@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "../core/HardwareConfig.h"
+#include "../core/KeyboardData.h"
 
 class MidiTransport;
 
@@ -27,19 +28,29 @@ public:
 
   void begin(MidiTransport* transport);
 
+  // --- Channel (0-15, set by BankManager later) ---
+  void setChannel(uint8_t ch);
+  uint8_t getChannel() const;
+
   // --- Note events (called on edges by the main loop) ---
-  void noteOn(uint8_t padIndex, uint8_t velocity);
+  // noteOn resolves the MIDI note via ScaleResolver using padOrder + scale.
+  void noteOn(uint8_t padIndex, uint8_t velocity,
+              const uint8_t* padOrder, const ScaleConfig& scale);
   void noteOff(uint8_t padIndex);
 
   // --- Aftertouch (called every cycle for held pads) ---
   // Rate-limited per pad. Queues events into the ring buffer.
   void updateAftertouch(uint8_t padIndex, uint8_t pressure);
 
+  // Send noteOff for all active pads, clear aftertouch queue.
+  void allNotesOff();
+
   // Drain the aftertouch queue (max FLUSH_BATCH per call).
   void flush();
 
 private:
   MidiTransport* _transport;
+  uint8_t        _channel;
 
   // Per-pad state
   uint8_t  _lastResolvedNote[NUM_KEYS];   // MIDI note sent on noteOn (0xFF = inactive)

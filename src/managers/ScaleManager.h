@@ -5,31 +5,40 @@
 #include "../core/KeyboardData.h"
 #include "../core/HardwareConfig.h"
 
+class MidiEngine;
+
 class ScaleManager {
 public:
   ScaleManager();
 
-  void begin(BankSlot* banks);
+  void begin(BankSlot* banks, MidiEngine* engine, uint8_t* lastKeys);
+
+  // Call every loop. Processes scale pad presses while button held.
   void update(const uint8_t* keyIsPressed, bool btnRightHeld, BankSlot& currentSlot);
 
   bool isHolding() const;
 
-private:
-  BankSlot* _banks;
-  bool      _holding;
-  bool      _lastBtnState;
+  // Override pad assignments (for future NVS loading / ToolPadRoles)
+  void setRootPads(const uint8_t* pads);
+  void setModePads(const uint8_t* pads);
+  void setChromaticPad(uint8_t pad);
 
-  // Pad assignments (loaded from NVS)
+private:
+  BankSlot*   _banks;
+  MidiEngine* _engine;
+  uint8_t*    _lastKeys;
+  bool        _holding;
+  bool        _lastBtnState;
+
+  // Edge detection for scale pads (prevent repeat while holding)
+  uint8_t _lastScaleKeys[NUM_KEYS];
+
+  // Pad assignments (defaults: root=8-14, mode=15-21, chromatic=22)
   uint8_t _rootPads[7];
   uint8_t _modePads[7];
   uint8_t _chromaticPad;
-  uint8_t _patternPads[5];
-  uint8_t _octavePad;
-  uint8_t _holdPad;
-  uint8_t _playStopPad;
 
   void processScalePads(const uint8_t* keyIsPressed, BankSlot& slot);
-  void processArpPads(const uint8_t* keyIsPressed, BankSlot& slot);
 };
 
 #endif // SCALE_MANAGER_H

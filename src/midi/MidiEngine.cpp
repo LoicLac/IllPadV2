@@ -1,4 +1,5 @@
 #include "MidiEngine.h"
+#include "ScaleResolver.h"
 #include "../core/MidiTransport.h"
 #include <Arduino.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 
 MidiEngine::MidiEngine()
   : _transport(nullptr)
+  , _channel(MIDI_CHANNEL)
   , _atHead(0)
   , _atTail(0)
 {
@@ -25,19 +27,28 @@ void MidiEngine::begin(MidiTransport* transport) {
   _transport = transport;
 }
 
+void MidiEngine::setChannel(uint8_t ch) {
+  _channel = (ch <= 15) ? ch : 15;
+}
+
+uint8_t MidiEngine::getChannel() const {
+  return _channel;
+}
+
 // =================================================================
-// noteOn — chromatic from MIDI_BASE_NOTE (C2 = 36)
+// noteOn — resolve note via ScaleResolver, then send
 // =================================================================
 
-void MidiEngine::noteOn(uint8_t padIndex, uint8_t velocity) {
+void MidiEngine::noteOn(uint8_t padIndex, uint8_t velocity,
+                         const uint8_t* padOrder, const ScaleConfig& scale) {
   if (padIndex >= NUM_KEYS || !_transport) return;
 
-  uint8_t note = MIDI_BASE_NOTE + padIndex;
-  if (note > 127) note = 127;
+  uint8_t note = ScaleResolver::resolve(padIndex, padOrder, scale);
+  if (note == 0xFF) return;  // Unmapped or out of range
 
   _lastResolvedNote[padIndex] = note;
   _lastSentPressure[padIndex] = 0;
-  _transport->sendNoteOn(MIDI_CHANNEL, note, velocity);
+  _transport->sendNoteOn(_channel, note, velocity);
 }
 
 // =================================================================
@@ -50,9 +61,28 @@ void MidiEngine::noteOff(uint8_t padIndex) {
   uint8_t note = _lastResolvedNote[padIndex];
   if (note == 0xFF) return;  // No active note on this pad
 
-  _transport->sendNoteOn(MIDI_CHANNEL, note, 0);  // velocity 0 = noteOff
+  _transport->sendNoteOn(_channel, note, 0);  // velocity 0 = noteOff
   _lastResolvedNote[padIndex] = 0xFF;
   _lastSentPressure[padIndex] = 0;
+}
+
+// =================================================================
+// allNotesOff — kill every active note, drain aftertouch queue
+// =================================================================
+
+void MidiEngine::allNotesOff() {
+  if (!_transport) return;
+
+  for (uint8_t i = 0; i < NUM_KEYS; i++) {
+    if (_lastResolvedNote[i] != 0xFF) {
+      _transport->sendNoteOn(_channel, _lastResolvedNote[i], 0);
+      _lastResolvedNote[i] = 0xFF;
+      _lastSentPressure[i] = 0;
+    }
+  }
+  // Drain aftertouch queue — stale events from old channel
+  _atHead = 0;
+  _atTail = 0;
 }
 
 // =================================================================
@@ -95,7 +125,7 @@ void MidiEngine::flush() {
   uint8_t count = 0;
   while (_atTail != _atHead && count < FLUSH_BATCH) {
     const AftertouchEvent& evt = _atRing[_atTail];
-    _transport->sendPolyAftertouch(MIDI_CHANNEL, evt.note, evt.pressure);
+    _transport->sendPolyAftertouch(_channel, evt.note, evt.pressure);
     _atTail = (_atTail + 1) % AT_RING_SIZE;
     count++;
   }

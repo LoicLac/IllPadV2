@@ -6,9 +6,14 @@
 #include "core/KeyboardData.h"
 #include "core/CapacitiveKeyboard.h"
 #include "core/MidiTransport.h"
+#include "core/LedController.h"
 
 // MIDI
 #include "midi/MidiEngine.h"
+
+// Managers
+#include "managers/BankManager.h"
+#include "managers/ScaleManager.h"
 
 // =================================================================
 // Double Buffer (lock-free Core 0 → Core 1)
@@ -27,6 +32,15 @@ static volatile uint16_t s_slewRate      = SLEW_RATE_DEFAULT;
 static CapacitiveKeyboard s_keyboard;
 static MidiTransport      s_transport;
 static MidiEngine         s_midiEngine;
+static LedController      s_leds;
+static BankManager        s_bankManager;
+static ScaleManager       s_scaleManager;
+
+// 8 banks — all NORMAL for now
+static BankSlot s_banks[NUM_BANKS];
+
+// Pad ordering: sequential 0..47 (Tool 2 will customize later)
+static uint8_t s_padOrder[NUM_KEYS];
 
 // Edge detection: previous frame's key state (Core 1 only)
 static uint8_t s_lastKeys[NUM_KEYS];
@@ -67,7 +81,7 @@ void setup() {
   Serial.begin(115200);
   delay(500);
   Serial.println();
-  Serial.println("=== ILLPAD48 V2 — MIDI Test ===");
+  Serial.println("=== ILLPAD48 V2 — Scale + Bank Test ===");
 
   // I2C
   Wire.begin(SDA_PIN, SCL_PIN, I2C_CLOCK_HZ);
@@ -89,6 +103,38 @@ void setup() {
   s_midiEngine.begin(&s_transport);
   Serial.println("[INIT] MIDI Engine OK.");
 
+  // LEDs
+  s_leds.begin();
+  Serial.println("[INIT] LEDs OK.");
+
+  // Pad ordering: sequential (0,1,2,...47)
+  for (uint8_t i = 0; i < NUM_KEYS; i++) {
+    s_padOrder[i] = i;
+  }
+
+  // Init banks — all NORMAL, chromatic, root C, mode Ionian
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    s_banks[i].channel      = i;
+    s_banks[i].type         = BANK_NORMAL;
+    s_banks[i].scale        = {true, 2, 0};  // chromatic=true, root=C(2), mode=Ionian(0)
+    s_banks[i].arpEngine    = nullptr;
+    s_banks[i].isForeground = (i == DEFAULT_BANK);
+    memset(s_banks[i].lastResolvedNote, 0xFF, NUM_KEYS);
+  }
+
+  // Bank Manager
+  s_bankManager.begin(&s_midiEngine, &s_leds, s_banks, s_lastKeys);
+  Serial.println("[INIT] BankManager OK.");
+
+  // Scale Manager
+  s_scaleManager.begin(s_banks, &s_midiEngine, s_lastKeys);
+  Serial.println("[INIT] ScaleManager OK.");
+  Serial.println("[INIT] Scale pads: root=8-14(A-G), mode=15-21, chromatic=22");
+
+  // Buttons — active LOW, internal pull-up
+  pinMode(BTN_LEFT_PIN, INPUT_PULLUP);
+  pinMode(BTN_RIGHT_PIN, INPUT_PULLUP);
+
   // Clear state
   memset(s_buffers, 0, sizeof(s_buffers));
   memset(s_lastKeys, 0, sizeof(s_lastKeys));
@@ -97,7 +143,9 @@ void setup() {
   xTaskCreatePinnedToCore(sensingTask, "sensing", 4096, nullptr, 1, nullptr, 0);
   s_bootTimestamp = millis();
 
-  Serial.println("[INIT] Ready. Touch pads → MIDI out (USB + BLE).");
+  Serial.println("[INIT] Ready.");
+  Serial.println("[INIT] LEFT btn + pad 0-7 = bank switch");
+  Serial.println("[INIT] RIGHT btn + pad 8-14 = root, 15-21 = mode, 22 = chromatic");
   Serial.println();
 }
 
@@ -117,29 +165,39 @@ void loop() {
     return;
   }
 
-  // Edge detection + MIDI
-  for (int i = 0; i < NUM_KEYS; i++) {
-    bool pressed    = state.keyIsPressed[i];
-    bool wasPressed = s_lastKeys[i];
+  // --- Read buttons (active LOW) ---
+  bool leftHeld  = (digitalRead(BTN_LEFT_PIN) == LOW);
+  bool rightHeld = (digitalRead(BTN_RIGHT_PIN) == LOW);
 
-    if (pressed && !wasPressed) {
-      // Note ON — fixed velocity 127, chromatic from C2
-      s_midiEngine.noteOn(i, MIDI_NOTE_ON_VELOCITY);
-    } else if (!pressed && wasPressed) {
-      // Note OFF
-      s_midiEngine.noteOff(i);
+  // --- Managers ---
+  s_bankManager.update(state.keyIsPressed, leftHeld);
+  s_scaleManager.update(state.keyIsPressed, rightHeld, s_bankManager.getCurrentSlot());
+
+  // --- MIDI processing (skip when either button held) ---
+  if (!s_bankManager.isHolding() && !s_scaleManager.isHolding()) {
+    const ScaleConfig& scale = s_bankManager.getCurrentSlot().scale;
+
+    for (int i = 0; i < NUM_KEYS; i++) {
+      bool pressed    = state.keyIsPressed[i];
+      bool wasPressed = s_lastKeys[i];
+
+      if (pressed && !wasPressed) {
+        s_midiEngine.noteOn(i, MIDI_NOTE_ON_VELOCITY, s_padOrder, scale);
+      } else if (!pressed && wasPressed) {
+        s_midiEngine.noteOff(i);
+      }
+
+      if (pressed) {
+        s_midiEngine.updateAftertouch(i, state.pressure[i]);
+      }
+
+      s_lastKeys[i] = state.keyIsPressed[i];
     }
-
-    // Aftertouch for held pads
-    if (pressed) {
-      s_midiEngine.updateAftertouch(i, state.pressure[i]);
-    }
-
-    s_lastKeys[i] = state.keyIsPressed[i];
   }
 
-  // Drain aftertouch queue + BLE housekeeping
+  // Drain aftertouch queue + LED update + BLE housekeeping
   s_midiEngine.flush();
+  s_leds.update();
   s_transport.update();
 
   vTaskDelay(1);

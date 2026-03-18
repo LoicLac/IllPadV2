@@ -1,7 +1,7 @@
 #include "ScaleResolver.h"
 
-// A=57, B=59, C=60, D=62, E=64, F=65, G=67
-const uint8_t ScaleResolver::ROOT_MIDI_BASE[7] = {57, 59, 60, 62, 64, 65, 67};
+// A1=33, B1=35, C2=36, D2=38, E2=40, F2=41, G2=43
+const uint8_t ScaleResolver::ROOT_MIDI_BASE[7] = {33, 35, 36, 38, 40, 41, 43};
 
 // Intervals in semitones from root for each mode
 const uint8_t ScaleResolver::SCALE_INTERVALS[7][7] = {
