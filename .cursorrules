@@ -1,0 +1,123 @@
+# ILLPAD48 V2 — Cursor Rules
+
+## Project Overview
+
+ILLPAD48 is a 48-pad capacitive MIDI controller built on ESP32-S3-N8R16. This is a V2 rewrite — fresh start, no backward compatibility with V1.
+
+The instrument is a 30×30×5cm solid wood block with 48 aluminum pads in a circular/radial layout. It has 3 buttons (left=bank, right=scale/arp, rear=battery/setup), 3 potentiometers (left=feel, right=rhythm, rear=config), and outputs MIDI over USB + BLE simultaneously.
+
+## CRITICAL: Read the Spec Documents First
+
+Before writing ANY code, read these 3 documents in DOCUMENTATION/:
+1. `ILLPAD48_V1_ANALYSIS.md` — What the V1 does, what we keep
+2. `ILLPAD48_V2_NEW_IDEAS.md` — All V2 features and design decisions
+3. `ILLPAD48_V2_RESTRUCTURATION_GUIDE.md` — Code architecture, implementation plan, phase-by-phase
+
+These documents are the source of truth. If something contradicts these docs, the docs win.
+
+## Architecture
+
+### Dual-Core FreeRTOS
+- **Core 0**: Sensing task only (I2C polling, pressure pipeline). Writes to double buffer.
+- **Core 1**: Everything else (MIDI, buttons, pots, LEDs, arp). Reads from double buffer.
+- **No mutex** between cores. Double buffer with atomic swap instead.
+- NVS writes happen in a dedicated low-priority task, never in the main loop.
+
+### File Structure
+```
+src/
+├── main.cpp                    # ~150 lines max. Setup + loop. NO business logic here.
+├── HardwareConfig.h            # ALL pin definitions, constants, tuning values
+├── core/                       # Hardware drivers (mostly unchanged from V1)
+│   ├── CapacitiveKeyboard      # DO NOT MODIFY pressure pipeline
+│   ├── MidiTransport           # Extend for clock reception + BLE interval
+│   ├── LedController           # Extend for arp feedback
+│   └── KeyboardData.h          # Extend with BankSlot, ScaleConfig, etc.
+├── managers/                   # Runtime logic (extracted from V1's monolithic main.cpp)
+│   ├── BankManager             # Left button: bank switch
+│   ├── ScaleManager            # Right button: root/mode/chrom + arp controls
+│   ├── PotRouter               # 3 pots, contextual bindings, catch system
+│   ├── BatteryMonitor          # Rear button
+│   └── NvsManager              # Dedicated FreeRTOS task for NVS writes
+├── midi/
+│   ├── MidiEngine              # noteOn/Off, aftertouch, channel
+│   ├── ScaleResolver           # root+mode+padOrder → MIDI note (static, no state)
+│   └── ClockManager            # MIDI clock reception, PLL smoothing, fallback
+├── arp/
+│   ├── ArpEngine               # Autonomous arpeggiator engine (max 4 instances)
+│   └── ArpScheduler            # Distributes clock ticks to active ArpEngines
+└── setup/
+    ├── SetupManager            # Menu principal
+    ├── ToolCalibration         # Tool 1 (from V1, minimal changes)
+    ├── ToolPadOrdering         # Tool 2 (replaces V1 Note Mapping)
+    ├── ToolPadRoles            # Tool 3 (unified bank+scale+arp pad assignment)
+    ├── ToolBankConfig          # Tool 4 (NORMAL/ARPEG toggle per bank)
+    ├── ToolSettings            # Tool 5
+    └── SetupUI                 # VT100 terminal helpers
+```
+
+### Key Design Decisions (DO NOT CHANGE)
+- **BankManager does NOT know about arpeggiators.** It only does all-notes-off for NORMAL banks. ARPEG banks live/die by their own logic.
+- **Arpège HOLD OFF**: notes added on press, removed on release. All fingers up = arp dies naturally. No special bank-switch logic needed.
+- **Arpège HOLD ON**: notes persist. Double-tap removes. Play/stop pad active. Survives bank switch.
+- **Play/stop pad**: contextual — plays a normal note on NORMAL banks and ARPEG HOLD OFF. Only acts as play/stop on ARPEG HOLD ON.
+- **Root = base note everywhere.** Chromatic root=D starts at D2. Scale root=D plays D Dorian/etc. One concept.
+- **lastResolvedNote[pad]**: stores the MIDI note sent at noteOn. noteOff uses this stored value, NEVER re-resolves. Prevents orphan notes when scale changes mid-play.
+- **PotRouter**: declarative binding table. Add a parameter = add a row. No if/else chains.
+- **Double buffer**: Core 0 writes buffer A while Core 1 reads buffer B, then swap. No mutex.
+
+## Code Conventions
+
+- `s_` prefix for static globals, `_` prefix for member variables
+- `SCREAMING_SNAKE_CASE` for constants
+- Debug output: `#if !PRODUCTION_MODE` guards
+- Fine-grained debug: `#if DEBUG_SERIAL && !PRODUCTION_MODE`
+- No dynamic allocation (`new`/`delete`) at runtime. Static instantiation only.
+- Keep stack allocations small (FreeRTOS task stacks are limited)
+- Unsigned arithmetic for `millis()` comparisons (handles overflow)
+- Arduino framework, C++17
+- PlatformIO with `esp32-s3-devkitc-1` environment
+
+## DO NOT MODIFY
+
+- **Pressure pipeline** in `CapacitiveKeyboard.cpp` — musically calibrated, tested on hardware
+- **Tuning constants** in `HardwareConfig.h`: PRESS_THRESHOLD_PERCENT, RELEASE_THRESHOLD_PERCENT, MIN_PRESS_THRESHOLD, MIN_RELEASE_THRESHOLD, AFTERTOUCH_CURVE_*, AFTERTOUCH_SMOOTHING_*, I2C_CLOCK_HZ
+- **platformio.ini** build flags (except adding new lib_deps)
+
+## Build & Upload
+
+```bash
+~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1
+~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1 --target upload
+~/.platformio/penv/bin/pio device monitor -b 115200
+```
+
+`pio` is NOT in PATH. Always use full path.
+
+## Implementation Order
+
+Follow the phases in ILLPAD48_V2_RESTRUCTURATION_GUIDE.md strictly:
+1. Phase 1: Infrastructure (double buffer, NVS task, BankSlots NORMAL only, managers)
+2. Phase 2: Pots + Scale (PotRouter, PadOrdering, ScaleResolver)
+3. Phase 3: Pad Roles + Bank Config (tools)
+4. Phase 4: Arpeggiator (ClockManager, ArpEngine, ArpScheduler)
+5. Phase 5: Polish
+
+**Each phase must compile and be testable before moving to the next.**
+
+## Hardware (GPIOs to define)
+
+```
+Pot Left:      GPIO ?? (ADC)
+Pot Right:     GPIO ?? (ADC)  
+Pot Rear:      GPIO ?? (ADC)
+Button Left:   GPIO ?? (INPUT_PULLUP, active LOW)
+Button Right:  GPIO ?? (INPUT_PULLUP, active LOW)
+Button Rear:   GPIO ?? (INPUT_PULLUP, active LOW)
+Battery ADC:   GPIO 10 (unchanged from V1)
+I2C SDA/SCL:   (unchanged from V1)
+LEDs 1-8:      (unchanged from V1)
+USB:           GPIO 19/20 (unchanged)
+```
+
+GPIOs will be defined when hardware is wired. Use constants in HardwareConfig.h — never hardcode pin numbers.
