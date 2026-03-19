@@ -124,7 +124,9 @@ C'est le **seul pad de contrôle actif en mode jeu** (les 30 autres ne sont acti
 | Up-Down | Ping-pong (sans répéter extrêmes) |
 | Random | Aléatoire parmi la pile |
 | Order | Ordre chronologique d'ajout |
-Garder des stubs pour ajout possible de patern .
+
+> Note : garder des stubs dans le code pour ajout possible de patterns supplémentaires.
+
 ### Pile de Notes
 
 Jusqu'à **48 notes** (tous les pads). Avec 4 octaves = 192 steps max. À 120BPM en croches = **48 secondes** sans répétition en Up. Up-Down double ça.
@@ -142,6 +144,11 @@ Jusqu'à **48 notes** (tous les pads). Avec 4 octaves = 192 steps max. À 120BPM
 ### Principe
 
 Chaque pot a une fonction principale (pot seul) et des fonctions secondaires (combo avec un bouton). Les fonctions changent selon le type de bank au premier plan (NORMAL vs ARPEG). Système **catch** sur tous les pots (le pot doit passer par la valeur stockée avant de prendre le contrôle).
+
+**Stockage des valeurs pot** :
+- Paramètres **NORMAL** (response shape, slew rate, AT deadzone) = **GLOBAUX** — un seul set partagé par toutes les banks NORMAL.
+- Paramètres **ARPEG** (gate length, swing, division, base velocity, velocity variation) = **PAR BANK** — chaque bank ARPEG a ses propres valeurs.
+- Au bank switch ARPEG → le catch se réinitialise (le pot physique doit re-catcher la valeur de la nouvelle bank).
 
 ### Pot Gauche — Feel / Son
 

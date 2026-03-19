@@ -36,9 +36,9 @@ CapacitiveKeyboard (pressure pipeline), dual-core FreeRTOS, aftertouch sur NORMA
 ```
 src/
 ├── main.cpp                        # ~150 lignes
-├── HardwareConfig.h                # Pins (3 btn, 3 pots), constantes
 │
 ├── core/
+│   ├── HardwareConfig.h                # Pins (3 btn, 3 pots), constantes
 │   ├── CapacitiveKeyboard.cpp/.h       # INCHANGÉ
 │   ├── MidiTransport.cpp/.h            # ÉTENDU (réception clock, BLE interval)
 │   ├── LedController.cpp/.h            # ÉTENDU
@@ -99,29 +99,31 @@ struct BankSlot {
 
 Le mutex V1 couple Core 0 et Core 1 — si l'un tient le lock, l'autre attend. Le double buffer élimine ce couplage.
 
+Un seul `std::atomic<uint8_t>` sert de point de synchronisation. Core 0 écrit dans le buffer inactif, puis publie l'index atomiquement. Core 1 lit l'index pour savoir quel buffer contient les données les plus récentes.
+
 ```cpp
+#include <atomic>
+
 struct SharedKeyboardState {
   uint8_t keyIsPressed[NUM_KEYS];
   uint8_t pressure[NUM_KEYS];
 };
 
 static SharedKeyboardState s_buffers[2];
-static volatile uint8_t s_writeIndex = 0;
-static volatile uint8_t s_readIndex = 1;
+static std::atomic<uint8_t> s_active{0};  // Index du buffer que Core 1 doit LIRE
 
-// Core 0 : écrire dans le buffer d'écriture
+// Core 0 : écrire dans le buffer que Core 1 ne lit PAS
 void sensingTask(void*) {
   for (;;) {
-    SharedKeyboardState& buf = s_buffers[s_writeIndex];
     keyboard.update();
+    uint8_t writeIdx = 1 - s_active.load(std::memory_order_acquire);
+    SharedKeyboardState& buf = s_buffers[writeIdx];
     for (int i = 0; i < NUM_KEYS; i++) {
       buf.keyIsPressed[i] = keyboard.isPressed(i) ? 1 : 0;
       buf.pressure[i] = keyboard.getPressure(i);
     }
-    // Swap atomique — Core 1 verra les nouvelles données
-    uint8_t tmp = s_writeIndex;
-    s_writeIndex = s_readIndex;
-    s_readIndex = tmp;
+    // Publication atomique — Core 1 verra les nouvelles données
+    s_active.store(writeIdx, std::memory_order_release);
 
     vTaskDelay(1);
   }
@@ -129,7 +131,7 @@ void sensingTask(void*) {
 
 // Core 1 : lire sans attente
 void loop() {
-  const SharedKeyboardState& state = s_buffers[s_readIndex];
+  const SharedKeyboardState& state = s_buffers[s_active.load(std::memory_order_acquire)];
   // ... utiliser state — jamais bloqué
 }
 ```
@@ -511,25 +513,22 @@ void processArpMode(BankSlot& slot, const SharedKeyboardState& state,
 
 ## 7. BankManager
 
-Ne connaît pas l'arpégiateur. Gère uniquement all notes off pour NORMAL :
+Ne connaît pas l'arpégiateur. Gère uniquement all notes off pour NORMAL via `MidiEngine::allNotesOff()` :
 
 ```cpp
 void BankManager::switchToBank(uint8_t newBank) {
   BankSlot& old = _banks[_currentBank];
 
   if (old.type == BANK_NORMAL) {
-    for (int i = 0; i < NUM_KEYS; i++) {
-      if (old.lastResolvedNote[i] != 0xFF) {
-        _transport->sendNoteOn(old.channel, old.lastResolvedNote[i], 0);
-        old.lastResolvedNote[i] = 0xFF;
-      }
-    }
+    // MidiEngine envoie noteOff pour chaque note active via lastResolvedNote[]
+    _midiEngine->allNotesOff();
   }
   // ARPEG : rien. L'arpège vit/meurt par sa propre logique.
 
   old.isForeground = false;
   _banks[newBank].isForeground = true;
   _currentBank = newBank;
+  _midiEngine->setChannel(newBank);  // canal MIDI suit la bank
 }
 ```
 

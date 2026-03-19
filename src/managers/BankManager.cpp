@@ -129,10 +129,6 @@ void BankManager::switchToBank(uint8_t newBank) {
   }
 
   // Reset edge detection — prevents phantom notes
-  if (_lastKeys) {
-    memset(_lastKeys, 0, NUM_KEYS);
-  }
-
   #if DEBUG_SERIAL
   Serial.printf("[BANK] Switched to bank %d (ch %d)\n",
                 _currentBank + 1, _currentBank + 1);

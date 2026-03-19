@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <atomic>
 
 // Core
 #include "core/HardwareConfig.h"
@@ -18,9 +19,11 @@
 // =================================================================
 // Double Buffer (lock-free Core 0 → Core 1)
 // =================================================================
+// Core 0 writes to s_buffers[w], then atomically publishes w via s_active.
+// Core 1 reads s_active to know which buffer has the latest data.
+// No mutex, no torn reads: a single std::atomic<uint8_t> is the sync point.
 static SharedKeyboardState s_buffers[2];
-static volatile uint8_t s_writeIndex = 0;
-static volatile uint8_t s_readIndex  = 1;
+static std::atomic<uint8_t> s_active{0};  // Index of the buffer Core 1 should READ
 
 // Slow parameters (Core 1 writes, Core 0 reads)
 static volatile float    s_responseShape = RESPONSE_SHAPE_DEFAULT;
@@ -60,15 +63,16 @@ static void sensingTask(void* param) {
     s_keyboard.setSlewRate(s_slewRate);
     s_keyboard.update();
 
-    SharedKeyboardState& buf = s_buffers[s_writeIndex];
+    // Write into the buffer Core 1 is NOT currently reading
+    uint8_t writeIdx = 1 - s_active.load(std::memory_order_acquire);
+    SharedKeyboardState& buf = s_buffers[writeIdx];
     for (int i = 0; i < NUM_KEYS; i++) {
       buf.keyIsPressed[i] = s_keyboard.isPressed(i) ? 1 : 0;
       buf.pressure[i]     = s_keyboard.getPressure(i);
     }
 
-    uint8_t tmp  = s_writeIndex;
-    s_writeIndex = s_readIndex;
-    s_readIndex  = tmp;
+    // Atomically publish — Core 1 will see the new data on next loop()
+    s_active.store(writeIdx, std::memory_order_release);
 
     vTaskDelay(1);
   }
@@ -153,7 +157,7 @@ void setup() {
 // Arduino loop() — Core 1
 // =================================================================
 void loop() {
-  const SharedKeyboardState& state = s_buffers[s_readIndex];
+  const SharedKeyboardState& state = s_buffers[s_active.load(std::memory_order_acquire)];
   uint32_t now = millis();
 
   // Boot settle — absorb state silently

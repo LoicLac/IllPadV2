@@ -91,7 +91,6 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       if (_engine) _engine->allNotesOff();
 
       slot.scale.root = r;
-      slot.scale.chromatic = false;  // Selecting a root implies scale mode
 
       #if DEBUG_SERIAL
       Serial.printf("[SCALE] Root → %s, Mode → %s\n",
@@ -113,7 +112,6 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       if (_engine) _engine->allNotesOff();
 
       slot.scale.mode = m;
-      slot.scale.chromatic = false;  // Selecting a mode implies scale mode
 
       #if DEBUG_SERIAL
       Serial.printf("[SCALE] Mode → %s, Root → %s\n",
