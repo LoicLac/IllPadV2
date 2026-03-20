@@ -94,6 +94,15 @@ uint8_t BankManager::getCurrentBank() const {
   return _currentBank;
 }
 
+void BankManager::setCurrentBank(uint8_t bank) {
+  if (bank >= NUM_BANKS) return;
+  _banks[_currentBank].isForeground = false;
+  _currentBank = bank;
+  _banks[_currentBank].isForeground = true;
+  if (_engine) _engine->setChannel(_currentBank);
+  if (_leds) _leds->setCurrentBank(_currentBank);
+}
+
 BankSlot& BankManager::getCurrentSlot() {
   return _banks[_currentBank];
 }
@@ -118,9 +127,10 @@ void BankManager::switchToBank(uint8_t newBank) {
   _currentBank = newBank;
   _banks[_currentBank].isForeground = true;
 
-  // Switch MIDI channel to match new bank
+  // Switch MIDI channel to match new bank + restore pitch bend
   if (_engine) {
     _engine->setChannel(_currentBank);
+    _engine->sendPitchBend(_banks[_currentBank].pitchBendOffset);
   }
 
   // Update LED

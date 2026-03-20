@@ -13,6 +13,7 @@ MidiEngine::MidiEngine()
   , _channel(MIDI_CHANNEL)
   , _atHead(0)
   , _atTail(0)
+  , _aftertouchIntervalMs(AT_RATE_DEFAULT)
 {
   memset(_lastResolvedNote, 0xFF, sizeof(_lastResolvedNote));
   memset(_lastSentPressure, 0, sizeof(_lastSentPressure));
@@ -25,6 +26,10 @@ MidiEngine::MidiEngine()
 
 void MidiEngine::begin(MidiTransport* transport) {
   _transport = transport;
+}
+
+void MidiEngine::setAftertouchRate(uint8_t ms) {
+  _aftertouchIntervalMs = constrain(ms, AT_RATE_MIN, AT_RATE_MAX);
 }
 
 void MidiEngine::setChannel(uint8_t ch) {
@@ -67,6 +72,15 @@ void MidiEngine::noteOff(uint8_t padIndex) {
 }
 
 // =================================================================
+// sendPitchBend — forward to transport on current channel
+// =================================================================
+
+void MidiEngine::sendPitchBend(uint16_t value) {
+  if (!_transport) return;
+  _transport->sendPitchBend(_channel, value);
+}
+
+// =================================================================
 // allNotesOff — kill every active note, drain aftertouch queue
 // =================================================================
 
@@ -102,7 +116,7 @@ void MidiEngine::updateAftertouch(uint8_t padIndex, uint8_t pressure) {
 
   // --- Rate limit per pad ---
   uint32_t now = millis();
-  if (now - _lastAftertouchMs[padIndex] < AFTERTOUCH_UPDATE_INTERVAL_MS) return;
+  if (now - _lastAftertouchMs[padIndex] < _aftertouchIntervalMs) return;
 
   // --- Queue into ring buffer ---
   uint8_t nextHead = (_atHead + 1) % AT_RING_SIZE;

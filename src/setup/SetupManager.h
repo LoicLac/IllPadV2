@@ -4,6 +4,11 @@
 #include <stdint.h>
 #include "../core/KeyboardData.h"
 #include "SetupUI.h"
+#include "ToolCalibration.h"
+#include "ToolPadOrdering.h"
+#include "ToolPadRoles.h"
+#include "ToolBankConfig.h"
+#include "ToolSettings.h"
 
 class CapacitiveKeyboard;
 class LedController;
@@ -15,12 +20,15 @@ public:
 
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
              NvsManager* nvs, BankSlot* banks,
-             uint8_t* padOrder, uint8_t* bankPads);
+             uint8_t* padOrder, uint8_t* bankPads,
+             uint8_t* rootPads, uint8_t* modePads,
+             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad);
 
   // Enter setup mode (blocking — returns when user exits)
   void run();
 
   // Check if setup should be entered (button held at boot)
+  // Note: entry detection is done inline in main.cpp, this returns false.
   static bool shouldEnterSetup();
 
 private:
@@ -31,6 +39,11 @@ private:
   uint8_t*            _padOrder;
   uint8_t*            _bankPads;
   SetupUI             _ui;
+  ToolCalibration     _toolCal;
+  ToolPadOrdering     _toolOrdering;
+  ToolPadRoles        _toolRoles;
+  ToolBankConfig      _toolBankConfig;
+  ToolSettings        _toolSettings;
 
   void runTool(uint8_t toolIndex);
 };

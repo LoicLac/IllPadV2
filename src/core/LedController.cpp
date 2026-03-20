@@ -12,7 +12,8 @@ const uint8_t LedController::_pins[NUM_LEDS] = {
 };
 
 LedController::LedController()
-  : _currentBank(0),
+  : _brightness(255),
+    _currentBank(0),
     _batteryLow(false),
     _bootMode(false),
     _bootStep(0),
@@ -212,7 +213,7 @@ void LedController::update() {
     return;
   }
 
-  // === Priority 5: Normal bank display ===
+  // === Priority 5: Normal bank display (with brightness) ===
   for (int i = 0; i < NUM_LEDS; i++) {
     if (i == _currentBank) {
       if (_batteryLow) {
@@ -225,15 +226,15 @@ void LedController::update() {
         if (elapsed < burstDuration) {
           uint8_t phase = elapsed / BAT_LOW_BLINK_SPEED_MS;
           bool on = (phase % 2 == 0);
-          digitalWrite(_pins[i], on ? HIGH : LOW);
+          analogWrite(_pins[i], on ? _brightness : 0);
         } else {
-          digitalWrite(_pins[i], HIGH);
+          analogWrite(_pins[i], _brightness);
         }
       } else {
-        digitalWrite(_pins[i], HIGH);
+        analogWrite(_pins[i], _brightness);
       }
     } else {
-      digitalWrite(_pins[i], LOW);
+      analogWrite(_pins[i], 0);
     }
   }
 
@@ -245,6 +246,10 @@ void LedController::update() {
 // =================================================================
 // Bank Display
 // =================================================================
+
+void LedController::setBrightness(uint8_t brightness) {
+  _brightness = brightness;
+}
 
 void LedController::setCurrentBank(uint8_t bank) {
   if (bank < NUM_BANKS) _currentBank = bank;

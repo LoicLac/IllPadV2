@@ -1,5 +1,6 @@
 #include "ScaleManager.h"
 #include "../midi/MidiEngine.h"
+#include "../arp/ArpEngine.h"
 #include <Arduino.h>
 #include <string.h>
 
@@ -19,6 +20,8 @@ ScaleManager::ScaleManager()
   , _holding(false)
   , _lastBtnState(false)
   , _chromaticPad(22)
+  , _holdPad(23)
+  , _scaleChanged(false)
 {
   // Default pad assignments: root pads 8-14, mode pads 15-21
   for (uint8_t i = 0; i < 7; i++) {
@@ -46,19 +49,23 @@ void ScaleManager::setChromaticPad(uint8_t pad) {
   _chromaticPad = pad;
 }
 
+void ScaleManager::setHoldPad(uint8_t pad) {
+  _holdPad = pad;
+}
+
 // =================================================================
 // update() — called every loop iteration
 // =================================================================
-void ScaleManager::update(const uint8_t* keyIsPressed, bool btnRightHeld,
+void ScaleManager::update(const uint8_t* keyIsPressed, bool btnHeld,
                            BankSlot& currentSlot) {
-  _holding = btnRightHeld;
+  _holding = btnHeld;
 
-  if (btnRightHeld) {
+  if (btnHeld) {
     processScalePads(keyIsPressed, currentSlot);
   }
 
   // On release edge: snapshot state to prevent phantom notes
-  if (!btnRightHeld && _lastBtnState) {
+  if (!btnHeld && _lastBtnState) {
     if (_lastKeys) {
       memcpy(_lastKeys, keyIsPressed, NUM_KEYS);
     }
@@ -66,11 +73,19 @@ void ScaleManager::update(const uint8_t* keyIsPressed, bool btnRightHeld,
     memset(_lastScaleKeys, 0, sizeof(_lastScaleKeys));
   }
 
-  _lastBtnState = btnRightHeld;
+  _lastBtnState = btnHeld;
 }
 
 bool ScaleManager::isHolding() const {
   return _holding;
+}
+
+bool ScaleManager::hasScaleChanged() {
+  if (_scaleChanged) {
+    _scaleChanged = false;
+    return true;
+  }
+  return false;
 }
 
 // =================================================================
@@ -87,10 +102,13 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
     bool wasPressed = _lastScaleKeys[pad];
 
     if (pressed && !wasPressed) {
-      // All notes off before changing scale (prevents orphan notes)
-      if (_engine) _engine->allNotesOff();
+      // NORMAL: all notes off before scale change (prevents orphan notes)
+      // ARPEG: no allNotesOff — arp re-resolves at next tick
+      if (slot.type == BANK_NORMAL && _engine) _engine->allNotesOff();
 
       slot.scale.root = r;
+      slot.scale.chromatic = false;  // Selecting root exits chromatic
+      _scaleChanged = true;
 
       #if DEBUG_SERIAL
       Serial.printf("[SCALE] Root → %s, Mode → %s\n",
@@ -109,9 +127,11 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
     bool wasPressed = _lastScaleKeys[pad];
 
     if (pressed && !wasPressed) {
-      if (_engine) _engine->allNotesOff();
+      if (slot.type == BANK_NORMAL && _engine) _engine->allNotesOff();
 
       slot.scale.mode = m;
+      slot.scale.chromatic = false;  // Selecting mode exits chromatic
+      _scaleChanged = true;
 
       #if DEBUG_SERIAL
       Serial.printf("[SCALE] Mode → %s, Root → %s\n",
@@ -127,9 +147,10 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
     bool wasPressed = _lastScaleKeys[_chromaticPad];
 
     if (pressed && !wasPressed) {
-      if (_engine) _engine->allNotesOff();
+      if (slot.type == BANK_NORMAL && _engine) _engine->allNotesOff();
 
       slot.scale.chromatic = true;
+      _scaleChanged = true;
 
       #if DEBUG_SERIAL
       Serial.printf("[SCALE] Chromatic ON (root %s)\n",
@@ -137,5 +158,21 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       #endif
     }
     _lastScaleKeys[_chromaticPad] = pressed;
+  }
+
+  // --- HOLD pad (ARPEG banks only) ---
+  if (_holdPad < NUM_KEYS && slot.type == BANK_ARPEG && slot.arpEngine) {
+    bool pressed = keyIsPressed[_holdPad];
+    bool wasPressed = _lastScaleKeys[_holdPad];
+
+    if (pressed && !wasPressed) {
+      bool newHold = !slot.arpEngine->isHoldOn();
+      slot.arpEngine->setHold(newHold);
+
+      #if DEBUG_SERIAL
+      Serial.printf("[SCALE] HOLD %s\n", newHold ? "ON" : "OFF");
+      #endif
+    }
+    _lastScaleKeys[_holdPad] = pressed;
   }
 }

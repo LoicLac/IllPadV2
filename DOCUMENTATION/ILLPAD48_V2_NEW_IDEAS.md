@@ -1,7 +1,7 @@
 # ILLPAD48 V2 — Nouvelles Idées & Features
 
-> Scale system + arpégiateur multi-bank + 3 pots contextuels.
-> Dernière mise à jour : 18 mars 2026.
+> Scale system + arpégiateur multi-bank + 5 pots contextuels + bouton unique.
+> Dernière mise à jour : 20 mars 2026.
 
 ---
 
@@ -15,8 +15,8 @@ Les 8 banks sont **toujours vivantes**. Le bank select change quelle bank reçoi
 
 | Type | Comportement |
 |---|---|
-| **NORMAL** | Pads → notes + poly-aftertouch. Ne joue qu'au premier plan. |
-| **ARPEG** | Arpégiateur. Deux sous-modes : live (non-HOLD) et persistant (HOLD). Pas d'aftertouch. Velocity fixe avec variation optionnelle. |
+| **NORMAL** | Pads → notes + poly-aftertouch. Ne joue qu'au premier plan. Velocity = base ± variation (per-bank). Pitch bend offset per-bank. |
+| **ARPEG** | Arpégiateur. Deux sous-modes : live (non-HOLD) et persistant (HOLD). Pas d'aftertouch. Velocity = base ± variation (per-bank). |
 
 Max 4 banks ARPEG. Configurable dans Tool 4 (Bank Config).
 
@@ -26,10 +26,11 @@ Le BankManager ne gère **aucune logique d'arrêt d'arpège**. Les arpèges vive
 
 | Situation | Au switch |
 |---|---|
-| Quitter NORMAL | All notes off |
+| Quitter NORMAL | All notes off + arrêt pitch bend |
 | Quitter ARPEG (HOLD off) | Rien — déjà mort (doigts levés) |
 | Quitter ARPEG (HOLD on) | Rien — continue tout seul |
 | Revenir sur ARPEG HOLD qui tourne | Pads ajoutent des notes, double-tap retire |
+| Arriver sur NORMAL | Envoi du pitch bend offset stocké de la bank |
 
 ---
 
@@ -44,35 +45,36 @@ Le BankManager ne gère **aucune logique d'arrêt d'arpège**. Les arpèges vive
 - **Chromatique** : `rootBase + padOrder[i]`
 - **Gamme** : `rootBase + octave*12 + scaleIntervals[mode][degree]`
 - **Root = base note partout.** Changer la root change la tonalité en gamme ET le point de départ en chromatique.
-- Changeable à chaud via bouton droit. Persisté NVS par bank.
+- Changeable à chaud via bouton gauche (hold + scale pads). Persisté NVS par bank.
 
 ### Couche 3 : Control Pad Assignment
 
-31 pads assignés à des fonctions. Un pad = un seul rôle. Tool 3.
+25 pads assignés à des fonctions. Un pad = un seul rôle. Tool 3.
 
 ---
 
-## C. Scale System (Bouton Droit Hold)
+## C. Bouton Gauche — Single Layer Control
 
-### Pads Communs (toutes banks) — 15
+### Principe
+
+Un seul bouton pour toutes les fonctions de contrôle (bank + scale + arp). Toutes les fonctions sont accessibles sur **un seul layer** pendant le hold. Remplace les deux boutons (gauche bank + droit scale) de l'ancienne conception.
+
+### Pads Communs (toutes banks) — 23
 
 | Zone | Pads | Fonction |
 |---|---|---|
+| Bank | 8 | Bank select (1-8) |
 | Root | 7 | A, B, C, D, E, F, G |
 | Mode | 7 | Ionian → Locrian |
 | Chromatique | 1 | Toggle chromatique |
 
-### Pads Arp (bank ARPEG seulement) — 7 pendant le hold
+### Pads Arp (bank ARPEG seulement) — 1 pendant le hold
 
 | Pad | Fonction |
 |---|---|
-| Pattern Up | Arpège montant |
-| Pattern Down | Descendant |
-| Pattern Up-Down | Ping-pong |
-| Pattern Random | Aléatoire |
-| Pattern Order | Ordre de press |
-| Octave cycle | 1→2→3→4→1 |
 | HOLD toggle | On/off |
+
+Les anciens pads arp (5 patterns, 1 octave) sont supprimés — ces fonctions passent sur les pots droits.
 
 ### Pad Play/Stop — 1 pad spécial
 
@@ -85,9 +87,21 @@ Le BankManager ne gère **aucune logique d'arrêt d'arpège**. Les arpèges vive
 - Sur bank ARPEG, HOLD OFF → ce pad joue une note (entre dans l'arpège comme les autres).
 - Sur bank ARPEG, HOLD ON → ce pad = **play/stop toggle** (pas de note). Stop puis Play repart du début.
 
-C'est le **seul pad de contrôle actif en mode jeu** (les 30 autres ne sont actifs que pendant les holds).
+C'est le **seul pad de contrôle actif en mode jeu** (les 24 autres ne sont actifs que pendant le hold).
 
-**Total pads de contrôle** : 8 bank + 15 scale + 8 arp (7 hold + 1 play/stop) = **31 pads**. 17 libres pendant les holds.
+**Total pads de contrôle** : 8 bank + 15 scale + 2 arp (1 hold + 1 play/stop) = **25 pads**. 23 libres pendant les holds.
+
+### Séquençage pendant un hold
+
+Pendant un seul hold, on peut enchaîner :
+1. Switch de bank 4 → configurer sa scale → switch de bank 5 → configurer sa scale → revenir sur bank 1 → release.
+2. Les arps en background reflètent les changements de scale **au tick suivant** (résolution live, pas d'interruption).
+
+### Protection notes fantômes
+
+- Release bouton : snapshot `_lastKeys`
+- Changement scale sur NORMAL : `allNotesOff()` avant
+- Changement scale sur ARPEG : **pas de allNotesOff** — résolution live au tick
 
 ---
 
@@ -99,8 +113,8 @@ C'est le **seul pad de contrôle actif en mode jeu** (les 30 autres ne sont acti
 
 | Action | Effet |
 |---|---|
-| Presser un pad | Note ajoutée |
-| Lever un doigt | Note retirée |
+| Presser un pad | Position ajoutée à la pile |
+| Lever un doigt | Position retirée |
 | Tous les doigts levés | Liste vide → arpège s'arrête |
 | Pad play/stop | Joue une note (pas de rôle spécial) |
 | Double-tap | Pas de sens (lever le doigt suffit) |
@@ -109,13 +123,21 @@ C'est le **seul pad de contrôle actif en mode jeu** (les 30 autres ne sont acti
 
 | Action | Effet |
 |---|---|
-| Presser un pad | Note ajoutée (persiste) |
-| Double-tap (< 300ms) | Note retirée |
+| Presser un pad | Position ajoutée (persiste) |
+| Double-tap (< 300ms) | Position retirée |
 | Pad play/stop | Toggle play/stop. Play repart du début. |
-| Lever les doigts | Rien — notes restent |
+| Lever les doigts | Rien — positions restent |
 | Bank switch | Arpège continue en background |
 
-### 5 Patterns
+### Pile de Positions (nouveau V2)
+
+La pile stocke des **padOrder index** (positions 0-47), pas des notes MIDI. La résolution en note MIDI se fait **au moment du tick** via la ScaleConfig courante de la bank.
+
+**Conséquence** : changer la scale/root d'une bank ARPEG en background change immédiatement les notes jouées. Les arpèges ne s'interrompent jamais lors d'un changement de scale.
+
+Jusqu'à **48 positions** (tous les pads). Avec 4 octaves = 192 steps max.
+
+### 5 Patterns (via pot droit 3)
 
 | Pattern | Comportement |
 |---|---|
@@ -125,87 +147,108 @@ C'est le **seul pad de contrôle actif en mode jeu** (les 30 autres ne sont acti
 | Random | Aléatoire parmi la pile |
 | Order | Ordre chronologique d'ajout |
 
+Sélection par pot droit 3 (5 positions discrètes). Pas de pads pattern.
+
 > Note : garder des stubs dans le code pour ajout possible de patterns supplémentaires.
 
-### Pile de Notes
+### Octave Range : 1-4 (via hold + pot droit 3)
 
-Jusqu'à **48 notes** (tous les pads). Avec 4 octaves = 192 steps max. À 120BPM en croches = **48 secondes** sans répétition en Up. Up-Down double ça.
+### Division Rythmique : hold + pot droit 1 (9 valeurs binaires, 4/1 → 1/64)
 
-### Octave Range : 1-4 (cycle via pad)
-
-### Division Rythmique : Pot Droit (voir section E)
-
-### Velocity : fixe avec variation optionnelle (voir section E)
+### Velocity : base ± variation per-bank (pot droit 4 / hold + pot droit 4)
 
 ---
 
-## E. Les 3 Potentiomètres
+## E. Les 5 Potentiomètres
 
 ### Principe
 
-Chaque pot a une fonction principale (pot seul) et des fonctions secondaires (combo avec un bouton). Les fonctions changent selon le type de bank au premier plan (NORMAL vs ARPEG). Système **catch** sur tous les pots (le pot doit passer par la valeur stockée avant de prendre le contrôle).
+4 pots à droite + 1 pot à l'arrière. Chaque pot droit a 2 slots : seul et hold bouton gauche. Les fonctions changent automatiquement selon le type de bank (NORMAL vs ARPEG). Système **catch** sur tous les pots.
 
-**Stockage des valeurs pot** :
-- Paramètres **NORMAL** (response shape, slew rate, AT deadzone) = **GLOBAUX** — un seul set partagé par toutes les banks NORMAL.
-- Paramètres **ARPEG** (gate length, swing, division, base velocity, velocity variation) = **PAR BANK** — chaque bank ARPEG a ses propres valeurs.
-- Au bank switch ARPEG → le catch se réinitialise (le pot physique doit re-catcher la valeur de la nouvelle bank).
+### Boutons Modifier
 
-### Pot Gauche — Feel / Son
+| Bouton | Modifie |
+|--------|---------|
+| Gauche | 4 pots droits (2ème slot) |
+| Arrière | Pot arrière uniquement (2ème slot) |
 
-| Contexte | Pot seul (LIVE) | Btn droit + pot G (LIVE cross) | Btn gauche + pot G (non-live) |
-|---|---|---|---|
-| **NORMAL** | Response shape (courbe AT) | Slew rate (smoothing AT) | 🔲 LIBRE |
-| **ARPEG** | Gate length (staccato↔legato) | Swing amount (droit↔shuffle) | 🔲 LIBRE |
+Le bouton gauche n'affecte jamais le pot arrière. Le bouton arrière n'affecte jamais les pots droits.
 
-### Pot Droit — Notes / Rythme
+### Pot Droit 1 — Tempo / Division
 
-| Contexte | Pot seul (LIVE) | Btn gauche + pot D (LIVE cross) | Btn droit + pot D (non-live) |
-|---|---|---|---|
-| **NORMAL** | 🔲 LIBRE | AT deadzone | 🔲 LIBRE |
-| **ARPEG** | Division rythmique | Velocity variation (±% random) | Base velocity (centre) |
+| Contexte | Pot seul | Hold gauche + pot |
+|---|---|---|
+| **NORMAL** | Tempo (10-260 BPM) | — vide — |
+| **ARPEG** | Tempo (10-260 BPM) | Division (9 valeurs binaires) |
+
+Tempo = global, partagé par tous les modes.
+
+### Pot Droit 2 — Shape/Gate / Deadzone/Swing
+
+| Contexte | Pot seul | Hold gauche + pot |
+|---|---|---|
+| **NORMAL** | Response shape (courbe AT) | AT deadzone |
+| **ARPEG** | Gate length (staccato↔legato) | Swing amount |
+
+### Pot Droit 3 — Slew/Pattern / PitchBend/Octave
+
+| Contexte | Pot seul | Hold gauche + pot |
+|---|---|---|
+| **NORMAL** | Slew rate (smoothing AT) | Pitch bend (offset per-bank) |
+| **ARPEG** | Pattern (5 positions) | Octave range (1-4) |
+
+### Pot Droit 4 — Velocity (identique NORMAL et ARPEG)
+
+| Contexte | Pot seul | Hold gauche + pot |
+|---|---|---|
+| **ANY** | Base velocity (1-127) | Velocity variation (0-100%) |
 
 ### Pot Arrière — Config
 
 | Combo | Fonction |
 |---|---|
-| Pot seul | Tempo interne (BPM fallback, 40-240) |
-| Btn gauche + pot arr | Pad sensitivity |
-| Btn droit + pot arr | 🔲 LIBRE |
+| Pot seul | LED brightness (0-255) |
+| Hold arrière + pot | Pad sensitivity (5-30%) |
 
-### Divisions Rythmiques (Pot Droit, bank ARPEG)
+### Divisions Rythmiques (hold + pot droit 1, bank ARPEG)
 
 ```
 Position    Division
-0%          1/1 (ronde)
-~15%        1/2 (blanche)
-~30%        1/4 (noire)
-~45%        1/8 (croche)
-~60%        1/16 (double croche)
-~75%        1/8T (croche triolée)
-~90%        1/16T (double croche triolée)
-100%        1/32 (triple croche)
+0%          4/1 (quadruple ronde)
+~12%        2/1 (double ronde)
+~25%        1/1 (ronde)
+~37%        1/2 (blanche)
+~50%        1/4 (noire)
+~62%        1/8 (croche)
+~75%        1/16 (double croche)
+~87%        1/32 (triple croche)
+100%        1/64
 ```
 
-### Velocity Variation (Btn gauche + Pot Droit, bank ARPEG)
+Pas de triolets, pas de pointées. 9 valeurs binaires uniquement.
+
+### Velocity Variation (hold + pot droit 4, toutes banks)
 
 Le pot contrôle le **pourcentage de variation aléatoire** autour de la base velocity :
 - 0% → velocity fixe (ex: toujours 80)
 - 50% → variation ±40 autour de 80 (range 40-120)
 - 100% → variation ±63 (range 17-143, clampé 1-127)
 
-La **base velocity** est réglée via btn droit + pot droit (non-live, on la règle une fois).
+La **base velocity** est réglée via pot droit 4 seul.
 
-### Slots Libres (7)
+### Stockage des Valeurs Pot
 
-| Slot | Statut |
-|---|---|
-| NORMAL : pot D seul | 🔲 LIBRE |
-| NORMAL : btn gauche + pot G | 🔲 LIBRE |
-| NORMAL : btn droit + pot D | 🔲 LIBRE |
-| ARPEG : btn gauche + pot G | 🔲 LIBRE |
-| Global : btn droit + pot arr | 🔲 LIBRE |
+- **Tempo** : global.
+- **Response shape, slew rate, AT deadzone** : globaux (partagés par toutes les banks NORMAL).
+- **Gate length, swing, division, pattern, octave** : per-bank ARPEG.
+- **Base velocity, velocity variation** : per-bank (NORMAL + ARPEG).
+- **Pitch bend offset** : per-bank NORMAL.
+- **LED brightness, pad sensitivity** : globaux.
+- Au bank switch → catch reset pour les params per-bank.
 
-Réservés pour de futures features. Le système est extensible.
+### Catch System
+
+Le pot physique doit passer par la valeur stockée avant de prendre le contrôle. Bargraph LED (0-8 LEDs) affiche la valeur cible pendant le catch.
 
 ---
 
@@ -216,7 +259,7 @@ Réservés pour de futures features. Le système est extensible.
 1. **USB MIDI Clock** — prioritaire si disponible (jitter ±0.5ms)
 2. **BLE MIDI Clock** — si pas d'USB (jitter ±7-15ms)
 3. **Dernier tempo reçu** — si le clock externe s'arrête
-4. **Tempo interne** — pot arrière (40-240 BPM) si jamais de clock
+4. **Tempo interne** — pot droit 1 (10-260 BPM) si jamais de clock
 
 ### PLL Logicielle (Clock Smoothing)
 
@@ -260,7 +303,7 @@ Configurable dans les Settings :
 ```
 [1] Bank Pads (8)
 [2] Scale Pads (15)
-[3] Arp Pads (8)     — 5 patterns + 1 octave + 1 HOLD + 1 play/stop
+[3] Arp Pads (2)     — 1 HOLD + 1 play/stop
 [4] View All / Collisions
 [s] Save  [q] Back
 ```
@@ -274,10 +317,10 @@ Toggle NORMAL/ARPEG par bank. Max 4 ARPEG.
 ### Tool 5 : Settings
 
 - Baseline Profile (Adaptive/Expressive/Percussive)
-- Pad Sensitivity (5-30%)
 - AT Rate (10-100ms)
-- AT Deadzone (0-250)
 - BLE Connection Interval (Low Latency / Normal / Battery Saver)
+
+~~Pad Sensitivity~~ → pot arrière (hold arrière). ~~AT Deadzone~~ → pot droit 2 (hold gauche, NORMAL). ~~LED Brightness~~ → pot arrière (seul).
 
 ---
 
@@ -293,12 +336,12 @@ Toggle NORMAL/ARPEG par bank. Max 4 ARPEG.
 
 | Feature | Priorité |
 |---|---|
-| Restructuration + BankSlots | **P0** |
+| Restructuration + BankSlots (velocity, pitch bend) | **P0** |
 | Pad Ordering + Scale system | **P0** |
-| Bank select (bouton gauche) | **P0** |
-| PotRouter (3 pots) | **P0** |
-| ArpEngine (live + persistant) | **P1** |
+| Bank select + Scale control (bouton gauche unique) | **P0** |
+| PotRouter (5 pots, bindings contextuels) | **P0** |
+| ArpEngine (live + persistant, pile positions, résolution au tick) | **P1** |
 | MIDI Clock réception + PLL | **P1** |
-| Arp controls (patterns, hold, play/stop, double-tap) | **P1** |
-| Pad Roles + Bank Config tools | **P2** |
+| Arp controls (HOLD, play/stop, pattern/octave/division via pots) | **P1** |
+| Pad Roles (25 pads) + Bank Config tools | **P2** |
 | Settings (BLE interval, etc.) | **P2** |

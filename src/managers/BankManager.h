@@ -23,6 +23,9 @@ public:
   BankSlot& getCurrentSlot();
   bool     isHolding() const;
 
+  // Set initial bank (from NVS, called before loop starts)
+  void setCurrentBank(uint8_t bank);
+
   // Bank select pads (default 0-7, loadable from NVS later)
   void setBankPads(const uint8_t* pads);
 

@@ -13,15 +13,17 @@ public:
 
   void begin(BankSlot* banks, MidiEngine* engine, uint8_t* lastKeys);
 
-  // Call every loop. Processes scale pad presses while button held.
-  void update(const uint8_t* keyIsPressed, bool btnRightHeld, BankSlot& currentSlot);
+  // Call every loop. Processes scale pad presses while left button held (single-layer).
+  void update(const uint8_t* keyIsPressed, bool btnHeld, BankSlot& currentSlot);
 
   bool isHolding() const;
+  bool hasScaleChanged();  // True if scale was modified this frame (auto-clears)
 
   // Override pad assignments (for future NVS loading / ToolPadRoles)
   void setRootPads(const uint8_t* pads);
   void setModePads(const uint8_t* pads);
   void setChromaticPad(uint8_t pad);
+  void setHoldPad(uint8_t pad);
 
 private:
   BankSlot*   _banks;
@@ -37,6 +39,8 @@ private:
   uint8_t _rootPads[7];
   uint8_t _modePads[7];
   uint8_t _chromaticPad;
+  uint8_t _holdPad;       // HOLD toggle pad (for ARPEG banks)
+  bool    _scaleChanged;  // Set by processScalePads, cleared by hasScaleChanged()
 
   void processScalePads(const uint8_t* keyIsPressed, BankSlot& slot);
 };

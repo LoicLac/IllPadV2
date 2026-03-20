@@ -10,6 +10,9 @@ public:
   void begin();
   void update();  // Call from loop() — handles all LED state and timing
 
+  // Brightness (0-255, affects all LED outputs via analogWrite)
+  void setBrightness(uint8_t brightness);
+
   // Bank display (runtime)
   void setCurrentBank(uint8_t bank);    // 0-7, lights the corresponding LED
   void setBatteryLow(bool low);         // When true, bank LED does 3 rapid blinks every BAT_LOW_BLINK_INTERVAL_MS
@@ -44,6 +47,9 @@ public:
 
 private:
   static const uint8_t _pins[NUM_LEDS];
+
+  // Brightness (0-255)
+  uint8_t _brightness;
 
   // Bank display
   uint8_t _currentBank;    // 0-7

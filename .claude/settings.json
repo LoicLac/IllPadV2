@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find /Users/loic/Code/PROJECTS/ILLPAD_V2/.pio/libdeps -name *BLE* -type d)",
+      "Bash(gh pr:*)"
+    ]
+  }
+}

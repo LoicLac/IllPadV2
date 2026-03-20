@@ -18,8 +18,8 @@
 - **Sensors**: 4× MPR121 capacitive touch (I2C 0x5A–0x5D) → 48 aluminium pads, circular/radial layout
 - **MIDI**: USB MIDI (TinyUSB composite) + BLE MIDI (ESP32-BLE-MIDI), simultaneous
 - **USB**: Single USB-C on GPIO 19/20 (native USB, no UART bridge)
-- **3 Buttons**: left (bank select), right (scale/arp controls), rear (battery/setup). GPIOs TBD.
-- **3 Pots**: left (feel/sound), right (notes/rhythm), rear (config/tempo). GPIOs TBD.
+- **2 Buttons**: left (bank+scale+arp single-layer control), rear (battery/setup/modifier pot rear). GPIOs TBD.
+- **5 Pots**: 4 right (tempo, shape/gate, slew/pattern, velocity), 1 rear (LED brightness/sensitivity). GPIOs TBD.
 - **8 LEDs** (circle) + 1 RGB onboard (GPIO48, `INT_LED` compile flag)
 - **Battery**: LiPo 3.7V, BQ25185 charger, ADC voltage divider
 
@@ -44,17 +44,18 @@ Inter-core sync uses `std::atomic<uint8_t>` for the read index — not mutex, no
 Every bank (= fixed MIDI channel 1-8) is a `BankSlot` that stays alive. Bank select only changes which slot receives pad input ("foreground"). ARPEG engines run in background.
 
 ```
-BankSlot { channel, type(NORMAL|ARPEG), scaleConfig, arpEngine*, isForeground, lastResolvedNote[48] }
+BankSlot { channel, type(NORMAL|ARPEG), scaleConfig, arpEngine*, isForeground,
+           lastResolvedNote[48], baseVelocity, velocityVariation, pitchBendOffset }
 ```
 
-- **NORMAL**: pads → notes + poly-aftertouch. Only plays when foreground.
-- **ARPEG**: arpeggiator. No aftertouch. Fixed velocity with variation. Max 4 ARPEG banks.
+- **NORMAL**: pads → notes + poly-aftertouch. Only plays when foreground. Velocity = baseVelocity ± random(velocityVariation), per-bank. Pitch bend offset per-bank.
+- **ARPEG**: arpeggiator. No aftertouch. Velocity = baseVelocity ± variation, per-bank. Max 4 ARPEG banks.
 
 ### 3 Mapping Layers
 
 1. **Pad Ordering** `padOrder[48]`: physical pad → rank 0-47 (low to high). Set once in Tool 2. All banks share it.
-2. **Scale Config** per bank: chromatic or scale (root + mode). Root = base note in both modes. Runtime-switchable via right button.
-3. **Control Pad Assignment**: 31 pads with control roles (bank 8 + scale 15 + arp 8). One role per pad. Set in Tool 3.
+2. **Scale Config** per bank: chromatic or scale (root + mode). Root = base note in both modes. Runtime-switchable via left button hold.
+3. **Control Pad Assignment**: 25 pads with control roles (bank 8 + scale 15 + arp 2). One role per pad. Set in Tool 3.
 
 ### Note Resolution
 
@@ -70,51 +71,62 @@ Critical path first, secondary after. MIDI latency depends on this order.
 
 ```
 1. Read double buffer (instant)              ← CRITICAL PATH START
-2. Read buttons
-3. BankManager.update()
-4. ScaleManager.update()
-5. processNormalMode() or processArpMode()
-6. ArpScheduler.tick()                        ← all background arps
-7. MidiEngine.flush()                         ← CRITICAL PATH END
-8. PotRouter.update()                         ← SECONDARY
-9. BatteryMonitor.update()
-10. LedController.update()
-11. NvsManager.notifyIfDirty()                ← non-blocking signal to NVS task
-12. vTaskDelay(1)
+2. Read buttons (left + rear)
+3. BankManager.update()                       ← left button
+4. ScaleManager.update()                      ← left button (same as bank)
+5. Play/Stop pad (ARPEG only, always active)
+6. processNormalMode() or processArpMode()
+7. ArpScheduler.tick()                        ← all background arps
+8. MidiEngine.flush()                         ← CRITICAL PATH END
+9. PotRouter.update()                         ← SECONDARY (5 pots)
+10. BatteryMonitor.update()
+11. LedController.update()
+12. NvsManager.notifyIfDirty()                ← non-blocking signal to NVS task
+13. vTaskDelay(1)
 ```
 
 ## Buttons
 
-- **Left (hold + pad)**: bank select. 8 pads. All notes off for NORMAL on switch. ARPEG: nothing (arp lives/dies by its own logic).
-- **Right (hold + pad)**: 15 scale pads (7 root + 7 mode + 1 chromatic) + 7 arp pads on ARPEG banks (5 patterns + 1 octave cycle + 1 HOLD toggle). No MIDI notes during hold.
-- **Play/Stop pad**: the ONLY control pad active during normal play. Contextual: note on NORMAL, note on ARPEG HOLD-OFF, play/stop toggle on ARPEG HOLD-ON.
-- **Rear**: battery gauge (press), setup mode (hold 3s at boot).
+- **Left (hold + pad)**: single-layer control. 8 bank pads + 15 scale pads (7 root + 7 mode + 1 chromatic) + 1 HOLD toggle (ARPEG only). All visible in one hold. BankManager and ScaleManager share this button — no conflict (pad roles are distinct, checked by Tool 3). All notes off for NORMAL on bank switch. ARPEG: nothing (arp lives/dies by its own logic). Scale change on ARPEG: no allNotesOff — arp re-resolves at next tick.
+- **Left (hold + pot)**: modifier for 4 right pots (2nd slot: division, AT deadzone/swing, pitch bend/octave, velocity variation).
+- **Play/Stop pad**: ARPEG only — always active (with or without left button held). Toggles arp transport. On NORMAL banks, this pad is a regular music pad (plays a note).
+- **Rear (press)**: battery gauge (3s).
+- **Rear (hold 3s at boot)**: setup mode.
+- **Rear (hold + pot rear)**: modifier for rear pot (pad sensitivity).
 
 ## Arpeggiator
 
-**HOLD OFF (live)**: press=add note, release=remove. All fingers up = arp stops naturally. BankManager has NO arp stop logic.
+**Pile stores padOrder positions, NOT MIDI notes.** Resolution happens at each tick via current ScaleConfig. Changing scale on a background arp = immediate effect at next tick, no interruption.
+
+**HOLD OFF (live)**: press=add position, release=remove. All fingers up = arp stops naturally. BankManager has NO arp stop logic.
 
 **HOLD ON (persistent)**: press=add, double-tap(<300ms)=remove. Play/stop pad controls transport (restart from beginning). Bank switch = arp continues in background.
 
-5 patterns (Up/Down/UpDown/Random/Order), 1-4 octaves, up to 48 notes (192 steps with 4 oct). Division from pot right. Gate/swing/velocity per-bank.
+5 patterns (Up/Down/UpDown/Random/Order) via pot right 3, 1-4 octaves via hold+pot right 3, up to 48 positions (192 steps with 4 oct). Division via hold+pot right 1 (9 binary values: 4/1→1/64). Gate/swing/velocity per-bank via pots.
 
 ## Pots — PotRouter
 
-PotRouter reads 3 ADCs, resolves button combos, applies catch system, exposes getters. Declarative binding table — add a param = add a line.
+PotRouter reads 5 ADCs (4 right + 1 rear), resolves button combos, applies catch system, exposes getters. Declarative binding table — add a param = add a line.
 
-**Pot values**: NORMAL params (shape, slew, AT deadzone) = **GLOBAL**. ARPEG params (gate, swing, division, velocity base, velocity variation) = **PER BANK**. Catch resets on bank switch for per-bank params.
+**Button modifiers**: Left button = modifier for 4 right pots. Rear button = modifier for rear pot only. They never cross.
 
-| Pot | Alone | + opposite btn | + same-side btn (non-live) |
-|---|---|---|---|
-| Left NORMAL | Response shape | Slew rate | — |
-| Left ARPEG | Gate length | Swing | — |
-| Right NORMAL | — | AT deadzone | — |
-| Right ARPEG | Division | Velocity variation | Base velocity |
-| Rear | Tempo BPM | Pad sensitivity | — |
+**Pot values**: NORMAL params (shape, slew, AT deadzone) = **GLOBAL**. ARPEG params (gate, swing, division, pattern, octave) = **PER BANK**. Velocity params (base, variation) = **PER BANK** (NORMAL + ARPEG). Pitch bend offset = **PER BANK** (NORMAL only). Tempo, LED brightness, pad sensitivity = **GLOBAL**. Catch resets on bank switch for per-bank params.
+
+| Pot | NORMAL alone | NORMAL + hold left | ARPEG alone | ARPEG + hold left |
+|---|---|---|---|---|
+| Right 1 | Tempo (10-260 BPM) | — empty — | Tempo (10-260 BPM) | Division (9 binary) |
+| Right 2 | Response shape | AT deadzone | Gate length | Swing |
+| Right 3 | Slew rate | Pitch bend (per-bank) | Pattern (5 discrete) | Octave (1-4) |
+| Right 4 | Base velocity | Velocity variation | Base velocity | Velocity variation |
+| Rear | LED brightness | — | LED brightness | — |
+
+| Rear pot | Alone | + hold rear |
+|---|---|---|
+| Rear | LED brightness | Pad sensitivity |
 
 ## MIDI Clock
 
-ClockManager receives 0xF8/0xFA/0xFC via USB+BLE. Priority: USB > BLE > last known > internal (pot rear).
+ClockManager receives 0xF8/0xFA/0xFC via USB+BLE. Priority: USB > BLE > last known > internal (pot right 1).
 **PLL** smooths BLE jitter (±15ms → ±1-2ms). ArpEngines sync to smoothed clock.
 
 ## Setup Mode (hold rear button 3s at boot)
@@ -124,9 +136,9 @@ VT100 terminal, serial input + button = ENTER.
 ```
 [1] Pressure Calibration  — unchanged from V1
 [2] Pad Ordering           — touch low→high, positions 1-48, no base note
-[3] Pad Roles              — unified (bank+scale+arp), color grid, collision check
+[3] Pad Roles              — bank(8) + scale(15) + arp(2), color grid, collision check
 [4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG)
-[5] Settings               — profile, sensitivity, AT rate, deadzone, BLE interval
+[5] Settings               — profile, AT rate, BLE interval
 [0] Reboot
 ```
 
@@ -153,13 +165,18 @@ src/
 | `illpad_nmap` | padOrder[48] (positions, NOT MIDI notes) |
 | `illpad_bpad` | bankPads[8] |
 | `illpad_bank` | current bank (0-7) |
-| `illpad_set` | settings (profile, sens, AT rate, deadzone, BLE interval) |
+| `illpad_set` | settings (profile, AT rate, BLE interval) |
 | `illpad_pot` | global pot params (shape, slew, AT deadzone) |
+| `illpad_tempo` | tempo BPM (global) |
 | `illpad_btype` | bank types[8] (NORMAL/ARPEG) |
 | `illpad_scale` | scale config per bank (chromatic, root, mode) |
 | `illpad_spad` | scale pads (7 root + 7 mode + 1 chrom) |
-| `illpad_apad` | arp pads (5 pattern + 1 oct + 1 hold + 1 play/stop) |
-| `illpad_apot` | arp pot params per bank (gate, swing, div, vel base, vel var) |
+| `illpad_apad` | arp pads (1 hold + 1 play/stop) |
+| `illpad_apot` | arp pot params per bank (gate, swing, div, pattern, octave) |
+| `illpad_bvel` | base velocity + velocity variation per bank (NORMAL + ARPEG) |
+| `illpad_pbnd` | pitch bend offset per bank (NORMAL) |
+| `illpad_led` | LED brightness (global) |
+| `illpad_sens` | pad sensitivity (global) |
 
 NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never blocks on flash.
 

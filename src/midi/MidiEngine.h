@@ -19,7 +19,7 @@ struct AftertouchEvent {
 // =================================================================
 // MidiEngine — pad-level noteOn/Off + rate-limited poly-aftertouch
 // =================================================================
-// No scale resolver, no banks. Simple chromatic mapping from C2.
+// Scale-aware noteOn via ScaleResolver. Per-bank velocity and pitch bend.
 // Edge detection lives in the caller (main loop).
 
 class MidiEngine {
@@ -42,6 +42,12 @@ public:
   // Rate-limited per pad. Queues events into the ring buffer.
   void updateAftertouch(uint8_t padIndex, uint8_t pressure);
 
+  // --- Pitch bend (per-bank, sent on bank switch or pot change) ---
+  void sendPitchBend(uint16_t value);  // 0-16383, center=8192
+
+  // --- Aftertouch rate (runtime configurable) ---
+  void setAftertouchRate(uint8_t ms);
+
   // Send noteOff for all active pads, clear aftertouch queue.
   void allNotesOff();
 
@@ -56,6 +62,7 @@ private:
   uint8_t  _lastResolvedNote[NUM_KEYS];   // MIDI note sent on noteOn (0xFF = inactive)
   uint8_t  _lastSentPressure[NUM_KEYS];   // Last aftertouch value sent (for change threshold)
   uint32_t _lastAftertouchMs[NUM_KEYS];   // Timestamp of last aftertouch send
+  uint8_t  _aftertouchIntervalMs;         // Rate limit interval (configurable)
 
   // Aftertouch ring buffer
   static const uint8_t AT_RING_SIZE = 64;

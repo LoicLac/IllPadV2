@@ -46,21 +46,22 @@ const int NUM_LEDS = 8;
 const uint8_t RGB_LED_PIN = 48;  // v1.1; use 48 for v1.0
 const uint8_t RGB_LED_BRIGHTNESS = 48;  // 0–255
 
-// --- Buttons (V2: 3 buttons, all active LOW with internal pull-up) ---
-const uint8_t BTN_LEFT_PIN  = 2;   // GPIO??? — Left side, bank select (hold + pad)
-const uint8_t BTN_RIGHT_PIN = 3;   // GPIO??? — Right side, scale/arp controls (hold + pad)
-const uint8_t BTN_REAR_PIN  = 11;  // GPIO??? — Rear, battery gauge + setup mode entry
+// --- Buttons (V2: 2 buttons, all active LOW with internal pull-up) ---
+const uint8_t BTN_LEFT_PIN  = 2;   // GPIO??? — Left side, bank+scale+arp single-layer (hold + pad), modifier for right pots
+const uint8_t BTN_REAR_PIN  = 11;  // GPIO??? — Rear, battery gauge + setup mode entry + modifier for rear pot
 
 const uint16_t CAL_WAIT_WINDOW_MS = 3000;   // Time after boot to press button
 const uint16_t CAL_HOLD_DURATION_MS = 3000; // Hold 3s after press to enter calibration
 const uint16_t CAL_AUTOCONFIG_COUNTDOWN_MS = 1000;
 const uint8_t  CHASE_STEP_MS = 80;          // Speed of chase pattern (ms per LED step)
 
-// --- Analog Pots (V2: 3 potentiometers) ---
-const uint8_t POT_LEFT_PIN  = 1;   // GPIO??? — Left side, feel/sound (contextual NORMAL/ARPEG)
-const uint8_t POT_RIGHT_PIN = 12;  // GPIO??? — Right side, notes/rhythm (contextual NORMAL/ARPEG)
-const uint8_t POT_REAR_PIN  = 13;  // GPIO??? — Rear, config (tempo, etc.)
-const uint8_t NUM_POTS = 3;
+// --- Analog Pots (V2: 5 potentiometers — 4 right + 1 rear) ---
+const uint8_t POT_RIGHT1_PIN = 1;   // GPIO??? — Right side pot 1 (tempo / division)
+const uint8_t POT_RIGHT2_PIN = 12;  // GPIO??? — Right side pot 2 (shape-gate / deadzone-swing)
+const uint8_t POT_RIGHT3_PIN = 14;  // GPIO??? — Right side pot 3 (slew-pattern / pitchbend-octave)
+const uint8_t POT_RIGHT4_PIN = 21;  // GPIO??? — Right side pot 4 (base velocity / velocity variation)
+const uint8_t POT_REAR_PIN   = 13;  // GPIO??? — Rear (LED brightness / pad sensitivity)
+const uint8_t NUM_POTS = 5;
 
 const int POT_DEADZONE = 30;     // ADC change threshold to register movement (ESP32 ADC noise ~10-20 LSB)
 const float POT_SMOOTHING_ALPHA = 0.05f;
@@ -152,12 +153,29 @@ const uint16_t AT_DEADZONE_MIN         = 0;
 const uint16_t AT_DEADZONE_MAX         = 250;  // = AFTERTOUCH_DEADZONE_MAX_OFFSET
 const uint16_t AT_DEADZONE_DEFAULT     = 0;
 
+// --- BLE Connection Interval Presets ---
+enum BleInterval : uint8_t {
+  BLE_LOW_LATENCY   = 0,   // 7.5ms (best response, more battery)
+  BLE_NORMAL        = 1,   // 15ms (balanced, Apple compatible)
+  BLE_BATTERY_SAVER = 2,   // 30ms (saves battery, higher latency)
+  NUM_BLE_INTERVALS = 3
+};
+const uint8_t DEFAULT_BLE_INTERVAL = BLE_NORMAL;
+
 // =================================================================
 // 5. MIDI
 // =================================================================
 const uint8_t MIDI_BASE_NOTE = 36;          // C2
 const uint8_t MIDI_CHANNEL = 0;             // Channel 1 (zero-indexed), default at boot
-const uint8_t MIDI_NOTE_ON_VELOCITY = 127;  // Fixed velocity
+// Velocity is now per-bank (baseVelocity + velocityVariation in BankSlot)
+const uint8_t DEFAULT_BASE_VELOCITY      = 100;  // Default base velocity for new banks
+const uint8_t DEFAULT_VELOCITY_VARIATION = 0;     // Default variation (0 = fixed)
+const uint16_t DEFAULT_PITCH_BEND_OFFSET = 8192;  // Center (no bend)
+
+// --- Tempo ---
+const uint16_t TEMPO_BPM_MIN = 10;
+const uint16_t TEMPO_BPM_MAX = 260;
+const uint16_t TEMPO_BPM_DEFAULT = 120;
 
 // --- Bank System ---
 // Hold bank button + press one of 8 pads to select bank (MIDI channel 1–8).

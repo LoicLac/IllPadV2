@@ -19,9 +19,15 @@ public:
   void setBaseVelocity(uint8_t vel);       // 1-127
   void setVelocityVariation(uint8_t pct);  // 0-100
 
-  void addNote(uint8_t midiNote);
-  void removeNote(uint8_t midiNote);
+  // Pile management — stores padOrder positions, NOT MIDI notes.
+  // Resolution to MIDI notes happens at tick time via current ScaleConfig.
+  void addPadPosition(uint8_t padOrderPos);
+  void removePadPosition(uint8_t padOrderPos);
   void clearAllNotes();
+
+  // Scale/pad context — set by main loop, used at tick for note resolution
+  void setScaleConfig(const ScaleConfig& scale);
+  void setPadOrder(const uint8_t* padOrder);
 
   void setHold(bool on);
   bool isHoldOn() const;
@@ -44,21 +50,25 @@ private:
   uint8_t     _baseVelocity;
   uint8_t     _velocityVariation;
 
-  // Note pile
-  uint8_t _notes[MAX_ARP_NOTES];
-  uint8_t _noteCount;
-  uint8_t _noteOrder[MAX_ARP_NOTES];   // Chronological order
+  // Note pile — stores padOrder positions (0-47), NOT MIDI notes
+  uint8_t _positions[MAX_ARP_NOTES];      // Sorted pile
+  uint8_t _positionCount;
+  uint8_t _positionOrder[MAX_ARP_NOTES];  // Chronological order
   uint8_t _orderCount;
 
-  // Built sequence (notes × octaves)
-  uint8_t _sequence[MAX_ARP_SEQUENCE];
+  // Built sequence (positions × octaves, resolved at tick time)
+  uint8_t _sequence[MAX_ARP_SEQUENCE];    // padOrder positions
   uint8_t _sequenceLen;
   bool    _sequenceDirty;
+
+  // Scale context for tick-time resolution
+  ScaleConfig    _scale;
+  const uint8_t* _padOrder;  // Pointer to global padOrder[48]
 
   // Playback state
   int16_t _stepIndex;
   int8_t  _direction;
-  uint8_t _lastPlayedNote;
+  uint8_t _lastPlayedNote;   // MIDI note (for noteOff)
   bool    _playing;
   bool    _holdOn;
 

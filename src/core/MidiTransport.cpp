@@ -1,6 +1,7 @@
 #include "MidiTransport.h"
 #include "HardwareConfig.h"
 #include <Arduino.h>
+#include <atomic>
 
 // --- USB MIDI (ESP32-S3 built-in TinyUSB) ---
 #include "USB.h"
@@ -9,6 +10,7 @@
 
 // --- BLE MIDI (max22/ESP32-BLE-MIDI) ---
 #include <BLEMidi.h>
+#include <NimBLEDevice.h>
 
 // USB MIDI global instance (built-in framework API)
 // Uses compile-time USB device name from HardwareConfig.h
@@ -16,9 +18,33 @@ static USBMIDI usbMidi(DEVICE_NAME_USB);
 
 // Track BLE connection state via callbacks
 static volatile bool s_bleConnected = false;
+static std::atomic<uint8_t> s_bleIntervalSetting{BLE_NORMAL};
 
 static void onBleConnected() {
   s_bleConnected = true;
+
+  // Apply BLE connection interval via NimBLE.
+  // getPeerDevices() returns std::vector because the ESP32-BLE-MIDI callback
+  // signature (void(*)()) strips the NimBLEServer* parameter, so we can't
+  // access the connection handle directly from the callback arguments.
+  NimBLEServer* pServer = NimBLEDevice::getServer();
+  if (pServer) {
+    std::vector<uint16_t> peers = pServer->getPeerDevices();
+    if (!peers.empty()) {
+      uint16_t handle = peers.back();
+      uint16_t minI, maxI;
+      switch (s_bleIntervalSetting.load(std::memory_order_relaxed)) {
+        case BLE_LOW_LATENCY:   minI = 6;  maxI = 6;  break;  // 7.5ms
+        case BLE_BATTERY_SAVER: minI = 24; maxI = 24; break;  // 30ms
+        default:                minI = 12; maxI = 12; break;  // 15ms
+      }
+      pServer->updateConnParams(handle, minI, maxI, 0, 200);
+      #if DEBUG_SERIAL
+      Serial.printf("[MIDI] BLE conn params: interval=%d (%.1fms)\n", minI, minI * 1.25f);
+      #endif
+    }
+  }
+
   #if DEBUG_SERIAL
   Serial.println("[MIDI] BLE client connected.");
   #endif
@@ -76,6 +102,14 @@ void MidiTransport::update() {
 }
 
 // =================================================================
+// BLE Connection Interval
+// =================================================================
+
+void MidiTransport::setBleInterval(uint8_t interval) {
+  s_bleIntervalSetting.store(interval, std::memory_order_relaxed);
+}
+
+// =================================================================
 // Dual-Output MIDI Sends
 // =================================================================
 
@@ -108,6 +142,19 @@ void MidiTransport::sendPolyAftertouch(uint8_t channel, uint8_t note, uint8_t pr
   // BLE MIDI
   if (BLEMidiServer.isConnected()) {
     BLEMidiServer.afterTouchPoly(channel, note, pressure);
+  }
+}
+
+void MidiTransport::sendPitchBend(uint8_t channel, uint16_t value) {
+  // USB MIDI — pitchBend takes signed value -8192..+8191 (USB MIDI lib convention)
+  if (tud_mounted()) {
+    int16_t signedVal = (int16_t)value - 8192;
+    usbMidi.pitchBend(signedVal, channel + 1);
+  }
+
+  // BLE MIDI — pitchBend takes 0-16383
+  if (BLEMidiServer.isConnected()) {
+    BLEMidiServer.pitchBend(channel, value);
   }
 }
 
