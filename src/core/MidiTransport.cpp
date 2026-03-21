@@ -87,18 +87,21 @@ void MidiTransport::begin() {
   Serial.println("[MIDI] USB MIDI initialized.");
   #endif
 
-  // --- BLE MIDI Init ---
-  // Uses compile-time BLE device name from HardwareConfig.h
-  BLEMidiServer.begin(DEVICE_NAME_BLE);
-  BLEMidiServer.setOnConnectCallback(onBleConnected);
-  BLEMidiServer.setOnDisconnectCallback(onBleDisconnected);
+  // --- BLE MIDI Init (skip if BLE_OFF) ---
+  if (s_bleIntervalSetting.load(std::memory_order_relaxed) != BLE_OFF) {
+    BLEMidiServer.begin(DEVICE_NAME_BLE);
+    BLEMidiServer.setOnConnectCallback(onBleConnected);
+    BLEMidiServer.setOnDisconnectCallback(onBleDisconnected);
+    BLEMidiServer.setSystemRTCallback(onBleSystemRT);
 
-  // ILLPAD fork: register system real-time callback for BLE clock reception
-  BLEMidiServer.setSystemRTCallback(onBleSystemRT);
-
-  #if DEBUG_SERIAL
-  Serial.println("[MIDI] BLE MIDI initialized (with system RT callback).");
-  #endif
+    #if DEBUG_SERIAL
+    Serial.println("[MIDI] BLE MIDI initialized.");
+    #endif
+  } else {
+    #if DEBUG_SERIAL
+    Serial.println("[MIDI] BLE disabled (USB only).");
+    #endif
+  }
 }
 
 // =================================================================
@@ -164,6 +167,22 @@ void MidiTransport::sendClockTick() {
   }
   if (BLEMidiServer.isConnected()) {
     BLEMidiServer.sendSystemRT(0xF8);
+  }
+}
+
+// =================================================================
+// CC 123 All Notes Off (Panic)
+// =================================================================
+
+void MidiTransport::sendAllNotesOff(uint8_t channel) {
+  // CC 123, value 0 = All Notes Off (MIDI standard)
+  uint8_t status = 0xB0 | (channel & 0x0F);
+  if (tud_mounted()) {
+    midiEventPacket_t pkt = {0x0B, status, 123, 0};
+    usbMidi.writePacket(&pkt);
+  }
+  if (BLEMidiServer.isConnected()) {
+    BLEMidiServer.controlChange(channel, 123, 0);
   }
 }
 

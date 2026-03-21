@@ -153,7 +153,8 @@ enum BleInterval : uint8_t {
   BLE_LOW_LATENCY   = 0,   // 7.5ms (best response, more battery)
   BLE_NORMAL        = 1,   // 15ms (balanced, Apple compatible)
   BLE_BATTERY_SAVER = 2,   // 30ms (saves battery, higher latency)
-  NUM_BLE_INTERVALS = 3
+  BLE_OFF           = 3,   // BLE disabled — USB only (saves ~35KB RAM, faster boot)
+  NUM_BLE_INTERVALS = 4
 };
 const uint8_t DEFAULT_BLE_INTERVAL = BLE_NORMAL;
 
@@ -165,6 +166,7 @@ enum ClockMode : uint8_t {
 };
 const uint8_t DEFAULT_CLOCK_MODE         = CLOCK_SLAVE;
 const uint8_t DEFAULT_FOLLOW_TRANSPORT   = 1;  // yes — slave follows DAW Start/Stop/Continue
+const uint8_t DEFAULT_PANIC_ON_RECONNECT = 1;  // yes — CC123 on all channels when BLE reconnects
 
 // --- Arp Start Quantize (per-bank, set in Tool 4) ---
 enum ArpStartMode : uint8_t {

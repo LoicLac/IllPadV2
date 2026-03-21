@@ -579,7 +579,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   // --- Settings (profile, AT rate, BLE interval, clock, follow transport, double-tap) ---
   settings = {EEPROM_MAGIC, SETTINGS_VERSION, DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT,
               DEFAULT_BLE_INTERVAL, DEFAULT_CLOCK_MODE, DEFAULT_FOLLOW_TRANSPORT,
-              DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT};
+              DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT, DEFAULT_PANIC_ON_RECONNECT};
   if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
     if (len == sizeof(SettingsStore)) {

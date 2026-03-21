@@ -25,7 +25,8 @@ void ToolSettings::run() {
   SettingsStore wk = {EEPROM_MAGIC, SETTINGS_VERSION,
                       DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
                       DEFAULT_CLOCK_MODE, DEFAULT_FOLLOW_TRANSPORT,
-                      DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT};
+                      DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
+                      DEFAULT_PANIC_ON_RECONNECT};
   {
     Preferences prefs;
     if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
@@ -42,11 +43,11 @@ void ToolSettings::run() {
   }
 
   static const char* profileNames[]   = {"Adaptive", "Expressive", "Percussive"};
-  static const char* bleNames[]       = {"Low Latency (7.5ms)", "Normal (15ms)", "Battery Saver (30ms)"};
+  static const char* bleNames[]       = {"Low Latency (7.5ms)", "Normal (15ms)", "Battery Saver (30ms)", "Off (USB only)"};
   static const char* clockModeNames[] = {"Slave", "Master"};
   static const char* yesNoNames[]     = {"No", "Yes"};
 
-  uint8_t selectedParam = 0;  // 0=none, 1-7
+  uint8_t selectedParam = 0;  // 0=none, 1-8
   bool screenDirty = true;
 
   _ui->vtClear();
@@ -55,7 +56,7 @@ void ToolSettings::run() {
     char input = _ui->readInput();
 
     // Select parameter
-    if (input >= '1' && input <= '7') {
+    if (input >= '1' && input <= '8') {
       selectedParam = input - '0';
       screenDirty = true;
     }
@@ -76,6 +77,8 @@ void ToolSettings::run() {
         if (wk.doubleTapMs + 10 <= DOUBLE_TAP_MS_MAX) wk.doubleTapMs += 10;
       } else if (selectedParam == 7) {
         if (wk.potBarDurationMs + 500 <= LED_BARGRAPH_DURATION_MAX) wk.potBarDurationMs += 500;
+      } else if (selectedParam == 8) {
+        wk.panicOnReconnect = wk.panicOnReconnect ? 0 : 1;
       }
       screenDirty = true;
     }
@@ -97,6 +100,8 @@ void ToolSettings::run() {
       } else if (selectedParam == 7) {
         if (wk.potBarDurationMs >= LED_BARGRAPH_DURATION_MIN + 500) wk.potBarDurationMs -= 500;
         else wk.potBarDurationMs = LED_BARGRAPH_DURATION_MIN;
+      } else if (selectedParam == 8) {
+        wk.panicOnReconnect = wk.panicOnReconnect ? 0 : 1;
       }
       screenDirty = true;
     }
@@ -168,6 +173,7 @@ void ToolSettings::run() {
       char bgBuf[16];
       snprintf(bgBuf, sizeof(bgBuf), "%.1f s", wk.potBarDurationMs / 1000.0f);
       drawParam(7, "Bargraph Duration:", bgBuf);
+      drawParam(8, "Panic on Reconnect:", yesNoNames[wk.panicOnReconnect ? 1 : 0]);
 
       Serial.printf(VT_CL "\n");
 
@@ -186,7 +192,8 @@ void ToolSettings::run() {
         Serial.printf(VT_DIM "    Low Latency: 7.5ms (best response, more battery)" VT_RESET VT_CL "\n");
         Serial.printf(VT_DIM "    Normal: 15ms (Apple compatible, default)" VT_RESET VT_CL "\n");
         Serial.printf(VT_DIM "    Battery Saver: 30ms (saves battery, higher latency)" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Note: the host device may override this." VT_RESET VT_CL "\n");
+        Serial.printf(VT_DIM "    Off: BLE disabled, USB only (saves RAM, faster boot)" VT_RESET VT_CL "\n");
+        Serial.printf(VT_DIM "    Reboot required after change." VT_RESET VT_CL "\n");
       } else if (selectedParam == 4) {
         Serial.printf(VT_DIM "    Slave: sync to external clock (DAW)." VT_RESET VT_CL "\n");
         Serial.printf(VT_DIM "    Master: generate clock from pot tempo." VT_RESET VT_CL "\n");
@@ -203,13 +210,17 @@ void ToolSettings::run() {
       } else if (selectedParam == 7) {
         Serial.printf(VT_DIM "    How long the pot bargraph stays visible" VT_RESET VT_CL "\n");
         Serial.printf(VT_DIM "    after last pot movement. Range: 1-10s." VT_RESET VT_CL "\n");
+      } else if (selectedParam == 8) {
+        Serial.printf(VT_DIM "    Yes: send CC123 (All Notes Off) on all" VT_RESET VT_CL "\n");
+        Serial.printf(VT_DIM "    channels when BLE reconnects. Prevents" VT_RESET VT_CL "\n");
+        Serial.printf(VT_DIM "    stuck notes after connection drop." VT_RESET VT_CL "\n");
       } else {
-        Serial.printf(VT_DIM "    Select a parameter with [1-7]." VT_RESET VT_CL "\n");
+        Serial.printf(VT_DIM "    Select a parameter with [1-8]." VT_RESET VT_CL "\n");
       }
       Serial.printf(VT_DIM "  ----------------------------------------" VT_RESET VT_CL "\n");
 
       Serial.printf(VT_CL "\n");
-      Serial.printf("    [1-7] Select   [+/-] Adjust   [ENTER] Save   [q] Back" VT_CL "\n");
+      Serial.printf("    [1-8] Select   [+/-] Adjust   [ENTER] Save   [q] Back" VT_CL "\n");
       _ui->vtFrameEnd();
     }
 

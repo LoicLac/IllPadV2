@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <Preferences.h>
 #include <atomic>
 
 // Core
@@ -78,6 +79,10 @@ static uint8_t  s_doubleTapMs = DOUBLE_TAP_MS_DEFAULT;
 // Hold pad (ARPEG)
 static uint8_t s_holdPad = 23;  // Default, overwritten by NVS
 
+// Panic: BLE reconnect detection + settings
+static bool    s_lastBleConnected = false;
+static bool    s_panicOnReconnect = DEFAULT_PANIC_ON_RECONNECT;
+
 // Boot stabilization
 static const uint32_t BOOT_SETTLE_MS = 300;
 static uint32_t s_bootTimestamp = 0;
@@ -107,6 +112,31 @@ static void sensingTask(void* param) {
 
     vTaskDelay(1);
   }
+}
+
+// =================================================================
+// Panic — brute force silence on all channels
+// =================================================================
+// Flushes all arp engines (pending events + refcounts) then sends
+// CC 123 (All Notes Off) on all 8 channels. Guarantees no stuck notes
+// in the DAW regardless of internal tracking state.
+
+static void midiPanic() {
+  // Phase 1: flush all arp engines (pending events + refcounts)
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine) {
+      s_banks[i].arpEngine->flushPendingNoteOffs(s_transport);
+    }
+  }
+  // Phase 2: clear MidiEngine tracked notes (NORMAL mode)
+  s_midiEngine.allNotesOff();
+  // Phase 3: CC 123 on all 8 channels (catches anything we missed)
+  for (uint8_t ch = 0; ch < NUM_BANKS; ch++) {
+    s_transport.sendAllNotesOff(ch);
+  }
+  #if DEBUG_SERIAL
+  Serial.println("[PANIC] All notes off on all channels");
+  #endif
 }
 
 // =================================================================
@@ -229,6 +259,21 @@ void setup() {
   }
 
   // MIDI Transport (USB + BLE) — after setup, before normal boot
+  // Load BLE interval early (before begin) so BLE_OFF can skip BLE init entirely
+  {
+    Preferences prefs;
+    if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
+      size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
+      if (len == sizeof(SettingsStore)) {
+        SettingsStore tmp;
+        prefs.getBytes(SETTINGS_NVS_KEY, &tmp, sizeof(SettingsStore));
+        if (tmp.magic == EEPROM_MAGIC && tmp.version == SETTINGS_VERSION) {
+          s_transport.setBleInterval(tmp.bleInterval);
+        }
+      }
+      prefs.end();
+    }
+  }
   s_leds.showBootProgress(4);  // Step 4: starting MIDI
   s_transport.begin();
   #if DEBUG_SERIAL
@@ -277,6 +322,7 @@ void setup() {
   s_clockManager.setFollowTransport(s_settings.followTransport != 0);
   s_doubleTapMs = s_settings.doubleTapMs;
   s_leds.setPotBarDuration(s_settings.potBarDurationMs);
+  s_panicOnReconnect = (s_settings.panicOnReconnect != 0);
 
   // Apply loaded tempo to ClockManager (loadAll set it on PotRouter,
   // but ClockManager was initialized before loadAll with default 120)
@@ -428,6 +474,9 @@ void loop() {
     BankSlot& scSlot = s_bankManager.getCurrentSlot();
     s_nvsManager.queueScaleWrite(bank, scSlot.scale);
     if (scSlot.type == BANK_ARPEG && scSlot.arpEngine) {
+      // Flush old notes before scale change — prevents stuck notes when
+      // a pile position resolves to a different MIDI note in the new scale
+      scSlot.arpEngine->flushPendingNoteOffs(s_transport);
       scSlot.arpEngine->setScaleConfig(scSlot.scale);
     }
     s_leds.triggerConfirm(CONFIRM_SCALE);
@@ -462,13 +511,16 @@ void loop() {
   // Must also reset ArpScheduler sync (prevents unsigned wrap burst)
   // and restart playing engines from bar 1.
   if (s_clockManager.consumeStartReceived()) {
-    s_arpScheduler.resetSync();
+    // Flush old events FIRST — prevents stale noteOn/noteOff from firing
+    // after restart. Then reset step index for bar 1 sync.
     for (uint8_t i = 0; i < NUM_BANKS; i++) {
       if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine
           && s_banks[i].arpEngine->isPlaying()) {
+        s_banks[i].arpEngine->flushPendingNoteOffs(s_transport);
         s_banks[i].arpEngine->resetStepIndex();
       }
     }
+    s_arpScheduler.resetSync();
   }
 
   // --- Play/Stop pad (ARPEG + HOLD ON only — in HOLD OFF this pad plays a note) ---
@@ -632,6 +684,40 @@ void loop() {
   }
 
   s_leds.update();
+
+  // --- Panic: BLE reconnect detection ---
+  {
+    bool bleNow = s_transport.isBleConnected();
+    if (bleNow && !s_lastBleConnected && s_panicOnReconnect) {
+      midiPanic();
+    }
+    s_lastBleConnected = bleNow;
+  }
+
+  // --- Panic: manual trigger (triple-click rear button within 600ms) ---
+  {
+    static bool    s_lastRearState = false;
+    static uint8_t s_rearClickCount = 0;
+    static uint32_t s_rearFirstClickTime = 0;
+
+    bool rearNow = rearHeld;
+    // Detect rising edge (press)
+    if (rearNow && !s_lastRearState) {
+      if (s_rearClickCount == 0) {
+        s_rearFirstClickTime = now;
+      }
+      s_rearClickCount++;
+      if (s_rearClickCount >= 3) {
+        midiPanic();
+        s_rearClickCount = 0;
+      }
+    }
+    // Reset if window expired
+    if (s_rearClickCount > 0 && (now - s_rearFirstClickTime) > 600) {
+      s_rearClickCount = 0;
+    }
+    s_lastRearState = rearNow;
+  }
 
   // --- NVS: pot debounce (10s after last change) + signal task ---
   bool potDirty = s_potRouter.isDirty();

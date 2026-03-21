@@ -63,7 +63,7 @@ struct BankPadStore {
 // Settings Data — runtime-tunable parameters, stored in NVS
 // =================================================================
 
-const uint8_t SETTINGS_VERSION = 7;  // Bumped: 6→7 (removed sendStartStop, renamed receiveStartStop→followTransport)
+const uint8_t SETTINGS_VERSION = 8;  // Bumped: 7→8 (added panicOnReconnect)
 
 struct SettingsStore {
   uint16_t magic;               // EEPROM_MAGIC (0xBEEF)
@@ -75,6 +75,7 @@ struct SettingsStore {
   uint8_t  followTransport;     // 0=No, 1=Yes — slave only: follow DAW Start/Stop/Continue
   uint8_t  doubleTapMs;         // 100-250 (ms), double-tap window for ARPEG HOLD
   uint16_t potBarDurationMs;    // 1000-10000 (ms), bargraph display persistence
+  uint8_t  panicOnReconnect;    // 0=No, 1=Yes — send CC123 on BLE reconnect
 };
 
 #define SETTINGS_NVS_NAMESPACE "illpad_set"

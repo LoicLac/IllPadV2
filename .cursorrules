@@ -72,19 +72,25 @@ Critical path first, secondary after. MIDI latency depends on this order.
 ```
 1. Read double buffer (instant)              ← CRITICAL PATH START
 2. Read buttons (left + rear)
-3. BankManager.update()                       ← left button
-4. ScaleManager.update()                      ← left button (same as bank)
-4b. Consume scale/octave/hold flags + LED confirmations
-5. Play/Stop pad (ARPEG + HOLD ON only)
-6. processNormalMode() or processArpMode()
-7. ArpScheduler.tick()                        ← all background arps
-7b. ArpScheduler.processEvents()              ← gate noteOff + shuffle noteOn
-8. MidiEngine.flush()                         ← CRITICAL PATH END
-9. PotRouter.update()                         ← SECONDARY (5 pots)
-10. BatteryMonitor.update()
-11. LedController.update()                    ← multi-bank state + confirmations
-12. NvsManager.notifyIfDirty()                ← non-blocking signal to NVS task
-13. vTaskDelay(1)
+3. USB MIDI transport update (clock polling)
+4. BankManager.update()                       ← left button
+5. ScaleManager.update()                      ← left button (same as bank)
+5b. Consume scale/octave/hold flags + LED confirmations
+    (ARPEG scale change: flush noteOffs before re-resolve)
+6. ClockManager.update()                      ← PLL + tick generation
+7. DAW transport: consume Start/Stop flags
+    Stop → flush all playing arps (immediate silence)
+    Start → flush + resetStepIndex + resetSync (bar 1 restart)
+8. Play/Stop pad (ARPEG + HOLD ON only)
+9. processNormalMode() or processArpMode()
+10. ArpScheduler.tick()                       ← all background arps
+10b. ArpScheduler.processEvents()             ← gate noteOff + shuffle noteOn
+11. MidiEngine.flush()                        ← CRITICAL PATH END
+12. PotRouter.update()                        ← SECONDARY (5 pots)
+13. BatteryMonitor.update()
+14. LedController.update()                    ← multi-bank state + confirmations
+15. NvsManager.notifyIfDirty()                ← non-blocking signal to NVS task
+16. vTaskDelay(1)
 ```
 
 ## Boot Sequence

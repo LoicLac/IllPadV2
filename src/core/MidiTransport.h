@@ -25,6 +25,9 @@ public:
   void setClockCallback(MidiClockCallback cb);
   void setTransportCallback(MidiTransportCallback cb);
 
+  // CC 123 All Notes Off (panic) — brute force silence on a single channel
+  void sendAllNotesOff(uint8_t channel);
+
   // Clock output (Master mode — ticks only, never sends Start/Stop)
   void sendClockTick();   // 0xF8
 
