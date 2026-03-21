@@ -74,6 +74,8 @@ void ArpEngine::setPattern(ArpPattern pattern) {
 }
 
 void ArpEngine::setOctaveRange(uint8_t range) {
+  if (range < 1) range = 1;
+  if (range > 4) range = 4;
   if (_octaveRange != range) {
     _octaveRange = range;
     _sequenceDirty = true;
@@ -259,8 +261,8 @@ void ArpEngine::rebuildSequence() {
     }
   }
 
-  // RANDOM: shuffle (Fisher-Yates)
-  if (_pattern == ARP_RANDOM) {
+  // RANDOM: shuffle (Fisher-Yates) — guard against empty sequence
+  if (_pattern == ARP_RANDOM && _sequenceLen > 1) {
     for (uint8_t i = _sequenceLen - 1; i > 0; i--) {
       uint8_t j = random(0, i + 1);
       uint8_t tmp = _sequence[i];
