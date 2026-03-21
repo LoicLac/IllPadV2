@@ -87,6 +87,7 @@ Critical path first, secondary after. MIDI latency depends on this order.
 10b. ArpScheduler.processEvents()             ← gate noteOff + shuffle noteOn
 11. MidiEngine.flush()                        ← CRITICAL PATH END
 12. PotRouter.update()                        ← SECONDARY (5 pots)
+12b. Send MIDI CC/PB if dirty                 ← from user-assigned pot mappings
 13. BatteryMonitor.update()
 14. LedController.update()                    ← multi-bank state + confirmations
 15. NvsManager.notifyIfDirty()                ← non-blocking signal to NVS task
@@ -183,11 +184,13 @@ Configurable via Tool 5 Settings (parameter 8). Range 1-10s, default 3s, steps o
 
 ## Pots — PotRouter
 
-PotRouter reads 5 ADCs (4 right + 1 rear), resolves button combos, applies catch system, exposes getters. Declarative binding table — add a param = add a line.
+PotRouter reads 5 ADCs (4 right + 1 rear), resolves button combos, applies catch system, exposes getters. Binding table is **runtime data** rebuilt from a user-configurable `PotMappingStore`.
 
 **Button modifiers**: Left button = modifier for 4 right pots. Rear button = modifier for rear pot only. They never cross.
 
-**Pot values**: NORMAL params (shape, slew, AT deadzone) = **GLOBAL**. ARPEG params (gate, shuffle depth, shuffle template, division, pattern) = **PER BANK**. Velocity params (base, variation) = **PER BANK** (NORMAL + ARPEG). Pitch bend offset = **PER BANK** (NORMAL only). Tempo, LED brightness, pad sensitivity = **GLOBAL**. Catch resets on bank switch for per-bank params.
+**Pot values**: NORMAL params (shape, slew, AT deadzone) = **GLOBAL**. ARPEG params (gate, shuffle depth, shuffle template, division, pattern) = **PER BANK**. Velocity params (base, variation) = **PER BANK** (NORMAL + ARPEG). Pitch bend offset = **PER BANK** (NORMAL only). Tempo, LED brightness, pad sensitivity = **GLOBAL**. MIDI CC/PB = **volatile per-bank** (sends on foreground channel, no NVS recall). Catch resets on bank switch for per-bank params.
+
+### Default Pot Mapping
 
 | Pot | NORMAL alone | NORMAL + hold left | ARPEG alone | ARPEG + hold left |
 |---|---|---|---|---|
@@ -195,13 +198,26 @@ PotRouter reads 5 ADCs (4 right + 1 rear), resolves button combos, applies catch
 | Right 2 | Response shape | AT deadzone | Gate length | Shuffle depth (0.0-1.0) |
 | Right 3 | Slew rate | Pitch bend (per-bank) | Pattern (5 discrete) | Shuffle template (5) |
 | Right 4 | Base velocity | Velocity variation | Base velocity | Velocity variation |
-| Rear | LED brightness | — | LED brightness | — |
 
 | Rear pot | Alone | + hold rear |
 |---|---|---|
 | Rear | LED brightness | Pad sensitivity |
 
 **Empty slot** (Right 1, NORMAL + hold left): reserved for future parameter.
+
+### User-Configurable Mapping (Tool 6)
+
+The 4 right pots × 2 layers = **8 slots per context** (NORMAL and ARPEG independently). Rear pot is fixed (not configurable). Each slot can be assigned any parameter from that context's pool, plus MIDI CC (with CC#) or MIDI Pitchbend.
+
+**PotMappingStore** (NVS `illpad_pmap`): two arrays of 8 `PotMapping` entries (one per context). Each entry = `{PotTarget, ccNumber}`. Has magic/version for NVS compatibility.
+
+**Rebuild flow**: `loadMapping()` or `applyMapping()` → `rebuildBindings()` → `seedCatchValues()`. The binding table, catch states, and CC slot tracking are all regenerated.
+
+**MIDI CC output**: multiple CCs allowed (different CC numbers). CC slot lookup uses binding index (not CC number) to avoid cross-context collision. Only sends on value change (dirty flag pattern, no MIDI flood). Sends on foreground bank's channel.
+
+**MIDI Pitchbend output**: max one per context. Auto-steals if a second is assigned. Sends on foreground bank's channel. Only sends on value change.
+
+**Global target catch propagation**: when a global target (e.g., Tempo) exists in both NORMAL and ARPEG contexts on the same pot, writing to one propagates `storedValue` to all same-target bindings. Prevents stale catch after bank type switch.
 
 ## MIDI Clock & Transport
 
@@ -230,8 +246,13 @@ VT100 terminal, serial input + button = ENTER.
 [3] Pad Roles              — bank(8) + scale(15) + arp(6: hold+play/stop+4 octave), color grid, collision check
 [4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
 [5] Settings               — profile, AT rate, BLE interval, clock, follow transport, double-tap, bargraph duration
+[6] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
 [0] Reboot
 ```
+
+### Tool 6 — Pot Mapping UX
+
+Two context pages (NORMAL / ARPEG), toggle with ENTER. Physical pot detection: turn a pot (or hold-left + turn) to select a slot. Pool line always visible showing all assignable parameters, color-coded: GREEN = available, DIM = already assigned. `< >` cycles through pool, immediately assigns. Steal logic: picking an already-assigned param orphans the source slot to "empty". CC enters CC# sub-mode immediately (`< >` adjusts number, ENTER confirms, `q` cancels and restores previous assignment). PB: max one per context, auto-steals. `s` saves to NVS + applies live. `d` resets current context to defaults. `q` prompts if unsaved changes.
 
 ## Source Files
 
@@ -243,7 +264,7 @@ src/
 ├── midi/       MidiEngine, ScaleResolver, ClockManager
 ├── arp/        ArpEngine, ArpScheduler
 └── setup/      SetupManager, ToolCalibration, ToolPadOrdering, ToolPadRoles,
-                ToolBankConfig, ToolSettings, SetupUI
+                ToolBankConfig, ToolSettings, ToolPotMapping, SetupUI
 ```
 
 † = DO NOT MODIFY (ported from V1, musically calibrated)
@@ -268,6 +289,7 @@ src/
 | `illpad_pbnd` | pitch bend offset per bank (NORMAL) |
 | `illpad_led` | LED brightness (global) |
 | `illpad_sens` | pad sensitivity (global) |
+| `illpad_pmap` | pot mapping (PotMappingStore: both NORMAL + ARPEG contexts, magic/version checked) |
 
 NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never blocks on flash.
 
