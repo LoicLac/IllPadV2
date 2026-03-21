@@ -103,11 +103,12 @@ void SetupUI::printMainMenu() {
   Serial.printf("   [3] Pad Roles             " VT_DIM "(bank/scale/arp pads)" VT_RESET "     %s" VT_CL "\n", statusStr(roleStatus));
   Serial.printf("   [4] Bank Config           " VT_DIM "(NORMAL vs ARPEG)" VT_RESET "         %s" VT_CL "\n", statusStr(bankStatus));
   Serial.printf("   [5] Settings              " VT_DIM "(preferences & BLE)" VT_RESET "       %s" VT_CL "\n", statusStr(setStatus));
+  Serial.printf("   [6] Pot Mapping           " VT_DIM "(parameter assignments)" VT_RESET VT_CL "\n");
   Serial.printf(VT_CL "\n");
   Serial.printf("   [0] Reboot & Exit Setup" VT_CL "\n");
   Serial.printf(VT_CL "\n");
   Serial.printf("  " VT_DIM "ok = saved    -- = defaults" VT_RESET VT_CL "\n");
-  Serial.printf("  Type 0-5" VT_CL "\n");
+  Serial.printf("  Type 0-6" VT_CL "\n");
   vtFrameEnd();
 }
 

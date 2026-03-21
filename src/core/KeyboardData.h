@@ -203,6 +203,9 @@ enum ArpDivision : uint8_t {
 #define TEMPO_NVS_NAMESPACE     "illpad_tempo"  // Tempo BPM (global)
 #define TEMPO_NVS_KEY           "bpm"
 
+#define POTMAP_NVS_NAMESPACE    "illpad_pmap"   // User pot mapping (both contexts)
+#define POTMAP_NVS_KEY          "mapping"
+
 // =================================================================
 // V2 — Shared Double Buffer (replaces mutex)
 // =================================================================

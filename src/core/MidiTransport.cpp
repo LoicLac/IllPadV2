@@ -235,6 +235,17 @@ void MidiTransport::sendPitchBend(uint8_t channel, uint16_t value) {
   }
 }
 
+void MidiTransport::sendCC(uint8_t channel, uint8_t cc, uint8_t value) {
+  if (tud_mounted()) {
+    uint8_t status = 0xB0 | (channel & 0x0F);
+    midiEventPacket_t pkt = {0x0B, status, cc, value};
+    usbMidi.writePacket(&pkt);
+  }
+  if (BLEMidiServer.isConnected()) {
+    BLEMidiServer.controlChange(channel, cc, value);
+  }
+}
+
 // =================================================================
 // Connection State
 // =================================================================

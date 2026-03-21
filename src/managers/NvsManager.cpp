@@ -597,6 +597,22 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     #endif
   }
 
+  // --- Pot mapping (user-configurable pot assignments) ---
+  if (prefs.begin(POTMAP_NVS_NAMESPACE, true)) {
+    size_t len = prefs.getBytesLength(POTMAP_NVS_KEY);
+    if (len == sizeof(PotMappingStore)) {
+      PotMappingStore pms;
+      prefs.getBytes(POTMAP_NVS_KEY, &pms, sizeof(PotMappingStore));
+      if (pms.magic == EEPROM_MAGIC && pms.version == POTMAP_VERSION) {
+        potRouter.loadMapping(pms);
+        #if DEBUG_SERIAL
+        Serial.println("[NVS] Pot mapping loaded.");
+        #endif
+      }
+    }
+    prefs.end();
+  }
+
   // --- Apply loaded values to PotRouter (BEFORE PotRouter::begin()) ---
   // This ensures catch seeds reflect NVS-saved values, not constructor defaults.
   // Without this, every reboot would lose tempo, shape, gate, etc.

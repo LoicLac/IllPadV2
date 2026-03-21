@@ -17,6 +17,7 @@ public:
   void sendNoteOn(uint8_t channel, uint8_t note, uint8_t velocity);
   void sendPolyAftertouch(uint8_t channel, uint8_t note, uint8_t pressure);
   void sendPitchBend(uint8_t channel, uint16_t value);  // 0-16383, center=8192
+  void sendCC(uint8_t channel, uint8_t cc, uint8_t value);  // Control Change
 
   // BLE connection interval (applied on next BLE connect)
   void setBleInterval(uint8_t interval);  // BleInterval enum (0-2)

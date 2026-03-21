@@ -246,7 +246,8 @@ void setup() {
       s_setupManager.begin(&s_keyboard, &s_leds, &s_nvsManager,
                            s_banks, s_padOrder, bankPads,
                            rootPads, modePads, chromaticPad,
-                           holdPad, s_playStopPad, octavePads);
+                           holdPad, s_playStopPad, octavePads,
+                           &s_potRouter);
       s_setupManager.run();
 
       // Reload calibration data after setup (may have been changed by Tool 1)
@@ -677,6 +678,18 @@ void loop() {
 
   // --- Non-musical params ---
   s_leds.setBrightness(s_potRouter.getLedBrightness());
+
+  // --- MIDI CC/PB from user-assigned pot mappings (secondary priority) ---
+  {
+    uint8_t ccNum, ccVal;
+    while (s_potRouter.consumeCC(ccNum, ccVal)) {
+      s_transport.sendCC(potSlot.channel, ccNum, ccVal);
+    }
+    uint16_t pbVal;
+    if (s_potRouter.consumePitchBend(pbVal)) {
+      s_transport.sendPitchBend(potSlot.channel, pbVal);
+    }
+  }
 
   // LED bargraph from pot movement
   if (s_potRouter.hasBargraphUpdate()) {

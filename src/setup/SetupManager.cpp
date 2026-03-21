@@ -3,6 +3,7 @@
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
 #include "../managers/NvsManager.h"
+#include "../managers/PotRouter.h"
 #include <Arduino.h>
 
 SetupManager::SetupManager()
@@ -14,7 +15,7 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
                           uint8_t* padOrder, uint8_t* bankPads,
                           uint8_t* rootPads, uint8_t* modePads,
                           uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
-                          uint8_t* octavePads) {
+                          uint8_t* octavePads, PotRouter* potRouter) {
   _keyboard = keyboard;
   _leds = leds;
   _nvs = nvs;
@@ -30,6 +31,7 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
                    octavePads);
   _toolBankConfig.begin(nvs, &_ui, banks);
   _toolSettings.begin(keyboard, nvs, &_ui);
+  _toolPotMapping.begin(leds, &_ui, potRouter);
 }
 
 // =================================================================
@@ -85,6 +87,12 @@ void SetupManager::run() {
 
       case '5':
         _toolSettings.run();
+        _ui.vtClear();
+        screenDirty = true;
+        break;
+
+      case '6':
+        _toolPotMapping.run();
         _ui.vtClear();
         screenDirty = true;
         break;

@@ -9,9 +9,11 @@
 #include "ToolPadRoles.h"
 #include "ToolBankConfig.h"
 #include "ToolSettings.h"
+#include "ToolPotMapping.h"
 
 class CapacitiveKeyboard;
 class LedController;
+class PotRouter;
 class NvsManager;
 
 class SetupManager {
@@ -23,7 +25,7 @@ public:
              uint8_t* padOrder, uint8_t* bankPads,
              uint8_t* rootPads, uint8_t* modePads,
              uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
-             uint8_t* octavePads);
+             uint8_t* octavePads, PotRouter* potRouter);
 
   // Enter setup mode (blocking — returns when user exits)
   void run();
@@ -41,6 +43,7 @@ private:
   ToolPadRoles        _toolRoles;
   ToolBankConfig      _toolBankConfig;
   ToolSettings        _toolSettings;
+  ToolPotMapping      _toolPotMapping;
 
 };
 
