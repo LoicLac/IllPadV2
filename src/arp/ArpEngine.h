@@ -82,6 +82,12 @@ public:
   uint8_t     getNoteCount() const;
   bool        hasNotes() const;
   ArpDivision getDivision() const;
+  ArpPattern  getPattern() const;
+  float       getGateLength() const;
+  float       getShuffleDepth() const;
+  uint8_t     getShuffleTemplate() const;
+  uint8_t     getBaseVelocity() const;
+  uint8_t     getVelocityVariation() const;
   bool        consumeTickFlash();   // Returns true once after each arp step, then resets
 
 private:

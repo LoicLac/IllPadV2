@@ -458,9 +458,30 @@ void loop() {
   bool bankSwitched = s_bankManager.update(state.keyIsPressed, leftHeld);
   s_scaleManager.update(state.keyIsPressed, leftHeld, s_bankManager.getCurrentSlot());
 
-  // Queue NVS saves on bank switch
+  // On bank switch: reload per-bank pot values from the new bank, then reset catch.
+  // Without this, PotRouter getters return the PREVIOUS bank's values, which get
+  // pushed to the new bank every frame until the pot physically crosses catch.
   if (bankSwitched) {
     s_nvsManager.queueBankWrite(s_bankManager.getCurrentBank());
+    BankSlot& newSlot = s_bankManager.getCurrentSlot();
+
+    // Read per-bank values from new bank (BankSlot + ArpEngine)
+    float gate = 0.5f, shufDepth = 0.0f;
+    ArpDivision div = DIV_1_8;
+    ArpPattern pat = ARP_UP;
+    uint8_t shufTmpl = 0;
+    if (newSlot.type == BANK_ARPEG && newSlot.arpEngine) {
+      gate      = newSlot.arpEngine->getGateLength();
+      shufDepth = newSlot.arpEngine->getShuffleDepth();
+      div       = newSlot.arpEngine->getDivision();
+      pat       = newSlot.arpEngine->getPattern();
+      shufTmpl  = newSlot.arpEngine->getShuffleTemplate();
+    }
+
+    s_potRouter.loadStoredPerBank(
+      newSlot.baseVelocity, newSlot.velocityVariation, newSlot.pitchBendOffset,
+      gate, shufDepth, div, pat, shufTmpl
+    );
     s_potRouter.resetPerBankCatch();
   }
 

@@ -545,7 +545,13 @@ void ArpEngine::refCountNoteOff(MidiTransport& transport, uint8_t note) {
 
 uint8_t     ArpEngine::getNoteCount() const { return _positionCount; }
 bool        ArpEngine::hasNotes() const     { return _positionCount > 0; }
-ArpDivision ArpEngine::getDivision() const  { return _division; }
+ArpDivision ArpEngine::getDivision() const          { return _division; }
+ArpPattern  ArpEngine::getPattern() const           { return _pattern; }
+float       ArpEngine::getGateLength() const        { return _gateLength; }
+float       ArpEngine::getShuffleDepth() const      { return _shuffleDepth; }
+uint8_t     ArpEngine::getShuffleTemplate() const   { return _shuffleTemplate; }
+uint8_t     ArpEngine::getBaseVelocity() const      { return _baseVelocity; }
+uint8_t     ArpEngine::getVelocityVariation() const { return _velocityVariation; }
 bool ArpEngine::consumeTickFlash() {
   if (_tickFlash) { _tickFlash = false; return true; }
   return false;
