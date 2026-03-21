@@ -202,14 +202,14 @@ void ToolPadOrdering::run() {
     // RECAP
     // =============================================================
     case ORD_RECAP: {
+      // Count actually assigned (at case scope so ENTER handler can access it)
+      int uniqueAssigned = 0;
+      for (int i = 0; i < NUM_KEYS; i++) {
+        if (assigned[i]) uniqueAssigned++;
+      }
+
       if (screenDirty) {
         screenDirty = false;
-
-        // Count actually assigned (unique pads with assigned[i] == true)
-        int uniqueAssigned = 0;
-        for (int i = 0; i < NUM_KEYS; i++) {
-          if (assigned[i]) uniqueAssigned++;
-        }
 
         _ui->vtFrameStart();
         _ui->drawHeader("PAD ORDERING", "COMPLETE");
@@ -232,6 +232,26 @@ void ToolPadOrdering::run() {
       }
 
       if (input == '\r' || input == '\n') {
+        // Partial save warning: explain consequences before proceeding
+        if (uniqueAssigned < NUM_KEYS) {
+          _ui->vtClear();
+          Serial.printf(VT_YELLOW VT_BOLD "  Only %d/%d pads assigned." VT_RESET "\n", uniqueAssigned, NUM_KEYS);
+          Serial.printf(VT_CL "\n");
+          Serial.printf("  Unassigned pads will use position 0 (lowest pitch).\n");
+          Serial.printf("  They will all play the same note.\n");
+          Serial.printf(VT_CL "\n");
+          Serial.printf("  [ENTER] Save anyway   [q] Cancel\n");
+
+          // Wait for confirmation
+          while (true) {
+            char c = _ui->readInput();
+            if (c == '\r' || c == '\n') break;  // Confirmed
+            if (c == 'q' || c == 'Q') { screenDirty = true; break; }
+            _leds->update();
+            delay(5);
+          }
+          if (screenDirty) break;  // User cancelled, back to recap
+        }
         state = ORD_SAVE;
       }
       else if (input == 'r' || input == 'R') {

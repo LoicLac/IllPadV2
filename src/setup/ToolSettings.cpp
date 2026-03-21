@@ -42,6 +42,9 @@ void ToolSettings::run() {
     }
   }
 
+  // Save original for change detection on save
+  SettingsStore original = wk;
+
   static const char* profileNames[]   = {"Adaptive", "Expressive", "Percussive"};
   static const char* bleNames[]       = {"Low Latency (7.5ms)", "Normal (15ms)", "Battery Saver (30ms)", "Off (USB only)"};
   static const char* clockModeNames[] = {"Slave", "Master"};
@@ -122,8 +125,22 @@ void ToolSettings::run() {
 
         _ui->showSaved();
         _ui->vtClear();
-        Serial.printf(VT_GREEN "  Settings saved. Reboot to apply all changes." VT_RESET "\n");
-        delay(800);
+        Serial.printf(VT_GREEN "  Settings saved." VT_RESET "\n");
+
+        // Show specific reboot notice only for fields that require it
+        bool needReboot = false;
+        if (wk.bleInterval != original.bleInterval) {
+          Serial.printf(VT_YELLOW "  BLE Interval changed — reboot required." VT_RESET "\n");
+          needReboot = true;
+        }
+        if (wk.clockMode != original.clockMode) {
+          Serial.printf(VT_YELLOW "  Clock Mode changed — reboot required." VT_RESET "\n");
+          needReboot = true;
+        }
+        if (!needReboot) {
+          Serial.printf(VT_DIM "  All changes applied live." VT_RESET "\n");
+        }
+        delay(needReboot ? 1500 : 800);
       } else {
         _ui->vtClear();
         Serial.printf(VT_RED "  NVS write failed!" VT_RESET "\n");
@@ -158,20 +175,23 @@ void ToolSettings::run() {
 
       drawParam(1, "Baseline Profile:", profileNames[wk.baselineProfile]);
 
-      char atBuf[16];
-      snprintf(atBuf, sizeof(atBuf), "%d ms", wk.aftertouchRate);
+      char atBuf[24];
+      snprintf(atBuf, sizeof(atBuf), "%d ms  (%d-%d)", wk.aftertouchRate, AT_RATE_MIN, AT_RATE_MAX);
       drawParam(2, "Aftertouch Rate:", atBuf);
 
       drawParam(3, "BLE Interval:", bleNames[wk.bleInterval]);
       drawParam(4, "Clock Mode:", clockModeNames[wk.clockMode]);
       drawParam(5, "Follow Transport:", yesNoNames[wk.followTransport ? 1 : 0]);
 
-      char dtBuf[16];
-      snprintf(dtBuf, sizeof(dtBuf), "%d ms", wk.doubleTapMs);
+      char dtBuf[24];
+      snprintf(dtBuf, sizeof(dtBuf), "%d ms  (%d-%d)", wk.doubleTapMs, DOUBLE_TAP_MS_MIN, DOUBLE_TAP_MS_MAX);
       drawParam(6, "Double-Tap Window:", dtBuf);
 
-      char bgBuf[16];
-      snprintf(bgBuf, sizeof(bgBuf), "%.1f s", wk.potBarDurationMs / 1000.0f);
+      char bgBuf[24];
+      snprintf(bgBuf, sizeof(bgBuf), "%.1f s  (%.1f-%.1f)",
+               wk.potBarDurationMs / 1000.0f,
+               LED_BARGRAPH_DURATION_MIN / 1000.0f,
+               LED_BARGRAPH_DURATION_MAX / 1000.0f);
       drawParam(7, "Bargraph Duration:", bgBuf);
       drawParam(8, "Panic on Reconnect:", yesNoNames[wk.panicOnReconnect ? 1 : 0]);
 

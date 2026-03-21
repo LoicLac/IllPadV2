@@ -1,6 +1,8 @@
 #include "SetupUI.h"
 #include "../core/LedController.h"
+#include "../core/KeyboardData.h"
 #include <Arduino.h>
+#include <Preferences.h>
 
 // =================================================================
 // Constructor
@@ -37,21 +39,74 @@ void SetupUI::drawHeader(const char* title, const char* rightText) {
 // =================================================================
 
 void SetupUI::printMainMenu() {
+  // Quick NVS status checks (read-only, ~1ms each)
+  Preferences prefs;
+  char calStatus = ' ';   // ' '=unchecked, 'v'=ok, '!'=missing
+  char ordStatus = ' ';
+  char roleStatus = ' ';
+  char bankStatus = ' ';
+  char setStatus = ' ';
+
+  // Tool 1: Calibration — check if CalDataStore exists with valid magic
+  if (prefs.begin(CAL_PREFERENCES_NAMESPACE, true)) {
+    size_t len = prefs.getBytesLength(CAL_PREFERENCES_KEY);
+    calStatus = (len == sizeof(CalDataStore)) ? 'v' : '!';
+    prefs.end();
+  } else { calStatus = '!'; }
+
+  // Tool 2: Pad Ordering — check if NoteMapStore exists
+  if (prefs.begin(NOTEMAP_NVS_NAMESPACE, true)) {
+    size_t len = prefs.getBytesLength(NOTEMAP_NVS_KEY);
+    ordStatus = (len == sizeof(NoteMapStore)) ? 'v' : '!';
+    prefs.end();
+  } else { ordStatus = '!'; }
+
+  // Tool 3: Pad Roles — check if bank pads exist
+  if (prefs.begin(BANKPAD_NVS_NAMESPACE, true)) {
+    size_t len = prefs.getBytesLength(BANKPAD_NVS_KEY);
+    roleStatus = (len > 0) ? 'v' : '!';
+    prefs.end();
+  } else { roleStatus = '!'; }
+
+  // Tool 4: Bank Config — check if bank types exist
+  if (prefs.begin(BANKTYPE_NVS_NAMESPACE, true)) {
+    size_t len = prefs.getBytesLength(BANKTYPE_NVS_KEY);
+    bankStatus = (len == NUM_BANKS) ? 'v' : '!';
+    prefs.end();
+  } else { bankStatus = '!'; }
+
+  // Tool 5: Settings — check if SettingsStore exists with current version
+  if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
+    size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
+    if (len == sizeof(SettingsStore)) {
+      SettingsStore tmp;
+      prefs.getBytes(SETTINGS_NVS_KEY, &tmp, sizeof(SettingsStore));
+      setStatus = (tmp.magic == EEPROM_MAGIC && tmp.version == SETTINGS_VERSION) ? 'v' : '!';
+    } else { setStatus = '!'; }
+    prefs.end();
+  } else { setStatus = '!'; }
+
+  // Helper lambda for status indicator
+  auto statusStr = [](char s) -> const char* {
+    if (s == 'v') return VT_GREEN " ok" VT_RESET;
+    if (s == '!') return VT_YELLOW " --" VT_RESET;
+    return "   ";
+  };
+
   vtFrameStart();
   Serial.printf(VT_BOLD "========================================================" VT_RESET VT_CL "\n");
   Serial.printf(VT_BOLD "             ILLPAD48 -- SETUP MODE" VT_RESET VT_CL "\n");
   Serial.printf(VT_BOLD "========================================================" VT_RESET VT_CL "\n");
   Serial.printf(VT_CL "\n");
-  Serial.printf("  Select tool:" VT_CL "\n");
-  Serial.printf(VT_CL "\n");
-  Serial.printf("   [1] Pressure Calibration" VT_CL "\n");
-  Serial.printf("   [2] Pad Ordering" VT_CL "\n");
-  Serial.printf("   [3] Pad Roles" VT_CL "\n");
-  Serial.printf("   [4] Bank Config" VT_CL "\n");
-  Serial.printf("   [5] Settings" VT_CL "\n");
+  Serial.printf("   [1] Pressure Calibration  " VT_DIM "(sensitivity tuning)" VT_RESET "      %s" VT_CL "\n", statusStr(calStatus));
+  Serial.printf("   [2] Pad Ordering          " VT_DIM "(pitch mapping, low->high)" VT_RESET "%s" VT_CL "\n", statusStr(ordStatus));
+  Serial.printf("   [3] Pad Roles             " VT_DIM "(bank/scale/arp pads)" VT_RESET "     %s" VT_CL "\n", statusStr(roleStatus));
+  Serial.printf("   [4] Bank Config           " VT_DIM "(NORMAL vs ARPEG)" VT_RESET "         %s" VT_CL "\n", statusStr(bankStatus));
+  Serial.printf("   [5] Settings              " VT_DIM "(preferences & BLE)" VT_RESET "       %s" VT_CL "\n", statusStr(setStatus));
   Serial.printf(VT_CL "\n");
   Serial.printf("   [0] Reboot & Exit Setup" VT_CL "\n");
   Serial.printf(VT_CL "\n");
+  Serial.printf("  " VT_DIM "ok = saved    -- = defaults" VT_RESET VT_CL "\n");
   Serial.printf("  Type 0-5" VT_CL "\n");
   vtFrameEnd();
 }

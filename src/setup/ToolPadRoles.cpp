@@ -273,6 +273,7 @@ void ToolPadRoles::assignSection(const char* sectionTitle,
   int activeKey = -1;
   int lastActiveKey = -1;
   unsigned long lastRefresh = 0;
+  bool awaitingOverrideConfirm = false;  // True after first ENTER on a pad with existing role
 
   _ui->vtClear();
 
@@ -285,6 +286,7 @@ void ToolPadRoles::assignSection(const char* sectionTitle,
     if (detected >= 0) {
       if (detected != lastActiveKey) {
         activeKey = detected;
+        awaitingOverrideConfirm = false;  // New pad touched, reset override
       }
       lastActiveKey = detected;
     }
@@ -317,9 +319,13 @@ void ToolPadRoles::assignSection(const char* sectionTitle,
         Serial.printf("  Active: Key %d (Sensor %c, Ch %d)" VT_CL "\n",
                       activeKey, 'A' + sensor, channel);
 
-        // Warn if this pad already has a role
+        // Warn if this pad already has a role (collision)
         if (_roleMap[activeKey] != ROLE_NONE) {
-          Serial.printf(VT_RED "  WARNING: This pad already has a role!" VT_RESET VT_CL "\n");
+          if (awaitingOverrideConfirm) {
+            Serial.printf(VT_RED VT_BOLD "  COLLISION: Press ENTER again to override, any other key to cancel" VT_RESET VT_CL "\n");
+          } else {
+            Serial.printf(VT_RED "  WARNING: This pad already has a role!" VT_RESET VT_CL "\n");
+          }
         }
 
         Serial.printf("  [ENTER/BTN] Confirm" VT_CL "\n");
@@ -338,6 +344,13 @@ void ToolPadRoles::assignSection(const char* sectionTitle,
     char input = _ui->readInput();
 
     if ((input == '\r' || input == '\n') && activeKey >= 0) {
+      // If pad has an existing role, require double-ENTER to confirm override
+      if (_roleMap[activeKey] != ROLE_NONE && !awaitingOverrideConfirm) {
+        awaitingOverrideConfirm = true;
+        continue;  // Wait for second ENTER
+      }
+      awaitingOverrideConfirm = false;
+
       targets[currentIndex] = (uint8_t)activeKey;
       _leds->playValidation();
 
@@ -360,6 +373,7 @@ void ToolPadRoles::assignSection(const char* sectionTitle,
     }
     else if (input == 'n' || input == 'N') {
       // Skip — keep existing value, advance
+      awaitingOverrideConfirm = false;
       currentIndex++;
       activeKey = -1;
       lastActiveKey = -1;
