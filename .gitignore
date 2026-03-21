@@ -3,6 +3,10 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+.DS_Store
 
 # Local documentation artifacts (keep docs out of commits)
 DOCUMENTATION/
+
+# V1 codebase (reference only, separate repo)
+DOCUMENTATION/CodeILLPADV1/

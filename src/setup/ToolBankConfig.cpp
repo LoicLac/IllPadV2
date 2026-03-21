@@ -14,16 +14,22 @@ void ToolBankConfig::begin(NvsManager* nvs, SetupUI* ui, BankSlot* banks) {
 }
 
 // =================================================================
-// run() — Toggle NORMAL/ARPEG per bank (max 4 ARPEG)
+// run() — Toggle NORMAL/ARPEG per bank + set quantize mode for ARPEG
 // =================================================================
+// [1]-[8]: toggle bank type
+// [a]-[h]: cycle quantize mode for bank 1-8 (ARPEG only)
+
+static const char* QUANTIZE_NAMES[] = {"Immediate", "Beat", "Bar"};
 
 void ToolBankConfig::run() {
   if (!_ui || !_banks) return;
 
-  // Working copy of bank types
+  // Working copies
   BankType wkTypes[NUM_BANKS];
+  uint8_t  wkQuantize[NUM_BANKS];
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     wkTypes[i] = _banks[i].type;
+    wkQuantize[i] = _nvs ? _nvs->getLoadedQuantizeMode(i) : DEFAULT_ARP_START_MODE;
   }
 
   _ui->vtClear();
@@ -53,9 +59,19 @@ void ToolBankConfig::run() {
         }
       } else {
         wkTypes[idx] = BANK_NORMAL;
+        wkQuantize[idx] = DEFAULT_ARP_START_MODE;  // Reset quantize on type change
         errorShown = false;
       }
       screenDirty = true;
+    }
+
+    // Cycle quantize mode [a]-[h] for bank 1-8 (ARPEG only)
+    if (input >= 'a' && input <= 'h') {
+      uint8_t idx = input - 'a';
+      if (wkTypes[idx] == BANK_ARPEG) {
+        wkQuantize[idx] = (wkQuantize[idx] + 1) % NUM_ARP_START_MODES;
+        screenDirty = true;
+      }
     }
 
     // Save [ENTER]
@@ -66,6 +82,7 @@ void ToolBankConfig::run() {
         uint8_t types[NUM_BANKS];
         for (uint8_t i = 0; i < NUM_BANKS; i++) types[i] = (uint8_t)wkTypes[i];
         prefs.putBytes(BANKTYPE_NVS_KEY, types, NUM_BANKS);
+        prefs.putBytes("qmode", wkQuantize, NUM_BANKS);
         prefs.end();
 
         // Update live bank slots only after successful NVS write
@@ -118,18 +135,20 @@ void ToolBankConfig::run() {
 
         // Left column
         if (wkTypes[left] == BANK_ARPEG) {
-          Serial.printf("    Bank %d (Ch %d):  " VT_CYAN VT_BOLD "ARPEG  ♪" VT_RESET, left + 1, left + 1);
+          Serial.printf("    [%d] Bank %d:  " VT_CYAN VT_BOLD "ARPEG" VT_RESET " [%c]%-9s",
+                        left + 1, left + 1, 'a' + left, QUANTIZE_NAMES[wkQuantize[left]]);
         } else {
-          Serial.printf("    Bank %d (Ch %d):  NORMAL    ", left + 1, left + 1);
+          Serial.printf("    [%d] Bank %d:  NORMAL              ", left + 1, left + 1);
         }
 
-        Serial.printf("    ");
+        Serial.printf("  ");
 
         // Right column
         if (wkTypes[right] == BANK_ARPEG) {
-          Serial.printf("Bank %d (Ch %d):  " VT_CYAN VT_BOLD "ARPEG  ♪" VT_RESET, right + 1, right + 1);
+          Serial.printf("[%d] Bank %d:  " VT_CYAN VT_BOLD "ARPEG" VT_RESET " [%c]%-9s",
+                        right + 1, right + 1, 'a' + right, QUANTIZE_NAMES[wkQuantize[right]]);
         } else {
-          Serial.printf("Bank %d (Ch %d):  NORMAL    ", right + 1, right + 1);
+          Serial.printf("[%d] Bank %d:  NORMAL              ", right + 1, right + 1);
         }
 
         Serial.printf(VT_CL "\n");
@@ -144,7 +163,8 @@ void ToolBankConfig::run() {
       }
 
       Serial.printf(VT_CL "\n");
-      Serial.printf("    [1-8] Toggle bank type   [ENTER] Save   [q] Back" VT_CL "\n");
+      Serial.printf("    [1-8] Toggle type   [a-h] Cycle quantize" VT_CL "\n");
+      Serial.printf("    [ENTER] Save   [q] Back" VT_CL "\n");
       _ui->vtFrameEnd();
     }
 

@@ -133,14 +133,16 @@ void BankManager::switchToBank(uint8_t newBank) {
     _engine->sendPitchBend(_banks[_currentBank].pitchBendOffset);
   }
 
-  // Update LED
+  // Update LED + confirmation blink
   if (_leds) {
     _leds->setCurrentBank(_currentBank);
+    _leds->triggerConfirm(CONFIRM_BANK_SWITCH);
   }
 
   // Reset edge detection — prevents phantom notes
   #if DEBUG_SERIAL
-  Serial.printf("[BANK] Switched to bank %d (ch %d)\n",
-                _currentBank + 1, _currentBank + 1);
+  Serial.printf("[BANK] Bank %d (ch %d, %s)\n",
+                _currentBank + 1, _currentBank + 1,
+                _banks[_currentBank].type == BANK_ARPEG ? "ARPEG" : "NORMAL");
   #endif
 }

@@ -25,7 +25,7 @@ static const char* SCALE_LABELS[] = {
 };
 
 static const char* ARP_LABELS[] = {
-  " HOLD", "PL/ST"
+  " HOLD", "PL/ST", "OCT 1", "OCT 2", "OCT 3", "OCT 4"
 };
 
 // =================================================================
@@ -36,16 +36,19 @@ ToolPadRoles::ToolPadRoles()
   : _keyboard(nullptr), _leds(nullptr), _nvs(nullptr), _ui(nullptr),
     _bankPads(nullptr), _rootPads(nullptr), _modePads(nullptr),
     _chromaticPad(nullptr), _holdPad(nullptr), _playStopPad(nullptr),
+    _octavePads(nullptr),
     _wkChromPad(0xFF), _wkHoldPad(0xFF), _wkPlayStopPad(0xFF) {
   memset(_wkBankPads, 0xFF, sizeof(_wkBankPads));
   memset(_wkRootPads, 0xFF, sizeof(_wkRootPads));
   memset(_wkModePads, 0xFF, sizeof(_wkModePads));
+  memset(_wkOctavePads, 0xFF, sizeof(_wkOctavePads));
 }
 
 void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
                           NvsManager* nvs, SetupUI* ui,
                           uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
-                          uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad) {
+                          uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
+                          uint8_t* octavePads) {
   _keyboard     = keyboard;
   _leds         = leds;
   _nvs          = nvs;
@@ -56,6 +59,7 @@ void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _chromaticPad = &chromaticPad;
   _holdPad      = &holdPad;
   _playStopPad  = &playStopPad;
+  _octavePads   = octavePads;
 }
 
 // =================================================================
@@ -124,6 +128,16 @@ void ToolPadRoles::buildRoleMap() {
     memcpy(_roleLabels[_wkPlayStopPad], ARP_LABELS[1], 6);
   }
 
+  // Octave pads (1-4)
+  for (int i = 0; i < 4; i++) {
+    uint8_t pad = _wkOctavePads[i];
+    if (pad < NUM_KEYS) {
+      hitCount[pad]++;
+      _roleMap[pad] = ROLE_ARP;
+      memcpy(_roleLabels[pad], ARP_LABELS[2 + i], 6);
+    }
+  }
+
   // Mark collisions
   for (int i = 0; i < NUM_KEYS; i++) {
     if (hitCount[i] > 1) {
@@ -155,6 +169,7 @@ void ToolPadRoles::run() {
   _wkChromPad    = *_chromaticPad;
   _wkHoldPad     = *_holdPad;
   _wkPlayStopPad = *_playStopPad;
+  if (_octavePads) memcpy(_wkOctavePads, _octavePads, 4);
 
   _ui->vtClear();
   bool screenDirty = true;
@@ -224,7 +239,7 @@ void ToolPadRoles::run() {
       Serial.printf(VT_CL "\n");
       Serial.printf("   [1] Bank Pads (8)" VT_CL "\n");
       Serial.printf("   [2] Scale Pads (15)  -- 7 root + 7 mode + 1 chromatic" VT_CL "\n");
-      Serial.printf("   [3] Arp Pads (2)     -- 1 HOLD + 1 play/stop" VT_CL "\n");
+      Serial.printf("   [3] Arp Pads (6)     -- 1 HOLD + 1 play/stop + 4 octave" VT_CL "\n");
       Serial.printf("   [4] View All / Check Collisions" VT_CL "\n");
       Serial.printf(VT_CL "\n");
 
@@ -392,12 +407,16 @@ void ToolPadRoles::runScalePads() {
 }
 
 void ToolPadRoles::runArpPads() {
-  uint8_t targets[2] = { _wkHoldPad, _wkPlayStopPad };
+  uint8_t targets[6] = {
+    _wkHoldPad, _wkPlayStopPad,
+    _wkOctavePads[0], _wkOctavePads[1], _wkOctavePads[2], _wkOctavePads[3]
+  };
 
-  assignSection("ARP PADS", ARP_LABELS, targets, 2);
+  assignSection("ARP PADS", ARP_LABELS, targets, 6);
 
   _wkHoldPad     = targets[0];
   _wkPlayStopPad = targets[1];
+  memcpy(_wkOctavePads, targets + 2, 4);
 }
 
 // =================================================================
@@ -461,6 +480,13 @@ void ToolPadRoles::viewAll() {
   else Serial.printf("--");
   Serial.printf(VT_CL "\n");
 
+  Serial.printf("  " VT_BOLD "Oct pads:" VT_RESET "   ");
+  for (int i = 0; i < 4; i++) {
+    if (_wkOctavePads[i] < NUM_KEYS) Serial.printf("O%d=%d  ", i + 1, _wkOctavePads[i]);
+    else Serial.printf("O%d=--  ", i + 1);
+  }
+  Serial.printf(VT_CL "\n");
+
   Serial.printf(VT_CL "\n");
 
   if (collisions > 0) {
@@ -518,6 +544,7 @@ bool ToolPadRoles::saveAll() {
   if (prefs.begin(ARP_PAD_NVS_NAMESPACE, false)) {
     prefs.putUChar(ARP_PAD_HOLD_KEY, _wkHoldPad);
     prefs.putUChar(ARP_PAD_PS_KEY, _wkPlayStopPad);
+    prefs.putBytes(ARP_PAD_OCT_KEY, _wkOctavePads, 4);
     prefs.end();
   }
 
@@ -528,6 +555,7 @@ bool ToolPadRoles::saveAll() {
   *_chromaticPad = _wkChromPad;
   *_holdPad      = _wkHoldPad;
   *_playStopPad  = _wkPlayStopPad;
+  if (_octavePads) memcpy(_octavePads, _wkOctavePads, 4);
 
   _leds->playValidation();
   return true;

@@ -24,6 +24,11 @@ public:
   void setModePads(const uint8_t* pads);
   void setChromaticPad(uint8_t pad);
   void setHoldPad(uint8_t pad);
+  void setOctavePads(const uint8_t* pads);  // 4 pads for octave 1-4 (ARPEG only)
+
+  bool hasOctaveChanged();       // True if octave was changed this frame (auto-clears)
+  bool hasHoldToggled();         // True if HOLD was toggled this frame (auto-clears)
+  uint8_t getNewOctaveRange() const;  // 1-4, last value set by octave pad
 
 private:
   BankSlot*   _banks;
@@ -39,8 +44,12 @@ private:
   uint8_t _rootPads[7];
   uint8_t _modePads[7];
   uint8_t _chromaticPad;
-  uint8_t _holdPad;       // HOLD toggle pad (for ARPEG banks)
-  bool    _scaleChanged;  // Set by processScalePads, cleared by hasScaleChanged()
+  uint8_t _holdPad;           // HOLD toggle pad (for ARPEG banks)
+  uint8_t _octavePads[4];    // Octave range 1-4 pads (for ARPEG banks)
+  bool    _scaleChanged;     // Set by processScalePads, cleared by hasScaleChanged()
+  bool    _octaveChanged;    // Set by processScalePads, cleared by hasOctaveChanged()
+  bool    _holdToggled;      // Set by processScalePads, cleared by hasHoldToggled()
+  uint8_t _newOctaveRange;   // 1-4, last octave set by pad press
 
   void processScalePads(const uint8_t* keyIsPressed, BankSlot& slot);
 };

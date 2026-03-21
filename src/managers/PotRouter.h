@@ -17,10 +17,10 @@ enum PotTarget : uint8_t {
   TARGET_PITCH_BEND,
   // ARPEG per-bank
   TARGET_GATE_LENGTH,
-  TARGET_SWING,
+  TARGET_SHUFFLE_DEPTH,
   TARGET_DIVISION,
   TARGET_PATTERN,
-  TARGET_OCTAVE_RANGE,
+  TARGET_SHUFFLE_TEMPLATE,
   // Shared per-bank (NORMAL + ARPEG)
   TARGET_BASE_VELOCITY,
   TARGET_VELOCITY_VARIATION,
@@ -57,16 +57,24 @@ public:
   // Reset catch for per-bank params (call on bank switch)
   void resetPerBankCatch();
 
+  // Load NVS-saved values (call BEFORE begin(), so catch seeds are correct).
+  // These set the internal output values that begin() uses for catch seeding.
+  void loadStoredGlobals(float shape, uint16_t slew, uint16_t deadzone,
+                         uint16_t tempo, uint8_t ledBright, uint8_t padSens);
+  void loadStoredPerBank(uint8_t baseVel, uint8_t velVar, uint16_t pitchBend,
+                         float gate, float shuffleDepth, ArpDivision div,
+                         ArpPattern pat, uint8_t shuffleTmpl);
+
   // Getters — consumers call these
   float       getResponseShape() const;
   uint16_t    getSlewRate() const;
   uint16_t    getAtDeadzone() const;
   uint16_t    getPitchBend() const;
   float       getGateLength() const;
-  float       getSwing() const;
+  float       getShuffleDepth() const;
   ArpDivision getDivision() const;
   ArpPattern  getPattern() const;
-  uint8_t     getOctaveRange() const;
+  uint8_t     getShuffleTemplate() const;
   uint8_t     getBaseVelocity() const;
   uint8_t     getVelocityVariation() const;
   uint16_t    getTempoBPM() const;
@@ -110,10 +118,10 @@ private:
   uint16_t    _atDeadzone;
   uint16_t    _pitchBend;
   float       _gateLength;
-  float       _swing;
+  float       _shuffleDepth;
   ArpDivision _division;
   ArpPattern  _pattern;
-  uint8_t     _octaveRange;
+  uint8_t     _shuffleTemplate;
   uint8_t     _baseVelocity;
   uint8_t     _velocityVariation;
   uint16_t    _tempoBPM;

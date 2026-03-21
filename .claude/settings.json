@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "Bash(find /Users/loic/Code/PROJECTS/ILLPAD_V2/.pio/libdeps -name *BLE* -type d)",
-      "Bash(gh pr:*)"
+      "Bash(gh pr:*)",
+      "Bash(ls /Users/loic/Code/PROJECTS/ILLPAD_V2/.pio/libdeps/esp32-s3-devkitc-1/ESP32-BLE-MIDI/library.*)",
+      "Bash(ls /Users/loic/Code/PROJECTS/ILLPAD_V2/.pio/libdeps/esp32-s3-devkitc-1/ESP32-BLE-MIDI/*.json)",
+      "Read(//Users/loic/**)"
     ]
   }
 }

@@ -22,14 +22,11 @@ public:
              NvsManager* nvs, BankSlot* banks,
              uint8_t* padOrder, uint8_t* bankPads,
              uint8_t* rootPads, uint8_t* modePads,
-             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad);
+             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
+             uint8_t* octavePads);
 
   // Enter setup mode (blocking — returns when user exits)
   void run();
-
-  // Check if setup should be entered (button held at boot)
-  // Note: entry detection is done inline in main.cpp, this returns false.
-  static bool shouldEnterSetup();
 
 private:
   CapacitiveKeyboard* _keyboard;
@@ -45,7 +42,6 @@ private:
   ToolBankConfig      _toolBankConfig;
   ToolSettings        _toolSettings;
 
-  void runTool(uint8_t toolIndex);
 };
 
 #endif // SETUP_MANAGER_H

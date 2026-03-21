@@ -10,7 +10,7 @@
 
 MidiEngine::MidiEngine()
   : _transport(nullptr)
-  , _channel(MIDI_CHANNEL)
+  , _channel(0)  // Default channel 0 (bank 1), overwritten by BankManager
   , _atHead(0)
   , _atTail(0)
   , _aftertouchIntervalMs(AT_RATE_DEFAULT)

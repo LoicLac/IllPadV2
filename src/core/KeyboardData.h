@@ -5,17 +5,6 @@
 #include "HardwareConfig.h"
 
 // =================================================================
-// Musical Data Structures
-// =================================================================
-
-const int NOTE_STACK_SIZE = 48;  // Full polyphony
-
-struct Note {
-  uint8_t pitch;
-  uint16_t value;  // Pressure or velocity
-};
-
-// =================================================================
 // Calibration Data — stored in ESP32 NVS via Preferences
 // =================================================================
 
@@ -35,12 +24,14 @@ struct CalDataStore {
 #define CAL_PREFERENCES_KEY       "caldata"
 
 // =================================================================
-// Note Map Data — pad-to-MIDI-note mapping, stored in NVS
+// Pad Ordering Data — stored in NVS
+// NOTE: struct/key names are V1 legacy ("NoteMap"). In V2 this stores
+// pad ordering (position indices 0-47), NOT MIDI note numbers.
+// Names kept for NVS backward compatibility.
 // =================================================================
 
 const uint8_t NOTEMAP_UNMAPPED = 0xFF;  // Pad produces no MIDI output
 const uint8_t NOTEMAP_VERSION  = 1;
-const uint8_t NOTEMAP_MAX_BASE_NOTE = 70;  // Highest allowed base note
 
 struct NoteMapStore {
   uint16_t magic;              // EEPROM_MAGIC (0xBEEF)
@@ -72,7 +63,7 @@ struct BankPadStore {
 // Settings Data — runtime-tunable parameters, stored in NVS
 // =================================================================
 
-const uint8_t SETTINGS_VERSION = 3;  // Bumped: 2→3 (added bleInterval)
+const uint8_t SETTINGS_VERSION = 7;  // Bumped: 6→7 (removed sendStartStop, renamed receiveStartStop→followTransport)
 
 struct SettingsStore {
   uint16_t magic;               // EEPROM_MAGIC (0xBEEF)
@@ -80,8 +71,10 @@ struct SettingsStore {
   uint8_t  baselineProfile;     // 0-2 (BaselineProfile enum)
   uint8_t  aftertouchRate;      // 10-100 (ms between aftertouch msgs)
   uint8_t  bleInterval;         // 0-2 (BleInterval enum)
-  // padSensitivity → pot rear (hold rear), stored in illpad_sens
-  // aftertouchDeadzone → pot right 2 (hold left, NORMAL), stored in illpad_pot
+  uint8_t  clockMode;           // 0=Slave, 1=Master (ClockMode enum)
+  uint8_t  followTransport;     // 0=No, 1=Yes — slave only: follow DAW Start/Stop/Continue
+  uint8_t  doubleTapMs;         // 100-250 (ms), double-tap window for ARPEG HOLD
+  uint16_t potBarDurationMs;    // 1000-10000 (ms), bargraph display persistence
 };
 
 #define SETTINGS_NVS_NAMESPACE "illpad_set"
@@ -112,11 +105,11 @@ struct PotParamsStore {
 
 struct ArpPotStore {
   uint16_t gateRaw;       // 0-4095 (maps to 0.0-1.0)
-  uint16_t swingRaw;      // 0-4095 (maps to 0.5-0.75)
+  uint16_t shuffleDepthRaw;  // 0-4095 (maps to 0.0-1.0)
   uint8_t  division;      // ArpDivision enum (0-8)
   uint8_t  pattern;       // ArpPattern enum (0-4)
-  uint8_t  octaveRange;   // 1-4
-  uint8_t  reserved;
+  uint8_t  octaveRange;      // 1-4
+  uint8_t  shuffleTemplate;  // 0-4 (index into groove templates)
 };
 
 // =================================================================
@@ -144,7 +137,6 @@ struct BankSlot {
   ScaleConfig scale;
   ArpEngine*  arpEngine;                  // non-null if ARPEG
   bool        isForeground;
-  uint8_t     lastResolvedNote[NUM_KEYS]; // 0xFF = no active note
   uint8_t     baseVelocity;              // 1-127, per-bank (NORMAL + ARPEG)
   uint8_t     velocityVariation;         // 0-100%, per-bank (NORMAL + ARPEG)
   uint16_t    pitchBendOffset;           // 0-16383, center=8192 (NORMAL only)
@@ -195,6 +187,7 @@ enum ArpDivision : uint8_t {
 // pat_pads and oct_pad removed — pattern/octave now on pots
 #define ARP_PAD_HOLD_KEY        "hold_pad"
 #define ARP_PAD_PS_KEY          "ps_pad"
+#define ARP_PAD_OCT_KEY         "oct_pads"  // uint8_t[4], octave pads 1-4
 
 // --- V2 New NVS Namespaces ---
 #define VELOCITY_NVS_NAMESPACE  "illpad_bvel"   // baseVelocity[8] + velocityVariation[8]
@@ -203,7 +196,7 @@ enum ArpDivision : uint8_t {
 #define LED_NVS_KEY             "brightness"
 #define SENSITIVITY_NVS_NAMESPACE "illpad_sens" // Pad sensitivity (global)
 #define SENSITIVITY_NVS_KEY     "sensitivity"
-#define ARP_POT_NVS_NAMESPACE   "illpad_apot"   // Arp pot params per bank (gate, swing, div, pattern, oct)
+#define ARP_POT_NVS_NAMESPACE   "illpad_apot"   // Arp pot params per bank (gate, shuffle, div, pattern, oct)
 // Keys: "arp_0" through "arp_7" (per bank)
 
 #define TEMPO_NVS_NAMESPACE     "illpad_tempo"  // Tempo BPM (global)

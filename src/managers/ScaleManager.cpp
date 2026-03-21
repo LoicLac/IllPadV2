@@ -22,11 +22,18 @@ ScaleManager::ScaleManager()
   , _chromaticPad(22)
   , _holdPad(23)
   , _scaleChanged(false)
+  , _octaveChanged(false)
+  , _holdToggled(false)
+  , _newOctaveRange(1)
 {
   // Default pad assignments: root pads 8-14, mode pads 15-21
   for (uint8_t i = 0; i < 7; i++) {
     _rootPads[i] = 8 + i;   // Pads 8-14 → A,B,C,D,E,F,G
     _modePads[i] = 15 + i;  // Pads 15-21 → Ionian..Locrian
+  }
+  // Default octave pads 25-28
+  for (uint8_t i = 0; i < 4; i++) {
+    _octavePads[i] = 25 + i;
   }
   memset(_lastScaleKeys, 0, sizeof(_lastScaleKeys));
 }
@@ -51,6 +58,30 @@ void ScaleManager::setChromaticPad(uint8_t pad) {
 
 void ScaleManager::setHoldPad(uint8_t pad) {
   _holdPad = pad;
+}
+
+void ScaleManager::setOctavePads(const uint8_t* pads) {
+  memcpy(_octavePads, pads, 4);
+}
+
+bool ScaleManager::hasHoldToggled() {
+  if (_holdToggled) {
+    _holdToggled = false;
+    return true;
+  }
+  return false;
+}
+
+bool ScaleManager::hasOctaveChanged() {
+  if (_octaveChanged) {
+    _octaveChanged = false;
+    return true;
+  }
+  return false;
+}
+
+uint8_t ScaleManager::getNewOctaveRange() const {
+  return _newOctaveRange;
 }
 
 // =================================================================
@@ -111,8 +142,7 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       _scaleChanged = true;
 
       #if DEBUG_SERIAL
-      Serial.printf("[SCALE] Root → %s, Mode → %s\n",
-                    ROOT_NAMES[r], MODE_NAMES[slot.scale.mode]);
+      Serial.printf("[SCALE] Root %s (mode %s)\n", ROOT_NAMES[r], MODE_NAMES[slot.scale.mode]);
       #endif
     }
     _lastScaleKeys[pad] = pressed;
@@ -134,8 +164,7 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       _scaleChanged = true;
 
       #if DEBUG_SERIAL
-      Serial.printf("[SCALE] Mode → %s, Root → %s\n",
-                    MODE_NAMES[m], ROOT_NAMES[slot.scale.root]);
+      Serial.printf("[SCALE] Mode %s (root %s)\n", MODE_NAMES[m], ROOT_NAMES[slot.scale.root]);
       #endif
     }
     _lastScaleKeys[pad] = pressed;
@@ -153,8 +182,7 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       _scaleChanged = true;
 
       #if DEBUG_SERIAL
-      Serial.printf("[SCALE] Chromatic ON (root %s)\n",
-                    ROOT_NAMES[slot.scale.root]);
+      Serial.printf("[SCALE] Chromatic (root %s)\n", ROOT_NAMES[slot.scale.root]);
       #endif
     }
     _lastScaleKeys[_chromaticPad] = pressed;
@@ -168,11 +196,34 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
     if (pressed && !wasPressed) {
       bool newHold = !slot.arpEngine->isHoldOn();
       slot.arpEngine->setHold(newHold);
+      _holdToggled = true;
 
       #if DEBUG_SERIAL
-      Serial.printf("[SCALE] HOLD %s\n", newHold ? "ON" : "OFF");
+      Serial.printf("[ARP] Hold %s\n", newHold ? "ON" : "OFF");
       #endif
     }
     _lastScaleKeys[_holdPad] = pressed;
+  }
+
+  // --- Octave pads (ARPEG only, 1-4 octaves) ---
+  if (slot.type == BANK_ARPEG && slot.arpEngine) {
+    for (uint8_t o = 0; o < 4; o++) {
+      uint8_t pad = _octavePads[o];
+      if (pad >= NUM_KEYS) continue;
+
+      bool pressed = keyIsPressed[pad];
+      bool wasPressed = _lastScaleKeys[pad];
+
+      if (pressed && !wasPressed) {
+        _newOctaveRange = o + 1;  // 1-4
+        _octaveChanged = true;
+        slot.arpEngine->setOctaveRange(o + 1);
+
+        #if DEBUG_SERIAL
+        Serial.printf("[ARP] Octave %d\n", o + 1);
+        #endif
+      }
+      _lastScaleKeys[pad] = pressed;
+    }
   }
 }

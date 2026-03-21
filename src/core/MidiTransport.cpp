@@ -8,7 +8,7 @@
 #include "USBMIDI.h"
 #include "tusb.h"  // tud_mounted() for USB connection detection
 
-// --- BLE MIDI (max22/ESP32-BLE-MIDI) ---
+// --- BLE MIDI (ILLPAD fork with system RT callback) ---
 #include <BLEMidi.h>
 #include <NimBLEDevice.h>
 
@@ -17,8 +17,19 @@
 static USBMIDI usbMidi(DEVICE_NAME_USB);
 
 // Track BLE connection state via callbacks
-static volatile bool s_bleConnected = false;
+static std::atomic<bool> s_bleConnected{false};
 static std::atomic<uint8_t> s_bleIntervalSetting{BLE_NORMAL};
+
+// Clock reception callbacks (set by main.cpp, called from USB poll + BLE callback)
+static MidiClockCallback     s_clockCb     = nullptr;
+static MidiTransportCallback s_transportCb = nullptr;
+
+// BLE system real-time callback (called from NimBLE task)
+static void onBleSystemRT(uint8_t status) {
+  if (status == 0xF8 && s_clockCb)     s_clockCb(1);        // BLE clock tick
+  if ((status == 0xFA || status == 0xFB || status == 0xFC) && s_transportCb)
+    s_transportCb(status, 1);                                 // BLE start/continue/stop
+}
 
 static void onBleConnected() {
   s_bleConnected = true;
@@ -39,21 +50,18 @@ static void onBleConnected() {
         default:                minI = 12; maxI = 12; break;  // 15ms
       }
       pServer->updateConnParams(handle, minI, maxI, 0, 200);
-      #if DEBUG_SERIAL
-      Serial.printf("[MIDI] BLE conn params: interval=%d (%.1fms)\n", minI, minI * 1.25f);
-      #endif
     }
   }
 
   #if DEBUG_SERIAL
-  Serial.println("[MIDI] BLE client connected.");
+  Serial.println("[MIDI] BLE connected");
   #endif
 }
 
 static void onBleDisconnected() {
   s_bleConnected = false;
   #if DEBUG_SERIAL
-  Serial.println("[MIDI] BLE client disconnected.");
+  Serial.println("[MIDI] BLE disconnected");
   #endif
 }
 
@@ -61,10 +69,7 @@ static void onBleDisconnected() {
 // Constructor
 // =================================================================
 
-MidiTransport::MidiTransport()
-  : _bleConnected(false)
-{
-}
+MidiTransport::MidiTransport() {}
 
 // =================================================================
 // Initialization
@@ -88,17 +93,44 @@ void MidiTransport::begin() {
   BLEMidiServer.setOnConnectCallback(onBleConnected);
   BLEMidiServer.setOnDisconnectCallback(onBleDisconnected);
 
+  // ILLPAD fork: register system real-time callback for BLE clock reception
+  BLEMidiServer.setSystemRTCallback(onBleSystemRT);
+
   #if DEBUG_SERIAL
-  Serial.println("[MIDI] BLE MIDI initialized.");
+  Serial.println("[MIDI] BLE MIDI initialized (with system RT callback).");
   #endif
 }
 
 // =================================================================
-// Loop Housekeeping
+// Loop Housekeeping + USB Clock Polling
 // =================================================================
 
 void MidiTransport::update() {
-  _bleConnected = s_bleConnected;
+  // Track USB connection state changes
+  #if DEBUG_SERIAL
+  {
+    static bool s_lastUsbMounted = false;
+    bool mounted = tud_mounted();
+    if (mounted != s_lastUsbMounted) {
+      Serial.printf("[MIDI] USB %s\n", mounted ? "connected" : "disconnected");
+      s_lastUsbMounted = mounted;
+    }
+  }
+  #endif
+
+  // Poll USB MIDI for incoming clock messages (system real-time)
+  if (tud_mounted()) {
+    midiEventPacket_t pkt;
+    while (usbMidi.readPacket(&pkt)) {
+      uint8_t cin = MIDI_EP_HEADER_CIN_GET(pkt.header);
+      if (cin == 0x0F) {  // CIN 0x0F = Single Byte (system real-time)
+        uint8_t status = pkt.byte1;
+        if (status == 0xF8 && s_clockCb)     s_clockCb(0);        // USB clock tick
+        if ((status == 0xFA || status == 0xFB || status == 0xFC) && s_transportCb)
+          s_transportCb(status, 0);                                 // USB start/continue/stop
+      }
+    }
+  }
 }
 
 // =================================================================
@@ -107,6 +139,32 @@ void MidiTransport::update() {
 
 void MidiTransport::setBleInterval(uint8_t interval) {
   s_bleIntervalSetting.store(interval, std::memory_order_relaxed);
+}
+
+// =================================================================
+// Clock Callback Setters
+// =================================================================
+
+void MidiTransport::setClockCallback(MidiClockCallback cb) {
+  s_clockCb = cb;
+}
+
+void MidiTransport::setTransportCallback(MidiTransportCallback cb) {
+  s_transportCb = cb;
+}
+
+// =================================================================
+// Clock Output (Master mode)
+// =================================================================
+
+void MidiTransport::sendClockTick() {
+  if (tud_mounted()) {
+    midiEventPacket_t pkt = {0x0F, 0xF8, 0, 0};
+    usbMidi.writePacket(&pkt);
+  }
+  if (BLEMidiServer.isConnected()) {
+    BLEMidiServer.sendSystemRT(0xF8);
+  }
 }
 
 // =================================================================
@@ -167,5 +225,5 @@ bool MidiTransport::isUsbConnected() const {
 }
 
 bool MidiTransport::isBleConnected() const {
-  return _bleConnected;
+  return s_bleConnected.load(std::memory_order_relaxed);
 }

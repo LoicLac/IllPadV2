@@ -25,16 +25,18 @@ const PotBinding PotRouter::BINDINGS[] = {
   {0, 0b00, BANK_ARPEG,  TARGET_TEMPO_BPM,          TEMPO_BPM_MIN, TEMPO_BPM_MAX},
   // [2] ARPEG + hold left → Division
   {0, 0b01, BANK_ARPEG,  TARGET_DIVISION,            0, 8},
+  // NOTE: NORMAL + hold left on pot 0 is intentionally empty (no binding).
+  // Reserved for a future parameter. The pot has no effect in this combo.
 
-  // --- Pot Right 2 (shape-gate / deadzone-swing) ---
+  // --- Pot Right 2 (shape-gate / deadzone-shuffle) ---
   // [3] NORMAL alone → Response shape
   {1, 0b00, BANK_NORMAL, TARGET_RESPONSE_SHAPE,      0, 4095},
   // [4] NORMAL + hold left → AT deadzone
   {1, 0b01, BANK_NORMAL, TARGET_AT_DEADZONE,         AT_DEADZONE_MIN, AT_DEADZONE_MAX},
   // [5] ARPEG alone → Gate length
   {1, 0b00, BANK_ARPEG,  TARGET_GATE_LENGTH,         0, 4095},
-  // [6] ARPEG + hold left → Swing
-  {1, 0b01, BANK_ARPEG,  TARGET_SWING,               0, 4095},
+  // [6] ARPEG + hold left → Shuffle depth
+  {1, 0b01, BANK_ARPEG,  TARGET_SHUFFLE_DEPTH,       0, 4095},
 
   // --- Pot Right 3 (slew-pattern / pitchbend-octave) ---
   // [7] NORMAL alone → Slew rate
@@ -43,8 +45,8 @@ const PotBinding PotRouter::BINDINGS[] = {
   {2, 0b01, BANK_NORMAL, TARGET_PITCH_BEND,          0, 16383},
   // [9] ARPEG alone → Pattern
   {2, 0b00, BANK_ARPEG,  TARGET_PATTERN,             0, 4},
-  // [10] ARPEG + hold left → Octave range
-  {2, 0b01, BANK_ARPEG,  TARGET_OCTAVE_RANGE,        1, 4},
+  // [10] ARPEG + hold left → Shuffle template (5 discrete)
+  {2, 0b01, BANK_ARPEG,  TARGET_SHUFFLE_TEMPLATE,    0, 4},
 
   // --- Pot Right 4 (base velocity / velocity variation) ---
   // [11] NORMAL alone → Base velocity
@@ -74,10 +76,10 @@ PotRouter::PotRouter()
   , _atDeadzone(AT_DEADZONE_DEFAULT)
   , _pitchBend(DEFAULT_PITCH_BEND_OFFSET)
   , _gateLength(0.5f)
-  , _swing(0.5f)
+  , _shuffleDepth(0.0f)
   , _division(DIV_1_8)
   , _pattern(ARP_UP)
-  , _octaveRange(1)
+  , _shuffleTemplate(0)
   , _baseVelocity(DEFAULT_BASE_VELOCITY)
   , _velocityVariation(DEFAULT_VELOCITY_VARIATION)
   , _tempoBPM(TEMPO_BPM_DEFAULT)
@@ -97,6 +99,37 @@ PotRouter::PotRouter()
     _catch[i].storedValue = 2048;  // Mid-range default
     _catch[i].caught = false;
   }
+}
+
+// =================================================================
+// loadStoredGlobals / loadStoredPerBank — set output values from NVS
+// =================================================================
+// Called BEFORE begin() so that catch seeds reflect saved values,
+// not constructor defaults. Without this, the catch system would
+// require the user to sweep the pot through the default position
+// before their saved value takes effect.
+
+void PotRouter::loadStoredGlobals(float shape, uint16_t slew, uint16_t deadzone,
+                                   uint16_t tempo, uint8_t ledBright, uint8_t padSens) {
+  _responseShape  = shape;
+  _slewRate       = slew;
+  _atDeadzone     = deadzone;
+  _tempoBPM       = tempo;
+  _ledBrightness  = ledBright;
+  _padSensitivity = padSens;
+}
+
+void PotRouter::loadStoredPerBank(uint8_t baseVel, uint8_t velVar, uint16_t pitchBend,
+                                   float gate, float shuffleDepth, ArpDivision div,
+                                   ArpPattern pat, uint8_t shuffleTmpl) {
+  _baseVelocity      = baseVel;
+  _velocityVariation = velVar;
+  _pitchBend         = pitchBend;
+  _gateLength        = gate;
+  _shuffleDepth      = shuffleDepth;
+  _division          = div;
+  _pattern           = pat;
+  _shuffleTemplate   = shuffleTmpl;
 }
 
 // =================================================================
@@ -122,16 +155,16 @@ void PotRouter::begin() {
   _catch[4].storedValue = (uint16_t)(((float)(_atDeadzone - AT_DEADZONE_MIN) / (AT_DEADZONE_MAX - AT_DEADZONE_MIN)) * 4095.0f);
   // Gate length: binding [5]
   _catch[5].storedValue = (uint16_t)(_gateLength * 4095.0f);
-  // Swing: binding [6]
-  _catch[6].storedValue = (uint16_t)(_swing * 4095.0f);
+  // Shuffle depth: binding [6]
+  _catch[6].storedValue = (uint16_t)(_shuffleDepth * 4095.0f);
   // Slew rate: binding [7]
   _catch[7].storedValue = (uint16_t)(((float)(_slewRate - SLEW_RATE_MIN) / (SLEW_RATE_MAX - SLEW_RATE_MIN)) * 4095.0f);
   // Pitch bend: binding [8]
   _catch[8].storedValue = (uint16_t)(((float)_pitchBend / 16383.0f) * 4095.0f);
   // Pattern: binding [9]
   _catch[9].storedValue = (uint16_t)(((float)_pattern / 4.0f) * 4095.0f);
-  // Octave range: binding [10]
-  _catch[10].storedValue = (uint16_t)(((float)(_octaveRange - 1) / 3.0f) * 4095.0f);
+  // Shuffle template: binding [10]
+  _catch[10].storedValue = (uint16_t)(((float)_shuffleTemplate / 4.0f) * 4095.0f);
   // Base velocity: bindings [11] and [13]
   _catch[11].storedValue = (uint16_t)(((float)(_baseVelocity - 1) / 126.0f) * 4095.0f);
   _catch[13].storedValue = _catch[11].storedValue;
@@ -193,16 +226,13 @@ void PotRouter::resolveBindings(bool btnLeft, bool btnRear, BankType type) {
       const PotBinding& bind = BINDINGS[b];
       if (bind.potIndex != p) continue;
 
-      // Button mask must match exactly
-      if (bind.buttonMask != currentMask) {
-        // Exception: rear pot uses only bit1, right pots use only bit0
-        // Rear pot (index 4): check bit1 only
-        if (p == 4) {
-          if ((bind.buttonMask & 0x02) != (currentMask & 0x02)) continue;
-        } else {
-          // Right pots (0-3): check bit0 only
-          if ((bind.buttonMask & 0x01) != (currentMask & 0x01)) continue;
-        }
+      // bit0=left, bit1=rear. Rear modifier does not apply to right pots: if rear
+      // is held, only the rear pot is routed; right pots require rear released.
+      if (p == 4) {
+        if ((bind.buttonMask & 0x02) != (currentMask & 0x02)) continue;
+      } else {
+        if (currentMask & 0x02) continue;
+        if ((bind.buttonMask & 0x01) != (currentMask & 0x01)) continue;
       }
 
       // Bank type must match or be BANK_ANY
@@ -243,9 +273,6 @@ void PotRouter::applyBinding(uint8_t potIndex) {
     if (diff < 0) diff = -diff;
     if (diff <= POT_CATCH_WINDOW) {
       cs.caught = true;
-      #if DEBUG_SERIAL
-      Serial.printf("[POT] Binding %d caught at ADC %d\n", idx, (int)adc);
-      #endif
     } else {
       // Show uncaught bargraph at stored position
       _bargraphLevel = (uint8_t)((cs.storedValue * 8 + 2048) / 4096);
@@ -273,10 +300,9 @@ void PotRouter::applyBinding(uint8_t potIndex) {
     case TARGET_GATE_LENGTH:
       _gateLength = adcToFloat(adc);
       break;
-    case TARGET_SWING: {
-      // 0.5 to 0.75
-      float norm = adcToFloat(adc);
-      _swing = 0.5f + norm * 0.25f;
+    case TARGET_SHUFFLE_DEPTH: {
+      // 0.0 to 1.0
+      _shuffleDepth = adcToFloat(adc);
       break;
     }
     case TARGET_DIVISION: {
@@ -293,9 +319,10 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       _pattern = (ArpPattern)pat;
       break;
     }
-    case TARGET_OCTAVE_RANGE: {
-      uint8_t oct = (uint8_t)adcToRange(adc, 1, 4);
-      _octaveRange = oct;
+    case TARGET_SHUFFLE_TEMPLATE: {
+      uint8_t tmpl = (uint8_t)adcToRange(adc, 0, 4);
+      if (tmpl > 4) tmpl = 4;
+      _shuffleTemplate = tmpl;
       break;
     }
     case TARGET_BASE_VELOCITY:
@@ -360,10 +387,10 @@ bool PotRouter::isPerBankTarget(PotTarget t) const {
   switch (t) {
     case TARGET_PITCH_BEND:
     case TARGET_GATE_LENGTH:
-    case TARGET_SWING:
+    case TARGET_SHUFFLE_DEPTH:
     case TARGET_DIVISION:
     case TARGET_PATTERN:
-    case TARGET_OCTAVE_RANGE:
+    case TARGET_SHUFFLE_TEMPLATE:
     case TARGET_BASE_VELOCITY:
     case TARGET_VELOCITY_VARIATION:
       return true;
@@ -380,10 +407,10 @@ uint16_t    PotRouter::getSlewRate() const             { return _slewRate; }
 uint16_t    PotRouter::getAtDeadzone() const           { return _atDeadzone; }
 uint16_t    PotRouter::getPitchBend() const            { return _pitchBend; }
 float       PotRouter::getGateLength() const           { return _gateLength; }
-float       PotRouter::getSwing() const                { return _swing; }
+float       PotRouter::getShuffleDepth() const          { return _shuffleDepth; }
 ArpDivision PotRouter::getDivision() const             { return _division; }
 ArpPattern  PotRouter::getPattern() const              { return _pattern; }
-uint8_t     PotRouter::getOctaveRange() const          { return _octaveRange; }
+uint8_t     PotRouter::getShuffleTemplate() const       { return _shuffleTemplate; }
 uint8_t     PotRouter::getBaseVelocity() const         { return _baseVelocity; }
 uint8_t     PotRouter::getVelocityVariation() const    { return _velocityVariation; }
 uint16_t    PotRouter::getTempoBPM() const             { return _tempoBPM; }

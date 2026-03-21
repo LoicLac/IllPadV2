@@ -13,7 +13,8 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
                           NvsManager* nvs, BankSlot* banks,
                           uint8_t* padOrder, uint8_t* bankPads,
                           uint8_t* rootPads, uint8_t* modePads,
-                          uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad) {
+                          uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
+                          uint8_t* octavePads) {
   _keyboard = keyboard;
   _leds = leds;
   _nvs = nvs;
@@ -25,7 +26,8 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _toolOrdering.begin(keyboard, leds, nvs, &_ui, padOrder);
   _toolRoles.begin(keyboard, leds, nvs, &_ui,
                    bankPads, rootPads, modePads,
-                   chromaticPad, holdPad, playStopPad);
+                   chromaticPad, holdPad, playStopPad,
+                   octavePads);
   _toolBankConfig.begin(nvs, &_ui, banks);
   _toolSettings.begin(keyboard, nvs, &_ui);
 }
@@ -110,11 +112,3 @@ void SetupManager::run() {
   }
 }
 
-bool SetupManager::shouldEnterSetup() {
-  return false;  // Entry detection is inline in main.cpp
-}
-
-void SetupManager::runTool(uint8_t toolIndex) {
-  (void)toolIndex;
-  // Dispatch handled inline in run()
-}

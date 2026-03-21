@@ -25,7 +25,8 @@ public:
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
              NvsManager* nvs, SetupUI* ui,
              uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
-             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad);
+             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
+             uint8_t* octavePads);
   void run();  // Blocking — sub-menu driven
 
 private:
@@ -41,6 +42,7 @@ private:
   uint8_t* _chromaticPad;  // single
   uint8_t* _holdPad;       // single
   uint8_t* _playStopPad;   // single
+  uint8_t* _octavePads;    // [4]
 
   // Working copies (edited during tool, committed on save)
   uint8_t _wkBankPads[NUM_BANKS];
@@ -49,6 +51,7 @@ private:
   uint8_t _wkChromPad;
   uint8_t _wkHoldPad;
   uint8_t _wkPlayStopPad;
+  uint8_t _wkOctavePads[4];
 
   // Grid state (rebuilt before each draw)
   uint8_t _roleMap[NUM_KEYS];        // PadRoleCode per pad

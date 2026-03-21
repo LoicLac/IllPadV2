@@ -16,7 +16,6 @@ NvsManager::NvsManager()
   , _ledBrightDirty(false)
   , _padSensDirty(false)
   , _padOrderDirty(false)
-  , _controlPadsDirty(false)
   , _anyDirty(false)
   , _pendingBank(DEFAULT_BANK)
   , _pendingLedBright(128)
@@ -39,7 +38,7 @@ NvsManager::NvsManager()
     _pendingBaseVel[i] = DEFAULT_BASE_VELOCITY;
     _pendingVelVar[i] = DEFAULT_VELOCITY_VARIATION;
     _pendingPitchBend[i] = DEFAULT_PITCH_BEND_OFFSET;
-    _pendingArpPot[i] = {2048, 2048, DIV_1_8, ARP_UP, 1, 0};
+    _pendingArpPot[i] = {2048, 0, DIV_1_8, ARP_UP, 1, 0};  // gate, shuffle, div, pat, oct, tmpl
   }
   for (uint8_t i = 0; i < NUM_KEYS; i++) {
     _pendingPadOrder[i] = i;
@@ -161,16 +160,16 @@ void NvsManager::tickPotDebounce(uint32_t now, bool potRouterDirty, const PotRou
   if (currentType == BANK_ARPEG) {
     ArpPotStore newArp;
     newArp.gateRaw     = (uint16_t)(potRouter.getGateLength() * 4095.0f);
-    newArp.swingRaw    = (uint16_t)((potRouter.getSwing() - 0.5f) / 0.25f * 4095.0f);
+    newArp.shuffleDepthRaw = (uint16_t)(potRouter.getShuffleDepth() * 4095.0f);
     newArp.division    = (uint8_t)potRouter.getDivision();
     newArp.pattern     = (uint8_t)potRouter.getPattern();
-    newArp.octaveRange = potRouter.getOctaveRange();
-    newArp.reserved    = 0;
+    newArp.octaveRange = _pendingArpPot[currentBank].octaveRange;  // Preserve pad-set value
+    newArp.shuffleTemplate = potRouter.getShuffleTemplate();
 
     const ArpPotStore& cur = _pendingArpPot[currentBank];
-    if (newArp.gateRaw != cur.gateRaw || newArp.swingRaw != cur.swingRaw
+    if (newArp.gateRaw != cur.gateRaw || newArp.shuffleDepthRaw != cur.shuffleDepthRaw
         || newArp.division != cur.division || newArp.pattern != cur.pattern
-        || newArp.octaveRange != cur.octaveRange) {
+        || newArp.shuffleTemplate != cur.shuffleTemplate) {
       _pendingArpPot[currentBank] = newArp;
       _arpPotDirty[currentBank] = true;
       _anyDirty = true;
@@ -228,13 +227,22 @@ void NvsManager::queuePadSensitivityWrite(uint8_t sensitivity) {
   _anyDirty = true;
 }
 
-void NvsManager::queueArpPotWrite(uint8_t bankIdx, float gate, float swing,
-                                    ArpDivision div, ArpPattern pat, uint8_t octave) {
+void NvsManager::queueArpPotWrite(uint8_t bankIdx, float gate, float shuffleDepth,
+                                    ArpDivision div, ArpPattern pat, uint8_t octave,
+                                    uint8_t shuffleTmpl) {
   if (bankIdx >= NUM_BANKS) return;
-  _pendingArpPot[bankIdx].gateRaw     = (uint16_t)(gate * 4095.0f);
-  _pendingArpPot[bankIdx].swingRaw    = (uint16_t)((swing - 0.5f) / 0.25f * 4095.0f);
-  _pendingArpPot[bankIdx].division    = (uint8_t)div;
-  _pendingArpPot[bankIdx].pattern     = (uint8_t)pat;
+  _pendingArpPot[bankIdx].gateRaw          = (uint16_t)(gate * 4095.0f);
+  _pendingArpPot[bankIdx].shuffleDepthRaw  = (uint16_t)(shuffleDepth * 4095.0f);
+  _pendingArpPot[bankIdx].division         = (uint8_t)div;
+  _pendingArpPot[bankIdx].pattern          = (uint8_t)pat;
+  _pendingArpPot[bankIdx].octaveRange      = octave;
+  _pendingArpPot[bankIdx].shuffleTemplate  = shuffleTmpl;
+  _arpPotDirty[bankIdx] = true;
+  _anyDirty = true;
+}
+
+void NvsManager::queueArpOctaveWrite(uint8_t bankIdx, uint8_t octave) {
+  if (bankIdx >= NUM_BANKS) return;
   _pendingArpPot[bankIdx].octaveRange = octave;
   _arpPotDirty[bankIdx] = true;
   _anyDirty = true;
@@ -252,10 +260,6 @@ void NvsManager::queuePadOrderWrite(const uint8_t* order) {
   _anyDirty = true;
 }
 
-void NvsManager::queueControlPadsWrite() {
-  _controlPadsDirty = true;
-  _anyDirty = true;
-}
 
 // =================================================================
 // commitAll — called by NVS task, writes all dirty data
@@ -357,7 +361,6 @@ void NvsManager::commitAll() {
   if (_ledBrightDirty)   { saveLedBrightness(); _ledBrightDirty = false; }
   if (_padSensDirty)     { savePadSensitivity(); _padSensDirty = false; }
   if (_padOrderDirty)    { savePadOrder();       _padOrderDirty = false; }
-  if (_controlPadsDirty) { saveControlPads();    _controlPadsDirty = false; }
 }
 
 // =================================================================
@@ -367,8 +370,8 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
                           uint8_t* padOrder, uint8_t* bankPads,
                           uint8_t* rootPads, uint8_t* modePads,
                           uint8_t& chromaticPad, uint8_t& holdPad,
-                          uint8_t& playStopPad, PotRouter& potRouter,
-                          SettingsStore& settings) {
+                          uint8_t& playStopPad, uint8_t* octavePads,
+                          PotRouter& potRouter, SettingsStore& settings) {
   Preferences prefs;
 
   // --- Current bank ---
@@ -398,7 +401,8 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     prefs.end();
   }
 
-  // --- Bank types ---
+  // --- Bank types + quantize modes ---
+  memset(_loadedQuantize, DEFAULT_ARP_START_MODE, NUM_BANKS);
   if (prefs.begin(BANKTYPE_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(BANKTYPE_NVS_KEY);
     if (len == NUM_BANKS) {
@@ -409,6 +413,14 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       }
       #if DEBUG_SERIAL
       Serial.println("[NVS] Bank types loaded.");
+      #endif
+    }
+    // Quantize modes (optional key — missing = all Immediate)
+    len = prefs.getBytesLength("qmode");
+    if (len == NUM_BANKS) {
+      prefs.getBytes("qmode", _loadedQuantize, NUM_BANKS);
+      #if DEBUG_SERIAL
+      Serial.println("[NVS] Quantize modes loaded.");
       #endif
     }
     prefs.end();
@@ -554,14 +566,20 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   if (prefs.begin(ARP_PAD_NVS_NAMESPACE, true)) {
     holdPad = prefs.getUChar(ARP_PAD_HOLD_KEY, 23);
     playStopPad = prefs.getUChar(ARP_PAD_PS_KEY, 24);
+    size_t octLen = prefs.getBytesLength(ARP_PAD_OCT_KEY);
+    if (octLen == 4) prefs.getBytes(ARP_PAD_OCT_KEY, octavePads, 4);
     prefs.end();
     #if DEBUG_SERIAL
-    Serial.printf("[NVS] Arp pads: hold=%d ps=%d\n", holdPad, playStopPad);
+    Serial.printf("[NVS] Arp pads: hold=%d ps=%d oct=%d,%d,%d,%d\n",
+                  holdPad, playStopPad, octavePads[0], octavePads[1],
+                  octavePads[2], octavePads[3]);
     #endif
   }
 
-  // --- Settings (profile, AT rate, BLE interval) ---
-  settings = {EEPROM_MAGIC, SETTINGS_VERSION, DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL};
+  // --- Settings (profile, AT rate, BLE interval, clock, follow transport, double-tap) ---
+  settings = {EEPROM_MAGIC, SETTINGS_VERSION, DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT,
+              DEFAULT_BLE_INTERVAL, DEFAULT_CLOCK_MODE, DEFAULT_FOLLOW_TRANSPORT,
+              DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT};
   if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
     if (len == sizeof(SettingsStore)) {
@@ -573,12 +591,46 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     }
     prefs.end();
     #if DEBUG_SERIAL
-    Serial.printf("[NVS] Settings: profile=%d, atRate=%d, bleInt=%d\n",
-                  settings.baselineProfile, settings.aftertouchRate, settings.bleInterval);
+    Serial.printf("[NVS] Settings: profile=%d, atRate=%d, bleInt=%d, clock=%d, follow=%d, dblTap=%d\n",
+                  settings.baselineProfile, settings.aftertouchRate, settings.bleInterval,
+                  settings.clockMode, settings.followTransport, settings.doubleTapMs);
     #endif
   }
 
-  (void)potRouter;  // PotRouter stored values will be set by caller
+  // --- Apply loaded values to PotRouter (BEFORE PotRouter::begin()) ---
+  // This ensures catch seeds reflect NVS-saved values, not constructor defaults.
+  // Without this, every reboot would lose tempo, shape, gate, etc.
+  potRouter.loadStoredGlobals(_pendingResponseShape, _pendingSlewRate,
+                               _pendingAtDeadzone, _pendingTempo,
+                               _pendingLedBright, _pendingPadSens);
+
+  // Per-bank params: load for the current bank (the one that will be foreground)
+  const ArpPotStore& arp = _pendingArpPot[currentBank];
+  potRouter.loadStoredPerBank(
+    _pendingBaseVel[currentBank], _pendingVelVar[currentBank],
+    _pendingPitchBend[currentBank],
+    (float)arp.gateRaw / 4095.0f,
+    (float)arp.shuffleDepthRaw / 4095.0f,
+    (ArpDivision)arp.division, (ArpPattern)arp.pattern,
+    arp.shuffleTemplate
+  );
+
+  #if DEBUG_SERIAL
+  Serial.printf("[NVS] PotRouter loaded: tempo=%d shape=%.2f slew=%d dz=%d bright=%d sens=%d\n",
+                _pendingTempo, _pendingResponseShape, _pendingSlewRate,
+                _pendingAtDeadzone, _pendingLedBright, _pendingPadSens);
+  #endif
+}
+
+uint8_t NvsManager::getLoadedQuantizeMode(uint8_t bank) const {
+  if (bank >= NUM_BANKS) return DEFAULT_ARP_START_MODE;
+  return _loadedQuantize[bank];
+}
+
+const ArpPotStore& NvsManager::getLoadedArpParams(uint8_t bankIdx) const {
+  static const ArpPotStore defaultArp = {2048, 0, DIV_1_8, ARP_UP, 1, 0};
+  if (bankIdx >= NUM_BANKS) return defaultArp;
+  return _pendingArpPot[bankIdx];
 }
 
 // =================================================================
@@ -590,9 +642,6 @@ void NvsManager::saveBank() {
   if (prefs.begin(BANK_NVS_NAMESPACE, false)) {
     prefs.putUChar(BANK_NVS_KEY, _pendingBank);
     prefs.end();
-    #if DEBUG_SERIAL
-    Serial.printf("[NVS] Saved bank: %d\n", _pendingBank);
-    #endif
   }
 }
 
@@ -603,9 +652,6 @@ void NvsManager::saveBankTypes() {
     for (uint8_t i = 0; i < NUM_BANKS; i++) types[i] = (uint8_t)_pendingTypes[i];
     prefs.putBytes(BANKTYPE_NVS_KEY, types, NUM_BANKS);
     prefs.end();
-    #if DEBUG_SERIAL
-    Serial.println("[NVS] Saved bank types.");
-    #endif
   }
 }
 
@@ -621,14 +667,7 @@ void NvsManager::savePotParams() {
     pps.atDeadzone = _pendingAtDeadzone;
     prefs.putBytes(POT_PARAMS_NVS_KEY, &pps, sizeof(PotParamsStore));
     prefs.end();
-    #if DEBUG_SERIAL
-    Serial.println("[NVS] Saved pot params.");
-    #endif
   }
-}
-
-void NvsManager::saveArpPotParams() {
-  // Batched in commitAll — this is a no-op placeholder (batch logic is in commitAll)
 }
 
 void NvsManager::saveTempo() {
@@ -636,9 +675,6 @@ void NvsManager::saveTempo() {
   if (prefs.begin(TEMPO_NVS_NAMESPACE, false)) {
     prefs.putUShort(TEMPO_NVS_KEY, _pendingTempo);
     prefs.end();
-    #if DEBUG_SERIAL
-    Serial.printf("[NVS] Saved tempo: %d BPM\n", _pendingTempo);
-    #endif
   }
 }
 
@@ -647,9 +683,6 @@ void NvsManager::saveLedBrightness() {
   if (prefs.begin(LED_NVS_NAMESPACE, false)) {
     prefs.putUChar(LED_NVS_KEY, _pendingLedBright);
     prefs.end();
-    #if DEBUG_SERIAL
-    Serial.printf("[NVS] Saved LED brightness: %d\n", _pendingLedBright);
-    #endif
   }
 }
 
@@ -658,9 +691,6 @@ void NvsManager::savePadSensitivity() {
   if (prefs.begin(SENSITIVITY_NVS_NAMESPACE, false)) {
     prefs.putUChar(SENSITIVITY_NVS_KEY, _pendingPadSens);
     prefs.end();
-    #if DEBUG_SERIAL
-    Serial.printf("[NVS] Saved pad sensitivity: %d\n", _pendingPadSens);
-    #endif
   }
 }
 
@@ -680,10 +710,3 @@ void NvsManager::savePadOrder() {
   }
 }
 
-void NvsManager::saveControlPads() {
-  // Scale pads + arp pads — written by ToolPadRoles, not by runtime code
-  // Placeholder for future tool integration
-  #if DEBUG_SERIAL
-  Serial.println("[NVS] Control pads save (placeholder).");
-  #endif
-}

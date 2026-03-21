@@ -7,8 +7,8 @@
 // =================================================================
 // 1. DEBUG & PRODUCTION
 // =================================================================
-#define DEBUG_SERIAL 1   // Set to 0 to disable Serial debug output (init, cal, transport)
-#define PRODUCTION_MODE 0  // When 1: no Serial in main (setup/loop); calibration still uses Serial
+#define DEBUG_SERIAL 1   // 1 = all debug messages (boot + runtime). 0 = complete silence, zero overhead.
+#define DEBUG_HARDWARE 0 // 1 = print pot ADC values + button states every 500ms (loop). 0 = off.
 
 // =================================================================
 // 2. PIN ASSIGNMENTS — ESP32-S3-N8R16
@@ -41,11 +41,6 @@ const uint8_t LED_PIN_7 = 17;  // Bank 7
 const uint8_t LED_PIN_8 = 18;  // Bank 8
 const int NUM_LEDS = 8;
 
-// --- Onboard addressable RGB (WS2812-type, D6 on ESP32-S3-DevKitC-1) ---
-#define INT_LED 1  // Set to 0 to disable onboard RGB LED (GPIO48) at compile time
-const uint8_t RGB_LED_PIN = 48;  // v1.1; use 48 for v1.0
-const uint8_t RGB_LED_BRIGHTNESS = 48;  // 0–255
-
 // --- Buttons (V2: 2 buttons, all active LOW with internal pull-up) ---
 const uint8_t BTN_LEFT_PIN  = 2;   // GPIO??? — Left side, bank+scale+arp single-layer (hold + pad), modifier for right pots
 const uint8_t BTN_REAR_PIN  = 11;  // GPIO??? — Rear, battery gauge + setup mode entry + modifier for rear pot
@@ -57,8 +52,8 @@ const uint8_t  CHASE_STEP_MS = 80;          // Speed of chase pattern (ms per LE
 
 // --- Analog Pots (V2: 5 potentiometers — 4 right + 1 rear) ---
 const uint8_t POT_RIGHT1_PIN = 1;   // GPIO??? — Right side pot 1 (tempo / division)
-const uint8_t POT_RIGHT2_PIN = 12;  // GPIO??? — Right side pot 2 (shape-gate / deadzone-swing)
-const uint8_t POT_RIGHT3_PIN = 14;  // GPIO??? — Right side pot 3 (slew-pattern / pitchbend-octave)
+const uint8_t POT_RIGHT2_PIN = 12;  // GPIO??? — Right side pot 2 (shape-gate / deadzone-shuffle)
+const uint8_t POT_RIGHT3_PIN = 14;  // GPIO??? — Right side pot 3 (slew-pattern / pitchbend-shuffletemplate)
 const uint8_t POT_RIGHT4_PIN = 21;  // GPIO??? — Right side pot 4 (base velocity / velocity variation)
 const uint8_t POT_REAR_PIN   = 13;  // GPIO??? — Rear (LED brightness / pad sensitivity)
 const uint8_t NUM_POTS = 5;
@@ -68,7 +63,7 @@ const float POT_SMOOTHING_ALPHA = 0.05f;
 
 // --- Pot Catch & Bargraph ---
 const int      POT_CATCH_WINDOW          = 100;   // ADC units (±2.4% of 4095) to catch stored value
-const uint32_t POT_BARGRAPH_DURATION_MS  = 5000;  // Show bargraph for 5s after last movement
+const uint32_t POT_BARGRAPH_DURATION_MS  = 3000;  // Show bargraph for 3s after last movement (legacy, used as fallback)
 const uint32_t POT_NVS_SAVE_DEBOUNCE_MS  = 10000; // Save to NVS 10s after last pot change
 
 // --- Battery Monitoring ---
@@ -162,11 +157,73 @@ enum BleInterval : uint8_t {
 };
 const uint8_t DEFAULT_BLE_INTERVAL = BLE_NORMAL;
 
+// --- Clock Mode ---
+enum ClockMode : uint8_t {
+  CLOCK_SLAVE  = 0,   // Sync to external clock (DAW)
+  CLOCK_MASTER = 1,   // Generate clock from pot tempo
+  NUM_CLOCK_MODES = 2
+};
+const uint8_t DEFAULT_CLOCK_MODE         = CLOCK_SLAVE;
+const uint8_t DEFAULT_FOLLOW_TRANSPORT   = 1;  // yes — slave follows DAW Start/Stop/Continue
+
+// --- Arp Start Quantize (per-bank, set in Tool 4) ---
+enum ArpStartMode : uint8_t {
+  ARP_START_IMMEDIATE = 0,   // Fire on next division boundary (current behavior)
+  ARP_START_BEAT      = 1,   // Snap to next beat (24 ticks)
+  ARP_START_BAR       = 2,   // Snap to next bar (96 ticks, 4/4)
+  NUM_ARP_START_MODES = 3
+};
+const uint8_t DEFAULT_ARP_START_MODE = ARP_START_IMMEDIATE;
+
+// --- Double-Tap Window (ARPEG HOLD mode) ---
+const uint8_t DOUBLE_TAP_MS_MIN     = 100;
+const uint8_t DOUBLE_TAP_MS_MAX     = 250;
+const uint8_t DOUBLE_TAP_MS_DEFAULT = 150;
+
 // =================================================================
-// 5. MIDI
+// 5. LED DISPLAY — Brightness Ranges & Timing
+// =================================================================
+// All brightness values 0-255, scaled by global brightness pot at runtime.
+// Compile-time constants — designed to become runtime-configurable in a future LED settings tool.
+
+// --- Foreground (current bank) ---
+const uint8_t LED_FG_NORMAL_BRIGHTNESS     = 255;  // NORMAL: solid 100%
+const uint8_t LED_FG_ARP_STOP_MIN          = 77;   // ARPEG stopped: sine pulse low (30%)
+const uint8_t LED_FG_ARP_STOP_MAX          = 255;  // ARPEG stopped: sine pulse high (100%)
+const uint8_t LED_FG_ARP_PLAY_MIN          = 77;   // ARPEG playing: sine pulse low (30%)
+const uint8_t LED_FG_ARP_PLAY_MAX          = 204;  // ARPEG playing: sine pulse high (80%)
+const uint8_t LED_FG_ARP_PLAY_FLASH        = 255;  // ARPEG playing: tick flash spike (100%)
+
+// --- Background (other banks) ---
+const uint8_t LED_BG_NORMAL_BRIGHTNESS     = 0;    // NORMAL: off
+const uint8_t LED_BG_ARP_STOP_MIN          = 20;   // ARPEG stopped: sine pulse low (8%)
+const uint8_t LED_BG_ARP_STOP_MAX          = 64;   // ARPEG stopped: sine pulse high (25%)
+const uint8_t LED_BG_ARP_PLAY_MIN          = 20;   // ARPEG playing: sine pulse low (8%)
+const uint8_t LED_BG_ARP_PLAY_MAX          = 51;   // ARPEG playing: sine pulse high (20%)
+const uint8_t LED_BG_ARP_PLAY_FLASH        = 64;   // ARPEG playing: tick flash spike (25%)
+
+// --- Pulse & Flash Timing ---
+const uint16_t LED_PULSE_PERIOD_MS         = 1472; // Sine pulse period (~1.5s). LUT step = period / 64
+const uint8_t  LED_TICK_FLASH_DURATION_MS  = 30;   // Tick flash spike duration
+
+// --- Confirmation Blinks ---
+const uint8_t  LED_CONFIRM_UNIT_MS         = 50;   // Base phase unit for confirmation blinks
+const uint8_t  LED_CONFIRM_BANK_PHASES     = 6;    // Bank switch: triple blink (on,off × 3) = 300ms
+const uint8_t  LED_CONFIRM_SCALE_PHASES    = 4;    // Scale change: double blink (on,off × 2) = 200ms
+const uint8_t  LED_CONFIRM_HOLD_ON_MS      = 150;  // Hold toggle: long blink on phase
+const uint8_t  LED_CONFIRM_HOLD_TOTAL_MS   = 250;  // Hold toggle: total duration
+const uint8_t  LED_CONFIRM_OCTAVE_PHASES   = 2;    // Octave change: single blink = 100ms
+const uint8_t  LED_CONFIRM_BRIGHTNESS_PCT  = 50;   // Bank switch blink brightness (% of global)
+
+// --- Bargraph Duration (configurable via Tool 5) ---
+const uint16_t LED_BARGRAPH_DURATION_MIN     = 1000;
+const uint16_t LED_BARGRAPH_DURATION_MAX     = 10000;
+const uint16_t LED_BARGRAPH_DURATION_DEFAULT = 3000;
+
+// =================================================================
+// 6. MIDI
 // =================================================================
 const uint8_t MIDI_BASE_NOTE = 36;          // C2
-const uint8_t MIDI_CHANNEL = 0;             // Channel 1 (zero-indexed), default at boot
 // Velocity is now per-bank (baseVelocity + velocityVariation in BankSlot)
 const uint8_t DEFAULT_BASE_VELOCITY      = 100;  // Default base velocity for new banks
 const uint8_t DEFAULT_VELOCITY_VARIATION = 0;     // Default variation (0 = fixed)
@@ -185,15 +242,6 @@ const uint8_t DEFAULT_BANK = 0;  // Bank 1 (MIDI channel 1)
 #define BANK_NVS_NAMESPACE "illpad_bank"
 #define BANK_NVS_KEY       "bank"
 
-#define BANK_SELECT_PAD_FOR_BANK1  0
-#define BANK_SELECT_PAD_FOR_BANK2  1
-#define BANK_SELECT_PAD_FOR_BANK3  2
-#define BANK_SELECT_PAD_FOR_BANK4  3
-#define BANK_SELECT_PAD_FOR_BANK5  4
-#define BANK_SELECT_PAD_FOR_BANK6  5
-#define BANK_SELECT_PAD_FOR_BANK7  6
-#define BANK_SELECT_PAD_FOR_BANK8  7
-
 // --- Poly-aftertouch rate limiting ---
 // Max poly-aftertouch update rate per pad. I2C supports ~250 polls/s; this caps MIDI event rate
 // per key. Lower interval = smoother response, more BLE/USB traffic. Higher = fewer events.
@@ -201,7 +249,7 @@ const uint16_t AFTERTOUCH_UPDATE_INTERVAL_MS = 25;  // Min ms between two aftert
 const uint8_t  AFTERTOUCH_CHANGE_THRESHOLD = 1;    // Min pressure delta (0–127) to send an update; avoids sending unchanged values
 
 // =================================================================
-// 6. DEVICE IDENTITY
+// 7. DEVICE IDENTITY
 // =================================================================
 // Base logical device name (no transport suffix)
 #define DEVICE_NAME "ILLPAD48"
