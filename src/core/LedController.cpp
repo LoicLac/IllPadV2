@@ -287,8 +287,8 @@ void LedController::update() {
       clearPixels();
 
       if (_potBarCaught) {
-        // Caught: full-color solid bar up to potLevel
-        for (uint8_t i = 0; i < _potBarPotLevel && i < NUM_LEDS; i++) {
+        // Caught: full-color solid bar (realLevel = 0-8, number of LEDs)
+        for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
           setPixel(i, barColor);
         }
       } else {
@@ -296,9 +296,9 @@ void LedController::update() {
         for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
           setPixel(i, barDim);
         }
-        // Bright cursor at pot position (show where the pot physically is)
-        if (_potBarPotLevel > 0 && _potBarPotLevel <= NUM_LEDS) {
-          setPixel(_potBarPotLevel - 1, barColor);
+        // Bright cursor at pot position (potLevel = 0-7, LED index)
+        if (_potBarPotLevel < NUM_LEDS) {
+          setPixel(_potBarPotLevel, barColor);
         }
       }
 
