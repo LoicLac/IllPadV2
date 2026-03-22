@@ -2,30 +2,43 @@
 #include "HardwareConfig.h"
 #include "KeyboardData.h"
 #include "../arp/ArpEngine.h"
+#include "../midi/ClockManager.h"
 #include <Arduino.h>
 #include <math.h>
 
-// LED pin mapping (indices 0-7 correspond to LEDs 1-8, arranged in a circle)
-const uint8_t LedController::_pins[NUM_LEDS] = {
-  LED_PIN_1, LED_PIN_2, LED_PIN_3, LED_PIN_4,
-  LED_PIN_5, LED_PIN_6, LED_PIN_7, LED_PIN_8
-};
+// =================================================================
+// Constructor
+// =================================================================
 
 LedController::LedController()
-  : _brightness(255),
+  : _strip(NUM_LEDS, LED_DATA_PIN, NEO_GRBW + NEO_KHZ800),
+    _brightness(255),
     _currentBank(0),
     _batteryLow(false),
     _slots(nullptr),
+    _clock(nullptr),
     _confirmType(CONFIRM_NONE),
     _confirmStart(0),
     _confirmParam(0),
+    _fadeStartTime(0),
+    _fadeColor{0, 0, 0, 0},
+    _playFlashPhase(0),
+    _playLastBeatTick(0),
     _potBarDurationMs(LED_BARGRAPH_DURATION_DEFAULT),
+    _showingPotBar(false),
+    _potBarRealLevel(0),
+    _potBarPotLevel(0),
+    _potBarCaught(true),
+    _potBarStart(0),
     _bootMode(false),
     _bootStep(0),
     _bootFailStep(0),
     _chaseActive(false),
     _chasePos(0),
     _chaseLastStep(0),
+    _setupComet(false),
+    _cometPos(0),
+    _cometLastStep(0),
     _calibrationMode(false),
     _validationFlashing(false),
     _validationFlashStart(0),
@@ -35,12 +48,9 @@ LedController::LedController()
     _showingBattery(false),
     _batteryLeds(0),
     _batteryDisplayStart(0),
-    _showingPotBar(false),
-    _potBarLevel(0),
-    _potBarStart(0),
     _batLowLastBurstTime(0)
 {
-  // Precompute sine LUT — 64 entries covering one full period (0-255 output range)
+  // Precompute sine LUT -- 64 entries covering one full period (0-255 output range)
   // Only runs once at boot, no float in update()
   for (uint8_t i = 0; i < 64; i++) {
     _sineTable[i] = (uint8_t)(127.5f + 127.5f * sinf((float)i * 6.2831853f / 64.0f));
@@ -51,51 +61,100 @@ LedController::LedController()
   }
 }
 
+// =================================================================
+// begin
+// =================================================================
+
 void LedController::begin() {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    pinMode(_pins[i], OUTPUT);
-    digitalWrite(_pins[i], LOW);
+  _strip.begin();
+  _strip.show();  // All pixels off
+}
+
+// =================================================================
+// Pixel Helpers -- per-pixel brightness scaling (no strip.setBrightness)
+// =================================================================
+
+void LedController::setPixel(uint8_t i, const RGBW& c) {
+  _strip.setPixelColor(i, _strip.Color(
+    (uint8_t)((uint16_t)c.r * _brightness / 255),
+    (uint8_t)((uint16_t)c.g * _brightness / 255),
+    (uint8_t)((uint16_t)c.b * _brightness / 255),
+    (uint8_t)((uint16_t)c.w * _brightness / 255)
+  ));
+}
+
+void LedController::setPixelScaled(uint8_t i, const RGBW& c, uint8_t scale) {
+  uint16_t combinedScale = (uint16_t)scale * _brightness / 255;
+  _strip.setPixelColor(i, _strip.Color(
+    (uint8_t)((uint16_t)c.r * combinedScale / 255),
+    (uint8_t)((uint16_t)c.g * combinedScale / 255),
+    (uint8_t)((uint16_t)c.b * combinedScale / 255),
+    (uint8_t)((uint16_t)c.w * combinedScale / 255)
+  ));
+}
+
+void LedController::clearPixels() {
+  for (uint8_t i = 0; i < NUM_LEDS; i++) {
+    _strip.setPixelColor(i, 0);
   }
 }
 
-// ---------------------------------------------------------------
-// I2C error halt — 3 rapid flashes + 1s off, loops forever
-// ---------------------------------------------------------------
+// =================================================================
+// I2C error halt -- 3 rapid red flashes + 1s off, loops forever
+// =================================================================
 
 void LedController::haltI2CError() {
   while (true) {
     for (uint8_t flash = 0; flash < 3; flash++) {
-      for (int i = 0; i < NUM_LEDS; i++) digitalWrite(_pins[i], HIGH);
+      for (uint8_t i = 0; i < NUM_LEDS; i++) setPixel(i, COL_ERROR);
+      _strip.show();
       delay(80);
-      for (int i = 0; i < NUM_LEDS; i++) digitalWrite(_pins[i], LOW);
+      clearPixels();
+      _strip.show();
       delay(80);
     }
     delay(1000);
   }
 }
 
-// ---------------------------------------------------------------
-// Chase pattern — single LED circling (calibration entry feedback)
-// ---------------------------------------------------------------
+// =================================================================
+// Chase pattern -- single LED circling (calibration entry feedback)
+// =================================================================
 
 void LedController::startChase() {
   _chaseActive = true;
   _chasePos = 0;
   _chaseLastStep = millis();
-  for (int i = 0; i < NUM_LEDS; i++) digitalWrite(_pins[i], LOW);
-  digitalWrite(_pins[0], HIGH);
+  clearPixels();
+  setPixel(0, COL_SETUP);
+  _strip.show();
 }
 
 void LedController::stopChase() {
   _chaseActive = false;
-  for (int i = 0; i < NUM_LEDS; i++) digitalWrite(_pins[i], LOW);
+  clearPixels();
+  _strip.show();
 }
 
-// ---------------------------------------------------------------
-// Main update — call from loop() every cycle
-// ---------------------------------------------------------------
-// Priority-based state machine. Highest active mode wins, others skip.
-// All timing via millis() — never blocks.
+// =================================================================
+// Setup comet -- ping-pong chase with trail (active during Tools 1-6)
+// =================================================================
+
+void LedController::startSetupComet() {
+  _setupComet = true;
+  _cometPos = 0;
+  _cometLastStep = millis();
+}
+
+void LedController::stopSetupComet() {
+  _setupComet = false;
+  clearPixels();
+  _strip.show();
+}
+
+// =================================================================
+// Main update -- priority-based state machine
+// =================================================================
 
 void LedController::update() {
   unsigned long now = millis();
@@ -106,154 +165,331 @@ void LedController::update() {
     _lastBlinkTime = now;
   }
 
-  // === Boot mode (progressive fill / failure blink) ===
+  // === Priority 1: Boot mode (progressive fill / failure blink) ===
   if (_bootMode) {
+    clearPixels();
     if (_bootFailStep > 0) {
       bool fastBlink = ((now / 150) % 2) == 0;
-      for (int i = 0; i < NUM_LEDS; i++) {
+      for (uint8_t i = 0; i < NUM_LEDS; i++) {
         if (i < _bootFailStep - 1) {
-          digitalWrite(_pins[i], HIGH);
+          setPixel(i, COL_BOOT);
         } else if (i == _bootFailStep - 1) {
-          digitalWrite(_pins[i], fastBlink ? HIGH : LOW);
-        } else {
-          digitalWrite(_pins[i], LOW);
+          if (fastBlink) setPixel(i, COL_BOOT_FAIL);
+          // else stays cleared (off)
         }
+        // remaining LEDs stay cleared
       }
     } else {
-      for (int i = 0; i < NUM_LEDS; i++) {
-        digitalWrite(_pins[i], (i < _bootStep) ? HIGH : LOW);
+      for (uint8_t i = 0; i < NUM_LEDS; i++) {
+        if (i < _bootStep) {
+          setPixel(i, COL_BOOT);
+        }
       }
     }
+    _strip.show();
     return;
   }
 
-  // === Chase pattern (calibration entry) ===
+  // === Priority 2: Setup comet (ping-pong chase, skipped if in calibration) ===
+  if (_setupComet && !_calibrationMode) {
+    if (now - _cometLastStep >= LED_SETUP_CHASE_SPEED_MS) {
+      _cometPos = (_cometPos + 1) % 14;  // 0-13 for ping-pong
+      _cometLastStep = now;
+    }
+    // Map ping-pong position to LED index:
+    // 0-7 = LEDs 0-7 forward, 8-13 = LEDs 6 down to 1 backward
+    uint8_t headLed;
+    if (_cometPos <= 7) {
+      headLed = _cometPos;
+    } else {
+      headLed = 14 - _cometPos;  // 8->6, 9->5, 10->4, 11->3, 12->2, 13->1
+    }
+
+    clearPixels();
+    // Head at 100%
+    setPixel(headLed, COL_SETUP);
+    // Trail -1 at 40% (if valid)
+    uint8_t prevPos = (_cometPos == 0) ? 13 : (_cometPos - 1);
+    uint8_t trail1Led;
+    if (prevPos <= 7) {
+      trail1Led = prevPos;
+    } else {
+      trail1Led = 14 - prevPos;
+    }
+    if (trail1Led != headLed) {
+      setPixelScaled(trail1Led, COL_SETUP, 102);  // 40% of 255
+    }
+    // Trail -2 at 10%
+    uint8_t prevPos2 = (prevPos == 0) ? 13 : (prevPos - 1);
+    uint8_t trail2Led;
+    if (prevPos2 <= 7) {
+      trail2Led = prevPos2;
+    } else {
+      trail2Led = 14 - prevPos2;
+    }
+    if (trail2Led != headLed && trail2Led != trail1Led) {
+      setPixelScaled(trail2Led, COL_SETUP, 26);  // 10% of 255
+    }
+
+    _strip.show();
+    return;
+  }
+
+  // === Priority 3: Chase pattern (calibration entry) ===
   if (_chaseActive) {
     if (now - _chaseLastStep >= CHASE_STEP_MS) {
-      digitalWrite(_pins[_chasePos], LOW);
       _chasePos = (_chasePos + 1) % NUM_LEDS;
-      digitalWrite(_pins[_chasePos], HIGH);
       _chaseLastStep = now;
     }
+    clearPixels();
+    setPixel(_chasePos, COL_SETUP);
+    _strip.show();
     return;
   }
 
-  // === Priority 1: Error (all 8 LEDs blink 500ms unison) ===
+  // === Priority 4: Error (LEDs 3-4 blink red, 500ms) ===
   if (_error) {
-    for (int i = 0; i < NUM_LEDS; i++) {
-      digitalWrite(_pins[i], _blinkState ? HIGH : LOW);
+    clearPixels();
+    if (_blinkState) {
+      setPixel(3, COL_ERROR);
+      setPixel(4, COL_ERROR);
     }
+    _strip.show();
     return;
   }
 
-  // === Priority 2: Battery gauge (8-LED bar, heartbeat pulse, 3s) ===
+  // === Priority 5: Battery gauge (solid gradient bar, 3s) ===
   if (_showingBattery) {
     if (now - _batteryDisplayStart < BAT_DISPLAY_DURATION_MS) {
-      // Asymmetric triangle: fast rise (200ms) + slow fall (800ms) = 1s period
-      unsigned long phase = now % 1000;
-      uint8_t brightness;
-      if (phase < 200) {
-        brightness = (uint8_t)((uint32_t)phase * 255 / 200);
-      } else {
-        brightness = (uint8_t)((uint32_t)(1000 - phase) * 255 / 800);
+      clearPixels();
+      for (uint8_t i = 0; i < _batteryLeds && i < NUM_LEDS; i++) {
+        setPixel(i, COL_BATTERY[i]);
       }
-      for (int i = 0; i < NUM_LEDS; i++) {
-        analogWrite(_pins[i], (i < _batteryLeds) ? brightness : 0);
-      }
+      _strip.show();
       return;
     }
-    // Battery display ended — detach LEDC, restore GPIO for analogWrite modes
     _showingBattery = false;
-    for (int i = 0; i < NUM_LEDS; i++) {
-      ledcDetachPin(_pins[i]);
-      pinMode(_pins[i], OUTPUT);
-      digitalWrite(_pins[i], LOW);
-    }
   }
 
-  // === Priority 3: Pot bargraph (solid bar, configurable duration) ===
+  // === Priority 6: Pot bargraph (solid/catch bar, configurable duration) ===
   if (_showingPotBar) {
     if (now - _potBarStart >= _potBarDurationMs) {
       _showingPotBar = false;
     } else {
-      for (int i = 0; i < NUM_LEDS; i++) {
-        digitalWrite(_pins[i], (i < _potBarLevel) ? HIGH : LOW);
+      // Determine bar color based on foreground bank type
+      RGBW barColor = COL_WHITE;  // NORMAL default
+      if (_slots && _slots[_currentBank].type == BANK_ARPEG) {
+        barColor = COL_BLUE;
       }
+
+      clearPixels();
+
+      if (_potBarCaught) {
+        // Caught: full-color solid bar up to potLevel
+        for (uint8_t i = 0; i < _potBarPotLevel && i < NUM_LEDS; i++) {
+          setPixel(i, barColor);
+        }
+      } else {
+        // Not caught: dim bar for real level + bright cursor for pot position
+        // Dim bar showing stored/real level
+        for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
+          setPixelScaled(i, barColor, 51);  // 20% brightness
+        }
+        // Bright cursor at pot position (show where the pot physically is)
+        if (_potBarPotLevel > 0 && _potBarPotLevel <= NUM_LEDS) {
+          setPixel(_potBarPotLevel - 1, barColor);
+        }
+      }
+
+      _strip.show();
       return;
     }
   }
 
-  // === Priority 4: Confirmation blinks (auto-expiring feedback) ===
+  // === Priority 7: Confirmation blinks (auto-expiring feedback) ===
   if (_confirmType != CONFIRM_NONE) {
     unsigned long elapsed = now - _confirmStart;
-    bool active = true;
 
     switch (_confirmType) {
       case CONFIRM_BANK_SWITCH: {
-        // Triple blink all 8 LEDs at reduced brightness
+        // Render normal display first, then overlay destination LED with triple blink
+        // Fall through to normal display below, with overlay applied after
         uint16_t totalMs = (uint16_t)LED_CONFIRM_BANK_PHASES * LED_CONFIRM_UNIT_MS;
-        if (elapsed < totalMs) {
-          uint8_t phase = elapsed / LED_CONFIRM_UNIT_MS;
-          bool on = (phase < LED_CONFIRM_BANK_PHASES) && (phase % 2 == 0);
-          uint8_t val = on ? (uint8_t)((uint16_t)_brightness * LED_CONFIRM_BRIGHTNESS_PCT / 100) : 0;
-          for (int i = 0; i < NUM_LEDS; i++) analogWrite(_pins[i], val);
-        } else {
+        if (elapsed >= totalMs) {
           _confirmType = CONFIRM_NONE;
-          active = false;
         }
+        // Don't return here -- fall through to normal display (handled there)
         break;
       }
-      case CONFIRM_SCALE: {
-        // Double blink current bank LED
+
+      case CONFIRM_SCALE_ROOT: {
         uint16_t totalMs = (uint16_t)LED_CONFIRM_SCALE_PHASES * LED_CONFIRM_UNIT_MS;
         if (elapsed < totalMs) {
           uint8_t phase = elapsed / LED_CONFIRM_UNIT_MS;
-          bool on = (phase < LED_CONFIRM_SCALE_PHASES) && (phase % 2 == 0);
-          for (int i = 0; i < NUM_LEDS; i++) {
-            analogWrite(_pins[i], (i == _currentBank && on) ? _brightness : 0);
-          }
-        } else {
-          _confirmType = CONFIRM_NONE;
-          active = false;
+          bool on = (phase % 2 == 0);
+          clearPixels();
+          if (on) setPixel(_currentBank, COL_SCALE_ROOT);
+          _strip.show();
+          return;
         }
+        _confirmType = CONFIRM_NONE;
         break;
       }
-      case CONFIRM_HOLD: {
-        // Single long blink: on phase + off phase
+
+      case CONFIRM_SCALE_MODE: {
+        uint16_t totalMs = (uint16_t)LED_CONFIRM_SCALE_PHASES * LED_CONFIRM_UNIT_MS;
+        if (elapsed < totalMs) {
+          uint8_t phase = elapsed / LED_CONFIRM_UNIT_MS;
+          bool on = (phase % 2 == 0);
+          clearPixels();
+          if (on) setPixel(_currentBank, COL_SCALE_MODE);
+          _strip.show();
+          return;
+        }
+        _confirmType = CONFIRM_NONE;
+        break;
+      }
+
+      case CONFIRM_SCALE_CHROM: {
+        uint16_t totalMs = (uint16_t)LED_CONFIRM_SCALE_PHASES * LED_CONFIRM_UNIT_MS;
+        if (elapsed < totalMs) {
+          uint8_t phase = elapsed / LED_CONFIRM_UNIT_MS;
+          bool on = (phase % 2 == 0);
+          clearPixels();
+          if (on) setPixel(_currentBank, COL_SCALE_CHROM);
+          _strip.show();
+          return;
+        }
+        _confirmType = CONFIRM_NONE;
+        break;
+      }
+
+      case CONFIRM_HOLD_ON: {
+        // Sharp blink current LED in deep blue
         if (elapsed < LED_CONFIRM_HOLD_TOTAL_MS) {
-          bool on = (elapsed < LED_CONFIRM_HOLD_ON_MS);
-          for (int i = 0; i < NUM_LEDS; i++) {
-            analogWrite(_pins[i], (i == _currentBank && on) ? _brightness : 0);
+          clearPixels();
+          if (elapsed < LED_CONFIRM_HOLD_ON_MS) {
+            setPixel(_currentBank, COL_ARP_HOLD);
           }
-        } else {
-          _confirmType = CONFIRM_NONE;
-          active = false;
+          _strip.show();
+          return;
+        }
+        _confirmType = CONFIRM_NONE;
+        break;
+      }
+
+      case CONFIRM_HOLD_OFF: {
+        // Fade-out from deep blue over LED_CONFIRM_FADE_MS
+        if (elapsed < LED_CONFIRM_FADE_MS) {
+          uint8_t fadeScale = (uint8_t)((uint32_t)(LED_CONFIRM_FADE_MS - elapsed) * 255 / LED_CONFIRM_FADE_MS);
+          clearPixels();
+          setPixelScaled(_currentBank, COL_ARP_HOLD, fadeScale);
+          _strip.show();
+          return;
+        }
+        _confirmType = CONFIRM_NONE;
+        break;
+      }
+
+      case CONFIRM_PLAY: {
+        // Phase 0 = immediate green ack flash
+        // Phases 1-3 = beat-synced flashes
+        if (_playFlashPhase == 0) {
+          // Ack flash: show green for one unit
+          if (elapsed < LED_CONFIRM_UNIT_MS * 2) {
+            bool on = (elapsed < LED_CONFIRM_UNIT_MS);
+            clearPixels();
+            if (on) setPixel(_currentBank, COL_PLAY_ACK);
+            _strip.show();
+            return;
+          }
+          // Ack done, advance to beat-synced phases
+          _playFlashPhase = 1;
+          if (_clock) {
+            _playLastBeatTick = _clock->getCurrentTick();
+          }
+          // Fall through to normal display between beats
+        }
+
+        if (_playFlashPhase >= 1 && _playFlashPhase < LED_CONFIRM_PLAY_STEPS) {
+          // Check for beat boundary (24 ticks = 1 quarter note)
+          if (_clock) {
+            uint32_t currentTick = _clock->getCurrentTick();
+            // Detect new beat: tick crossed a 24-tick boundary since last beat
+            if (currentTick >= _playLastBeatTick + 24) {
+              _playLastBeatTick = currentTick - (currentTick % 24);  // Align to boundary
+              // Flash at increasing intensity: phase 1=85, 2=170, 3=255
+              uint8_t intensity = (uint8_t)((uint16_t)_playFlashPhase * 255 / (LED_CONFIRM_PLAY_STEPS - 1));
+              clearPixels();
+              setPixelScaled(_currentBank, COL_ARP_PLAY, intensity);
+              _strip.show();
+              _playFlashPhase++;
+              if (_playFlashPhase >= LED_CONFIRM_PLAY_STEPS) {
+                _confirmType = CONFIRM_NONE;
+              }
+              return;
+            }
+          } else {
+            // No clock: use time-based fallback (200ms per beat)
+            uint8_t beatPhase = (elapsed / 200);
+            if (beatPhase >= LED_CONFIRM_PLAY_STEPS) {
+              _confirmType = CONFIRM_NONE;
+            } else if (beatPhase >= 1) {
+              uint8_t intensity = (uint8_t)((uint16_t)beatPhase * 255 / (LED_CONFIRM_PLAY_STEPS - 1));
+              clearPixels();
+              setPixelScaled(_currentBank, COL_ARP_PLAY, intensity);
+              _strip.show();
+              return;
+            }
+          }
+          // Between beats: fall through to normal display
         }
         break;
       }
+
+      case CONFIRM_STOP: {
+        // Fade-out from blue-cyan over LED_CONFIRM_FADE_MS
+        if (elapsed < LED_CONFIRM_FADE_MS) {
+          uint8_t fadeScale = (uint8_t)((uint32_t)(LED_CONFIRM_FADE_MS - elapsed) * 255 / LED_CONFIRM_FADE_MS);
+          clearPixels();
+          setPixelScaled(_currentBank, COL_ARP_PLAY, fadeScale);
+          _strip.show();
+          return;
+        }
+        _confirmType = CONFIRM_NONE;
+        break;
+      }
+
       case CONFIRM_OCTAVE: {
-        // Single blink of N LEDs (N = _confirmParam, 1-4)
+        // Triple blink 2 LEDs of selected group
+        // param 1 -> LEDs 0-1, param 2 -> LEDs 2-3, param 3 -> LEDs 4-5, param 4 -> LEDs 6-7
         uint16_t totalMs = (uint16_t)LED_CONFIRM_OCTAVE_PHASES * LED_CONFIRM_UNIT_MS;
         if (elapsed < totalMs) {
-          bool on = (elapsed < LED_CONFIRM_UNIT_MS);
-          for (int i = 0; i < NUM_LEDS; i++) {
-            analogWrite(_pins[i], (i < _confirmParam && on) ? _brightness : 0);
+          uint8_t phase = elapsed / LED_CONFIRM_UNIT_MS;
+          bool on = (phase % 2 == 0);
+          clearPixels();
+          if (on && _confirmParam >= 1 && _confirmParam <= 4) {
+            uint8_t baseLed = (_confirmParam - 1) * 2;
+            setPixel(baseLed, COL_ARP_OCTAVE);
+            if (baseLed + 1 < NUM_LEDS) {
+              setPixel(baseLed + 1, COL_ARP_OCTAVE);
+            }
           }
-        } else {
-          _confirmType = CONFIRM_NONE;
-          active = false;
+          _strip.show();
+          return;
         }
+        _confirmType = CONFIRM_NONE;
         break;
       }
+
       default:
         _confirmType = CONFIRM_NONE;
-        active = false;
         break;
     }
-    if (active && _confirmType != CONFIRM_NONE) return;
+    // If confirmation was cleared, fall through to lower priorities
   }
 
-  // === Priority 5: Calibration mode ===
+  // === Priority 8: Calibration mode ===
   if (_calibrationMode) {
     if (_validationFlashing) {
       unsigned long elapsed = now - _validationFlashStart;
@@ -262,34 +498,39 @@ void LedController::update() {
       } else {
         uint8_t phase = elapsed / 25;
         bool on = (phase < 6) && (phase % 2 == 0);
-        for (int i = 0; i < NUM_LEDS; i++) {
-          digitalWrite(_pins[i], on ? HIGH : LOW);
+        clearPixels();
+        if (on) {
+          for (uint8_t i = 0; i < NUM_LEDS; i++) {
+            setPixel(i, COL_BOOT);  // White validation flash
+          }
         }
+        _strip.show();
         return;
       }
     }
-    for (int i = 0; i < NUM_LEDS; i++) {
-      digitalWrite(_pins[i], LOW);
-    }
+    clearPixels();
+    _strip.show();
     return;
   }
 
-  // === Priority 6: Normal bank display (multi-bank state) ===
+  // === Priority 9: Normal bank display (multi-bank state) ===
+  // Label used by CONFIRM_BANK_SWITCH to render normal display then overlay
+  clearPixels();
+
   if (_slots) {
     // Sine LUT index: divide period into 64 steps
     const uint8_t lutStep = LED_PULSE_PERIOD_MS / 64;  // ~23ms
     uint8_t sineIdx = (uint8_t)((now / lutStep) % 64);
     uint8_t sineRaw = _sineTable[sineIdx];
 
-    for (int i = 0; i < NUM_LEDS; i++) {
+    for (uint8_t i = 0; i < NUM_LEDS; i++) {
       const BankSlot& slot = _slots[i];
       bool isFg = (i == _currentBank);
-      uint8_t ledVal = 0;
 
       if (slot.type == BANK_NORMAL) {
         if (isFg) {
-          // Foreground NORMAL: solid
-          ledVal = LED_FG_NORMAL_BRIGHTNESS;
+          // Foreground NORMAL: solid white
+          setPixel(i, COL_WHITE);
 
           // Battery low override: 3-blink burst every BAT_LOW_BLINK_INTERVAL_MS
           if (_batteryLow) {
@@ -301,15 +542,17 @@ void LedController::update() {
             uint32_t burstDuration = (uint32_t)BAT_LOW_BLINK_SPEED_MS * 6;
             if (elapsed < burstDuration) {
               uint8_t phase = elapsed / BAT_LOW_BLINK_SPEED_MS;
-              if (phase % 2 != 0) ledVal = 0;
+              if (phase % 2 != 0) {
+                _strip.setPixelColor(i, 0);  // Off during blink
+              }
             }
           }
         } else {
-          // Background NORMAL: off
-          ledVal = LED_BG_NORMAL_BRIGHTNESS;
+          // Background NORMAL: dim white
+          setPixel(i, COL_WHITE_DIM);
         }
       } else {
-        // ARPEG bank — check play state and tick flash
+        // ARPEG bank -- check play state and tick flash
         bool playing = slot.arpEngine && slot.arpEngine->isPlaying() && slot.arpEngine->hasNotes();
 
         // Consume tick flash: record start time on fresh tick
@@ -321,45 +564,75 @@ void LedController::update() {
 
         if (isFg) {
           if (playing) {
-            // Foreground ARPEG playing: sine pulse + tick flash spike
+            // Foreground ARPEG playing: blue sine pulse (30-80%) + white tick flash override
             if (flashing) {
-              ledVal = LED_FG_ARP_PLAY_FLASH;
+              setPixel(i, COL_WHITE);  // Full white flash on tick
             } else {
-              ledVal = LED_FG_ARP_PLAY_MIN + (uint8_t)((uint16_t)sineRaw *
+              // Modulate B channel between LED_FG_ARP_PLAY_MIN and LED_FG_ARP_PLAY_MAX
+              uint8_t bVal = LED_FG_ARP_PLAY_MIN + (uint8_t)((uint16_t)sineRaw *
                        (LED_FG_ARP_PLAY_MAX - LED_FG_ARP_PLAY_MIN) / 255);
+              RGBW col = {0, 0, bVal, 0};
+              setPixel(i, col);
             }
           } else {
-            // Foreground ARPEG stopped: sine pulse (wider range)
-            ledVal = LED_FG_ARP_STOP_MIN + (uint8_t)((uint16_t)sineRaw *
+            // Foreground ARPEG stopped: blue sine pulse (30-100%)
+            uint8_t bVal = LED_FG_ARP_STOP_MIN + (uint8_t)((uint16_t)sineRaw *
                      (LED_FG_ARP_STOP_MAX - LED_FG_ARP_STOP_MIN) / 255);
+            RGBW col = {0, 0, bVal, 0};
+            setPixel(i, col);
           }
         } else {
           if (playing) {
-            // Background ARPEG playing: dimmed sine pulse + dimmed tick flash
+            // Background ARPEG playing: dimmed blue sine pulse (8-20%) + dimmed tick flash
             if (flashing) {
-              ledVal = LED_BG_ARP_PLAY_FLASH;
+              RGBW col = {0, 0, LED_BG_ARP_PLAY_FLASH, 0};
+              setPixel(i, col);
             } else {
-              ledVal = LED_BG_ARP_PLAY_MIN + (uint8_t)((uint16_t)sineRaw *
+              uint8_t bVal = LED_BG_ARP_PLAY_MIN + (uint8_t)((uint16_t)sineRaw *
                        (LED_BG_ARP_PLAY_MAX - LED_BG_ARP_PLAY_MIN) / 255);
+              RGBW col = {0, 0, bVal, 0};
+              setPixel(i, col);
             }
           } else {
-            // Background ARPEG stopped: dimmed sine pulse
-            ledVal = LED_BG_ARP_STOP_MIN + (uint8_t)((uint16_t)sineRaw *
+            // Background ARPEG stopped: dimmed blue sine pulse (8-25%)
+            uint8_t bVal = LED_BG_ARP_STOP_MIN + (uint8_t)((uint16_t)sineRaw *
                      (LED_BG_ARP_STOP_MAX - LED_BG_ARP_STOP_MIN) / 255);
+            RGBW col = {0, 0, bVal, 0};
+            setPixel(i, col);
           }
         }
       }
-
-      // Apply global brightness scaling
-      uint8_t finalVal = (uint8_t)((uint16_t)ledVal * _brightness / 255);
-      analogWrite(_pins[i], finalVal);
     }
   } else {
-    // Fallback: no slots pointer, simple single-bank display (pre-init or legacy)
-    for (int i = 0; i < NUM_LEDS; i++) {
-      analogWrite(_pins[i], (i == _currentBank) ? _brightness : 0);
-    }
+    // Fallback: no slots pointer, simple single-bank display (pre-init)
+    setPixel(_currentBank, COL_WHITE);
   }
+
+  // --- CONFIRM_BANK_SWITCH overlay ---
+  // Normal display is already rendered above. Override the destination bank LED
+  // with a triple blink in context color (on top of the normal display).
+  if (_confirmType == CONFIRM_BANK_SWITCH) {
+    unsigned long elapsed = now - _confirmStart;
+    uint16_t totalMs = (uint16_t)LED_CONFIRM_BANK_PHASES * LED_CONFIRM_UNIT_MS;
+    if (elapsed < totalMs) {
+      uint8_t phase = elapsed / LED_CONFIRM_UNIT_MS;
+      bool on = (phase % 2 == 0);
+      // Determine context color: white for NORMAL, blue for ARPEG
+      RGBW blinkColor = COL_WHITE;
+      if (_slots && _slots[_currentBank].type == BANK_ARPEG) {
+        blinkColor = COL_BLUE;
+      }
+      if (on) {
+        setPixelScaled(_currentBank, blinkColor,
+                       (uint8_t)((uint16_t)255 * LED_CONFIRM_BRIGHTNESS_PCT / 100));
+      } else {
+        _strip.setPixelColor(_currentBank, 0);
+      }
+    }
+    // Note: CONFIRM_BANK_SWITCH expiry was already handled in the confirmation section above
+  }
+
+  _strip.show();
 }
 
 // =================================================================
@@ -382,6 +655,10 @@ void LedController::setBankSlots(const BankSlot* slots) {
   _slots = slots;
 }
 
+void LedController::setClockManager(const ClockManager* clock) {
+  _clock = clock;
+}
+
 // =================================================================
 // Confirmation Blinks
 // =================================================================
@@ -390,6 +667,23 @@ void LedController::triggerConfirm(ConfirmType type, uint8_t param) {
   _confirmType = type;
   _confirmStart = millis();
   _confirmParam = param;
+
+  // Special init for play confirmation
+  if (type == CONFIRM_PLAY) {
+    _playFlashPhase = 0;
+    if (_clock) {
+      _playLastBeatTick = _clock->getCurrentTick();
+    }
+  }
+
+  // Store fade color for fade-out confirmations
+  if (type == CONFIRM_HOLD_OFF) {
+    _fadeColor = COL_ARP_HOLD;
+    _fadeStartTime = millis();
+  } else if (type == CONFIRM_STOP) {
+    _fadeColor = COL_ARP_PLAY;
+    _fadeStartTime = millis();
+  }
 }
 
 void LedController::setPotBarDuration(uint16_t ms) {
@@ -436,19 +730,14 @@ void LedController::showBatteryGauge(uint8_t percent) {
 }
 
 // =================================================================
-// Pot Bargraph
+// Pot Bargraph (with catch visualization)
 // =================================================================
 
-void LedController::showPotBargraph(uint8_t level) {
-  uint8_t newLevel = (level > NUM_LEDS) ? NUM_LEDS : level;
-
-  // Ignore calls with identical level — prevents ADC jitter from keeping bar alive
-  if (newLevel == _potBarLevel && _showingPotBar) {
-    return;
-  }
-
+void LedController::showPotBargraph(uint8_t realLevel, uint8_t potLevel, bool caught) {
+  _potBarRealLevel = (realLevel > NUM_LEDS) ? NUM_LEDS : realLevel;
+  _potBarPotLevel = (potLevel > NUM_LEDS) ? NUM_LEDS : potLevel;
+  _potBarCaught = caught;
   _potBarStart = millis();
-  _potBarLevel = newLevel;
   _showingPotBar = true;
 }
 
@@ -470,15 +759,16 @@ void LedController::playValidation() {
 // =================================================================
 
 void LedController::allOff() {
-  for (int i = 0; i < NUM_LEDS; i++) {
-    digitalWrite(_pins[i], LOW);
-  }
+  clearPixels();
+  _strip.show();
+
   _currentBank = 0;
   _batteryLow = false;
   _bootMode = false;
   _bootStep = 0;
   _bootFailStep = 0;
   _chaseActive = false;
+  _setupComet = false;
   _calibrationMode = false;
   _validationFlashing = false;
   _error = false;
