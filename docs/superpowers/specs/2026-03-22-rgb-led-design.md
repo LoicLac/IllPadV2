@@ -167,14 +167,22 @@ LED_CONFIRM_BRIGHTNESS_PCT   = 50    // Bank switch blink intensity
 
 ### Play
 
-- 4 rising flashes in `COL_ARP_PLAY` (blue-cyan) on current LED
-- Synchronized to the next 4 tick flashes from the arp engine
-- Each flash is a sharp spike (same duration as tick flash: `LED_TICK_FLASH_DURATION_MS`)
-- Intensity per flash: 25% → 50% → 75% → 100% of `COL_ARP_PLAY` brightness
-- After 4th flash, transition to normal display (confirmation expires)
-- Fallback: if arp not ticking yet (first play after hold), use fixed interval = current step duration from `ArpEngine::getStepDurationMs()`
+Two-phase rising flash in `COL_ARP_PLAY` (blue-cyan) on current LED:
 
-**Sync mechanism**: LedController tracks a `_playFlashCount` (starts at 0, incremented each time `consumeTickFlash()` fires on the current bank's arp engine during CONFIRM_PLAY). When count reaches `LED_CONFIRM_PLAY_STEPS` (4), the confirmation expires. Between ticks, the LED stays off (no sustained glow — just discrete flashes).
+**Phase 1 — Acknowledgment (immediate):**
+- Instant flash at 25% intensity on button press
+- Same duration as tick flash (`LED_TICK_FLASH_DURATION_MS`)
+- Confirms the play command was received
+
+**Phase 2 — Beat-synced ramp (after quantize):**
+- 3 flashes on the next 3 quarter-note beats (24 MIDI ticks each)
+- Intensity: 50% → 75% → 100% of `COL_ARP_PLAY` brightness
+- Starts when the arp actually begins playing (after quantize snap)
+- After 3rd beat flash, confirmation expires → transition to normal display
+
+The gap between phase 1 and phase 2 visually shows the quantize delay. In Immediate mode, the gap is near-zero and all 4 flashes feel continuous. In Bar mode, the first flash fires instantly, then silence until the bar boundary, then 3 beat flashes.
+
+**Sync mechanism**: LedController tracks `_playFlashPhase` (0 = ack fired, waiting for arp start; 1-3 = beat-synced flashes). Beat detection uses ClockManager's tick counter (every 24 ticks = 1 beat). When `_playFlashPhase` reaches 3, the confirmation expires. Between beats, the LED stays off (discrete flashes only).
 
 ### Stop
 
