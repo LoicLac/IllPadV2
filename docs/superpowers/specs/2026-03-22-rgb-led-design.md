@@ -26,7 +26,7 @@ Array of 8 RGBW pixels in RAM. All logic writes to this buffer. A single `strip.
 
 ### Brightness
 
-Global scaler (`_brightness` / rear pot) applied via `strip.setBrightness()` before `show()`. Same API as before, single control point.
+Global scaler (`_brightness` / rear pot) applied **per-pixel** in the `setPixel()` helper (each RGBW channel scaled by `_brightness / 255`). Do NOT use `strip.setBrightness()` — it is lossy (only rescales the buffer when brightness changes, but we rewrite all pixels every frame). Same external API as before (`setBrightness(uint8_t)`), single control point.
 
 ## 2. Color Palette
 
@@ -113,7 +113,7 @@ Same mechanism: `consumeTickFlash()`, `_flashStartTime[i]`, duration `LED_TICK_F
 
 ### Global Brightness
 
-Applied via `strip.setBrightness()` before `show()`. Entire buffer scaled uniformly.
+Applied per-pixel in the `setPixel()` helper (NOT via `strip.setBrightness()`). Every pixel write multiplies each RGBW channel by `_brightness / 255`. This ensures correct brightness regardless of frame-to-frame brightness stability.
 
 ## 4. Confirmations
 
