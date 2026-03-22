@@ -55,6 +55,7 @@ All colors defined as RGBW constants in `HardwareConfig.h`. The W channel is the
 |---|---|---|---|---|---|
 | `COL_ARP_HOLD` | 0 | 0 | 255 | 0 | Hold toggle — deep blue |
 | `COL_ARP_PLAY` | 0 | 80 | 255 | 0 | Play/Stop — blue-cyan |
+| `COL_PLAY_ACK` | 0 | 255 | 0 | 0 | Play acknowledgment — green "go" |
 | `COL_ARP_OCTAVE` | 80 | 0 | 255 | 0 | Octave — blue-violet |
 
 ### System Colors
@@ -170,9 +171,9 @@ LED_CONFIRM_BRIGHTNESS_PCT   = 50    // Bank switch blink intensity
 Two-phase rising flash in `COL_ARP_PLAY` (blue-cyan) on current LED:
 
 **Phase 1 — Acknowledgment (immediate):**
-- Instant flash at 25% intensity on button press
+- Instant flash in `COL_PLAY_ACK` (green, 0/255/0/0) at 100% intensity on button press
 - Same duration as tick flash (`LED_TICK_FLASH_DURATION_MS`)
-- Confirms the play command was received
+- Confirms the play command was received — green = "go"
 
 **Phase 2 — Beat-synced ramp (after quantize):**
 - 3 flashes on the next 3 quarter-note beats (24 MIDI ticks each)
