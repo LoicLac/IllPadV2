@@ -520,7 +520,9 @@ void loop() {
 
   // LED confirmation on hold toggle
   if (holdToggled) {
-    s_leds.triggerConfirm(CONFIRM_HOLD);
+    BankSlot& holdSlot = s_bankManager.getCurrentSlot();
+    bool holdIsOn = (holdSlot.type == BANK_ARPEG && holdSlot.arpEngine && holdSlot.arpEngine->isHoldOn());
+    s_leds.triggerConfirm(holdIsOn ? CONFIRM_HOLD_ON : CONFIRM_HOLD_OFF);
   }
 
   // --- Clock: process ticks (PLL + tick generation) ---
