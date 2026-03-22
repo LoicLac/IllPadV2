@@ -486,7 +486,8 @@ void loop() {
   }
 
   // Consume all ScaleManager change flags once (auto-clearing: can't read twice)
-  bool scaleChanged  = s_scaleManager.hasScaleChanged();
+  ScaleChangeType scaleChange = s_scaleManager.consumeScaleChange();
+  bool scaleChanged = (scaleChange != SCALE_CHANGE_NONE);
   bool octaveChanged = s_scaleManager.hasOctaveChanged();
   bool holdToggled   = s_scaleManager.hasHoldToggled();
 
@@ -501,7 +502,12 @@ void loop() {
       scSlot.arpEngine->flushPendingNoteOffs(s_transport);
       scSlot.arpEngine->setScaleConfig(scSlot.scale);
     }
-    s_leds.triggerConfirm(CONFIRM_SCALE);
+    switch (scaleChange) {
+      case SCALE_CHANGE_ROOT:      s_leds.triggerConfirm(CONFIRM_SCALE_ROOT); break;
+      case SCALE_CHANGE_MODE:      s_leds.triggerConfirm(CONFIRM_SCALE_MODE); break;
+      case SCALE_CHANGE_CHROMATIC: s_leds.triggerConfirm(CONFIRM_SCALE_CHROM); break;
+      default: break;
+    }
   }
 
   // Queue NVS save on octave change + LED confirmation
@@ -714,7 +720,11 @@ void loop() {
 
   // LED bargraph from pot movement
   if (s_potRouter.hasBargraphUpdate()) {
-    s_leds.showPotBargraph(s_potRouter.getBargraphLevel());
+    s_leds.showPotBargraph(
+      s_potRouter.getBargraphLevel(),
+      s_potRouter.getBargraphPotLevel(),
+      s_potRouter.isBargraphCaught()
+    );
   }
 
   s_leds.update();
