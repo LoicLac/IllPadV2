@@ -277,9 +277,11 @@ void LedController::update() {
       _showingPotBar = false;
     } else {
       // Determine bar color based on foreground bank type
-      RGBW barColor = COL_WHITE;  // NORMAL default
+      RGBW barColor = COL_WHITE;
+      RGBW barDim   = COL_WHITE_DIM;
       if (_slots && _slots[_currentBank].type == BANK_ARPEG) {
         barColor = COL_BLUE;
+        barDim   = COL_BLUE_DIM;
       }
 
       clearPixels();
@@ -291,9 +293,8 @@ void LedController::update() {
         }
       } else {
         // Not caught: dim bar for real level + bright cursor for pot position
-        // Dim bar showing stored/real level
         for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
-          setPixelScaled(i, barColor, 51);  // 20% brightness
+          setPixel(i, barDim);
         }
         // Bright cursor at pot position (show where the pot physically is)
         if (_potBarPotLevel > 0 && _potBarPotLevel <= NUM_LEDS) {
@@ -418,8 +419,9 @@ void LedController::update() {
             // Detect new beat: tick crossed a 24-tick boundary since last beat
             if (currentTick >= _playLastBeatTick + 24) {
               _playLastBeatTick = currentTick - (currentTick % 24);  // Align to boundary
-              // Flash at increasing intensity: phase 1=85, 2=170, 3=255
-              uint8_t intensity = (uint8_t)((uint16_t)_playFlashPhase * 255 / (LED_CONFIRM_PLAY_STEPS - 1));
+              // Flash at increasing intensity: phase 1=128(50%), 2=191(75%), 3=255(100%)
+              static const uint8_t playIntensity[] = {0, 128, 191, 255};
+              uint8_t intensity = (_playFlashPhase < 4) ? playIntensity[_playFlashPhase] : 255;
               clearPixels();
               setPixelScaled(_currentBank, COL_ARP_PLAY, intensity);
               _strip.show();
