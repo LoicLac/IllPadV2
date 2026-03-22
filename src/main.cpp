@@ -377,6 +377,7 @@ void setup() {
 
   // Give LedController access to bank states for multi-bank display
   s_leds.setBankSlots(s_banks);
+  s_leds.setClockManager(&s_clockManager);
 
   // Store hold pad for ARPEG toggle detection in loop
   s_holdPad = holdPad;
@@ -561,6 +562,11 @@ void loop() {
       bool psPressed = state.keyIsPressed[s_playStopPad];
       if (psPressed && !s_lastPlayStopState) {
         psSlot.arpEngine->playStop(s_transport);
+        if (psSlot.arpEngine->isPlaying()) {
+          s_leds.triggerConfirm(CONFIRM_PLAY);
+        } else {
+          s_leds.triggerConfirm(CONFIRM_STOP);
+        }
       }
       s_lastPlayStopState = psPressed;
     } else {
