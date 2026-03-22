@@ -2,131 +2,164 @@
 #define LED_CONTROLLER_H
 
 #include "HardwareConfig.h"
+#include <Adafruit_NeoPixel.h>
 #include <stdint.h>
 
-// Forward declarations (avoid pulling in full headers)
+// Forward declarations
 struct BankSlot;
 class ArpEngine;
+class ClockManager;
 
 // =================================================================
-// Confirmation blink types — short visual feedback for user actions
+// Confirmation blink types
 // =================================================================
 enum ConfirmType : uint8_t {
-  CONFIRM_NONE        = 0,
-  CONFIRM_BANK_SWITCH = 1,  // Triple blink all 8 LEDs
-  CONFIRM_SCALE       = 2,  // Double blink current LED
-  CONFIRM_HOLD        = 3,  // Single long blink current LED
-  CONFIRM_OCTAVE      = 4,  // Single blink of N LEDs (param = 1-4)
+  CONFIRM_NONE         = 0,
+  CONFIRM_BANK_SWITCH  = 1,
+  CONFIRM_SCALE_ROOT   = 2,
+  CONFIRM_SCALE_MODE   = 3,
+  CONFIRM_SCALE_CHROM  = 4,
+  CONFIRM_HOLD_ON      = 5,
+  CONFIRM_HOLD_OFF     = 6,
+  CONFIRM_PLAY         = 7,
+  CONFIRM_STOP         = 8,
+  CONFIRM_OCTAVE       = 9,
 };
 
 class LedController {
 public:
   LedController();
   void begin();
-  void update();  // Call from loop() — handles all LED state and timing
+  void update();
 
-  // Brightness (0-255, affects all LED outputs via analogWrite)
+  // Brightness (0-255)
   void setBrightness(uint8_t brightness);
 
-  // Bank display (runtime)
-  void setCurrentBank(uint8_t bank);    // 0-7, lights the corresponding LED
-  void setBatteryLow(bool low);         // When true, bank LED does 3 rapid blinks every BAT_LOW_BLINK_INTERVAL_MS
+  // Bank display
+  void setCurrentBank(uint8_t bank);
+  void setBatteryLow(bool low);
 
-  // Multi-bank state display
-  void setBankSlots(const BankSlot* slots);  // Set once at init — pointer to 8 BankSlot array
+  // Multi-bank state
+  void setBankSlots(const BankSlot* slots);
 
-  // Confirmation blinks — short auto-expiring feedback overlays
+  // Clock manager (for play confirmation beat sync)
+  void setClockManager(const ClockManager* clock);
+
+  // Confirmations
   void triggerConfirm(ConfirmType type, uint8_t param = 0);
 
-  // Configurable bargraph persistence
+  // Bargraph persistence
   void setPotBarDuration(uint16_t ms);
 
-  // Boot sequence (normal boot only — not used in cal path)
-  void showBootProgress(uint8_t step);  // Light LEDs 1 through step (progressive fill)
-  void showBootFailure(uint8_t step);   // LEDs 1..step-1 solid, LED step blinks rapidly
-  void endBoot();                       // Exit boot mode, switch to normal display
+  // Boot
+  void showBootProgress(uint8_t step);
+  void showBootFailure(uint8_t step);
+  void endBoot();
 
-  // Boot: I2C error (loops forever internally — never returns)
+  // I2C error halt
   void haltI2CError();
 
-  // Chase pattern (calibration entry: "release button")
+  // Chase (calibration entry)
   void startChase();
   void stopChase();
 
-  // Error (runtime: sensing task stall)
-  void setError(bool error);            // All 8 LEDs blink 500ms unison
+  // Setup comet (active during Tools 1-6)
+  void startSetupComet();
+  void stopSetupComet();
 
-  // Battery gauge: show battery level on all 8 LEDs for BAT_DISPLAY_DURATION_MS
+  // Error
+  void setError(bool error);
+
+  // Battery gauge
   void showBatteryGauge(uint8_t percent);
 
-  // Pot bargraph: solid bar at given level (0-8 LEDs). Caller decides what level means.
-  void showPotBargraph(uint8_t level);
+  // Pot bargraph with catch visualization
+  void showPotBargraph(uint8_t realLevel, uint8_t potLevel, bool caught);
 
-  // Calibration feedback
-  void setCalibrationMode(bool active);  // All LEDs off during calibration
-  void playValidation();                 // 3x rapid blink = acknowledge (calibration only)
+  // Calibration
+  void setCalibrationMode(bool active);
+  void playValidation();
 
   // All off
   void allOff();
 
 private:
-  static const uint8_t _pins[NUM_LEDS];
+  Adafruit_NeoPixel _strip;
 
-  // Brightness (0-255)
+  // Helper: set pixel from RGBW struct (applies _brightness scaling)
+  void setPixel(uint8_t i, const RGBW& color);
+  void setPixelScaled(uint8_t i, const RGBW& color, uint8_t scale);
+  void clearPixels();
+
+  // Brightness
   uint8_t _brightness;
 
   // Bank display
-  uint8_t _currentBank;    // 0-7
+  uint8_t _currentBank;
   bool _batteryLow;
 
   // Multi-bank state
-  const BankSlot* _slots;           // Pointer to 8 BankSlot array (read-only, set once)
-  uint8_t _sineTable[64];           // Precomputed sine LUT (0-255), populated in constructor
-  unsigned long _flashStartTime[NUM_LEDS];  // Per-LED tick flash start (0 = inactive)
+  const BankSlot* _slots;
+  uint8_t _sineTable[64];
+  unsigned long _flashStartTime[NUM_LEDS];
 
-  // Confirmation blink state
+  // Clock manager (for play beat detection)
+  const ClockManager* _clock;
+
+  // Confirmation state
   ConfirmType   _confirmType;
   unsigned long _confirmStart;
   uint8_t       _confirmParam;
 
-  // Configurable bargraph timeout
+  // Fade-out state (hold-off, stop)
+  unsigned long _fadeStartTime;
+  RGBW          _fadeColor;
+
+  // Play confirmation state
+  uint8_t       _playFlashPhase;    // 0=ack done, 1-3=beat flashes
+  uint32_t      _playLastBeatTick;  // Clock tick at last beat flash
+
+  // Bargraph
   uint16_t _potBarDurationMs;
+  bool _showingPotBar;
+  uint8_t _potBarRealLevel;
+  uint8_t _potBarPotLevel;
+  bool    _potBarCaught;
+  unsigned long _potBarStart;
 
-  // Boot sequence
+  // Boot
   bool _bootMode;
-  uint8_t _bootStep;       // 0-8: progressive fill level
-  uint8_t _bootFailStep;   // 0 = no failure; 1-8 = step that failed
+  uint8_t _bootStep;
+  uint8_t _bootFailStep;
 
-  // Chase pattern
+  // Chase (calibration entry)
   bool _chaseActive;
-  uint8_t _chasePos;              // Current lit LED (0-7)
-  unsigned long _chaseLastStep;   // Timestamp of last step
+  uint8_t _chasePos;
+  unsigned long _chaseLastStep;
+
+  // Setup comet
+  bool _setupComet;
+  uint8_t _cometPos;          // 0-13 (ping-pong: 0-7 forward, 8-13 = 6 down to 1)
+  unsigned long _cometLastStep;
 
   // Calibration
   bool _calibrationMode;
-
-  // Calibration validation flash
   bool _validationFlashing;
   unsigned long _validationFlashStart;
 
   // Error
   bool _error;
 
-  // Blink timer (shared by error blink)
+  // Blink timer
   unsigned long _lastBlinkTime;
   bool _blinkState;
 
   // Battery gauge
   bool _showingBattery;
-  uint8_t _batteryLeds;           // Number of LEDs to light (0-8)
+  uint8_t _batteryLeds;
   unsigned long _batteryDisplayStart;
 
-  // Pot bargraph state
-  bool _showingPotBar;
-  uint8_t _potBarLevel;          // 0-8 LEDs
-  unsigned long _potBarStart;    // Timestamp for timeout
-
-  // Battery low blink burst timing
+  // Battery low blink
   unsigned long _batLowLastBurstTime;
 };
 
