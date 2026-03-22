@@ -131,6 +131,8 @@ public:
   // LED bargraph — caller reads and shows on LEDs
   bool    hasBargraphUpdate();
   uint8_t getBargraphLevel() const;
+  uint8_t getBargraphPotLevel() const;   // Physical pot position mapped to 0-7
+  bool    isBargraphCaught() const;      // True if active binding is caught
 
   // Dirty flag for NVS save debounce
   bool isDirty() const;
@@ -204,6 +206,8 @@ private:
   // Bargraph
   bool    _bargraphDirty;
   uint8_t _bargraphLevel;
+  uint8_t _bargraphPotLevel;   // Physical pot position (0-7)
+  bool    _bargraphCaught;     // Catch state of active binding
 
   // Dirty (any output changed since last clearDirty)
   bool _dirty;
