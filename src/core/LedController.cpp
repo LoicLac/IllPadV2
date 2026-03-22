@@ -21,7 +21,6 @@ LedController::LedController()
     _confirmStart(0),
     _confirmParam(0),
     _fadeStartTime(0),
-    _fadeColor{0, 0, 0, 0},
     _playFlashPhase(0),
     _playLastBeatTick(0),
     _potBarDurationMs(LED_BARGRAPH_DURATION_DEFAULT),
@@ -413,36 +412,38 @@ void LedController::update() {
         }
 
         if (_playFlashPhase >= 1 && _playFlashPhase < LED_CONFIRM_PLAY_STEPS) {
+          static const uint8_t playIntensity[] = {0, 128, 191, 255};
+
           // Check for beat boundary (24 ticks = 1 quarter note)
           if (_clock) {
             uint32_t currentTick = _clock->getCurrentTick();
-            // Detect new beat: tick crossed a 24-tick boundary since last beat
             if (currentTick >= _playLastBeatTick + 24) {
-              _playLastBeatTick = currentTick - (currentTick % 24);  // Align to boundary
-              // Flash at increasing intensity: phase 1=128(50%), 2=191(75%), 3=255(100%)
-              static const uint8_t playIntensity[] = {0, 128, 191, 255};
-              uint8_t intensity = (_playFlashPhase < 4) ? playIntensity[_playFlashPhase] : 255;
-              clearPixels();
-              setPixelScaled(_currentBank, COL_ARP_PLAY, intensity);
-              _strip.show();
+              _playLastBeatTick = currentTick - (currentTick % 24);
+              _fadeStartTime = now;  // Start flash hold timer
               _playFlashPhase++;
               if (_playFlashPhase >= LED_CONFIRM_PLAY_STEPS) {
                 _confirmType = CONFIRM_NONE;
               }
-              return;
             }
           } else {
             // No clock: use time-based fallback (200ms per beat)
             uint8_t beatPhase = (elapsed / 200);
             if (beatPhase >= LED_CONFIRM_PLAY_STEPS) {
               _confirmType = CONFIRM_NONE;
-            } else if (beatPhase >= 1) {
-              uint8_t intensity = (uint8_t)((uint16_t)beatPhase * 255 / (LED_CONFIRM_PLAY_STEPS - 1));
-              clearPixels();
-              setPixelScaled(_currentBank, COL_ARP_PLAY, intensity);
-              _strip.show();
-              return;
+              break;
+            } else if (beatPhase >= 1 && beatPhase != _playFlashPhase) {
+              _fadeStartTime = now;  // Start flash hold timer
+              _playFlashPhase = beatPhase;
             }
+          }
+
+          // Hold flash for LED_TICK_FLASH_DURATION_MS (same as tick flash)
+          if (_fadeStartTime != 0 && (now - _fadeStartTime) < LED_TICK_FLASH_DURATION_MS) {
+            uint8_t phase = (_playFlashPhase < 4) ? _playFlashPhase : 3;
+            clearPixels();
+            setPixelScaled(_currentBank, COL_ARP_PLAY, playIntensity[phase]);
+            _strip.show();
+            return;
           }
           // Between beats: fall through to normal display
         }
@@ -673,18 +674,10 @@ void LedController::triggerConfirm(ConfirmType type, uint8_t param) {
   // Special init for play confirmation
   if (type == CONFIRM_PLAY) {
     _playFlashPhase = 0;
+    _fadeStartTime = 0;  // Used as flash hold timer during beat-synced phases
     if (_clock) {
       _playLastBeatTick = _clock->getCurrentTick();
     }
-  }
-
-  // Store fade color for fade-out confirmations
-  if (type == CONFIRM_HOLD_OFF) {
-    _fadeColor = COL_ARP_HOLD;
-    _fadeStartTime = millis();
-  } else if (type == CONFIRM_STOP) {
-    _fadeColor = COL_ARP_PLAY;
-    _fadeStartTime = millis();
   }
 }
 
