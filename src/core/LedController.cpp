@@ -736,8 +736,8 @@ void LedController::showBatteryGauge(uint8_t percent) {
 // =================================================================
 
 void LedController::showPotBargraph(uint8_t realLevel, uint8_t potLevel, bool caught) {
-  _potBarRealLevel = (realLevel > NUM_LEDS) ? NUM_LEDS : realLevel;
-  _potBarPotLevel = (potLevel > NUM_LEDS) ? NUM_LEDS : potLevel;
+  _potBarRealLevel = (realLevel > NUM_LEDS) ? NUM_LEDS : realLevel;     // 0-8 (LED count)
+  _potBarPotLevel = (potLevel >= NUM_LEDS) ? (NUM_LEDS - 1) : potLevel; // 0-7 (LED index)
   _potBarCaught = caught;
   _potBarStart = millis();
   _showingPotBar = true;
