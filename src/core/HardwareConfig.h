@@ -30,16 +30,44 @@ const int NUM_SENSORS = 4;
 const int CHANNELS_PER_SENSOR = 12;
 const int NUM_KEYS = NUM_SENSORS * CHANNELS_PER_SENSOR;  // 48
 
-// --- LEDs (x8) — Bank indicator LEDs ---
-const uint8_t LED_PIN_1 = 4;   // Bank 1
-const uint8_t LED_PIN_2 = 5;   // Bank 2
-const uint8_t LED_PIN_3 = 6;   // Bank 3
-const uint8_t LED_PIN_4 = 7;   // Bank 4
-const uint8_t LED_PIN_5 = 15;  // Bank 5
-const uint8_t LED_PIN_6 = 16;  // Bank 6
-const uint8_t LED_PIN_7 = 17;  // Bank 7
-const uint8_t LED_PIN_8 = 18;  // Bank 8
+// --- LEDs — 8x SK6812 RGBW NeoPixel Stick (Adafruit product 2868) ---
+const uint8_t LED_DATA_PIN = 4;  // Single GPIO for NeoPixel data line
 const int NUM_LEDS = 8;
+
+// --- RGBW Color Type ---
+struct RGBW {
+  uint8_t r, g, b, w;
+};
+
+// --- Color Palette ---
+// Base colors
+const RGBW COL_WHITE       = {  0,   0,   0, 255};  // NORMAL foreground
+const RGBW COL_WHITE_DIM   = {  0,   0,   0,  40};  // NORMAL background
+const RGBW COL_BLUE        = {  0,   0, 255,   0};  // ARPEG foreground
+const RGBW COL_BLUE_DIM    = {  0,   0,  40,   0};  // ARPEG background
+
+// Scale confirmations (yellow, 3 saturations)
+const RGBW COL_SCALE_ROOT  = {255, 200,   0,   0};  // Root — vivid yellow
+const RGBW COL_SCALE_MODE  = {200, 160,   0,  60};  // Mode — pale yellow
+const RGBW COL_SCALE_CHROM = {255, 140,   0,   0};  // Chromatic — golden yellow
+
+// Arp confirmations (blue, 3 variations)
+const RGBW COL_ARP_HOLD    = {  0,   0, 255,   0};  // Hold — deep blue
+const RGBW COL_ARP_PLAY    = {  0,  80, 255,   0};  // Play/Stop — blue-cyan
+const RGBW COL_PLAY_ACK    = {  0, 255,   0,   0};  // Play ack — green "go"
+const RGBW COL_ARP_OCTAVE  = { 80,   0, 255,   0};  // Octave — blue-violet
+
+// System
+const RGBW COL_ERROR       = {255,   0,   0,   0};  // Error — red
+const RGBW COL_BOOT        = {  0,   0,   0, 255};  // Boot — white
+const RGBW COL_BOOT_FAIL   = {255,   0,   0,   0};  // Boot fail — red
+const RGBW COL_SETUP       = {128,   0, 255,   0};  // Setup comet — violet
+
+// Battery gauge gradient (LED 0 = red, LED 7 = green)
+const RGBW COL_BATTERY[NUM_LEDS] = {
+  {255,   0, 0, 0}, {255,  36, 0, 0}, {255,  73, 0, 0}, {255, 145, 0, 0},
+  {200, 200, 0, 0}, {145, 255, 0, 0}, { 73, 255, 0, 0}, {  0, 255, 0, 0}
+};
 
 // --- Buttons (V2: 2 buttons, all active LOW with internal pull-up) ---
 const uint8_t BTN_LEFT_PIN  = 2;   // GPIO??? — Left side, bank+scale+arp single-layer (hold + pad), modifier for right pots
@@ -183,39 +211,41 @@ const uint8_t DOUBLE_TAP_MS_MAX     = 250;
 const uint8_t DOUBLE_TAP_MS_DEFAULT = 150;
 
 // =================================================================
-// 5. LED DISPLAY — Brightness Ranges & Timing
+// 5. LED DISPLAY — RGBW Sine Ranges & Timing
 // =================================================================
-// All brightness values 0-255, scaled by global brightness pot at runtime.
-// Compile-time constants — designed to become runtime-configurable in a future LED settings tool.
+// Sine range values define the min/max of the modulated channel (B or W).
+// All other channels in the pixel stay at 0 during sine modulation.
 
-// --- Foreground (current bank) ---
-const uint8_t LED_FG_NORMAL_BRIGHTNESS     = 255;  // NORMAL: solid 100%
-const uint8_t LED_FG_ARP_STOP_MIN          = 77;   // ARPEG stopped: sine pulse low (30%)
-const uint8_t LED_FG_ARP_STOP_MAX          = 255;  // ARPEG stopped: sine pulse high (100%)
-const uint8_t LED_FG_ARP_PLAY_MIN          = 77;   // ARPEG playing: sine pulse low (30%)
-const uint8_t LED_FG_ARP_PLAY_MAX          = 204;  // ARPEG playing: sine pulse high (80%)
-const uint8_t LED_FG_ARP_PLAY_FLASH        = 255;  // ARPEG playing: tick flash spike (100%)
+// --- Foreground ARPEG (modulate B channel) ---
+const uint8_t LED_FG_ARP_STOP_MIN          = 77;   // Stopped: sine 30%
+const uint8_t LED_FG_ARP_STOP_MAX          = 255;  // Stopped: sine 100%
+const uint8_t LED_FG_ARP_PLAY_MIN          = 77;   // Playing: sine 30%
+const uint8_t LED_FG_ARP_PLAY_MAX          = 204;  // Playing: sine 80%
 
-// --- Background (other banks) ---
-const uint8_t LED_BG_NORMAL_BRIGHTNESS     = 0;    // NORMAL: off
-const uint8_t LED_BG_ARP_STOP_MIN          = 20;   // ARPEG stopped: sine pulse low (8%)
-const uint8_t LED_BG_ARP_STOP_MAX          = 64;   // ARPEG stopped: sine pulse high (25%)
-const uint8_t LED_BG_ARP_PLAY_MIN          = 20;   // ARPEG playing: sine pulse low (8%)
-const uint8_t LED_BG_ARP_PLAY_MAX          = 51;   // ARPEG playing: sine pulse high (20%)
-const uint8_t LED_BG_ARP_PLAY_FLASH        = 64;   // ARPEG playing: tick flash spike (25%)
+// --- Background ARPEG (modulate B channel, dimmed) ---
+const uint8_t LED_BG_ARP_STOP_MIN          = 20;   // Stopped: sine 8%
+const uint8_t LED_BG_ARP_STOP_MAX          = 64;   // Stopped: sine 25%
+const uint8_t LED_BG_ARP_PLAY_MIN          = 20;   // Playing: sine 8%
+const uint8_t LED_BG_ARP_PLAY_MAX          = 51;   // Playing: sine 20%
+const uint8_t LED_BG_ARP_PLAY_FLASH        = 64;   // Playing: tick flash spike 25%
 
 // --- Pulse & Flash Timing ---
-const uint16_t LED_PULSE_PERIOD_MS         = 1472; // Sine pulse period (~1.5s). LUT step = period / 64
+const uint16_t LED_PULSE_PERIOD_MS         = 1472; // Sine pulse period (~1.5s)
 const uint8_t  LED_TICK_FLASH_DURATION_MS  = 30;   // Tick flash spike duration
 
 // --- Confirmation Blinks ---
-const uint8_t  LED_CONFIRM_UNIT_MS         = 50;   // Base phase unit for confirmation blinks
-const uint8_t  LED_CONFIRM_BANK_PHASES     = 6;    // Bank switch: triple blink (on,off × 3) = 300ms
-const uint8_t  LED_CONFIRM_SCALE_PHASES    = 4;    // Scale change: double blink (on,off × 2) = 200ms
-const uint8_t  LED_CONFIRM_HOLD_ON_MS      = 150;  // Hold toggle: long blink on phase
-const uint8_t  LED_CONFIRM_HOLD_TOTAL_MS   = 250;  // Hold toggle: total duration
-const uint8_t  LED_CONFIRM_OCTAVE_PHASES   = 2;    // Octave change: single blink = 100ms
+const uint8_t  LED_CONFIRM_UNIT_MS         = 50;   // Base phase unit
+const uint8_t  LED_CONFIRM_BANK_PHASES     = 6;    // Bank switch: triple blink = 300ms
+const uint8_t  LED_CONFIRM_SCALE_PHASES    = 4;    // Scale change: double blink = 200ms
+const uint8_t  LED_CONFIRM_HOLD_ON_MS      = 150;  // Hold ON: blink on phase
+const uint8_t  LED_CONFIRM_HOLD_TOTAL_MS   = 250;  // Hold ON: total duration
+const uint16_t LED_CONFIRM_FADE_MS         = 300;  // Hold OFF + Stop: fade-out duration
+const uint8_t  LED_CONFIRM_PLAY_STEPS      = 4;    // Play: total flashes (1 ack + 3 beat-synced)
+const uint8_t  LED_CONFIRM_OCTAVE_PHASES   = 6;    // Octave: triple blink = 300ms
 const uint8_t  LED_CONFIRM_BRIGHTNESS_PCT  = 50;   // Bank switch blink brightness (% of global)
+
+// --- Setup Comet Chase ---
+const uint8_t  LED_SETUP_CHASE_SPEED_MS    = 180;  // Time per step (~2.5s round trip)
 
 // --- Bargraph Duration (configurable via Tool 5) ---
 const uint16_t LED_BARGRAPH_DURATION_MIN     = 1000;
