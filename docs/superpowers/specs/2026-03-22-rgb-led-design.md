@@ -136,7 +136,8 @@ LED_CONFIRM_BRIGHTNESS_PCT   = 50    // Bank switch blink intensity
 
 ### Bank Switch
 
-- Triple blink all 8 LEDs in context color (white if NORMAL, blue if ARPEG)
+- Triple blink of the destination bank LED only, in context color of the new bank (white if NORMAL, blue if ARPEG)
+- All other LEDs remain in their normal display state
 - 6 phases x 50ms = 300ms
 
 ### Scale Root
