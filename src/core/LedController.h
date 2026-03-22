@@ -111,11 +111,8 @@ private:
   unsigned long _confirmStart;
   uint8_t       _confirmParam;
 
-  // Fade-out state (hold-off, stop)
-  unsigned long _fadeStartTime;
-  RGBW          _fadeColor;
-
   // Play confirmation state
+  unsigned long _fadeStartTime;    // Flash hold timer for beat-synced play flashes
   uint8_t       _playFlashPhase;    // 0=ack done, 1-3=beat flashes
   uint32_t      _playLastBeatTick;  // Clock tick at last beat flash
 
