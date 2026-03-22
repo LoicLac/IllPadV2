@@ -105,7 +105,10 @@ Identical to current code. `sineRaw` (0-255) maps between min and max. Instead o
 
 ### Tick Flash
 
-Same mechanism: `consumeTickFlash()`, `_flashStartTime[i]`, duration `LED_TICK_FLASH_DURATION_MS` (30ms). Foreground flash = white (`{0,0,0,255}`). Background flash = blue dim (same hue, brightness spike).
+Same mechanism: `consumeTickFlash()`, `_flashStartTime[i]`, duration `LED_TICK_FLASH_DURATION_MS` (30ms). Tick flash is a **complete pixel override** (not a blend):
+
+- **Foreground**: pixel set to `{0,0,0,255}` (pure white), completely replacing the blue sine value
+- **Background**: pixel set to `COL_BLUE_DIM` at spike brightness (25%), replacing the dimmed sine value
 
 ### Global Brightness
 
@@ -165,8 +168,12 @@ LED_CONFIRM_BRIGHTNESS_PCT   = 50    // Bank switch blink intensity
 
 - 4 rising flashes in `COL_ARP_PLAY` (blue-cyan) on current LED
 - Synchronized to the next 4 tick flashes from the arp engine
-- Intensity: 25% -> 50% -> 75% -> 100% then transition to normal display
-- Fallback: if arp not ticking yet, use fixed timing (~4 x current division)
+- Each flash is a sharp spike (same duration as tick flash: `LED_TICK_FLASH_DURATION_MS`)
+- Intensity per flash: 25% → 50% → 75% → 100% of `COL_ARP_PLAY` brightness
+- After 4th flash, transition to normal display (confirmation expires)
+- Fallback: if arp not ticking yet (first play after hold), use fixed interval = current step duration from `ArpEngine::getStepDurationMs()`
+
+**Sync mechanism**: LedController tracks a `_playFlashCount` (starts at 0, incremented each time `consumeTickFlash()` fires on the current bank's arp engine during CONFIRM_PLAY). When count reaches `LED_CONFIRM_PLAY_STEPS` (4), the confirmation expires. Between ticks, the LED stays off (no sustained glow — just discrete flashes).
 
 ### Stop
 
@@ -176,7 +183,9 @@ LED_CONFIRM_BRIGHTNESS_PCT   = 50    // Bank switch blink intensity
 ### Octave
 
 - Triple blink in `COL_ARP_OCTAVE` (blue-violet)
-- 2 LEDs of selected group only (1-2 / 3-4 / 5-6 / 7-8), all others off
+- 2 LEDs of selected group only, all others off
+- Groups: param 1 → LEDs 0-1, param 2 → LEDs 2-3, param 3 → LEDs 4-5, param 4 → LEDs 6-7 (0-indexed)
+- LED indices: `startLed = (param - 1) * 2`, light `startLed` and `startLed + 1`
 - 6 phases x 50ms = 300ms
 
 ### ConfirmType Enum Extension
@@ -228,7 +237,9 @@ void showPotBargraph(uint8_t realLevel, uint8_t potLevel, bool caught);
 - `realLevel`: current parameter value mapped to 0-8 LEDs
 - `potLevel`: physical pot position mapped to 0-7 (cursor position)
 - `caught`: if true, display as unified full-color bar; if false, show dim bar + bright cursor
-- PotRouter provides both values + catch state
+- PotRouter provides both values + catch state via existing getters (add `getBargraphPotLevel()` and `isBargraphCaught()` alongside existing `getBargraphLevel()`)
+
+**Context color resolution**: LedController already has `_currentBank` and `_slots` pointer. It reads `_slots[_currentBank].type` to determine NORMAL (white) or ARPEG (blue). No extra parameter needed.
 
 ### Cursor/Bargraph Overlap
 
@@ -239,6 +250,7 @@ If the cursor falls on a LED that's part of the dim bargraph, that LED displays 
 - Solid bar, no pulse (simplified from current asymmetric triangle heartbeat)
 - Each LED has its fixed color from the pre-computed gradient (LED 1 = red -> LED 8 = green)
 - N LEDs lit corresponding to battery percentage, each in its gradient color
+- Mapping formula: `N = (percent * 8 + 50) / 100` (e.g., 50% → 4 LEDs, 88% → 7 LEDs, 100% → 8 LEDs)
 - Display duration: `BAT_DISPLAY_DURATION_MS` (3s, unchanged)
 - Trigger: rear button press (unchanged)
 
@@ -259,19 +271,26 @@ If the cursor falls on a LED that's part of the dim bargraph, that LED displays 
 
 - Ping-pong chase across 8 LEDs in `COL_SETUP` (violet)
 - Head: 100%, trail -1: 40%, trail -2: 10%
-- Speed: ~2-3s per round trip, constant `LED_SETUP_CHASE_SPEED_MS` (time per step)
+- Speed: ~2-3s per round trip, constant `LED_SETUP_CHASE_SPEED_MS` (time per step, ~180ms for 14 steps per round trip)
 - Active during entire setup duration (Tools 1-6)
+- Separate state flag `_setupComet` (distinct from `_chaseActive` used by calibration entry)
 - Tools that need LED feedback (calibration validation flash) temporarily preempt the comet
 
 ## 10. Files Changed
 
 ### Modified (3 files)
 
-1. **`HardwareConfig.h`**: Replace 8 `LED_PIN_x` with single `LED_DATA_PIN`. All brightness constants become RGBW color constants. Add new timing constants (`LED_CONFIRM_FADE_MS`, `LED_CONFIRM_PLAY_STEPS`, `LED_SETUP_CHASE_SPEED_MS`). Update `LED_CONFIRM_OCTAVE_PHASES` from 2 to 6.
+1. **`HardwareConfig.h`**: Replace 8 `LED_PIN_x` with single `LED_DATA_PIN`. All brightness constants become RGBW color constants. Add new constants: `LED_CONFIRM_FADE_MS` (300), `LED_CONFIRM_PLAY_STEPS` (4), `LED_SETUP_CHASE_SPEED_MS` (~180). Update `LED_CONFIRM_OCTAVE_PHASES` from 2 to 6.
 
-2. **`LedController.h`**: Replace `_pins[NUM_LEDS]` with NeoPixel strip object and pixel buffer. Extend `ConfirmType` enum (10 types). Update `showPotBargraph()` signature. Add setup comet state members. Add fade state members for hold-off/stop.
+2. **`LedController.h`**: Replace `_pins[NUM_LEDS]` with NeoPixel strip object. Extend `ConfirmType` enum (10 types, split from 5). Update `showPotBargraph()` signature. Add `_setupComet` flag (separate from `_chaseActive`). Add `_playFlashCount` for play confirmation sync. Add `_fadeStartTime` + `_fadeColor` for fade-out confirmations.
 
-3. **`LedController.cpp`**: Swap all `analogWrite`/`digitalWrite` calls to pixel buffer writes + single `strip.show()`. Implement color-based state machine. Add fade-out logic. Add catch visualization. Add comet chase. Reduce error to LEDs 4-5. Remove battery heartbeat pulse. Add play rising flash logic.
+3. **`LedController.cpp`**: Swap all `analogWrite`/`digitalWrite` calls to pixel buffer writes + single `strip.show()` at end of `update()`. Implement color-based state machine. Add fade-out logic (hold-off, stop). Add catch visualization (dim bar + cursor). Add setup comet chase with trail. Reduce error to LEDs 4-5 only. Remove battery heartbeat pulse. Add play rising flash logic with tick sync.
+
+4. **`PotRouter.h/cpp`**: Add `getBargraphPotLevel()` and `isBargraphCaught()` getters alongside existing `getBargraphLevel()`.
+
+5. **`main.cpp`**: Update `showPotBargraph()` call to pass 3 args from PotRouter.
+
+6. **`platformio.ini`**: Add `adafruit/Adafruit NeoPixel` to `lib_deps`.
 
 ### Added (0 files)
 
@@ -279,11 +298,15 @@ No new files. Library added via `platformio.ini` `lib_deps`.
 
 ### Unchanged
 
-- Public API surface (except `showPotBargraph` signature change)
-- All callers (BankManager, PotRouter, main.cpp) — only PotRouter needs to pass extra args to `showPotBargraph`
+- Public API surface (except `showPotBargraph` signature and `ConfirmType` enum extension)
 - State machine priorities and timing logic
 - Sine LUT mechanism
 - `CapacitiveKeyboard` (DO NOT MODIFY)
+
+### Breaking Changes
+
+- `ConfirmType` enum: 5 values → 10 values. Callers using `CONFIRM_SCALE` must switch to `CONFIRM_SCALE_ROOT` / `CONFIRM_SCALE_MODE` / `CONFIRM_SCALE_CHROM`. Callers using `CONFIRM_HOLD` must switch to `CONFIRM_HOLD_ON` / `CONFIRM_HOLD_OFF`. New types: `CONFIRM_PLAY`, `CONFIRM_STOP`.
+- `showPotBargraph()`: 1 param → 3 params. All callers must update.
 
 ## 11. Priority State Machine (updated)
 
