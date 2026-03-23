@@ -39,9 +39,7 @@ enum NavType : uint8_t {
   NAV_QUIT,        // 'q'
   NAV_DEFAULTS,    // 'd'
   NAV_TOGGLE,      // 't' (context switch in Pot Mapping)
-  NAV_YES,         // 'y' (confirmation prompts)
-  NAV_NO,          // 'n' (confirmation prompts)
-  NAV_CHAR,        // any other key — raw char in NavEvent.ch
+  NAV_CHAR,        // all other keys — raw char in NavEvent.ch (includes 'y', 'n', 'u', 's', etc.)
 };
 
 struct NavEvent {
@@ -57,8 +55,8 @@ struct NavEvent {
 - Escape timeout: if `ESC` arrives without `[` within 50ms, discard (not a valid arrow sequence)
 - Map `ESC[A/B/C/D` to UP/DOWN/LEFT/RIGHT
 - Map `\r` and `\n` to ENTER
-- Map `q`, `d`, `t`, `y`, `n` to their NavType equivalents
-- Any unrecognized character → `NAV_CHAR` with raw char in `event.ch` (passthrough for tools that need extra keys like `u` for undo in Tool 2)
+- Map `q`, `d`, `t` to their dedicated NavType equivalents
+- All other characters (`y`, `n`, `u`, `s`, `0`-`9`, etc.) → `NAV_CHAR` with raw char in `event.ch`. Each tool interprets these in its own context (e.g., `n` = "no" in a confirmation prompt, `n` = "skip" in Tool 2 sequential flow, `1`-`6` = tool selection in main menu)
 - Acceleration detection: if two identical LEFT/RIGHT events arrive within 120ms, set `accelerated = true`
 - Return `NavEvent` (or `NAV_NONE` if no input)
 
@@ -100,8 +98,8 @@ Applies to: Pad Roles (Tool 3), Pot Mapping (Tool 6).
 
 When user selects a value already assigned elsewhere:
 1. Display: "Already assigned to [X], replace? (y/n)"
-2. `y` = source slot becomes empty, target gets the value, save both
-3. `n` = cancel, nothing changes
+2. `y` = source slot becomes empty, target gets the value. The `y` acts as an implicit Enter: NVS save fires immediately, LED blink confirms, edit mode exits. This is consistent with the enter-save convention — the confirmation IS the final validation step.
+3. `n` = cancel, stay in edit mode, nothing saved
 4. Any other key = treated as `n`
 
 #### Reset to Defaults
@@ -194,8 +192,8 @@ ILLPAD48 — Bank Configuration              3/4 ARPEG
 **Edit mode — two sub-params per bank:**
 Enter on a bank enters edit on the **type** field (NORMAL/ARPEG). Left/Right cycles type.
 - Max 4 ARPEG enforced: if at limit and trying to switch to ARPEG, message "Max 4 ARPEG reached", stays NORMAL.
-- **Down within edit mode** moves focus to the **Quantize** sub-param of the same bank (only visible/editable when type = ARPEG). Left/Right cycles Immediate/Beat/Bar.
-- **Up within edit mode** moves focus back to the type sub-param of the same bank.
+- **Down within edit mode** moves focus to the **Quantize** sub-param of the same bank (only when type = ARPEG). Left/Right cycles Immediate/Beat/Bar. If the bank is NORMAL, Down is ignored (no Quantize field exists for NORMAL banks).
+- **Up within edit mode** moves focus back to the type sub-param of the same bank. If already on type, Up is ignored.
 - This is an intentional deviation from the "Up/Down blocked in edit" convention — Bank Config allows Down/Up to move between type and quantize within the same bank's edit session.
 - Enter exits edit = saves both type and quantize to NVS, LED blink.
 
@@ -231,7 +229,7 @@ ILLPAD48 — Pot Mapping                    [NORMAL]  t=toggle
 **Edit:** Enter → cursor moves to pool line, Left/Right cycles available params.
 - Available params: green. Already assigned: dim.
 - Selecting assigned param: auto-steal with confirmation.
-- Selecting MIDI CC: Left/Right continues to CC# (0-127, acceleration x10).
+- Selecting MIDI CC: a two-step edit. First, Left/Right in the pool lands on "CC". Press Enter to confirm CC as the target — this opens a CC# sub-editor inline (the pool item shows "CC #0"). Left/Right adjusts CC# (0-127, acceleration x10). Press Enter again to confirm the CC# and exit edit mode (NVS save + blink). This is Enter → Enter (select CC target, then confirm CC number).
 - Selecting MIDI PB: max 1 per context, auto-steal if already assigned.
 
 **Save:** Enter exits edit = save full PotMappingStore to NVS + `applyMapping()` live, LED blink. Note: `applyMapping()` triggers `rebuildBindings()` + `seedCatchValues()`. This is acceptable in setup mode (not performance-critical).
