@@ -5,6 +5,7 @@
 #include "../core/KeyboardData.h"
 #include "../core/HardwareConfig.h"
 
+class LedController;
 class NvsManager;
 class SetupUI;
 
@@ -12,13 +13,17 @@ class ToolBankConfig {
 public:
   ToolBankConfig();
 
-  void begin(NvsManager* nvs, SetupUI* ui, BankSlot* banks);
-  void run();  // Blocking — toggle NORMAL/ARPEG per bank (max 4 ARPEG)
+  void begin(LedController* leds, NvsManager* nvs, SetupUI* ui, BankSlot* banks);
+  void run();  // Blocking — unified arrow navigation for bank type + quantize
 
 private:
-  NvsManager* _nvs;
-  SetupUI*    _ui;
-  BankSlot*   _banks;
+  bool saveConfig(const BankType* types, const uint8_t* quantize);
+  void drawDescription(uint8_t cursor, bool isArpeg);
+
+  LedController* _leds;
+  NvsManager*    _nvs;
+  SetupUI*       _ui;
+  BankSlot*      _banks;
 };
 
 #endif // TOOL_BANK_CONFIG_H
