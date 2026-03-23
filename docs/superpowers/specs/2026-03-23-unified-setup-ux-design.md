@@ -28,7 +28,7 @@ The current setup menu system has inconsistent navigation across tools:
 
 ### 3.1 InputParser (new module: `src/setup/InputParser.h/.cpp`)
 
-Shared input parsing layer. No business logic, no state beyond escape sequence buffering.
+Shared input parsing layer. Stateful: stores partial escape sequences between `update()` calls and uses `millis()` for timeouts.
 
 **NavEvent struct:**
 ```cpp
@@ -39,20 +39,26 @@ enum NavType : uint8_t {
   NAV_QUIT,        // 'q'
   NAV_DEFAULTS,    // 'd'
   NAV_TOGGLE,      // 't' (context switch in Pot Mapping)
+  NAV_YES,         // 'y' (confirmation prompts)
+  NAV_NO,          // 'n' (confirmation prompts)
+  NAV_CHAR,        // any other key — raw char in NavEvent.ch
 };
 
 struct NavEvent {
   NavType type;
-  bool    accelerated;  // true if rapid repeat detected (step x10)
+  bool    accelerated;  // true if rapid repeat detected
+  char    ch;           // raw character (only valid when type == NAV_CHAR)
 };
 ```
 
 **Responsibilities:**
 - Read serial bytes, assemble VT100 escape sequences
-- Escape timeout: if `ESC` arrives without `[` within 50ms, discard
+- **Stateful escape parsing:** stores partial sequences (`ESC` received, waiting for `[` + letter). Uses `millis()` to detect timeout.
+- Escape timeout: if `ESC` arrives without `[` within 50ms, discard (not a valid arrow sequence)
 - Map `ESC[A/B/C/D` to UP/DOWN/LEFT/RIGHT
 - Map `\r` and `\n` to ENTER
-- Map `q`, `d`, `t` to QUIT, DEFAULTS, TOGGLE
+- Map `q`, `d`, `t`, `y`, `n` to their NavType equivalents
+- Any unrecognized character → `NAV_CHAR` with raw char in `event.ch` (passthrough for tools that need extra keys like `u` for undo in Tool 2)
 - Acceleration detection: if two identical LEFT/RIGHT events arrive within 120ms, set `accelerated = true`
 - Return `NavEvent` (or `NAV_NONE` if no input)
 
@@ -67,20 +73,26 @@ struct NavEvent {
 | Key | Action |
 |---|---|
 | Up/Down | Move cursor between parameters/cells |
-| Left/Right | Cycle value (only in edit mode) |
+| Left/Right | Cycle value (only in edit mode). Ignored outside edit mode (except Tool 3 grid navigation — see 4.4) |
 | Enter | Toggle edit mode. Exiting edit mode = immediate NVS save + LED blink |
 | `q` | Return to main menu (no confirmation needed — everything already saved) |
 | `d` | Reset to defaults + confirmation "Reset to defaults? (y/n)" |
 
 #### Edit Mode
-- Selected parameter highlighted (cyan + `>` indicator)
+- Selected parameter highlighted (cyan + `>` indicator, value in `[brackets]`)
 - Enter toggles into edit mode: value becomes modifiable via Left/Right
 - Enter again exits edit mode: NVS write fires, LED blink confirms
-- While in edit mode, Up/Down are blocked (must exit edit first)
+- While in edit mode, Up/Down are blocked (must exit edit first). **Exception:** Tool 4 Bank Config allows Down to move to Quantize sub-param within the same bank (see Section 4.2).
+
+#### NVS Save & Failure Handling
+- Enter exits edit mode → NVS write fires immediately (direct `Preferences` call, blocking)
+- On success: LED blink confirmation via `SetupUI::showSaved()`
+- On failure: red error message "NVS write failed!" displayed for 1.5s, value stays as-is in working copy (user can retry by pressing Enter again), edit mode stays active
+- Flash wear note: setup mode is used infrequently (configuration only). The per-param save model is acceptable. Each NVS write is a single key in a single namespace — ESP32 NVS is designed for this pattern.
 
 #### Acceleration (Left/Right)
-- Two identical arrow events within 120ms: step x10
-- Applies to numeric values (CC# 0-127, tempo ranges, deadzone, etc.)
+- Two identical arrow events within 120ms: accelerated step
+- **Step size:** x10 for large ranges (CC# 0-127, tempo). For small ranges where x10 would exceed 25% of total range, use x5 instead. Each tool defines the acceleration factor per parameter.
 - Discrete values (enums, booleans) ignore acceleration — always step 1
 
 #### Auto-Steal with Confirmation
@@ -117,8 +129,15 @@ Hardware shortcut does NOT enter edit mode — just moves the cursor.
 - Info line: shows description/help for the currently selected parameter
 - Pool lines at bottom for tools that have them (Pot Mapping: 1 line, Pad Roles: 3 lines)
 - Synchronized VT100 updates (vtFrameStart/vtFrameEnd) for flicker-free rendering
+- All prompt strings updated to remove references to rear button / "BTN"
 
 ## 4. Tool-by-Tool Design
+
+### 4.0 Main Menu
+
+The main menu keeps its current model: number keys `1`-`6` select a tool, `0` reboots. InputParser is used for input (number keys arrive as `NAV_CHAR`), but arrows are ignored on the main menu. The menu layout and NVS validation display remain unchanged.
+
+**Migration:** Remove rear button input from `SetupManager::run()` and `SetupUI::readInput()`. Serial-only input.
 
 ### 4.1 Tool 5 — Settings (simplest, implements pattern first)
 
@@ -142,11 +161,11 @@ ILLPAD48 — Settings
   [Up/Down] navigate  [Enter] edit  [d] defaults  [q] quit
 ```
 
-**Navigation:** Up/Down through 8 parameters.
-**Edit:** Enter toggles. Left/Right cycles value. Acceleration for numeric params.
+**Navigation:** Up/Down through 8 parameters. Left/Right ignored outside edit mode.
+**Edit:** Enter toggles. Left/Right cycles value. Acceleration for numeric params (x5 for small ranges like AT Rate 10-100, x10 for others).
 **Save:** Enter exits edit = immediate NVS write + LED blink.
-**Info:** Description box below list updates per selected param (already exists, keep).
-**Defaults:** `d` resets all 8 params to factory values.
+**Info:** Description box below list updates per selected param (already exists, keep). Includes reboot notice for BLE Interval and Clock Mode.
+**Defaults:** `d` resets all 8 params to factory values + confirmation.
 
 ### 4.2 Tool 4 — Bank Config
 
@@ -158,7 +177,7 @@ ILLPAD48 — Bank Configuration              3/4 ARPEG
   Bank 1    NORMAL
   Bank 2    NORMAL
   Bank 3    NORMAL
-> Bank 4   [ARPEG]    Quantize: Immediate   <- editing
+> Bank 4   [ARPEG]    Quantize: Immediate   <- editing type
   Bank 5    ARPEG      Quantize: Beat
   Bank 6    ARPEG      Quantize: Bar
   Bank 7    ARPEG      Quantize: Immediate
@@ -170,13 +189,18 @@ ILLPAD48 — Bank Configuration              3/4 ARPEG
   [Up/Down] navigate  [Enter] edit  [d] defaults  [q] quit
 ```
 
-**Navigation:** Up/Down through 8 banks.
-**Edit:** Enter on a bank → Left/Right cycles NORMAL/ARPEG.
-- Max 4 ARPEG enforced: if at limit, ARPEG option skipped with message "Max 4 ARPEG reached".
-- If bank is ARPEG: Down moves to Quantize sub-param (same bank), Left/Right cycles Immediate/Beat/Bar.
-**Save:** Enter exits edit = save bank types + quantize to NVS, LED blink.
-**Defaults:** `d` resets to Banks 1-3 NORMAL, Banks 4-8 ARPEG, all Quantize = Immediate.
-**Info line:** Shows ARPEG count + description of selected field.
+**Navigation:** Up/Down through 8 banks. Left/Right ignored outside edit mode.
+
+**Edit mode — two sub-params per bank:**
+Enter on a bank enters edit on the **type** field (NORMAL/ARPEG). Left/Right cycles type.
+- Max 4 ARPEG enforced: if at limit and trying to switch to ARPEG, message "Max 4 ARPEG reached", stays NORMAL.
+- **Down within edit mode** moves focus to the **Quantize** sub-param of the same bank (only visible/editable when type = ARPEG). Left/Right cycles Immediate/Beat/Bar.
+- **Up within edit mode** moves focus back to the type sub-param of the same bank.
+- This is an intentional deviation from the "Up/Down blocked in edit" convention — Bank Config allows Down/Up to move between type and quantize within the same bank's edit session.
+- Enter exits edit = saves both type and quantize to NVS, LED blink.
+
+**Defaults:** `d` resets to Banks 1-3 NORMAL, Banks 4-8 ARPEG, all Quantize = Immediate + confirmation.
+**Info line:** Shows ARPEG count (e.g., "3/4 ARPEG") + description of selected field (type vs quantize).
 
 ### 4.3 Tool 6 — Pot Mapping
 
@@ -202,15 +226,19 @@ ILLPAD48 — Pot Mapping                    [NORMAL]  t=toggle
   [t] NORMAL/ARPEG  [d] defaults  [q] quit
 ```
 
-**Navigation:** Up/Down through 8 slots. Turn pot = jump to its slot.
+**Navigation:** Up/Down through 8 slots. Turn pot = jump to its slot. Left/Right ignored outside edit mode.
+
 **Edit:** Enter → cursor moves to pool line, Left/Right cycles available params.
 - Available params: green. Already assigned: dim.
 - Selecting assigned param: auto-steal with confirmation.
-- Selecting MIDI CC: Left/Right continues to CC# (0-127, acceleration active).
+- Selecting MIDI CC: Left/Right continues to CC# (0-127, acceleration x10).
 - Selecting MIDI PB: max 1 per context, auto-steal if already assigned.
-**Save:** Enter exits edit = save full PotMappingStore to NVS + applyMapping() live, LED blink.
-**Context switch:** `t` toggles NORMAL/ARPEG (separate pool per context).
-**Defaults:** `d` resets current context to default mapping.
+
+**Save:** Enter exits edit = save full PotMappingStore to NVS + `applyMapping()` live, LED blink. Note: `applyMapping()` triggers `rebuildBindings()` + `seedCatchValues()`. This is acceptable in setup mode (not performance-critical).
+
+**Context switch:** `t` toggles NORMAL/ARPEG (separate pool per context). **Migration note:** Enter is repurposed from context-switch (old behavior) to edit-toggle (new behavior). `t` replaces Enter for context switching.
+
+**Defaults:** `d` resets current context to default mapping + confirmation.
 **Info line:** Description of highlighted pool param.
 
 ### 4.4 Tool 3 — Pad Roles
@@ -239,70 +267,95 @@ ILLPAD48 — Pad Roles
   [d] defaults  [q] quit
 ```
 
-**Grid navigation:** Up/Down/Left/Right moves cursor in 4x12 grid. Touch pad = jump to cell.
-**Edit:** Enter on a cell → cursor descends to pool (3 lines: Bank / Scale / Arp).
-- Up/Down navigates between 3 pool lines + implicit "none" (pressing Enter on a cell with a role while cursor is outside all pools = remove role, set to none).
-- Left/Right navigates within the pool line.
-- Current role of the pad = highlighted. Roles taken by other pads = dim.
-- Selecting a taken role: "Already assigned to pad X, replace? (y/n)".
-- Enter = validate choice, save immediate, LED blink, return to grid.
-**Defaults:** `d` resets all pad roles to default assignment.
-**Info line:** Description of highlighted role.
+**Grid navigation (not in edit mode):** All four arrows (Up/Down/Left/Right) navigate the 4x12 grid. This is a deviation from the convention where Left/Right are edit-only — in Tool 3's grid, Left/Right are needed for spatial navigation.
+- Wrapping: Right on column 12 wraps to column 1 of next row. Left on column 1 wraps to column 12 of previous row. Up on row 1 wraps to row 4. Down on row 4 wraps to row 1.
+- Touch pad = jump to cell (does not enter edit mode).
+
+**Edit mode (pool navigation):**
+Enter on a grid cell → cursor descends to the pool area (3 lines + none):
+- **4 vertical positions:** None (implicit, above the pool lines), Bank, Scale, Arp
+- Up/Down navigates between these 4 positions
+- Left/Right navigates within the current pool line's roles
+- Current role of the selected pad = highlighted in the pool. Roles already assigned to other pads = dim with pad number shown.
+- Selecting a taken role: "Already assigned to pad X, replace? (y/n)" → y = steal (other pad becomes none), n = cancel.
+
+**Removing a role:** Navigate to the "None" position (Up above Bank line) and press Enter. The pad's role is cleared.
+
+**Confirming a role:** Enter on any pool item = validate choice, save immediate to NVS, LED blink, cursor returns to grid.
+
+**Touch detection in edit mode:** If user touches a different pad while in edit mode, exit edit mode (discard uncommitted selection), jump to new pad's cell in grid.
+
+**Baseline drift:** The existing `detectActiveKey()` helper in SetupCommon.h handles baseline compensation and ambiguous-touch detection. This remains unchanged — it is called to detect pad touches regardless of edit mode state.
+
+**Defaults:** `d` resets all pad roles to default assignment + confirmation. Default assignment is defined in code (existing `DEFAULT_BANK_PADS`, `DEFAULT_SCALE_PADS`, `DEFAULT_ARP_PADS` arrays).
+
+**Info line:** Description of the highlighted role in the pool, or of the selected pad's current role when not in edit mode.
+
+**No undo:** The old sequential-assignment flow had `u` for undo. The new model does not need it — each pad is edited individually with immediate save. To revert a mistake, re-edit the pad and pick the correct role.
 
 ### 4.5 Tool 2 — Pad Ordering (minimal changes)
 
 Sequential touch flow remains (touch pads low to high, positions 1-48).
+
 **Changes:**
 - Uses InputParser for key handling
+- `u` = undo last (existing behavior, received as `NAV_CHAR` with `ch='u'`)
 - `d` = reset to default linear order (0-47) + confirmation
 - `q` = abort + return to menu
 - Info line shows progress and instructions
 
+**Preserved keys:** `u` (undo), `n` (skip) — received via `NAV_CHAR` passthrough from InputParser.
+
 ### 4.6 Tool 1 — Calibration (minimal changes)
 
 Guided flow remains unchanged.
+
 **Changes:**
 - Uses InputParser for key handling
 - `q` = abort + return to menu
+
+**Preserved keys:** `r` (redo), `s` (save) — received via `NAV_CHAR` passthrough from InputParser.
 
 ## 5. Implementation Order
 
 1. **InputParser** — standalone module, no dependencies
 2. **Tool 5 (Settings)** — simplest list navigation, validates the pattern
-3. **Tool 4 (Bank Config)** — list with sub-param (quantize)
-4. **Tool 6 (Pot Mapping)** — list + pool + hardware pot detection + context toggle
-5. **Tool 3 (Pad Roles)** — grid + 3-line pool + hardware pad detection + steal
+3. **Tool 4 (Bank Config)** — list with sub-param (quantize), tests edit-mode deviation
+4. **Tool 6 (Pot Mapping)** — list + pool + hardware pot detection + context toggle + steal
+5. **Tool 3 (Pad Roles)** — grid + 3-line pool + hardware pad detection + steal (most complex)
 6. **Tool 2 (Pad Ordering)** — minimal changes (InputParser + defaults)
 7. **Tool 1 (Calibration)** — minimal changes (InputParser)
+8. **SetupManager + SetupUI cleanup** — remove rear button logic, update prompt strings
 
 Each tool is independently deliverable and testable.
 
 ## 6. NVS Save Strategy
 
 All tools save immediately on Enter (exit edit mode):
-- Each tool writes only the parameter that changed (not the full config)
-- Direct `Preferences` calls (setup mode is blocking, no background task)
-- LED blink confirmation via `SetupUI::showSaved()`
+- Each tool writes only the parameter(s) that changed (blocking `Preferences` calls)
+- On success: LED blink confirmation via `SetupUI::showSaved()`
+- On failure: red error message "NVS write failed!" for 1.5s, stays in edit mode, user can retry
+- Flash wear: acceptable — setup mode is used infrequently (configuration only)
 
 Reset-to-defaults saves the full default config for that tool in one NVS write.
 
 ## 7. Files Changed
 
 **New:**
-- `src/setup/InputParser.h` — NavEvent enum, InputParser class
-- `src/setup/InputParser.cpp` — VT100 parsing, acceleration detection
+- `src/setup/InputParser.h` — NavEvent enum + struct, InputParser class
+- `src/setup/InputParser.cpp` — VT100 escape sequence parsing (stateful), acceleration detection, char passthrough
 
 **Modified (major refactor):**
 - `src/setup/ToolSettings.cpp/.h` — new navigation model
-- `src/setup/ToolBankConfig.cpp/.h` — new navigation model
-- `src/setup/ToolPotMapping.cpp/.h` — new navigation model + pool + steal
-- `src/setup/ToolPadRoles.cpp/.h` — new navigation model + grid + 3-pool + steal
+- `src/setup/ToolBankConfig.cpp/.h` — new navigation model + sub-param deviation
+- `src/setup/ToolPotMapping.cpp/.h` — new navigation model + pool + steal. Enter repurposed from context-switch to edit-toggle.
+- `src/setup/ToolPadRoles.cpp/.h` — complete rewrite: sub-menu model replaced by grid + 3-pool model
 
 **Modified (minor):**
-- `src/setup/SetupManager.cpp` — remove rear button input, use InputParser for menu
-- `src/setup/SetupUI.cpp/.h` — remove `readInput()` rear button logic, add helpers if needed
+- `src/setup/SetupManager.cpp` — remove rear button input from main loop, use InputParser for menu char reading
+- `src/setup/SetupUI.cpp/.h` — remove rear button logic from `readInput()`, remove "BTN" references from prompt strings
 - `src/setup/ToolPadOrdering.cpp/.h` — InputParser + defaults
-- `src/setup/ToolCalibration.cpp/.h` — InputParser
+- `src/setup/ToolCalibration.cpp/.h` — InputParser + quit
 
 **Not changed:**
-- `src/setup/SetupCommon.h` — touch detection helpers remain as-is
+- `src/setup/SetupCommon.h` — touch detection helpers remain as-is (used by Tool 2, 3)
