@@ -76,6 +76,7 @@ PotRouter::PotRouter()
   for (uint8_t i = 0; i < NUM_POTS; i++) {
     _rawAdc[i] = 0;
     _smoothedAdc[i] = 0.0f;
+    _stableAdc[i] = 0.0f;
     _moved[i] = false;
     _activeIdx[i] = -1;
   }
@@ -310,6 +311,7 @@ void PotRouter::begin() {
     uint16_t raw = analogRead(POT_PINS[i]);
     _rawAdc[i] = raw;
     _smoothedAdc[i] = (float)raw;
+    _stableAdc[i] = (float)raw;
   }
 
   seedCatchValues();
@@ -339,12 +341,17 @@ void PotRouter::update(bool btnLeft, bool btnRear, BankType currentType) {
 void PotRouter::readAndSmooth() {
   for (uint8_t i = 0; i < NUM_POTS; i++) {
     _rawAdc[i] = analogRead(POT_PINS[i]);
-    float prev = _smoothedAdc[i];
     _smoothedAdc[i] += POT_SMOOTHING_ALPHA * ((float)_rawAdc[i] - _smoothedAdc[i]);
 
-    float delta = _smoothedAdc[i] - prev;
-    if (delta < 0) delta = -delta;
-    _moved[i] = (delta > 1.0f);
+    // Output deadband: only update stable value when smoothed drifts far enough
+    float diff = _smoothedAdc[i] - _stableAdc[i];
+    if (diff < 0) diff = -diff;
+    if (diff >= POT_OUTPUT_DEADBAND) {
+      _stableAdc[i] = _smoothedAdc[i];
+      _moved[i] = true;
+    } else {
+      _moved[i] = false;
+    }
   }
 }
 
@@ -401,7 +408,7 @@ void PotRouter::applyBinding(uint8_t potIndex) {
   if (idx < 0) return;
 
   CatchState& cs = _catch[idx];
-  float adc = _smoothedAdc[potIndex];
+  float adc = _stableAdc[potIndex];
 
   // --- Catch system ---
   if (!cs.caught) {

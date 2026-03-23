@@ -136,6 +136,9 @@ public:
   bool isDirty() const;
   void clearDirty();
 
+  // Stable ADC values after deadband (public for debug display)
+  const float* getSmoothedAdc() const { return _stableAdc; }
+
   // ADC pin mapping (public for Tool 6 pot detection)
   static const uint8_t POT_PINS[NUM_POTS];
 
@@ -163,6 +166,7 @@ private:
   // Hardware ADC
   uint16_t _rawAdc[NUM_POTS];
   float    _smoothedAdc[NUM_POTS];
+  float    _stableAdc[NUM_POTS];   // Last output value (deadband gate)
   bool     _moved[NUM_POTS];
 
   // Catch per-binding

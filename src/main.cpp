@@ -759,6 +759,64 @@ void loop() {
                                 s_bankManager.getCurrentBank(), potSlot.type);
   if (potDirty) s_potRouter.clearDirty();
 
+  // --- Debug: print pot parameters on change ---
+  #if DEBUG_SERIAL
+  {
+    static float    s_dbgShape    = -1.0f;
+    static uint16_t s_dbgSlew     = 0xFFFF;
+    static uint16_t s_dbgAtDz     = 0xFFFF;
+    static uint16_t s_dbgPB       = 0xFFFF;
+    static uint8_t  s_dbgBaseVel  = 0xFF;
+    static uint8_t  s_dbgVelVar   = 0xFF;
+    static uint16_t s_dbgTempo    = 0xFFFF;
+    static uint8_t  s_dbgLedBr    = 0xFF;
+    static uint8_t  s_dbgPadSens  = 0xFF;
+    static float    s_dbgGate     = -1.0f;
+    static float    s_dbgShufDep  = -1.0f;
+    static uint8_t  s_dbgDiv      = 0xFF;
+    static uint8_t  s_dbgPat      = 0xFF;
+    static uint8_t  s_dbgShufTpl  = 0xFF;
+
+    static const char* s_divNames[] = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64"};
+    static const char* s_patNames[] = {"Up","Down","UpDown","Random","Order"};
+
+    float    shape   = s_potRouter.getResponseShape();
+    uint16_t slew    = s_potRouter.getSlewRate();
+    uint16_t atDz    = s_potRouter.getAtDeadzone();
+    uint16_t pb      = s_potRouter.getPitchBend();
+    uint8_t  baseVel = s_potRouter.getBaseVelocity();
+    uint8_t  velVar  = s_potRouter.getVelocityVariation();
+    uint16_t tempo   = s_potRouter.getTempoBPM();
+    uint8_t  ledBr   = s_potRouter.getLedBrightness();
+    uint8_t  padSens = s_potRouter.getPadSensitivity();
+    float    gate    = s_potRouter.getGateLength();
+    float    shufDep = s_potRouter.getShuffleDepth();
+    uint8_t  div     = (uint8_t)s_potRouter.getDivision();
+    uint8_t  pat     = (uint8_t)s_potRouter.getPattern();
+    uint8_t  shufTpl = s_potRouter.getShuffleTemplate();
+
+    // Global params
+    if ((int)(shape * 100) != (int)(s_dbgShape * 100)) { Serial.printf("[POT] Shape=%.2f\n", shape); s_dbgShape = shape; }
+    if (slew != s_dbgSlew)       { Serial.printf("[POT] Slew=%u\n", slew); s_dbgSlew = slew; }
+    if (atDz != s_dbgAtDz)       { Serial.printf("[POT] AT_Deadzone=%u\n", atDz); s_dbgAtDz = atDz; }
+    if (tempo != s_dbgTempo)     { Serial.printf("[POT] Tempo=%u BPM\n", tempo); s_dbgTempo = tempo; }
+    if (ledBr != s_dbgLedBr)     { Serial.printf("[POT] LED_Bright=%u\n", ledBr); s_dbgLedBr = ledBr; }
+    if (padSens != s_dbgPadSens) { Serial.printf("[POT] PadSens=%u\n", padSens); s_dbgPadSens = padSens; }
+
+    // Per-bank params (always tracked, foreground bank)
+    if (baseVel != s_dbgBaseVel) { Serial.printf("[POT] BaseVel=%u\n", baseVel); s_dbgBaseVel = baseVel; }
+    if (velVar != s_dbgVelVar)   { Serial.printf("[POT] VelVar=%u\n", velVar); s_dbgVelVar = velVar; }
+    if (pb != s_dbgPB)           { Serial.printf("[POT] PitchBend=%u\n", pb); s_dbgPB = pb; }
+
+    // Arp params
+    if ((int)(gate * 100) != (int)(s_dbgGate * 100))       { Serial.printf("[POT] Gate=%.2f\n", gate); s_dbgGate = gate; }
+    if ((int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) { Serial.printf("[POT] ShufDepth=%.2f\n", shufDep); s_dbgShufDep = shufDep; }
+    if (div != s_dbgDiv)     { Serial.printf("[POT] Division=%s\n", div < 9 ? s_divNames[div] : "?"); s_dbgDiv = div; }
+    if (pat != s_dbgPat)     { Serial.printf("[POT] Pattern=%s\n", pat < 5 ? s_patNames[pat] : "?"); s_dbgPat = pat; }
+    if (shufTpl != s_dbgShufTpl) { Serial.printf("[POT] ShufTpl=%u\n", shufTpl); s_dbgShufTpl = shufTpl; }
+  }
+  #endif
+
   // Check if any pad is pressed (NVS won't write during play)
   bool anyPressed = false;
   for (int i = 0; i < NUM_KEYS; i++) {
@@ -767,17 +825,52 @@ void loop() {
   s_nvsManager.setAnyPadPressed(anyPressed);
   s_nvsManager.notifyIfDirty();
 
-  // --- Hardware debug: raw pot ADC + button states (every 500ms) ---
+  // --- Hardware debug: log only on button/pot changes ---
   #if DEBUG_HARDWARE
   {
-    static uint32_t s_lastHwDebug = 0;
-    if (now - s_lastHwDebug >= 500) {
-      s_lastHwDebug = now;
+    static bool s_hwInit = false;
+    static bool s_lastLeft = false;
+    static bool s_lastRear = false;
+    static int  s_lastPot[NUM_POTS] = {0, 0, 0, 0, 0};
+
+    const float* smoothed = s_potRouter.getSmoothedAdc();
+    int potNow[NUM_POTS];
+    for (uint8_t i = 0; i < NUM_POTS; i++) {
+      potNow[i] = (int)smoothed[i];
+    }
+
+    if (!s_hwInit) {
+      s_hwInit = true;
+      s_lastLeft = leftHeld;
+      s_lastRear = rearHeld;
+      for (uint8_t i = 0; i < NUM_POTS; i++) {
+        s_lastPot[i] = potNow[i];
+      }
       Serial.printf("[HW] BTN left=%d rear=%d | POT R1=%d R2=%d R3=%d R4=%d Rear=%d\n",
                     leftHeld ? 1 : 0, rearHeld ? 1 : 0,
-                    analogRead(POT_RIGHT1_PIN), analogRead(POT_RIGHT2_PIN),
-                    analogRead(POT_RIGHT3_PIN), analogRead(POT_RIGHT4_PIN),
-                    analogRead(POT_REAR_PIN));
+                    potNow[0], potNow[1], potNow[2], potNow[3], potNow[4]);
+    } else {
+      if (leftHeld != s_lastLeft || rearHeld != s_lastRear) {
+        Serial.printf("[HW] BTN left=%d rear=%d\n",
+                      leftHeld ? 1 : 0, rearHeld ? 1 : 0);
+        s_lastLeft = leftHeld;
+        s_lastRear = rearHeld;
+      }
+
+      bool potChanged = false;
+      for (uint8_t i = 0; i < NUM_POTS; i++) {
+        if (abs(potNow[i] - s_lastPot[i]) >= POT_DEADZONE) {
+          potChanged = true;
+          break;
+        }
+      }
+      if (potChanged) {
+        Serial.printf("[HW] POT R1=%d R2=%d R3=%d R4=%d Rear=%d\n",
+                      potNow[0], potNow[1], potNow[2], potNow[3], potNow[4]);
+        for (uint8_t i = 0; i < NUM_POTS; i++) {
+          s_lastPot[i] = potNow[i];
+        }
+      }
     }
   }
   #endif

@@ -8,7 +8,7 @@
 // 1. DEBUG & PRODUCTION
 // =================================================================
 #define DEBUG_SERIAL 1   // 1 = all debug messages (boot + runtime). 0 = complete silence, zero overhead.
-#define DEBUG_HARDWARE 0 // 1 = print pot ADC values + button states every 500ms (loop). 0 = off.
+#define DEBUG_HARDWARE  0 // 1 = print pot ADC values + button states every 500ms (loop). 0 = off.
 
 // =================================================================
 // 2. PIN ASSIGNMENTS — ESP32-S3-N8R16
@@ -42,8 +42,8 @@ const uint8_t LED_PIN_8 = 18;  // Bank 8
 const int NUM_LEDS = 8;
 
 // --- Buttons (V2: 2 buttons, all active LOW with internal pull-up) ---
-const uint8_t BTN_LEFT_PIN  = 2;   // GPIO??? — Left side, bank+scale+arp single-layer (hold + pad), modifier for right pots
-const uint8_t BTN_REAR_PIN  = 11;  // GPIO??? — Rear, battery gauge + setup mode entry + modifier for rear pot
+const uint8_t BTN_LEFT_PIN  = 2;   // GPIO2 — Left side, bank+scale+arp single-layer (hold + pad), modifier for right pots
+const uint8_t BTN_REAR_PIN  = 3;   // GPIO3 — Rear, battery gauge + setup mode entry + modifier for rear pot
 
 const uint16_t CAL_WAIT_WINDOW_MS = 3000;   // Time after boot to press button
 const uint16_t CAL_HOLD_DURATION_MS = 3000; // Hold 3s after press to enter calibration
@@ -51,15 +51,17 @@ const uint16_t CAL_AUTOCONFIG_COUNTDOWN_MS = 1000;
 const uint8_t  CHASE_STEP_MS = 80;          // Speed of chase pattern (ms per LED step)
 
 // --- Analog Pots (V2: 5 potentiometers — 4 right + 1 rear) ---
-const uint8_t POT_RIGHT1_PIN = 1;   // GPIO??? — Right side pot 1 (tempo / division)
-const uint8_t POT_RIGHT2_PIN = 12;  // GPIO??? — Right side pot 2 (shape-gate / deadzone-shuffle)
-const uint8_t POT_RIGHT3_PIN = 14;  // GPIO??? — Right side pot 3 (slew-pattern / pitchbend-shuffletemplate)
-const uint8_t POT_RIGHT4_PIN = 21;  // GPIO??? — Right side pot 4 (base velocity / velocity variation)
-const uint8_t POT_REAR_PIN   = 13;  // GPIO??? — Rear (LED brightness / pad sensitivity)
+const uint8_t POT_RIGHT1_PIN = 11;  // GPIO11 — Right side pot 1 (tempo / division)
+const uint8_t POT_RIGHT2_PIN = 12;  // GPIO12 — Right side pot 2 (shape-gate / deadzone-shuffle)
+const uint8_t POT_RIGHT3_PIN = 13;  // GPIO13 — Right side pot 3 (slew-pattern / pitchbend-shuffletemplate)
+const uint8_t POT_RIGHT4_PIN = 14;  // GPIO14 — Right side pot 4 (base velocity / velocity variation)
+const uint8_t POT_REAR_PIN   = 1;   // GPIO1 — Rear (LED brightness / pad sensitivity)
 const uint8_t NUM_POTS = 5;
 
-const int POT_DEADZONE = 30;     // ADC change threshold to register movement (ESP32 ADC noise ~10-20 LSB)
-const float POT_SMOOTHING_ALPHA = 0.05f;
+const int   POT_DEADZONE        = 50;    // ADC change threshold for debug display
+const float POT_SMOOTHING_ALPHA = 0.02f; // EMA filter (lower = smoother, 0.02 = heavy smoothing)
+const float POT_MOVE_THRESHOLD  = 4.0f;  // Smoothed ADC delta to register movement (higher = less jitter)
+const int   POT_OUTPUT_DEADBAND = 15;     // Output deadband: smoothed must move ≥ this from last stable value
 
 // --- Pot Catch & Bargraph ---
 const int      POT_CATCH_WINDOW          = 100;   // ADC units (±2.4% of 4095) to catch stored value

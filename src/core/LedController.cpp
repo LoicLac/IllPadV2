@@ -53,8 +53,7 @@ LedController::LedController()
 
 void LedController::begin() {
   for (int i = 0; i < NUM_LEDS; i++) {
-    pinMode(_pins[i], OUTPUT);
-    digitalWrite(_pins[i], LOW);
+    analogWrite(_pins[i], 0);  // Allocates LEDC channel per pin (8 pins = 8 channels on ESP32-S3)
   }
 }
 
@@ -65,9 +64,9 @@ void LedController::begin() {
 void LedController::haltI2CError() {
   while (true) {
     for (uint8_t flash = 0; flash < 3; flash++) {
-      for (int i = 0; i < NUM_LEDS; i++) digitalWrite(_pins[i], HIGH);
+      for (int i = 0; i < NUM_LEDS; i++) analogWrite(_pins[i], 255);
       delay(80);
-      for (int i = 0; i < NUM_LEDS; i++) digitalWrite(_pins[i], LOW);
+      for (int i = 0; i < NUM_LEDS; i++) analogWrite(_pins[i], 0);
       delay(80);
     }
     delay(1000);
@@ -82,13 +81,13 @@ void LedController::startChase() {
   _chaseActive = true;
   _chasePos = 0;
   _chaseLastStep = millis();
-  for (int i = 0; i < NUM_LEDS; i++) digitalWrite(_pins[i], LOW);
-  digitalWrite(_pins[0], HIGH);
+  for (int i = 0; i < NUM_LEDS; i++) analogWrite(_pins[i], 0);
+  analogWrite(_pins[0], _brightness);
 }
 
 void LedController::stopChase() {
   _chaseActive = false;
-  for (int i = 0; i < NUM_LEDS; i++) digitalWrite(_pins[i], LOW);
+  for (int i = 0; i < NUM_LEDS; i++) analogWrite(_pins[i], 0);
 }
 
 // ---------------------------------------------------------------
@@ -112,16 +111,16 @@ void LedController::update() {
       bool fastBlink = ((now / 150) % 2) == 0;
       for (int i = 0; i < NUM_LEDS; i++) {
         if (i < _bootFailStep - 1) {
-          digitalWrite(_pins[i], HIGH);
+          analogWrite(_pins[i], _brightness);
         } else if (i == _bootFailStep - 1) {
-          digitalWrite(_pins[i], fastBlink ? HIGH : LOW);
+          analogWrite(_pins[i], fastBlink ? _brightness : 0);
         } else {
-          digitalWrite(_pins[i], LOW);
+          analogWrite(_pins[i], 0);
         }
       }
     } else {
       for (int i = 0; i < NUM_LEDS; i++) {
-        digitalWrite(_pins[i], (i < _bootStep) ? HIGH : LOW);
+        analogWrite(_pins[i], (i < _bootStep) ? _brightness : 0);
       }
     }
     return;
@@ -130,18 +129,20 @@ void LedController::update() {
   // === Chase pattern (calibration entry) ===
   if (_chaseActive) {
     if (now - _chaseLastStep >= CHASE_STEP_MS) {
-      digitalWrite(_pins[_chasePos], LOW);
       _chasePos = (_chasePos + 1) % NUM_LEDS;
-      digitalWrite(_pins[_chasePos], HIGH);
       _chaseLastStep = now;
+    }
+    for (int i = 0; i < NUM_LEDS; i++) {
+      analogWrite(_pins[i], (i == _chasePos) ? _brightness : 0);
     }
     return;
   }
 
   // === Priority 1: Error (all 8 LEDs blink 500ms unison) ===
   if (_error) {
+    uint8_t val = _blinkState ? _brightness : 0;
     for (int i = 0; i < NUM_LEDS; i++) {
-      digitalWrite(_pins[i], _blinkState ? HIGH : LOW);
+      analogWrite(_pins[i], val);
     }
     return;
   }
@@ -162,13 +163,7 @@ void LedController::update() {
       }
       return;
     }
-    // Battery display ended — detach LEDC, restore GPIO for analogWrite modes
     _showingBattery = false;
-    for (int i = 0; i < NUM_LEDS; i++) {
-      ledcDetachPin(_pins[i]);
-      pinMode(_pins[i], OUTPUT);
-      digitalWrite(_pins[i], LOW);
-    }
   }
 
   // === Priority 3: Pot bargraph (solid bar, configurable duration) ===
@@ -177,7 +172,7 @@ void LedController::update() {
       _showingPotBar = false;
     } else {
       for (int i = 0; i < NUM_LEDS; i++) {
-        digitalWrite(_pins[i], (i < _potBarLevel) ? HIGH : LOW);
+        analogWrite(_pins[i], (i < _potBarLevel) ? _brightness : 0);
       }
       return;
     }
@@ -262,14 +257,15 @@ void LedController::update() {
       } else {
         uint8_t phase = elapsed / 25;
         bool on = (phase < 6) && (phase % 2 == 0);
+        uint8_t val = on ? _brightness : 0;
         for (int i = 0; i < NUM_LEDS; i++) {
-          digitalWrite(_pins[i], on ? HIGH : LOW);
+          analogWrite(_pins[i], val);
         }
         return;
       }
     }
     for (int i = 0; i < NUM_LEDS; i++) {
-      digitalWrite(_pins[i], LOW);
+      analogWrite(_pins[i], 0);
     }
     return;
   }
@@ -471,7 +467,7 @@ void LedController::playValidation() {
 
 void LedController::allOff() {
   for (int i = 0; i < NUM_LEDS; i++) {
-    digitalWrite(_pins[i], LOW);
+    analogWrite(_pins[i], 0);
   }
   _currentBank = 0;
   _batteryLow = false;
