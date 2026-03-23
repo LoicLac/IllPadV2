@@ -1,5 +1,6 @@
 #include "ToolPotMapping.h"
 #include "SetupUI.h"
+#include "InputParser.h"
 #include "../core/LedController.h"
 #include "../managers/PotRouter.h"
 #include <Preferences.h>
@@ -25,9 +26,23 @@ const char* ToolPotMapping::targetName(PotTarget t) {
     case TARGET_VELOCITY_VARIATION: return "VelVar";
     case TARGET_MIDI_CC:            return "CC";
     case TARGET_MIDI_PITCHBEND:     return "PB";
-    case TARGET_EMPTY:              return "empty";
+    case TARGET_EMPTY:              return "(empty)";
     default:                        return "???";
   }
+}
+
+// =================================================================
+// Slot display names
+// =================================================================
+const char* ToolPotMapping::slotName(uint8_t slot) {
+  static const char* names[] = {
+    "R1 alone",  "R1 + hold",
+    "R2 alone",  "R2 + hold",
+    "R3 alone",  "R3 + hold",
+    "R4 alone",  "R4 + hold"
+  };
+  if (slot < 8) return names[slot];
+  return "???";
 }
 
 // =================================================================
@@ -55,8 +70,10 @@ static const uint8_t ARPEG_PARAM_COUNT = sizeof(ARPEG_PARAMS) / sizeof(ARPEG_PAR
 // =================================================================
 ToolPotMapping::ToolPotMapping()
   : _leds(nullptr), _ui(nullptr), _potRouter(nullptr)
-  , _context(0), _selectedSlot(-1), _poolCursorIdx(0)
-  , _ccSubMode(false), _poolCount(0)
+  , _contextNormal(true), _cursor(0), _editing(false)
+  , _poolIdx(0), _ccEditing(false), _ccNumber(0)
+  , _confirmSteal(false), _stealSourceSlot(-1), _stealTarget(TARGET_EMPTY)
+  , _poolCount(0)
 {
   memset(&_wk, 0, sizeof(_wk));
   memset(_potBaseline, 0, sizeof(_potBaseline));
@@ -76,7 +93,7 @@ void ToolPotMapping::buildPool() {
 
   const PotTarget* params;
   uint8_t paramCount;
-  if (_context == 0) {
+  if (_contextNormal) {
     params = NORMAL_PARAMS;
     paramCount = NORMAL_PARAM_COUNT;
   } else {
@@ -88,10 +105,10 @@ void ToolPotMapping::buildPool() {
   for (uint8_t i = 0; i < paramCount && _poolCount < MAX_POOL; i++) {
     _pool[_poolCount++] = params[i];
   }
-  // Then: empty, CC, PB
-  if (_poolCount < MAX_POOL) _pool[_poolCount++] = TARGET_EMPTY;
+  // Then: CC, PB, empty
   if (_poolCount < MAX_POOL) _pool[_poolCount++] = TARGET_MIDI_CC;
   if (_poolCount < MAX_POOL) _pool[_poolCount++] = TARGET_MIDI_PITCHBEND;
+  if (_poolCount < MAX_POOL) _pool[_poolCount++] = TARGET_EMPTY;
 }
 
 // =================================================================
@@ -112,11 +129,11 @@ int8_t ToolPotMapping::findSlotWithTarget(PotTarget t, uint8_t ccNum) const {
 }
 
 PotMapping* ToolPotMapping::currentMap() {
-  return (_context == 0) ? _wk.normalMap : _wk.arpegMap;
+  return _contextNormal ? _wk.normalMap : _wk.arpegMap;
 }
 
 const PotMapping* ToolPotMapping::currentMapConst() const {
-  return (_context == 0) ? _wk.normalMap : _wk.arpegMap;
+  return _contextNormal ? _wk.normalMap : _wk.arpegMap;
 }
 
 // =================================================================
@@ -145,143 +162,6 @@ int8_t ToolPotMapping::detectMovedPot(bool btnLeftHeld) {
 }
 
 // =================================================================
-// drawScreen — full VT100 redraw
-// =================================================================
-void ToolPotMapping::drawScreen() {
-  _ui->vtFrameStart();
-  Serial.printf(VT_HOME);
-
-  const char* ctxName = (_context == 0) ? "NORMAL" : "ARPEG";
-  Serial.printf(VT_BOLD "=== [6] Pot Mapping -- %s ===" VT_RESET VT_CL "\n", ctxName);
-  Serial.printf(VT_CL "\n");
-
-  drawGrid();
-  Serial.printf(VT_CL "\n");
-  drawPoolLine();
-  Serial.printf(VT_CL "\n");
-  drawStatus();
-
-  _ui->vtFrameEnd();
-}
-
-// =================================================================
-// drawGrid — 4 rows (R1-R4), 2 columns (alone, +hold)
-// =================================================================
-void ToolPotMapping::drawGrid() {
-  const PotMapping* map = currentMapConst();
-
-  Serial.printf("  " VT_DIM "Pot" VT_RESET "  |  " VT_DIM "Alone" VT_RESET
-                "           |  " VT_DIM "+ Hold Left" VT_RESET VT_CL "\n");
-  Serial.printf("  -----+------------------+------------------" VT_CL "\n");
-
-  for (uint8_t pot = 0; pot < 4; pot++) {
-    uint8_t slotAlone = pot * 2;
-    uint8_t slotHold  = pot * 2 + 1;
-
-    // Format each slot with selection highlight
-    for (uint8_t col = 0; col < 2; col++) {
-      uint8_t slot = (col == 0) ? slotAlone : slotHold;
-      const PotMapping& pm = map[slot];
-      bool isSelected = (_selectedSlot == (int8_t)slot);
-
-      if (col == 0) {
-        Serial.printf("  R%d   |  ", pot + 1);
-      } else {
-        Serial.printf("  ");
-      }
-
-      // Build display string for this slot
-      char buf[20];
-      if (pm.target == TARGET_MIDI_CC) {
-        snprintf(buf, sizeof(buf), "CC %d", pm.ccNumber);
-      } else {
-        snprintf(buf, sizeof(buf), "%s", targetName(pm.target));
-      }
-
-      if (isSelected) {
-        Serial.printf(VT_REVERSE VT_BOLD " > %-12s < " VT_RESET, buf);
-      } else if (pm.target == TARGET_EMPTY) {
-        Serial.printf(VT_DIM "  %-14s  " VT_RESET, buf);
-      } else {
-        Serial.printf("  %-14s  ", buf);
-      }
-
-      if (col == 0) {
-        Serial.printf("|");
-      }
-    }
-    Serial.printf(VT_CL "\n");
-  }
-}
-
-// =================================================================
-// drawPoolLine — all assignable params, color-coded
-// =================================================================
-void ToolPotMapping::drawPoolLine() {
-  const PotMapping* map = currentMapConst();
-
-  Serial.printf("  " VT_DIM "-- Available " VT_RESET);
-  // Separator
-  for (uint8_t i = 0; i < 44; i++) Serial.print('-');
-  Serial.printf(VT_CL "\n  ");
-
-  for (uint8_t i = 0; i < _poolCount; i++) {
-    PotTarget t = _pool[i];
-    bool isAssigned = false;
-
-    if (t == TARGET_EMPTY) {
-      // "empty" is always available (can be on multiple slots)
-      isAssigned = false;
-    } else if (t == TARGET_MIDI_CC) {
-      // CC is always available (multiple CCs allowed with different numbers)
-      isAssigned = false;
-    } else {
-      isAssigned = (findSlotWithTarget(t) >= 0);
-    }
-
-    bool isCursor = (_selectedSlot >= 0 && _poolCursorIdx == (int8_t)i);
-
-    if (isCursor) {
-      // Cursor position — highlighted
-      Serial.printf(VT_REVERSE VT_BOLD " %s " VT_RESET " ", targetName(t));
-    } else if (isAssigned) {
-      // Already on a slot — dim
-      Serial.printf(VT_DIM "%s" VT_RESET " ", targetName(t));
-    } else {
-      // Available — bright green
-      Serial.printf(VT_GREEN VT_BOLD "%s" VT_RESET " ", targetName(t));
-    }
-  }
-  Serial.printf(VT_CL "\n");
-}
-
-// =================================================================
-// drawStatus — bottom status line with commands
-// =================================================================
-void ToolPotMapping::drawStatus() {
-  if (_ccSubMode) {
-    // CC number input mode
-    PotMapping* map = currentMap();
-    uint8_t slot = (uint8_t)_selectedSlot;
-    Serial.printf("  " VT_CYAN "CC#: [%d]" VT_RESET
-                  "   < > adjust   ENTER confirm   q cancel" VT_CL "\n",
-                  map[slot].ccNumber);
-  } else if (_selectedSlot >= 0) {
-    // Slot selected, cycling pool
-    Serial.printf("  Turn pot to select  |  " VT_BOLD "< >" VT_RESET " cycle  |  "
-                  VT_BOLD "ENTER" VT_RESET " context  |  "
-                  VT_BOLD "s" VT_RESET "ave  " VT_BOLD "d" VT_RESET "efault  "
-                  VT_BOLD "q" VT_RESET "uit" VT_CL "\n");
-  } else {
-    // No slot selected
-    Serial.printf("  Turn a pot to select  |  "
-                  VT_BOLD "ENTER" VT_RESET " context  |  "
-                  VT_BOLD "s" VT_RESET "ave  " VT_BOLD "d" VT_RESET "efault  "
-                  VT_BOLD "q" VT_RESET "uit" VT_CL "\n");
-  }
-}
-
-// =================================================================
 // saveMapping — direct NVS write (blocking, setup mode)
 // =================================================================
 bool ToolPotMapping::saveMapping() {
@@ -303,6 +183,245 @@ bool ToolPotMapping::saveMapping() {
 }
 
 // =================================================================
+// assignCurrentTarget — handle the assignment of pool[_poolIdx] to
+// current slot, including steal confirmation, CC sub-editor, PB max-one
+// =================================================================
+void ToolPotMapping::assignCurrentTarget() {
+  PotMapping* map = currentMap();
+  PotTarget newTarget = _pool[_poolIdx];
+
+  // --- Empty: direct assign, save, exit edit ---
+  if (newTarget == TARGET_EMPTY) {
+    map[_cursor].target = TARGET_EMPTY;
+    map[_cursor].ccNumber = 0;
+    if (saveMapping()) {
+      _ui->showSaved();
+      _editing = false;
+    } else {
+      Serial.printf("\r\n" VT_RED "  NVS write failed!" VT_RESET);
+      delay(1500);
+    }
+    return;
+  }
+
+  // --- CC: enter CC# sub-editor ---
+  if (newTarget == TARGET_MIDI_CC) {
+    map[_cursor].target = TARGET_MIDI_CC;
+    _ccNumber = map[_cursor].ccNumber;
+    if (_ccNumber == 0) _ccNumber = 1;  // Default CC#
+    _ccEditing = true;
+    return;
+  }
+
+  // --- PB: max one per context, auto-steal ---
+  if (newTarget == TARGET_MIDI_PITCHBEND) {
+    int8_t existing = findSlotWithTarget(TARGET_MIDI_PITCHBEND);
+    if (existing >= 0 && existing != (int8_t)_cursor) {
+      map[existing].target = TARGET_EMPTY;
+      map[existing].ccNumber = 0;
+    }
+    map[_cursor].target = TARGET_MIDI_PITCHBEND;
+    map[_cursor].ccNumber = 0;
+    if (saveMapping()) {
+      _ui->showSaved();
+      _editing = false;
+    } else {
+      Serial.printf("\r\n" VT_RED "  NVS write failed!" VT_RESET);
+      delay(1500);
+    }
+    return;
+  }
+
+  // --- Regular param: check steal ---
+  int8_t existing = findSlotWithTarget(newTarget);
+  if (existing >= 0 && existing != (int8_t)_cursor) {
+    // Already assigned elsewhere — enter steal confirmation
+    _confirmSteal = true;
+    _stealSourceSlot = existing;
+    _stealTarget = newTarget;
+    return;
+  }
+
+  // Not assigned elsewhere (or already on this slot) — direct assign + save
+  map[_cursor].target = newTarget;
+  map[_cursor].ccNumber = 0;
+  if (saveMapping()) {
+    _ui->showSaved();
+    _editing = false;
+  } else {
+    Serial.printf("\r\n" VT_RED "  NVS write failed!" VT_RESET);
+    delay(1500);
+  }
+}
+
+// =================================================================
+// drawScreen — full VT100 redraw
+// =================================================================
+void ToolPotMapping::drawScreen() {
+  _ui->vtFrameStart();
+
+  const char* ctxLabel = _contextNormal ? "NORMAL" : "ARPEG";
+  char rightText[32];
+  snprintf(rightText, sizeof(rightText), "[%s]  t=toggle", ctxLabel);
+  _ui->drawHeader("POT MAPPING", rightText);
+  Serial.printf(VT_CL "\n");
+
+  // Draw 8 slot lines
+  for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
+    drawSlotLine(i);
+  }
+
+  Serial.printf(VT_CL "\n");
+  drawPoolLine();
+  Serial.printf(VT_CL "\n");
+  drawDescription();
+  Serial.printf(VT_CL "\n");
+  drawHelpLine();
+
+  _ui->vtFrameEnd();
+}
+
+// =================================================================
+// drawSlotLine — one line for a slot
+// =================================================================
+void ToolPotMapping::drawSlotLine(uint8_t slot) {
+  const PotMapping* map = currentMapConst();
+  const PotMapping& pm = map[slot];
+  bool selected = (_cursor == slot);
+  bool isEditing = selected && _editing;
+
+  // Build value string
+  char val[20];
+  if (pm.target == TARGET_MIDI_CC) {
+    snprintf(val, sizeof(val), "CC %d", pm.ccNumber);
+  } else {
+    snprintf(val, sizeof(val), "%s", targetName(pm.target));
+  }
+
+  if (selected) {
+    if (isEditing) {
+      Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " %-13s" VT_CYAN "[%s]" VT_RESET VT_CL "\n",
+                     slotName(slot), val);
+    } else {
+      Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " %-13s" VT_CYAN "%s" VT_RESET VT_CL "\n",
+                     slotName(slot), val);
+    }
+  } else {
+    if (pm.target == TARGET_EMPTY) {
+      Serial.printf("    %-13s" VT_DIM "%s" VT_RESET VT_CL "\n", slotName(slot), val);
+    } else {
+      Serial.printf("    %-13s%s" VT_CL "\n", slotName(slot), val);
+    }
+  }
+}
+
+// =================================================================
+// drawPoolLine — all assignable params, color-coded
+// =================================================================
+void ToolPotMapping::drawPoolLine() {
+  bool inEdit = _editing || _ccEditing;
+
+  Serial.printf("  " VT_DIM "Pool:" VT_RESET " ");
+
+  const PotMapping* map = currentMapConst();
+
+  for (uint8_t i = 0; i < _poolCount; i++) {
+    PotTarget t = _pool[i];
+    bool isAssigned = false;
+
+    if (t == TARGET_EMPTY) {
+      isAssigned = false;
+    } else if (t == TARGET_MIDI_CC) {
+      isAssigned = false;  // Multiple CCs allowed
+    } else {
+      int8_t owner = findSlotWithTarget(t);
+      isAssigned = (owner >= 0 && owner != (int8_t)_cursor);
+    }
+
+    bool isCursor = inEdit && (_poolIdx == i);
+
+    if (isCursor) {
+      Serial.printf(VT_REVERSE VT_BOLD " %s " VT_RESET " ", targetName(t));
+    } else if (isAssigned) {
+      Serial.printf(VT_DIM "%s" VT_RESET " ", targetName(t));
+    } else if (inEdit) {
+      Serial.printf(VT_GREEN VT_BOLD "%s" VT_RESET " ", targetName(t));
+    } else {
+      // Navigation mode: show pool dimmed as reference
+      Serial.printf(VT_DIM "%s" VT_RESET " ", targetName(t));
+    }
+  }
+  Serial.printf(VT_CL "\n");
+}
+
+// =================================================================
+// drawDescription — context-sensitive help for current pool selection
+// =================================================================
+void ToolPotMapping::drawDescription() {
+  if (!_editing && !_ccEditing && !_confirmSteal) {
+    Serial.printf(VT_CL "\n");
+    return;
+  }
+
+  if (_confirmSteal) {
+    Serial.printf(VT_YELLOW "  Already assigned to %s. Replace? (y/n)" VT_RESET VT_CL "\n",
+                  slotName((uint8_t)_stealSourceSlot));
+    return;
+  }
+
+  if (_ccEditing) {
+    Serial.printf("  " VT_CYAN "CC#: [%d]" VT_RESET VT_CL "\n", _ccNumber);
+    return;
+  }
+
+  // Show brief description of the currently highlighted pool target
+  PotTarget t = _pool[_poolIdx];
+  const char* desc = "";
+  switch (t) {
+    case TARGET_TEMPO_BPM:          desc = "Internal clock tempo (10-260 BPM)."; break;
+    case TARGET_RESPONSE_SHAPE:     desc = "Pressure response curve shape."; break;
+    case TARGET_SLEW_RATE:          desc = "Slew rate for pressure response smoothing."; break;
+    case TARGET_AT_DEADZONE:        desc = "Aftertouch deadzone threshold."; break;
+    case TARGET_PITCH_BEND:         desc = "Pitch bend offset (per-bank, NORMAL only)."; break;
+    case TARGET_GATE_LENGTH:        desc = "Arp gate length (note duration vs step)."; break;
+    case TARGET_SHUFFLE_DEPTH:      desc = "Shuffle intensity (0.0-1.0)."; break;
+    case TARGET_SHUFFLE_TEMPLATE:   desc = "Groove template selection (5 templates)."; break;
+    case TARGET_DIVISION:           desc = "Arp clock division (4/1 to 1/64)."; break;
+    case TARGET_PATTERN:            desc = "Arp pattern (Up/Down/UpDown/Random/Order)."; break;
+    case TARGET_BASE_VELOCITY:      desc = "Base velocity for note output (per-bank)."; break;
+    case TARGET_VELOCITY_VARIATION: desc = "Random velocity variation range (per-bank)."; break;
+    case TARGET_MIDI_CC:            desc = "Send MIDI CC on foreground channel."; break;
+    case TARGET_MIDI_PITCHBEND:     desc = "Send MIDI Pitchbend on foreground channel. Max one per context."; break;
+    case TARGET_EMPTY:              desc = "Remove assignment from this slot."; break;
+    default: break;
+  }
+  Serial.printf("  " VT_DIM "%s" VT_RESET VT_CL "\n", desc);
+}
+
+// =================================================================
+// drawHelpLine — bottom help text
+// =================================================================
+void ToolPotMapping::drawHelpLine() {
+  if (_confirmSteal) {
+    // No extra help needed — description line has the prompt
+    Serial.printf(VT_CL "\n");
+    return;
+  }
+
+  if (_ccEditing) {
+    Serial.printf(VT_DIM "  [Left/Right] adjust CC#  [Enter] confirm  [q] cancel" VT_RESET VT_CL "\n");
+    return;
+  }
+
+  if (_editing) {
+    Serial.printf(VT_DIM "  [Left/Right] cycle pool  [Enter] confirm" VT_RESET VT_CL "\n");
+  } else {
+    Serial.printf(VT_DIM "  [Up/Down] navigate  [Enter] edit  [t] %s  [d] defaults  [q] quit" VT_RESET VT_CL "\n",
+                  _contextNormal ? "NORMAL/ARPEG" : "ARPEG/NORMAL");
+  }
+}
+
+// =================================================================
 // run — main tool loop (blocking)
 // =================================================================
 void ToolPotMapping::run() {
@@ -315,196 +434,236 @@ void ToolPotMapping::run() {
     memcpy(&_wk, &PotRouter::DEFAULT_MAPPING, sizeof(PotMappingStore));
   }
 
-  _context = 0;
-  _selectedSlot = -1;
-  _poolCursorIdx = 0;
-  _ccSubMode = false;
-  _unsaved = false;
-  memset(&_ccPrevMapping, 0, sizeof(_ccPrevMapping));
+  _contextNormal = true;
+  _cursor = 0;
+  _editing = false;
+  _poolIdx = 0;
+  _ccEditing = false;
+  _ccNumber = 0;
+  _confirmSteal = false;
+  _stealSourceSlot = -1;
+  _stealTarget = TARGET_EMPTY;
 
   buildPool();
   samplePotBaselines();
 
-  _ui->vtClear();
+  InputParser input;
   bool screenDirty = true;
-  unsigned long lastRefresh = 0;
+  bool confirmDefaults = false;
+
+  _ui->vtClear();
 
   while (true) {
     _leds->update();
 
-    // Detect pot movement (physical pot selection)
-    bool btnLeftHeld = (digitalRead(BTN_LEFT_PIN) == LOW);
-    int8_t movedSlot = detectMovedPot(btnLeftHeld);
-
-    if (movedSlot >= 0 && !_ccSubMode) {
-      _selectedSlot = movedSlot;
-      // Set pool cursor to current assignment of this slot
-      PotMapping* map = currentMap();
-      PotTarget current = map[_selectedSlot].target;
-      _poolCursorIdx = 0;
-      for (uint8_t i = 0; i < _poolCount; i++) {
-        if (_pool[i] == current) {
-          _poolCursorIdx = (int8_t)i;
-          break;
-        }
+    // --- Physical pot detection (only when not editing) ---
+    if (!_editing && !_ccEditing && !_confirmSteal && !confirmDefaults) {
+      bool btnLeftHeld = (digitalRead(BTN_LEFT_PIN) == LOW);
+      int8_t movedSlot = detectMovedPot(btnLeftHeld);
+      if (movedSlot >= 0) {
+        _cursor = (uint8_t)movedSlot;
+        screenDirty = true;
       }
-      screenDirty = true;
     }
 
-    char input = _ui->readInput();
-    if (input == 0) {
-      // No input — refresh if needed
-      if (screenDirty || millis() - lastRefresh >= 500) {
-        drawScreen();
-        screenDirty = false;
-        lastRefresh = millis();
-      }
-      delay(5);
-      continue;
-    }
+    NavEvent ev = input.update();
 
-    // --- CC sub-mode: < > adjust number, ENTER confirm, q cancel ---
-    if (_ccSubMode) {
-      PotMapping* map = currentMap();
-      uint8_t slot = (uint8_t)_selectedSlot;
-      switch (input) {
-        case ',': case '<': case '[':
-          if (map[slot].ccNumber > 0) map[slot].ccNumber--;
-          break;
-        case '.': case '>': case ']':
-          if (map[slot].ccNumber < 127) map[slot].ccNumber++;
-          break;
-        case '\r': case '\n':
-          // Confirm CC assignment — check for duplicate CC#
-          {
-            int8_t existing = findSlotWithTarget(TARGET_MIDI_CC, map[slot].ccNumber);
-            if (existing >= 0 && existing != _selectedSlot) {
-              map[existing].target = TARGET_EMPTY;
-              map[existing].ccNumber = 0;
-            }
-          }
-          _ccSubMode = false;
-          _unsaved = true;
-          break;
-        case 'q':
-          // B6 fix: restore previous assignment instead of setting to empty
-          map[slot] = _ccPrevMapping;
-          _ccSubMode = false;
-          break;
-      }
-      screenDirty = true;
-      continue;
-    }
-
-    // --- Normal mode ---
-    switch (input) {
-      case ',': case '<': case '[':
-      case '.': case '>': case ']':
-      {
-        // Cycle pool cursor left or right
-        if (_selectedSlot >= 0 && _poolCount > 0) {
-          if (input == ',' || input == '<' || input == '[') {
-            _poolCursorIdx--;
-            if (_poolCursorIdx < 0) _poolCursorIdx = _poolCount - 1;
-          } else {
-            _poolCursorIdx++;
-            if (_poolCursorIdx >= (int8_t)_poolCount) _poolCursorIdx = 0;
-          }
-
-          PotMapping* map = currentMap();
-          PotTarget newTarget = _pool[_poolCursorIdx];
-
-          // Steal: if already assigned elsewhere, orphan the source
-          // R3 fix: unified steal handles all targets including PB (no separate PB block)
-          if (newTarget != TARGET_EMPTY && newTarget != TARGET_MIDI_CC) {
-            int8_t existing = findSlotWithTarget(newTarget);
-            if (existing >= 0 && existing != _selectedSlot) {
-              map[existing].target = TARGET_EMPTY;
-              map[existing].ccNumber = 0;
-            }
-          }
-
-          // B6 fix: save current mapping before overwriting (for CC cancel restore)
-          _ccPrevMapping = map[_selectedSlot];
-
-          map[_selectedSlot].target = newTarget;
-          if (newTarget == TARGET_MIDI_CC) {
-            map[_selectedSlot].ccNumber = 1;  // Default CC#
-            _ccSubMode = true;
-          } else {
-            _unsaved = true;
-          }
-        }
-        screenDirty = true;
-        break;
-      }
-
-      case '\r': case '\n':
-        // Toggle context (NORMAL <-> ARPEG)
-        _context = 1 - _context;
-        _selectedSlot = -1;
-        _poolCursorIdx = 0;
-        _ccSubMode = false;
-        buildPool();
-        samplePotBaselines();
-        _ui->vtClear();
-        screenDirty = true;
-        break;
-
-      case 's':
-        // Save
-        if (saveMapping()) {
-          _ui->showSaved();
-          _unsaved = false;
-          Serial.printf(VT_GREEN "  Saved! Applied to PotRouter." VT_RESET VT_CL "\n");
-        } else {
-          Serial.printf(VT_RED "  Save failed!" VT_RESET VT_CL "\n");
-        }
-        delay(800);
-        screenDirty = true;
-        break;
-
-      case 'd':
-        // B4 fix: reset only current context to defaults
-        if (_context == 0) {
+    // --- Defaults confirmation sub-mode ---
+    if (confirmDefaults) {
+      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+        if (_contextNormal) {
           memcpy(_wk.normalMap, PotRouter::DEFAULT_MAPPING.normalMap,
                  sizeof(PotMapping) * POT_MAPPING_SLOTS);
         } else {
           memcpy(_wk.arpegMap, PotRouter::DEFAULT_MAPPING.arpegMap,
                  sizeof(PotMapping) * POT_MAPPING_SLOTS);
         }
-        _selectedSlot = -1;
-        _poolCursorIdx = 0;
-        _unsaved = true;
+        if (saveMapping()) {
+          _ui->showSaved();
+        }
+        confirmDefaults = false;
         buildPool();
         screenDirty = true;
-        break;
-
-      case 'q':
-        // B5 fix: confirm quit if unsaved changes
-        if (_unsaved) {
-          Serial.printf(VT_YELLOW "  Unsaved changes! Press q again to discard, s to save."
-                        VT_RESET VT_CL "\n");
-          // Wait for confirmation
-          while (true) {
-            _leds->update();
-            char confirm = _ui->readInput();
-            if (confirm == 'q') return;   // Discard
-            if (confirm == 's') {
-              if (saveMapping()) {
-                _ui->showSaved();
-                delay(400);
-              }
-              return;
-            }
-            if (confirm != 0) break;  // Any other key = cancel quit
-            delay(5);
-          }
-          screenDirty = true;
-        } else {
-          return;
-        }
-        break;
+      } else if (ev.type != NAV_NONE) {
+        confirmDefaults = false;
+        screenDirty = true;
+      }
+      delay(5);
+      continue;
     }
+
+    // --- Steal confirmation sub-mode ---
+    if (_confirmSteal) {
+      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+        // Steal: orphan source, assign to current slot, save
+        PotMapping* map = currentMap();
+        map[_stealSourceSlot].target = TARGET_EMPTY;
+        map[_stealSourceSlot].ccNumber = 0;
+        map[_cursor].target = _stealTarget;
+        map[_cursor].ccNumber = 0;
+        if (saveMapping()) {
+          _ui->showSaved();
+          _confirmSteal = false;
+          _editing = false;
+        } else {
+          Serial.printf("\r\n" VT_RED "  NVS write failed!" VT_RESET);
+          delay(1500);
+          _confirmSteal = false;  // exit steal prompt, stay in edit
+        }
+        screenDirty = true;
+      } else if (ev.type != NAV_NONE) {
+        // Cancel steal — stay in edit mode
+        _confirmSteal = false;
+        screenDirty = true;
+      }
+      delay(5);
+      continue;
+    }
+
+    // --- CC# sub-editor ---
+    if (_ccEditing) {
+      if (ev.type == NAV_LEFT) {
+        int step = ev.accelerated ? 10 : 1;
+        int val = (int)_ccNumber - step;
+        if (val < 0) val = 0;
+        _ccNumber = (uint8_t)val;
+        screenDirty = true;
+      } else if (ev.type == NAV_RIGHT) {
+        int step = ev.accelerated ? 10 : 1;
+        int val = (int)_ccNumber + step;
+        if (val > 127) val = 127;
+        _ccNumber = (uint8_t)val;
+        screenDirty = true;
+      } else if (ev.type == NAV_ENTER) {
+        // Confirm CC assignment
+        PotMapping* map = currentMap();
+        map[_cursor].target = TARGET_MIDI_CC;
+        map[_cursor].ccNumber = _ccNumber;
+        // Check for duplicate CC# — steal
+        int8_t dup = findSlotWithTarget(TARGET_MIDI_CC, _ccNumber);
+        if (dup >= 0 && dup != (int8_t)_cursor) {
+          map[dup].target = TARGET_EMPTY;
+          map[dup].ccNumber = 0;
+        }
+        if (saveMapping()) {
+          _ui->showSaved();
+          _ccEditing = false;
+          _editing = false;
+        } else {
+          Serial.printf("\r\n" VT_RED "  NVS write failed!" VT_RESET);
+          delay(1500);
+          // Stay in CC editor — user can retry Enter
+        }
+        screenDirty = true;
+      } else if (ev.type == NAV_QUIT) {
+        // Cancel CC editing — revert slot to previous state
+        // (we haven't saved yet, so just exit CC sub-editor)
+        _ccEditing = false;
+        // Restore slot to what it was before entering CC mode
+        // The slot was set to TARGET_MIDI_CC when entering, but not saved.
+        // Reload from last saved state by re-reading working copy.
+        // Actually, _wk still has the unsaved change. We need to revert.
+        // Simplest: reload from the live router mapping.
+        if (_potRouter) {
+          const PotMappingStore& live = _potRouter->getMapping();
+          const PotMapping* liveMap = _contextNormal ? live.normalMap : live.arpegMap;
+          currentMap()[_cursor] = liveMap[_cursor];
+        }
+        screenDirty = true;
+      }
+      delay(5);
+      continue;
+    }
+
+    // --- Main navigation ---
+    if (ev.type == NAV_QUIT && !_editing) {
+      _ui->vtClear();
+      return;
+    }
+
+    if (ev.type == NAV_TOGGLE && !_editing) {
+      // Toggle context NORMAL <-> ARPEG
+      _contextNormal = !_contextNormal;
+      _cursor = 0;
+      _editing = false;
+      _poolIdx = 0;
+      buildPool();
+      samplePotBaselines();
+      _ui->vtClear();
+      screenDirty = true;
+    }
+
+    if (ev.type == NAV_DEFAULTS && !_editing) {
+      confirmDefaults = true;
+      screenDirty = true;
+    }
+
+    if (!_editing) {
+      // Navigation mode
+      if (ev.type == NAV_UP) {
+        if (_cursor > 0) _cursor--;
+        else _cursor = POT_MAPPING_SLOTS - 1;
+        screenDirty = true;
+      } else if (ev.type == NAV_DOWN) {
+        if (_cursor < POT_MAPPING_SLOTS - 1) _cursor++;
+        else _cursor = 0;
+        screenDirty = true;
+      } else if (ev.type == NAV_ENTER) {
+        _editing = true;
+        // Set pool cursor to current assignment of this slot
+        PotTarget current = currentMapConst()[_cursor].target;
+        _poolIdx = 0;
+        for (uint8_t i = 0; i < _poolCount; i++) {
+          if (_pool[i] == current) {
+            _poolIdx = i;
+            break;
+          }
+        }
+        screenDirty = true;
+      }
+    } else {
+      // Editing mode (cycling pool)
+      if (ev.type == NAV_LEFT) {
+        if (_poolCount > 0) {
+          if (_poolIdx == 0) _poolIdx = _poolCount - 1;
+          else _poolIdx--;
+        }
+        screenDirty = true;
+      } else if (ev.type == NAV_RIGHT) {
+        if (_poolCount > 0) {
+          _poolIdx++;
+          if (_poolIdx >= _poolCount) _poolIdx = 0;
+        }
+        screenDirty = true;
+      } else if (ev.type == NAV_ENTER) {
+        // Confirm assignment
+        assignCurrentTarget();
+        screenDirty = true;
+      } else if (ev.type == NAV_QUIT) {
+        // Cancel editing, revert slot to saved state
+        if (_potRouter) {
+          const PotMappingStore& live = _potRouter->getMapping();
+          const PotMapping* liveMap = _contextNormal ? live.normalMap : live.arpegMap;
+          currentMap()[_cursor] = liveMap[_cursor];
+        }
+        _editing = false;
+        screenDirty = true;
+      }
+    }
+
+    // --- Render ---
+    if (screenDirty) {
+      screenDirty = false;
+
+      drawScreen();
+
+      // Extra line for defaults confirmation
+      if (confirmDefaults) {
+        Serial.printf(VT_YELLOW "  Reset %s context to defaults? (y/n)" VT_RESET VT_CL "\n",
+                      _contextNormal ? "NORMAL" : "ARPEG");
+      }
+    }
+
+    delay(5);
   }
 }
