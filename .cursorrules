@@ -135,7 +135,7 @@ LedController reads `BankSlot[]` to show all 8 banks simultaneously. All brightn
 
 | Event | Pattern | Duration |
 |---|---|---|
-| Bank switch | Triple blink ALL 8 at 50% | 300ms |
+| Bank switch | Triple blink destination LED at 50% | 300ms |
 | Scale change (root/mode/chromatic) | Double blink current LED | 200ms |
 | Hold toggle | Single long blink current LED | 250ms (150ms on + 100ms off) |
 | Octave change | Single blink of N LEDs (1-4) | 100ms |
@@ -147,8 +147,8 @@ Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Priority: below
 ```
 1. Boot mode          (progressive fill / failure blink)
 2. Chase pattern      (calibration entry)
-3. Error              (all 8 blink 500ms — sensing task stall)
-4. Battery gauge      (8-LED bar with heartbeat pulse, 3s)
+3. Error              (LEDs 4-5 blink red 500ms — sensing task stall)
+4. Battery gauge      (8-LED solid gradient bar, 3s)
 5. Pot bargraph       (solid bar, configurable duration via Tool 5)
 6. Confirmation blinks (bank/scale/hold/octave, auto-expire)
 7. Calibration mode   (all off + validation flash)
