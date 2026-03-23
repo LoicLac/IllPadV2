@@ -1,21 +1,150 @@
 #include "ToolSettings.h"
 #include "../core/CapacitiveKeyboard.h"
+#include "../core/LedController.h"
 #include "../managers/NvsManager.h"
 #include "SetupUI.h"
+#include "InputParser.h"
 #include <Arduino.h>
 #include <Preferences.h>
 
-ToolSettings::ToolSettings()
-  : _keyboard(nullptr), _nvs(nullptr), _ui(nullptr) {}
+static const uint8_t NUM_PARAMS = 8;
 
-void ToolSettings::begin(CapacitiveKeyboard* keyboard, NvsManager* nvs, SetupUI* ui) {
+static const char* s_profileNames[]   = {"Adaptive", "Expressive", "Percussive"};
+static const char* s_bleNames[]       = {"Low Latency (7.5ms)", "Normal (15ms)", "Battery Saver (30ms)", "Off (USB only)"};
+static const char* s_clockModeNames[] = {"Slave", "Master"};
+static const char* s_yesNoNames[]     = {"No", "Yes"};
+
+ToolSettings::ToolSettings()
+  : _keyboard(nullptr), _leds(nullptr), _nvs(nullptr), _ui(nullptr) {}
+
+void ToolSettings::begin(CapacitiveKeyboard* keyboard, LedController* leds, NvsManager* nvs, SetupUI* ui) {
   _keyboard = keyboard;
+  _leds = leds;
   _nvs = nvs;
   _ui = ui;
 }
 
 // =================================================================
-// run() — Edit settings: Profile, AT Rate, BLE, Clock, Transport, Double-Tap, Bargraph
+// adjustParam — apply directional step with clamping/wrapping
+// =================================================================
+void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool accelerated) {
+  switch (param) {
+    case 0: // Baseline Profile: cycle 0-2
+      wk.baselineProfile = (wk.baselineProfile + NUM_BASELINE_PROFILES + dir) % NUM_BASELINE_PROFILES;
+      break;
+    case 1: { // Aftertouch Rate: step 5ms, range 10-100, accel x5
+      int step = accelerated ? 25 : 5;
+      int val = (int)wk.aftertouchRate + dir * step;
+      if (val < AT_RATE_MIN) val = AT_RATE_MIN;
+      if (val > AT_RATE_MAX) val = AT_RATE_MAX;
+      wk.aftertouchRate = (uint8_t)val;
+      break;
+    }
+    case 2: // BLE Interval: cycle 0-3
+      wk.bleInterval = (wk.bleInterval + NUM_BLE_INTERVALS + dir) % NUM_BLE_INTERVALS;
+      break;
+    case 3: // Clock Mode: cycle 0-1
+      wk.clockMode = (wk.clockMode + NUM_CLOCK_MODES + dir) % NUM_CLOCK_MODES;
+      break;
+    case 4: // Follow Transport: cycle 0-1
+      wk.followTransport = wk.followTransport ? 0 : 1;
+      break;
+    case 5: { // Double-Tap: step 10ms, range 100-250, accel x5
+      int step = accelerated ? 50 : 10;
+      int val = (int)wk.doubleTapMs + dir * step;
+      if (val < DOUBLE_TAP_MS_MIN) val = DOUBLE_TAP_MS_MIN;
+      if (val > DOUBLE_TAP_MS_MAX) val = DOUBLE_TAP_MS_MAX;
+      wk.doubleTapMs = (uint16_t)val;
+      break;
+    }
+    case 6: { // Bargraph Duration: step 500ms, range 1000-10000, accel x10
+      int step = accelerated ? 5000 : 500;
+      int val = (int)wk.potBarDurationMs + dir * step;
+      if (val < (int)LED_BARGRAPH_DURATION_MIN) val = LED_BARGRAPH_DURATION_MIN;
+      if (val > (int)LED_BARGRAPH_DURATION_MAX) val = LED_BARGRAPH_DURATION_MAX;
+      wk.potBarDurationMs = (uint16_t)val;
+      break;
+    }
+    case 7: // Panic on Reconnect: cycle 0-1
+      wk.panicOnReconnect = wk.panicOnReconnect ? 0 : 1;
+      break;
+  }
+}
+
+// =================================================================
+// saveSettings — write to NVS, apply live where possible
+// =================================================================
+bool ToolSettings::saveSettings(const SettingsStore& wk) {
+  SettingsStore toSave = wk;
+  toSave.magic = EEPROM_MAGIC;
+  toSave.version = SETTINGS_VERSION;
+  Preferences prefs;
+  if (!prefs.begin(SETTINGS_NVS_NAMESPACE, false)) return false;
+  prefs.putBytes(SETTINGS_NVS_KEY, &toSave, sizeof(SettingsStore));
+  prefs.end();
+
+  // Apply baseline profile immediately if keyboard available
+  if (_keyboard) {
+    _keyboard->setBaselineProfile(toSave.baselineProfile);
+  }
+  return true;
+}
+
+// =================================================================
+// drawDescription — show help text for the selected parameter
+// =================================================================
+void ToolSettings::drawDescription(uint8_t param) {
+  Serial.printf(VT_DIM "  ----------------------------------------" VT_RESET VT_CL "\n");
+  switch (param) {
+    case 0:
+      Serial.printf(VT_DIM "    Controls MPR121 baseline adaptation." VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Adaptive = balanced (default)." VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Expressive = slower recovery, more dynamic." VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Percussive = fast recovery, tight response." VT_RESET VT_CL "\n");
+      break;
+    case 1:
+      Serial.printf(VT_DIM "    Min interval between aftertouch messages" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    per pad (10-100ms). Lower = smoother but" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    more MIDI traffic. Default: 25ms (~40Hz)." VT_RESET VT_CL "\n");
+      break;
+    case 2:
+      Serial.printf(VT_DIM "    Low Latency: 7.5ms (best response, more battery)" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Normal: 15ms (Apple compatible, default)" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Battery Saver: 30ms (saves battery, higher latency)" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Off: BLE disabled, USB only (saves RAM, faster boot)" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Reboot required after change." VT_RESET VT_CL "\n");
+      break;
+    case 3:
+      Serial.printf(VT_DIM "    Slave: sync to external clock (DAW)." VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Master: generate clock from pot tempo." VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Reboot required after change." VT_RESET VT_CL "\n");
+      break;
+    case 4:
+      Serial.printf(VT_DIM "    Slave only. Yes: DAW Start/Stop/Continue" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    controls arps (Start=sync, Stop=silence," VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Continue=resume). No: arps ignore DAW" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    transport. Clock ticks always received." VT_RESET VT_CL "\n");
+      break;
+    case 5:
+      Serial.printf(VT_DIM "    Time window to detect double-tap on ARPEG" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    pads (HOLD mode). Lower = faster but harder" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    to trigger. Range: 100-250ms." VT_RESET VT_CL "\n");
+      break;
+    case 6:
+      Serial.printf(VT_DIM "    How long the pot bargraph stays visible" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    after last pot movement. Range: 1-10s." VT_RESET VT_CL "\n");
+      break;
+    case 7:
+      Serial.printf(VT_DIM "    Yes: send CC123 (All Notes Off) on all" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    channels when BLE reconnects. Prevents" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    stuck notes after connection drop." VT_RESET VT_CL "\n");
+      break;
+  }
+  Serial.printf(VT_DIM "  ----------------------------------------" VT_RESET VT_CL "\n");
+}
+
+// =================================================================
+// run() — Unified arrow navigation with immediate save per param
 // =================================================================
 
 void ToolSettings::run() {
@@ -42,121 +171,105 @@ void ToolSettings::run() {
     }
   }
 
-  // Save original for change detection on save
+  // Save original for reboot-required change detection
   SettingsStore original = wk;
 
-  static const char* profileNames[]   = {"Adaptive", "Expressive", "Percussive"};
-  static const char* bleNames[]       = {"Low Latency (7.5ms)", "Normal (15ms)", "Battery Saver (30ms)", "Off (USB only)"};
-  static const char* clockModeNames[] = {"Slave", "Master"};
-  static const char* yesNoNames[]     = {"No", "Yes"};
-
-  uint8_t selectedParam = 0;  // 0=none, 1-8
+  InputParser input;
+  uint8_t cursor = 0;
+  bool editing = false;
   bool screenDirty = true;
+  bool confirmDefaults = false;
 
   _ui->vtClear();
 
   while (true) {
-    char input = _ui->readInput();
+    if (_leds) _leds->update();
 
-    // Select parameter
-    if (input >= '1' && input <= '8') {
-      selectedParam = input - '0';
-      screenDirty = true;
+    NavEvent ev = input.update();
+
+    // --- Defaults confirmation sub-mode ---
+    if (confirmDefaults) {
+      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+        wk = {EEPROM_MAGIC, SETTINGS_VERSION,
+              DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
+              DEFAULT_CLOCK_MODE, DEFAULT_FOLLOW_TRANSPORT,
+              DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
+              DEFAULT_PANIC_ON_RECONNECT};
+        if (saveSettings(wk)) {
+          original = wk;
+          _ui->showSaved();
+        }
+        confirmDefaults = false;
+        screenDirty = true;
+      } else if (ev.type != NAV_NONE) {
+        confirmDefaults = false;
+        screenDirty = true;
+      }
+      delay(5);
+      continue;
     }
 
-    // +/- adjust selected param
-    if (input == '+' || input == '=') {
-      if (selectedParam == 1) {
-        wk.baselineProfile = (wk.baselineProfile + 1) % NUM_BASELINE_PROFILES;
-      } else if (selectedParam == 2) {
-        if (wk.aftertouchRate < AT_RATE_MAX) wk.aftertouchRate += 5;
-      } else if (selectedParam == 3) {
-        wk.bleInterval = (wk.bleInterval + 1) % NUM_BLE_INTERVALS;
-      } else if (selectedParam == 4) {
-        wk.clockMode = (wk.clockMode + 1) % NUM_CLOCK_MODES;
-      } else if (selectedParam == 5) {
-        wk.followTransport = wk.followTransport ? 0 : 1;
-      } else if (selectedParam == 6) {
-        if (wk.doubleTapMs + 10 <= DOUBLE_TAP_MS_MAX) wk.doubleTapMs += 10;
-      } else if (selectedParam == 7) {
-        if (wk.potBarDurationMs + 500 <= LED_BARGRAPH_DURATION_MAX) wk.potBarDurationMs += 500;
-      } else if (selectedParam == 8) {
-        wk.panicOnReconnect = wk.panicOnReconnect ? 0 : 1;
-      }
-      screenDirty = true;
-    }
-    if (input == '-' || input == '_') {
-      if (selectedParam == 1) {
-        wk.baselineProfile = (wk.baselineProfile + NUM_BASELINE_PROFILES - 1) % NUM_BASELINE_PROFILES;
-      } else if (selectedParam == 2) {
-        if (wk.aftertouchRate > AT_RATE_MIN) wk.aftertouchRate -= 5;
-        if (wk.aftertouchRate < AT_RATE_MIN) wk.aftertouchRate = AT_RATE_MIN;
-      } else if (selectedParam == 3) {
-        wk.bleInterval = (wk.bleInterval + NUM_BLE_INTERVALS - 1) % NUM_BLE_INTERVALS;
-      } else if (selectedParam == 4) {
-        wk.clockMode = (wk.clockMode + NUM_CLOCK_MODES - 1) % NUM_CLOCK_MODES;
-      } else if (selectedParam == 5) {
-        wk.followTransport = wk.followTransport ? 0 : 1;
-      } else if (selectedParam == 6) {
-        if (wk.doubleTapMs >= DOUBLE_TAP_MS_MIN + 10) wk.doubleTapMs -= 10;
-        else wk.doubleTapMs = DOUBLE_TAP_MS_MIN;
-      } else if (selectedParam == 7) {
-        if (wk.potBarDurationMs >= LED_BARGRAPH_DURATION_MIN + 500) wk.potBarDurationMs -= 500;
-        else wk.potBarDurationMs = LED_BARGRAPH_DURATION_MIN;
-      } else if (selectedParam == 8) {
-        wk.panicOnReconnect = wk.panicOnReconnect ? 0 : 1;
-      }
-      screenDirty = true;
-    }
-
-    // Save [ENTER]
-    if (input == '\r' || input == '\n') {
-      wk.magic = EEPROM_MAGIC;
-      wk.version = SETTINGS_VERSION;
-      Preferences prefs;
-      if (prefs.begin(SETTINGS_NVS_NAMESPACE, false)) {
-        prefs.putBytes(SETTINGS_NVS_KEY, &wk, sizeof(SettingsStore));
-        prefs.end();
-
-        // Apply baseline profile immediately if keyboard available
-        if (_keyboard) {
-          _keyboard->setBaselineProfile(wk.baselineProfile);
-        }
-
-        _ui->showSaved();
-        _ui->vtClear();
-        Serial.printf(VT_GREEN "  Settings saved." VT_RESET "\n");
-
-        // Show specific reboot notice only for fields that require it
-        bool needReboot = false;
-        if (wk.bleInterval != original.bleInterval) {
-          Serial.printf(VT_YELLOW "  BLE Interval changed — reboot required." VT_RESET "\n");
-          needReboot = true;
-        }
-        if (wk.clockMode != original.clockMode) {
-          Serial.printf(VT_YELLOW "  Clock Mode changed — reboot required." VT_RESET "\n");
-          needReboot = true;
-        }
-        if (!needReboot) {
-          Serial.printf(VT_DIM "  All changes applied live." VT_RESET "\n");
-        }
-        delay(needReboot ? 1500 : 800);
-      } else {
-        _ui->vtClear();
-        Serial.printf(VT_RED "  NVS write failed!" VT_RESET "\n");
-        delay(1500);
-      }
+    // --- Main navigation ---
+    if (ev.type == NAV_QUIT) {
       _ui->vtClear();
       return;
     }
 
-    // Quit [q]
-    if (input == 'q' || input == 'Q') {
-      _ui->vtClear();
-      return;
+    if (ev.type == NAV_DEFAULTS && !editing) {
+      confirmDefaults = true;
+      screenDirty = true;
     }
 
-    // Refresh display
+    if (!editing) {
+      if (ev.type == NAV_UP) {
+        if (cursor > 0) cursor--;
+        else cursor = NUM_PARAMS - 1;
+        screenDirty = true;
+      } else if (ev.type == NAV_DOWN) {
+        if (cursor < NUM_PARAMS - 1) cursor++;
+        else cursor = 0;
+        screenDirty = true;
+      } else if (ev.type == NAV_ENTER) {
+        editing = true;
+        screenDirty = true;
+      }
+    } else {
+      // Editing mode
+      if (ev.type == NAV_LEFT) {
+        adjustParam(wk, cursor, -1, ev.accelerated);
+        screenDirty = true;
+      } else if (ev.type == NAV_RIGHT) {
+        adjustParam(wk, cursor, +1, ev.accelerated);
+        screenDirty = true;
+      } else if (ev.type == NAV_ENTER) {
+        // Save on confirm
+        if (saveSettings(wk)) {
+          editing = false;
+          _ui->showSaved();
+
+          // Show reboot notice if needed
+          bool needReboot = false;
+          if (wk.bleInterval != original.bleInterval) {
+            needReboot = true;
+          }
+          if (wk.clockMode != original.clockMode) {
+            needReboot = true;
+          }
+          if (needReboot) {
+            // Will show on next redraw via status line
+          }
+          original = wk;
+          screenDirty = true;
+        } else {
+          // NVS write failed — stay in edit mode, show inline error
+          Serial.printf("\r\n" VT_RED "  NVS write failed!" VT_RESET);
+          delay(1500);
+          screenDirty = true;
+        }
+      }
+    }
+
+    // --- Render ---
     if (screenDirty) {
       screenDirty = false;
 
@@ -164,86 +277,66 @@ void ToolSettings::run() {
       _ui->drawHeader("SETTINGS", "");
       Serial.printf(VT_CL "\n");
 
-      // Helper macro-like lambda for rendering a param line
-      auto drawParam = [&](uint8_t num, const char* label, const char* value) {
-        if (selectedParam == num) {
-          Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " [%d] %-22s" VT_CYAN "%s" VT_RESET VT_CL "\n", num, label, value);
+      // Helper lambda for rendering a param line
+      auto drawParam = [&](uint8_t idx, const char* label, const char* value) {
+        bool selected = (cursor == idx);
+        bool isEditing = selected && editing;
+        if (selected) {
+          if (isEditing) {
+            Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " %-24s" VT_CYAN "[%s]" VT_RESET VT_CL "\n", label, value);
+          } else {
+            Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " %-24s" VT_CYAN "%s" VT_RESET VT_CL "\n", label, value);
+          }
         } else {
-          Serial.printf("    [%d] %-22s%s" VT_CL "\n", num, label, value);
+          Serial.printf("    %-24s%s" VT_CL "\n", label, value);
         }
       };
 
-      drawParam(1, "Baseline Profile:", profileNames[wk.baselineProfile]);
+      drawParam(0, "Baseline Profile:", s_profileNames[wk.baselineProfile]);
 
       char atBuf[24];
       snprintf(atBuf, sizeof(atBuf), "%d ms  (%d-%d)", wk.aftertouchRate, AT_RATE_MIN, AT_RATE_MAX);
-      drawParam(2, "Aftertouch Rate:", atBuf);
+      drawParam(1, "Aftertouch Rate:", atBuf);
 
-      drawParam(3, "BLE Interval:", bleNames[wk.bleInterval]);
-      drawParam(4, "Clock Mode:", clockModeNames[wk.clockMode]);
-      drawParam(5, "Follow Transport:", yesNoNames[wk.followTransport ? 1 : 0]);
+      drawParam(2, "BLE Interval:", s_bleNames[wk.bleInterval]);
+      drawParam(3, "Clock Mode:", s_clockModeNames[wk.clockMode]);
+      drawParam(4, "Follow Transport:", s_yesNoNames[wk.followTransport ? 1 : 0]);
 
       char dtBuf[24];
       snprintf(dtBuf, sizeof(dtBuf), "%d ms  (%d-%d)", wk.doubleTapMs, DOUBLE_TAP_MS_MIN, DOUBLE_TAP_MS_MAX);
-      drawParam(6, "Double-Tap Window:", dtBuf);
+      drawParam(5, "Double-Tap Window:", dtBuf);
 
       char bgBuf[24];
       snprintf(bgBuf, sizeof(bgBuf), "%.1f s  (%.1f-%.1f)",
                wk.potBarDurationMs / 1000.0f,
                LED_BARGRAPH_DURATION_MIN / 1000.0f,
                LED_BARGRAPH_DURATION_MAX / 1000.0f);
-      drawParam(7, "Bargraph Duration:", bgBuf);
-      drawParam(8, "Panic on Reconnect:", yesNoNames[wk.panicOnReconnect ? 1 : 0]);
+      drawParam(6, "Bargraph Duration:", bgBuf);
+      drawParam(7, "Panic on Reconnect:", s_yesNoNames[wk.panicOnReconnect ? 1 : 0]);
 
       Serial.printf(VT_CL "\n");
 
       // Description box
-      Serial.printf(VT_DIM "  ----------------------------------------" VT_RESET VT_CL "\n");
-      if (selectedParam == 1) {
-        Serial.printf(VT_DIM "    Controls MPR121 baseline adaptation." VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Adaptive = balanced (default)." VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Expressive = slower recovery, more dynamic." VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Percussive = fast recovery, tight response." VT_RESET VT_CL "\n");
-      } else if (selectedParam == 2) {
-        Serial.printf(VT_DIM "    Min interval between aftertouch messages" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    per pad (10-100ms). Lower = smoother but" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    more MIDI traffic. Default: 25ms (~40Hz)." VT_RESET VT_CL "\n");
-      } else if (selectedParam == 3) {
-        Serial.printf(VT_DIM "    Low Latency: 7.5ms (best response, more battery)" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Normal: 15ms (Apple compatible, default)" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Battery Saver: 30ms (saves battery, higher latency)" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Off: BLE disabled, USB only (saves RAM, faster boot)" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Reboot required after change." VT_RESET VT_CL "\n");
-      } else if (selectedParam == 4) {
-        Serial.printf(VT_DIM "    Slave: sync to external clock (DAW)." VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Master: generate clock from pot tempo." VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Reboot required after change." VT_RESET VT_CL "\n");
-      } else if (selectedParam == 5) {
-        Serial.printf(VT_DIM "    Slave only. Yes: DAW Start/Stop/Continue" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    controls arps (Start=sync, Stop=silence," VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    Continue=resume). No: arps ignore DAW" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    transport. Clock ticks always received." VT_RESET VT_CL "\n");
-      } else if (selectedParam == 6) {
-        Serial.printf(VT_DIM "    Time window to detect double-tap on ARPEG" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    pads (HOLD mode). Lower = faster but harder" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    to trigger. Range: 100-250ms." VT_RESET VT_CL "\n");
-      } else if (selectedParam == 7) {
-        Serial.printf(VT_DIM "    How long the pot bargraph stays visible" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    after last pot movement. Range: 1-10s." VT_RESET VT_CL "\n");
-      } else if (selectedParam == 8) {
-        Serial.printf(VT_DIM "    Yes: send CC123 (All Notes Off) on all" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    channels when BLE reconnects. Prevents" VT_RESET VT_CL "\n");
-        Serial.printf(VT_DIM "    stuck notes after connection drop." VT_RESET VT_CL "\n");
-      } else {
-        Serial.printf(VT_DIM "    Select a parameter with [1-8]." VT_RESET VT_CL "\n");
-      }
-      Serial.printf(VT_DIM "  ----------------------------------------" VT_RESET VT_CL "\n");
+      drawDescription(cursor);
 
       Serial.printf(VT_CL "\n");
-      Serial.printf("    [1-8] Select   [+/-] Adjust   [ENTER] Save   [q] Back" VT_CL "\n");
+
+      if (confirmDefaults) {
+        Serial.printf(VT_YELLOW "  Reset to defaults? (y/n)" VT_RESET VT_CL "\n");
+      } else if (editing) {
+        Serial.printf(VT_DIM "  [Left/Right] change value  [Enter] confirm & save" VT_RESET VT_CL "\n");
+      } else {
+        Serial.printf(VT_DIM "  [Up/Down] navigate  [Enter] edit  [d] defaults  [q] quit" VT_RESET VT_CL "\n");
+      }
+
+      // Show reboot warning if BLE/Clock changed from original
+      if (wk.bleInterval != original.bleInterval || wk.clockMode != original.clockMode) {
+        Serial.printf(VT_YELLOW "  Reboot required for BLE/Clock changes." VT_RESET VT_CL "\n");
+      }
+
       _ui->vtFrameEnd();
     }
 
-    delay(10);
+    delay(5);
   }
 }

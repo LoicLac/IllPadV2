@@ -4,18 +4,25 @@
 #include <stdint.h>
 
 class CapacitiveKeyboard;
+class LedController;
 class NvsManager;
 class SetupUI;
+struct SettingsStore;
 
 class ToolSettings {
 public:
   ToolSettings();
 
-  void begin(CapacitiveKeyboard* keyboard, NvsManager* nvs, SetupUI* ui);
-  void run();  // Blocking — edit profile, sensitivity, AT rate, deadzone, BLE interval
+  void begin(CapacitiveKeyboard* keyboard, LedController* leds, NvsManager* nvs, SetupUI* ui);
+  void run();  // Blocking — unified arrow navigation, immediate save per param
 
 private:
+  void adjustParam(SettingsStore& wk, uint8_t param, int dir, bool accelerated);
+  bool saveSettings(const SettingsStore& wk);
+  void drawDescription(uint8_t param);
+
   CapacitiveKeyboard* _keyboard;
+  LedController*      _leds;
   NvsManager*         _nvs;
   SetupUI*            _ui;
 };
