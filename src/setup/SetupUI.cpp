@@ -250,15 +250,6 @@ void SetupUI::drawRolesGrid(const uint8_t roleMap[], const char roleLabels[][6],
 }
 
 // =================================================================
-// Dual Input: serial + rear button = ENTER
-// =================================================================
-
-char SetupUI::readInput() {
-  if (Serial.available()) return (char)Serial.read();
-  return 0;
-}
-
-// =================================================================
 // LED Feedback
 // =================================================================
 

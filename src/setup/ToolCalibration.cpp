@@ -1,6 +1,7 @@
 #include "ToolCalibration.h"
 #include "SetupCommon.h"
 #include "SetupUI.h"
+#include "InputParser.h"
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
 #include <Arduino.h>
@@ -55,12 +56,13 @@ static bool runStabilizationPhase(
 
   // Stabilization loop — show live baseline grid
   unsigned long lastRefresh = 0;
+  InputParser stab;
   while (true) {
     leds.update();
     keyboard.pollAllSensorData();
-    char input = ui.readInput();
+    NavEvent ev = stab.update();
 
-    if (input == 'q' || input == 'Q') return false;
+    if (ev.type == NAV_QUIT) return false;
 
     if (millis() - lastRefresh >= 250) {
       lastRefresh = millis();
@@ -93,11 +95,11 @@ static bool runStabilizationPhase(
         Serial.printf("  Status: " VT_YELLOW "Settling... %d/%d" VT_RESET VT_CL "\n", stableCount, NUM_KEYS);
       }
       Serial.printf(VT_CL "\n");
-      Serial.printf("  Press ENTER or button to continue  [q] Abort" VT_CL "\n");
+      Serial.printf("  Press Enter to continue  [q] Abort" VT_CL "\n");
       ui.vtFrameEnd();
     }
 
-    if (input == '\r' || input == '\n') {
+    if (ev.type == NAV_ENTER) {
       // Capture reference baselines
       keyboard.pollAllSensorData();
       delay(50);
@@ -143,11 +145,13 @@ void ToolCalibration::run() {
   memset(calibrated, 0, sizeof(calibrated));
   memset(measuredDeltas, 0, sizeof(measuredDeltas));
 
+  InputParser input;
+
   _ui->vtClear();
 
   while (state != CAL_DONE) {
     _leds->update();
-    char input = _ui->readInput();
+    NavEvent ev = input.update();
 
     switch (state) {
 
@@ -155,11 +159,11 @@ void ToolCalibration::run() {
     // SENSITIVITY SELECTION (exact V1 lines 531-583)
     // =============================================================
     case CAL_SENSITIVITY: {
-      if (input >= '1' && input <= '3') {
-        sensitivityIndex = input - '1';
+      if (ev.type == NAV_CHAR && ev.ch >= '1' && ev.ch <= '3') {
+        sensitivityIndex = ev.ch - '1';
         screenDirty = true;
       }
-      else if (input == '\r' || input == '\n') {
+      else if (ev.type == NAV_ENTER) {
         // Run stabilization phase (autoconfig + live grid + baseline capture)
         if (runStabilizationPhase(*_keyboard, *_leds, *_ui,
               sensitivityTargets[sensitivityIndex],
@@ -181,7 +185,7 @@ void ToolCalibration::run() {
         }
         break;
       }
-      else if (input == 'q' || input == 'Q') {
+      else if (ev.type == NAV_QUIT) {
         _ui->vtClear();
         state = CAL_DONE;
         break;
@@ -207,7 +211,7 @@ void ToolCalibration::run() {
           }
         }
         Serial.printf(VT_CL "\n");
-        Serial.printf("  Type 1-3 to select, ENTER or button to confirm  [q] Back" VT_CL "\n");
+        Serial.printf("  Type 1-3 to select, Enter to confirm  [q] Back" VT_CL "\n");
         _ui->vtFrameEnd();
       }
       break;
@@ -279,7 +283,7 @@ void ToolCalibration::run() {
                           activeKey, sc, channel);
             Serial.printf("  |  Previous: %-5u   Current delta: %-5u       |" VT_CL "\n",
                           measuredDeltas[activeKey], delta);
-            Serial.printf("  |  [ENTER/BTN] Overwrite   or touch another     |" VT_CL "\n");
+            Serial.printf("  |  [Enter] Overwrite   or touch another         |" VT_CL "\n");
             Serial.printf("  +---------------------------------------------+" VT_CL "\n");
           } else {
             Serial.printf("  +-- Active: Key %d (Sensor %c, Channel %d) ------+" VT_CL "\n",
@@ -312,12 +316,12 @@ void ToolCalibration::run() {
           Serial.printf("  Progress: 0/%d" VT_CL "\n", NUM_KEYS);
         }
         Serial.printf(VT_CL "\n");
-        Serial.printf("  [ENTER/BTN] Validate   [s] Save   [q] Abort" VT_CL "\n");
+        Serial.printf("  [Enter] Validate   [s] Save   [q] Abort" VT_CL "\n");
         _ui->vtFrameEnd();
       }
 
       // Handle input
-      if ((input == '\r' || input == '\n') && activeKey >= 0) {
+      if (ev.type == NAV_ENTER && activeKey >= 0) {
         measuredDeltas[activeKey] = currentMaxDelta;
         calibrated[activeKey] = true;
         _keyboard->setCalibrationMaxDelta(activeKey, currentMaxDelta);
@@ -347,13 +351,13 @@ void ToolCalibration::run() {
           currentMaxDelta = 0;
         }
       }
-      else if (input == 's' || input == 'S') {
+      else if (ev.type == NAV_CHAR && (ev.ch == 's' || ev.ch == 'S')) {
         _keyboard->setAutoReconfigEnabled(true);
         _ui->vtClear();
         state = CAL_RECAP;
         screenDirty = true;
       }
-      else if (input == 'q' || input == 'Q') {
+      else if (ev.type == NAV_QUIT) {
         _keyboard->setAutoReconfigEnabled(true);
         _ui->vtClear();
         state = CAL_DONE;
@@ -390,14 +394,14 @@ void ToolCalibration::run() {
           Serial.printf("  No keys calibrated." VT_CL "\n");
         }
         Serial.printf(VT_CL "\n");
-        Serial.printf("  [ENTER/BTN] Save   [r] Redo all   [q] Back to menu" VT_CL "\n");
+        Serial.printf("  [Enter] Save   [r] Redo all   [q] Back to menu" VT_CL "\n");
         _ui->vtFrameEnd();
       }
 
-      if (input == '\r' || input == '\n') {
+      if (ev.type == NAV_ENTER) {
         state = CAL_SAVE;
       }
-      else if (input == 'r' || input == 'R') {
+      else if (ev.type == NAV_CHAR && (ev.ch == 'r' || ev.ch == 'R')) {
         memset(calibrated, 0, sizeof(calibrated));
         memset(measuredDeltas, 0, sizeof(measuredDeltas));
         sensitivityIndex = 0;
@@ -406,7 +410,7 @@ void ToolCalibration::run() {
         screenDirty = true;
         state = CAL_SENSITIVITY;
       }
-      else if (input == 'q' || input == 'Q') {
+      else if (ev.type == NAV_QUIT) {
         _ui->vtClear();
         state = CAL_DONE;
       }

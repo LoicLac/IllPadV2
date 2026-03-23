@@ -59,16 +59,16 @@ public:
 
   // 4x12 pad grid
   // Parameters:
-  //   mode          — display mode
-  //   target        — GRID_BASELINE: target baseline for coloring
-  //   baselines[]   — GRID_BASELINE: live baseline values
+  //   mode             — display mode
+  //   target           — GRID_BASELINE: target baseline for coloring
+  //   baselines[]      — GRID_BASELINE: live baseline values
   //   measuredDeltas[] — GRID_MEASUREMENT: stored deltas per key
-  //   done[]        — which keys are done (calibrated/assigned)
-  //   activeKey     — currently touched key (-1=none)
-  //   activeDelta   — GRID_MEASUREMENT: live delta for active key
-  //                    GRID_ORDERING: next position number (0-based)
-  //   activeIsDone  — is active key already done?
-  //   orderMap[]    — GRID_ORDERING: padIndex → position (0-based, 0xFF=unassigned)
+  //   done[]           — which keys are done (calibrated/assigned)
+  //   activeKey        — currently touched key (-1=none)
+  //   activeDelta      — GRID_MEASUREMENT: live delta for active key
+  //                       GRID_ORDERING: next position number (0-based)
+  //   activeIsDone     — is active key already done?
+  //   orderMap[]       — GRID_ORDERING: padIndex → position (0-based, 0xFF=unassigned)
   void drawGrid(GridMode mode, uint16_t target, uint16_t baselines[],
                 uint16_t measuredDeltas[], bool done[], int activeKey,
                 uint16_t activeDelta, bool activeIsDone, uint8_t orderMap[]);
@@ -77,9 +77,6 @@ public:
   // roleMap[48]: PadRoleCode per pad (0=none, 1=bank, 2=scale, 3=arp, 0xFF=collision)
   // roleLabels[48][6]: 5-char null-terminated label per pad
   void drawRolesGrid(const uint8_t roleMap[], const char roleLabels[][6], int activeKey);
-
-  // Dual input: serial keyboard + rear button (returns '\r' on button press)
-  char readInput();
 
   // LED feedback during setup
   void showToolActive(uint8_t toolIndex);

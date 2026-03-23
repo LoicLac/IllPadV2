@@ -1,6 +1,7 @@
 #include "ToolPadOrdering.h"
 #include "SetupCommon.h"
 #include "SetupUI.h"
+#include "InputParser.h"
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
 #include "../core/KeyboardData.h"
@@ -64,11 +65,13 @@ void ToolPadOrdering::run() {
   unsigned long lastRefresh = 0;
   bool screenDirty = true;
 
+  InputParser input;
+
   _ui->vtClear();
 
   while (state != ORD_DONE) {
     _leds->update();
-    char input = _ui->readInput();
+    NavEvent ev = input.update();
 
     switch (state) {
 
@@ -130,7 +133,7 @@ void ToolPadOrdering::run() {
                           activeKey, sc, channel);
             Serial.printf("  |  Will be assigned position: %-3d               |" VT_CL "\n",
                           assignedCount + 1);
-            Serial.printf("  |  [ENTER/BTN] to confirm                       |" VT_CL "\n");
+            Serial.printf("  |  [Enter] to confirm                           |" VT_CL "\n");
             Serial.printf("  +---------------------------------------------+" VT_CL "\n");
           }
         }
@@ -145,12 +148,12 @@ void ToolPadOrdering::run() {
         Serial.printf(VT_CL "\n");
         Serial.printf("  Next position: %d/%d" VT_CL "\n", assignedCount + 1, NUM_KEYS);
         Serial.printf(VT_CL "\n");
-        Serial.printf("  [ENTER/BTN] Assign   [u] Undo   [s] Save   [q] Abort" VT_CL "\n");
+        Serial.printf("  [Enter] Assign   [u] Undo   [d] Defaults   [s] Save   [q] Abort" VT_CL "\n");
         _ui->vtFrameEnd();
       }
 
       // Handle input
-      if ((input == '\r' || input == '\n') && activeKey >= 0) {
+      if (ev.type == NAV_ENTER && activeKey >= 0) {
         if (assigned[activeKey]) {
           // Already assigned — ignore (use [r] to redo all)
           break;
@@ -178,7 +181,7 @@ void ToolPadOrdering::run() {
           lastActiveKey = -1;
         }
       }
-      else if ((input == 'u' || input == 'U') && assignedCount > 0) {
+      else if (ev.type == NAV_CHAR && (ev.ch == 'u' || ev.ch == 'U') && assignedCount > 0) {
         assignedCount--;
         uint8_t undoneKey = assignHistory[assignedCount];
         assigned[undoneKey] = false;
@@ -186,12 +189,52 @@ void ToolPadOrdering::run() {
         activeKey = -1;
         lastActiveKey = -1;
       }
-      else if (input == 's' || input == 'S') {
+      else if (ev.type == NAV_DEFAULTS) {
+        // Reset to linear order 0-47
+        _ui->vtClear();
+        Serial.printf("  Reset to default order (0-47)? [y/n]\n");
+        while (true) {
+          NavEvent ce = input.update();
+          if (ce.type == NAV_CHAR && (ce.ch == 'y' || ce.ch == 'Y')) {
+            for (int i = 0; i < NUM_KEYS; i++) {
+              orderMap[i] = (uint8_t)i;
+              assigned[i] = true;
+              assignHistory[i] = (uint8_t)i;
+            }
+            assignedCount = NUM_KEYS;
+            // Direct NVS write
+            NoteMapStore nms;
+            nms.magic = EEPROM_MAGIC;
+            nms.version = NOTEMAP_VERSION;
+            nms.reserved = 0;
+            memcpy(nms.noteMap, orderMap, NUM_KEYS);
+            Preferences prefs;
+            if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
+              prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
+              prefs.end();
+            }
+            memcpy(_padOrder, orderMap, NUM_KEYS);
+            _ui->showSaved();
+            _ui->vtClear();
+            state = ORD_DONE;
+            break;
+          }
+          if (ce.type == NAV_CHAR && (ce.ch == 'n' || ce.ch == 'N')) {
+            _ui->vtClear();
+            screenDirty = true;
+            lastRefresh = 0;
+            break;
+          }
+          _leds->update();
+          delay(5);
+        }
+      }
+      else if (ev.type == NAV_CHAR && (ev.ch == 's' || ev.ch == 'S')) {
         _ui->vtClear();
         state = ORD_RECAP;
         screenDirty = true;
       }
-      else if (input == 'q' || input == 'Q') {
+      else if (ev.type == NAV_QUIT) {
         _ui->vtClear();
         state = ORD_DONE;
       }
@@ -227,11 +270,11 @@ void ToolPadOrdering::run() {
                         uniqueAssigned, NUM_KEYS);
         }
         Serial.printf(VT_CL "\n");
-        Serial.printf("  [ENTER/BTN] Save   [r] Redo all   [q] Back to menu" VT_CL "\n");
+        Serial.printf("  [Enter] Save   [r] Redo all   [q] Back to menu" VT_CL "\n");
         _ui->vtFrameEnd();
       }
 
-      if (input == '\r' || input == '\n') {
+      if (ev.type == NAV_ENTER) {
         // Partial save warning: explain consequences before proceeding
         if (uniqueAssigned < NUM_KEYS) {
           _ui->vtClear();
@@ -240,13 +283,13 @@ void ToolPadOrdering::run() {
           Serial.printf("  Unassigned pads will use position 0 (lowest pitch).\n");
           Serial.printf("  They will all play the same note.\n");
           Serial.printf(VT_CL "\n");
-          Serial.printf("  [ENTER] Save anyway   [q] Cancel\n");
+          Serial.printf("  [Enter] Save anyway   [q] Cancel\n");
 
           // Wait for confirmation
           while (true) {
-            char c = _ui->readInput();
-            if (c == '\r' || c == '\n') break;  // Confirmed
-            if (c == 'q' || c == 'Q') { screenDirty = true; break; }
+            NavEvent ce = input.update();
+            if (ce.type == NAV_ENTER) break;  // Confirmed
+            if (ce.type == NAV_QUIT) { screenDirty = true; break; }
             _leds->update();
             delay(5);
           }
@@ -254,7 +297,7 @@ void ToolPadOrdering::run() {
         }
         state = ORD_SAVE;
       }
-      else if (input == 'r' || input == 'R') {
+      else if (ev.type == NAV_CHAR && (ev.ch == 'r' || ev.ch == 'R')) {
         memset(orderMap, 0xFF, sizeof(orderMap));
         memset(assigned, 0, sizeof(assigned));
         assignedCount = 0;
@@ -266,7 +309,7 @@ void ToolPadOrdering::run() {
         screenDirty = true;
         state = ORD_MEASUREMENT;
       }
-      else if (input == 'q' || input == 'Q') {
+      else if (ev.type == NAV_QUIT) {
         _ui->vtClear();
         state = ORD_DONE;
       }
