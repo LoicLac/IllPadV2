@@ -113,9 +113,18 @@ void ToolBankConfig::run() {
     }
 
     // --- Main navigation ---
-    if (ev.type == NAV_QUIT && !editing) {
-      _ui->vtClear();
-      return;
+    if (ev.type == NAV_QUIT) {
+      if (editing) {
+        // Cancel edit — revert working copy from live state
+        wkTypes[cursor] = _banks[cursor].type;
+        if (_nvs) wkQuantize[cursor] = _nvs->getLoadedQuantizeMode(cursor);
+        editing = false;
+        editField = 0;
+        screenDirty = true;
+      } else {
+        _ui->vtClear();
+        return;
+      }
     }
 
     if (ev.type == NAV_DEFAULTS && !editing) {

@@ -211,8 +211,15 @@ void ToolSettings::run() {
 
     // --- Main navigation ---
     if (ev.type == NAV_QUIT) {
-      _ui->vtClear();
-      return;
+      if (editing) {
+        // Cancel edit — revert working copy to last saved state
+        wk = original;
+        editing = false;
+        screenDirty = true;
+      } else {
+        _ui->vtClear();
+        return;
+      }
     }
 
     if (ev.type == NAV_DEFAULTS && !editing) {

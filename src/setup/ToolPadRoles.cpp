@@ -313,6 +313,7 @@ void ToolPadRoles::resetToDefaults() {
 
 bool ToolPadRoles::saveAll() {
   Preferences prefs;
+  bool ok = true;
 
   // Bank pads
   BankPadStore bps;
@@ -323,7 +324,7 @@ bool ToolPadRoles::saveAll() {
   if (prefs.begin(BANKPAD_NVS_NAMESPACE, false)) {
     prefs.putBytes(BANKPAD_NVS_KEY, &bps, sizeof(BankPadStore));
     prefs.end();
-  }
+  } else { ok = false; }
 
   // Scale pads
   if (prefs.begin(SCALE_PAD_NVS_NAMESPACE, false)) {
@@ -331,7 +332,7 @@ bool ToolPadRoles::saveAll() {
     prefs.putBytes(SCALE_PAD_MODE_KEY, _wkModePads, 7);
     prefs.putUChar(SCALE_PAD_CHROM_KEY, _wkChromPad);
     prefs.end();
-  }
+  } else { ok = false; }
 
   // Arp pads
   if (prefs.begin(ARP_PAD_NVS_NAMESPACE, false)) {
@@ -339,9 +340,11 @@ bool ToolPadRoles::saveAll() {
     prefs.putUChar(ARP_PAD_PS_KEY, _wkPlayStopPad);
     prefs.putBytes(ARP_PAD_OCT_KEY, _wkOctavePads, 4);
     prefs.end();
-  }
+  } else { ok = false; }
 
-  // Update live values
+  if (!ok) return false;
+
+  // Update live values only after all writes succeeded
   memcpy(_bankPads, _wkBankPads, NUM_BANKS);
   memcpy(_rootPads, _wkRootPads, 7);
   memcpy(_modePads, _wkModePads, 7);
@@ -350,7 +353,6 @@ bool ToolPadRoles::saveAll() {
   *_playStopPad  = _wkPlayStopPad;
   if (_octavePads) memcpy(_octavePads, _wkOctavePads, 4);
 
-  _leds->playValidation();
   return true;
 }
 
