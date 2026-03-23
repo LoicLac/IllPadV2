@@ -1,5 +1,6 @@
 #include "SetupManager.h"
 #include "SetupUI.h"
+#include "InputParser.h"
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
 #include "../managers/NvsManager.h"
@@ -34,6 +35,8 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _toolPotMapping.begin(leds, &_ui, potRouter);
 }
 
+static InputParser s_input;
+
 // =================================================================
 // run() — Main setup mode loop (blocking)
 // =================================================================
@@ -45,12 +48,8 @@ void SetupManager::run() {
   _leds->setCalibrationMode(true);
   _leds->update();
 
-  // Wait for button release (user held it 3s to enter setup)
-  while (digitalRead(BTN_REAR_PIN) == LOW) {
-    delay(10);
-    _leds->update();
-  }
-  delay(50);
+  // Debounce: wait for entry conditions to settle
+  delay(200);
 
   _ui.vtClear();
   bool screenDirty = true;
@@ -58,7 +57,10 @@ void SetupManager::run() {
 
   while (true) {
     _leds->update();
-    char input = _ui.readInput();
+    NavEvent ev = s_input.update();
+    char input = 0;
+    if (ev.type == NAV_CHAR) input = ev.ch;
+    else if (ev.type == NAV_QUIT) input = '0';  // q = reboot from main menu
 
     switch (input) {
       case '1':

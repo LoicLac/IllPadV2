@@ -8,11 +8,10 @@
 // Constructor
 // =================================================================
 
-SetupUI::SetupUI() : _leds(nullptr), _btnLast(false) {}
+SetupUI::SetupUI() : _leds(nullptr) {}
 
 void SetupUI::begin(LedController* leds) {
   _leds = leds;
-  _btnLast = (digitalRead(BTN_REAR_PIN) == LOW);
 }
 
 // =================================================================
@@ -255,13 +254,8 @@ void SetupUI::drawRolesGrid(const uint8_t roleMap[], const char roleLabels[][6],
 // =================================================================
 
 char SetupUI::readInput() {
-  if (Serial.available()) {
-    return Serial.read();
-  }
-  bool cur = (digitalRead(BTN_REAR_PIN) == LOW);
-  bool edge = cur && !_btnLast;
-  _btnLast = cur;
-  return edge ? '\r' : 0;
+  if (Serial.available()) return (char)Serial.read();
+  return 0;
 }
 
 // =================================================================

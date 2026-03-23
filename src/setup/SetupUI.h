@@ -89,7 +89,6 @@ public:
 
 private:
   LedController* _leds;
-  bool _btnLast;
 };
 
 #endif // SETUP_UI_H
