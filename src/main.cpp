@@ -377,6 +377,7 @@ void setup() {
 
   // Give LedController access to bank states for multi-bank display
   s_leds.setBankSlots(s_banks);
+  s_leds.setClockManager(&s_clockManager);
 
   // Store hold pad for ARPEG toggle detection in loop
   s_holdPad = holdPad;
@@ -486,7 +487,8 @@ void loop() {
   }
 
   // Consume all ScaleManager change flags once (auto-clearing: can't read twice)
-  bool scaleChanged  = s_scaleManager.hasScaleChanged();
+  ScaleChangeType scaleChange = s_scaleManager.consumeScaleChange();
+  bool scaleChanged = (scaleChange != SCALE_CHANGE_NONE);
   bool octaveChanged = s_scaleManager.hasOctaveChanged();
   bool holdToggled   = s_scaleManager.hasHoldToggled();
 
@@ -501,7 +503,12 @@ void loop() {
       scSlot.arpEngine->flushPendingNoteOffs(s_transport);
       scSlot.arpEngine->setScaleConfig(scSlot.scale);
     }
-    s_leds.triggerConfirm(CONFIRM_SCALE);
+    switch (scaleChange) {
+      case SCALE_CHANGE_ROOT:      s_leds.triggerConfirm(CONFIRM_SCALE_ROOT); break;
+      case SCALE_CHANGE_MODE:      s_leds.triggerConfirm(CONFIRM_SCALE_MODE); break;
+      case SCALE_CHANGE_CHROMATIC: s_leds.triggerConfirm(CONFIRM_SCALE_CHROM); break;
+      default: break;
+    }
   }
 
   // Queue NVS save on octave change + LED confirmation
@@ -514,7 +521,9 @@ void loop() {
 
   // LED confirmation on hold toggle
   if (holdToggled) {
-    s_leds.triggerConfirm(CONFIRM_HOLD);
+    BankSlot& holdSlot = s_bankManager.getCurrentSlot();
+    bool holdIsOn = (holdSlot.type == BANK_ARPEG && holdSlot.arpEngine && holdSlot.arpEngine->isHoldOn());
+    s_leds.triggerConfirm(holdIsOn ? CONFIRM_HOLD_ON : CONFIRM_HOLD_OFF);
   }
 
   // --- Clock: process ticks (PLL + tick generation) ---
@@ -553,6 +562,11 @@ void loop() {
       bool psPressed = state.keyIsPressed[s_playStopPad];
       if (psPressed && !s_lastPlayStopState) {
         psSlot.arpEngine->playStop(s_transport);
+        if (psSlot.arpEngine->isPlaying()) {
+          s_leds.triggerConfirm(CONFIRM_PLAY);
+        } else {
+          s_leds.triggerConfirm(CONFIRM_STOP);
+        }
       }
       s_lastPlayStopState = psPressed;
     } else {
@@ -714,7 +728,11 @@ void loop() {
 
   // LED bargraph from pot movement
   if (s_potRouter.hasBargraphUpdate()) {
-    s_leds.showPotBargraph(s_potRouter.getBargraphLevel());
+    s_leds.showPotBargraph(
+      s_potRouter.getBargraphLevel(),
+      s_potRouter.getBargraphPotLevel(),
+      s_potRouter.isBargraphCaught()
+    );
   }
 
   s_leds.update();

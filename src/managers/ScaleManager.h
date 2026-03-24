@@ -7,6 +7,13 @@
 
 class MidiEngine;
 
+enum ScaleChangeType : uint8_t {
+  SCALE_CHANGE_NONE      = 0,
+  SCALE_CHANGE_ROOT      = 1,
+  SCALE_CHANGE_MODE      = 2,
+  SCALE_CHANGE_CHROMATIC = 3,
+};
+
 class ScaleManager {
 public:
   ScaleManager();
@@ -17,7 +24,7 @@ public:
   void update(const uint8_t* keyIsPressed, bool btnHeld, BankSlot& currentSlot);
 
   bool isHolding() const;
-  bool hasScaleChanged();  // True if scale was modified this frame (auto-clears)
+  ScaleChangeType consumeScaleChange();  // Returns change type, auto-clears to NONE
 
   // Override pad assignments (for future NVS loading / ToolPadRoles)
   void setRootPads(const uint8_t* pads);
@@ -46,7 +53,7 @@ private:
   uint8_t _chromaticPad;
   uint8_t _holdPad;           // HOLD toggle pad (for ARPEG banks)
   uint8_t _octavePads[4];    // Octave range 1-4 pads (for ARPEG banks)
-  bool    _scaleChanged;     // Set by processScalePads, cleared by hasScaleChanged()
+  ScaleChangeType _scaleChangeType;  // Set by processScalePads, cleared by consumeScaleChange()
   bool    _octaveChanged;    // Set by processScalePads, cleared by hasOctaveChanged()
   bool    _holdToggled;      // Set by processScalePads, cleared by hasHoldToggled()
   uint8_t _newOctaveRange;   // 1-4, last octave set by pad press
