@@ -20,7 +20,7 @@
 - **USB**: Single USB-C on GPIO 19/20 (native USB, no UART bridge)
 - **2 Buttons**: left (bank+scale+arp single-layer control), rear (battery/setup/modifier pot rear). GPIOs TBD.
 - **5 Pots**: 4 right (tempo, shape/gate, slew/pattern, velocity), 1 rear (LED brightness/sensitivity). GPIOs TBD.
-- **8 LEDs** (circle, PWM brightness, no RGB)
+- **8 LEDs**: SK6812 RGBW NeoPixel Stick (Adafruit 2868), single data pin GPIO 4, Adafruit_NeoPixel driver
 - **Battery**: LiPo 3.7V, BQ25185 charger, ADC voltage divider
 
 Pads measure **skin contact surface area**, not mechanical force. Aftertouch = yes. Velocity from pressure = unreliable.
@@ -116,16 +116,16 @@ Step 8: ●●●●●●●●  All systems go (200ms full bar)
 
 ### Normal Display (multi-bank state)
 
-LedController reads `BankSlot[]` to show all 8 banks simultaneously. All brightness values are compile-time constants in HardwareConfig.h (`LED_FG_*`, `LED_BG_*`), scaled by the global brightness pot.
+LedController drives an SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel`. Per-pixel RGBW colors defined in HardwareConfig.h (`COL_WHITE`, `COL_BLUE`, `COL_SCALE_*`, `COL_ARP_*`, `COL_ERROR`, etc.). Brightness applied per-pixel via `setPixelScaled()` — never `setBrightness()`. Intensity ranges are compile-time constants (`LED_FG_*`, `LED_BG_*`).
 
-| State | Pattern | Brightness | Rate |
-|---|---|---|---|
-| Current NORMAL | Solid | 100% | — |
-| Current ARPEG stopped | Sine pulse | 30%↔100% | ~1.5s period |
-| Current ARPEG playing | Sine pulse + tick flash | 30%↔80%, spike 100% on beat | Pulse ~1.5s, flash 30ms |
-| Background NORMAL | Off | 0% | — |
-| Background ARPEG stopped | Sine pulse | 8%↔25% | ~1.5s period |
-| Background ARPEG playing | Sine pulse + tick flash | 8%↔20%, spike 25% on beat | Pulse ~1.5s, flash 30ms |
+| State | Color | Pattern | Intensity | Rate |
+|---|---|---|---|---|
+| Current NORMAL | White (W channel) | Solid | 100% | — |
+| Current ARPEG stopped | Blue | Sine pulse | 30%↔100% | ~1.5s period |
+| Current ARPEG playing | Blue | Sine pulse + tick flash | 30%↔80%, spike 100% on beat | Pulse ~1.5s, flash 30ms |
+| Background NORMAL | — | Off | 0% | — |
+| Background ARPEG stopped | Blue dim | Sine pulse | 8%↔25% | ~1.5s period |
+| Background ARPEG playing | Blue dim | Sine pulse + tick flash | 8%↔20%, spike 25% on beat | Pulse ~1.5s, flash 30ms |
 
 **Sine pulse**: 64-entry precomputed LUT, index = `(millis() / (LED_PULSE_PERIOD_MS/64)) % 64`. Integer math only in `update()`.
 
@@ -133,31 +133,39 @@ LedController reads `BankSlot[]` to show all 8 banks simultaneously. All brightn
 
 ### Confirmation Blinks (auto-expiring overlays)
 
-| Event | Pattern | Duration |
-|---|---|---|
-| Bank switch | Triple blink ALL 8 at 50% | 300ms |
-| Scale change (root/mode/chromatic) | Double blink current LED | 200ms |
-| Hold toggle | Single long blink current LED | 250ms (150ms on + 100ms off) |
-| Octave change | Single blink of N LEDs (1-4) | 100ms |
+Each confirmation type has a distinct RGBW color. 10 `ConfirmType` enum values:
 
-Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Priority: below error/battery/bargraph, above normal display. New confirmation preempts active one.
+| Event | ConfirmType | Color | Pattern | Duration |
+|---|---|---|---|---|
+| Bank switch | `CONFIRM_BANK_SWITCH` | White | Triple blink destination LED | 300ms |
+| Scale root | `CONFIRM_SCALE_ROOT` | Vivid yellow | Double blink current LED | 200ms |
+| Scale mode | `CONFIRM_SCALE_MODE` | Pale yellow | Double blink current LED | 200ms |
+| Scale chromatic | `CONFIRM_SCALE_CHROM` | Golden yellow | Double blink current LED | 200ms |
+| Hold ON | `CONFIRM_HOLD_ON` | Deep blue | Single long blink | 250ms (150ms on + 100ms off) |
+| Hold OFF | `CONFIRM_HOLD_OFF` | Deep blue | Fade-out | 300ms |
+| Play | `CONFIRM_PLAY` | Green ack → blue-cyan ramp | Ack flash + 3 beat-synced flashes | Beat-synced (4 steps) |
+| Stop | `CONFIRM_STOP` | Blue-cyan | Fade-out | 300ms |
+| Octave | `CONFIRM_OCTAVE` | Blue-violet | Single blink of N LEDs (1-4) | 100ms |
+
+Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Play confirmation uses `ClockManager` for beat sync (fallback: 200ms/beat if no clock). Priority: below error/battery/bargraph, above normal display. New confirmation preempts active one.
 
 ### Priority State Machine (in `update()`)
 
 ```
-1. Boot mode          (progressive fill / failure blink)
-2. Chase pattern      (calibration entry)
-3. Error              (all 8 blink 500ms — sensing task stall)
-4. Battery gauge      (8-LED bar with heartbeat pulse, 3s)
-5. Pot bargraph       (solid bar, configurable duration via Tool 5)
-6. Confirmation blinks (bank/scale/hold/octave, auto-expire)
-7. Calibration mode   (all off + validation flash)
-8. Normal bank display (multi-bank state with sine pulse + tick flash)
+1. Boot mode          (progressive white fill / red failure blink)
+2. Chase pattern      (calibration entry — white chase)
+3. Setup comet        (violet comet during Tools 1-6)
+4. Error              (LEDs 4-5 blink red 500ms — sensing task stall)
+5. Battery gauge      (8-LED red→green gradient bar, 3s)
+6. Pot bargraph       (solid bar + catch visualization, configurable duration)
+7. Confirmation blinks (10 types, color-coded, auto-expire)
+8. Calibration mode   (all off + validation flash)
+9. Normal bank display (multi-bank RGBW state with sine pulse + tick flash)
 ```
 
-### Bargraph Persistence
+### Pot Bargraph
 
-Configurable via Tool 5 Settings (parameter 8). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
+`showPotBargraph(realLevel, potLevel, caught)` — 3 params. Shows target level as solid bar + physical pot position indicator. Catch state visualized: uncaught pots show pot position dimly until caught. Configurable duration via Tool 5 Settings (parameter 8). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
 
 ## Buttons
 

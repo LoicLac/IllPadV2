@@ -70,6 +70,8 @@ PotRouter::PotRouter()
   , _midiPbDirty(false)
   , _bargraphDirty(false)
   , _bargraphLevel(0)
+  , _bargraphPotLevel(0)
+  , _bargraphCaught(false)
   , _dirty(false)
 {
   // Init hardware state
@@ -418,6 +420,8 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       cs.caught = true;
     } else {
       _bargraphLevel = (uint8_t)((cs.storedValue * 8 + 2048) / 4096);
+      _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f);
+      _bargraphCaught = false;
       _bargraphDirty = true;
       return;
     }
@@ -528,6 +532,8 @@ void PotRouter::applyBinding(uint8_t potIndex) {
 
   _bargraphLevel = (uint8_t)(adc * 8.0f / 4096.0f);
   if (_bargraphLevel > 8) _bargraphLevel = 8;
+  _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f);
+  _bargraphCaught = true;
   _bargraphDirty = true;
   _dirty = true;
 }
@@ -632,7 +638,9 @@ bool PotRouter::hasBargraphUpdate() {
   return false;
 }
 
-uint8_t PotRouter::getBargraphLevel() const { return _bargraphLevel; }
+uint8_t PotRouter::getBargraphLevel() const    { return _bargraphLevel; }
+uint8_t PotRouter::getBargraphPotLevel() const { return _bargraphPotLevel; }
+bool    PotRouter::isBargraphCaught() const    { return _bargraphCaught; }
 
 bool PotRouter::isDirty() const   { return _dirty; }
 void PotRouter::clearDirty()      { _dirty = false; }

@@ -21,7 +21,7 @@ ScaleManager::ScaleManager()
   , _lastBtnState(false)
   , _chromaticPad(22)
   , _holdPad(23)
-  , _scaleChanged(false)
+  , _scaleChangeType(SCALE_CHANGE_NONE)
   , _octaveChanged(false)
   , _holdToggled(false)
   , _newOctaveRange(1)
@@ -111,12 +111,10 @@ bool ScaleManager::isHolding() const {
   return _holding;
 }
 
-bool ScaleManager::hasScaleChanged() {
-  if (_scaleChanged) {
-    _scaleChanged = false;
-    return true;
-  }
-  return false;
+ScaleChangeType ScaleManager::consumeScaleChange() {
+  ScaleChangeType t = _scaleChangeType;
+  _scaleChangeType = SCALE_CHANGE_NONE;
+  return t;
 }
 
 // =================================================================
@@ -139,7 +137,7 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
 
       slot.scale.root = r;
       slot.scale.chromatic = false;  // Selecting root exits chromatic
-      _scaleChanged = true;
+      _scaleChangeType = SCALE_CHANGE_ROOT;
 
       #if DEBUG_SERIAL
       Serial.printf("[SCALE] Root %s (mode %s)\n", ROOT_NAMES[r], MODE_NAMES[slot.scale.mode]);
@@ -161,7 +159,7 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
 
       slot.scale.mode = m;
       slot.scale.chromatic = false;  // Selecting mode exits chromatic
-      _scaleChanged = true;
+      _scaleChangeType = SCALE_CHANGE_MODE;
 
       #if DEBUG_SERIAL
       Serial.printf("[SCALE] Mode %s (root %s)\n", MODE_NAMES[m], ROOT_NAMES[slot.scale.root]);
@@ -179,7 +177,7 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       if (slot.type == BANK_NORMAL && _engine) _engine->allNotesOff();
 
       slot.scale.chromatic = true;
-      _scaleChanged = true;
+      _scaleChangeType = SCALE_CHANGE_CHROMATIC;
 
       #if DEBUG_SERIAL
       Serial.printf("[SCALE] Chromatic (root %s)\n", ROOT_NAMES[slot.scale.root]);

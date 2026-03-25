@@ -43,9 +43,9 @@ static InputParser s_input;
 void SetupManager::run() {
   if (!_keyboard || !_leds) return;
 
-  // Enter calibration LED mode
+  // Enter setup LED mode
   _leds->allOff();
-  _leds->setCalibrationMode(true);
+  _leds->startSetupComet();
   _leds->update();
 
   // Debounce: wait for entry conditions to settle
@@ -100,7 +100,7 @@ void SetupManager::run() {
         break;
 
       case '0':
-        _leds->setCalibrationMode(false);
+        _leds->stopSetupComet();
         _leds->allOff();
         _ui.vtClear();
         Serial.println("  Rebooting...");
