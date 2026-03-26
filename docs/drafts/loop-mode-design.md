@@ -126,8 +126,14 @@ class LoopEngine {
     uint32_t _playStartUs;           // micros() when playback started
     uint32_t _lastPositionUs;        // Previous loop position (wrap detection)
 
-    // --- Active notes (clean noteOff at wrap) ---
-    uint8_t  _activeNotes[48];       // velocity per pad, 0 = off
+    // --- Reference-counted note tracking (live + playback unified) ---
+    // Mirrors ArpEngine pattern (ArpEngine.h:130-136).
+    // MIDI noteOn only sent when refcount goes 0→1.
+    // MIDI noteOff only sent when refcount goes 1→0.
+    // Prevents duplicate noteOn when live press coincides with loop playback,
+    // and prevents premature noteOff when one source releases while the other holds.
+    uint8_t  _noteRefCount[128];     // per MIDI note (not per pad)
+    uint8_t  _activeNotes[48];       // velocity per pad, 0 = off (playback tracking)
 
     // --- State machine ---
     enum State : uint8_t { EMPTY, RECORDING, PLAYING, OVERDUBBING, STOPPED };
@@ -225,7 +231,7 @@ void LoopEngine::tick(MidiTransport& transport, float currentBPM) {
 
     // Detect wrap (position jumped backward)
     if (positionUs < _lastPositionUs) {
-        flushActiveNotes(transport);  // noteOff safety
+        flushActiveNotes(transport);  // noteOff for all refcount>0, then zero refcounts
         _cursorIdx = 0;
         _tickFlash = true;
     }
@@ -245,25 +251,37 @@ void LoopEngine::tick(MidiTransport& transport, float currentBPM) {
             schedulePending(now + shuffleUs + chaosUs, ev.padIndex, vel);
         } else {
             uint8_t note = padToNote(ev.padIndex);
-            if (_activeNotes[ev.padIndex] > 0) {
-                transport.sendNoteOff(note, 0, _channel);
-                _activeNotes[ev.padIndex] = 0;
+            // Refcount: only send MIDI noteOff on 1→0 transition
+            if (_noteRefCount[note] > 0) {
+                _noteRefCount[note]--;
+                if (_noteRefCount[note] == 0) {
+                    transport.sendNoteOff(note, 0, _channel);
+                }
             }
+            _activeNotes[ev.padIndex] = 0;
         }
         _cursorIdx++;
     }
 }
 ```
 
-### Phase 2 — `processEvents()`: fire pending noteOns
+### Phase 2 — `processEvents()`: fire pending noteOns (refcounted)
+
+Uses `(int32_t)` cast pattern consistent with ArpEngine (`ArpEngine.cpp:448`).
 
 ```cpp
 void LoopEngine::processEvents(MidiTransport& transport) {
     uint32_t now = micros();
     for (uint8_t i = 0; i < MAX_PENDING; i++) {
-        if (_pending[i].active && (now - _pending[i].fireTimeUs) < 0x80000000UL) {
-            transport.sendNoteOn(_pending[i].note, _pending[i].velocity, _channel);
-            _activeNotes[_pending[i].note - LOOP_NOTE_OFFSET] = _pending[i].velocity;
+        if (_pending[i].active && (int32_t)(now - _pending[i].fireTimeUs) >= 0) {
+            uint8_t note = _pending[i].note;
+            uint8_t vel  = _pending[i].velocity;
+            // Refcount: only send MIDI noteOn on 0→1 transition
+            if (_noteRefCount[note] == 0) {
+                transport.sendNoteOn(note, vel, _channel);
+            }
+            _noteRefCount[note]++;
+            _activeNotes[note - LOOP_NOTE_OFFSET] = vel;
             _pending[i].active = false;
         }
     }
@@ -320,6 +338,37 @@ Requires pointer to global `padOrder[48]`, same pattern as ArpEngine.
 | STOPPED | PLAYING | -- | EMPTY (clear) |
 
 Reuses configurable `doubleTapMs` from settings (100-250ms, default 150ms).
+
+### Bank switch denied during RECORDING/OVERDUBBING
+
+Bank switching is **blocked** while any foreground LOOP bank is in RECORDING or OVERDUBBING state.
+The user must close the recording (tap → PLAYING) or stop (double-tap → STOPPED) before switching.
+This prevents dangling recording state and ambiguous background behavior.
+
+Guard in `BankManager::switchToBank()` (BankManager.cpp:117):
+
+```cpp
+void BankManager::switchToBank(uint8_t newBank) {
+  if (newBank >= NUM_BANKS || newBank == _currentBank) return;
+
+  // --- LOOP recording lock: deny bank switch while recording/overdubbing ---
+  BankSlot& cur = _banks[_currentBank];
+  if (cur.type == BANK_LOOP && cur.loopEngine) {
+    LoopEngine::State ls = cur.loopEngine->getState();
+    if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
+      return;  // Silently deny — user must close recording first
+    }
+  }
+
+  // All notes off on old bank's channel
+  // ... (existing code unchanged)
+}
+```
+
+**MIDI transport during RECORDING/OVERDUBBING:**
+- MIDI Start (0xFA): **ignored** during RECORDING (loop doesn't exist yet) and OVERDUBBING (would disrupt active recording).
+- MIDI Stop (0xFC): **closes recording** (bar-snap → STOPPED, flushes active notes). Aligns with DAW's intent to halt all activity.
+- MIDI Continue (0xFB): **ignored** during RECORDING/OVERDUBBING.
 
 ### Playback start quantize
 
@@ -471,15 +520,84 @@ uint8_t LoopEngine::applyVelocityPattern(uint8_t origVel, uint32_t offsetUs, uin
 
 ## Pot Mapping
 
-### New PotTargets (add to PotRouter.h:11)
+### New PotTargets (add to PotRouter.h:11, before TARGET_MIDI_CC)
 
 ```cpp
-    TARGET_CHAOS,             // LOOP per-bank, 0.0-1.0
-    TARGET_VEL_PATTERN,       // LOOP per-bank, 0-3 discrete
-    TARGET_VEL_PATTERN_DEPTH, // LOOP per-bank, 0.0-1.0
+    // LOOP per-bank
+    TARGET_CHAOS,             // 0.0-1.0
+    TARGET_VEL_PATTERN,       // 0-3 discrete
+    TARGET_VEL_PATTERN_DEPTH, // 0.0-1.0
 ```
 
 Existing targets reused: `TARGET_TEMPO_BPM`, `TARGET_BASE_VELOCITY`, `TARGET_VELOCITY_VARIATION`, `TARGET_SHUFFLE_DEPTH`, `TARGET_SHUFFLE_TEMPLATE`.
+
+### PotRouter new members and applyBinding cases
+
+Add members to PotRouter (alongside existing `_shuffleDepth`, `_gateLength`, etc.):
+```cpp
+    // LOOP-specific params (PotRouter.h)
+    float   _chaosAmount;        // 0.0-1.0
+    uint8_t _velPatternIdx;      // 0-3
+    float   _velPatternDepth;    // 0.0-1.0
+```
+
+Add cases to `applyBinding()` switch (PotRouter.cpp:455+):
+```cpp
+    case TARGET_CHAOS:
+      _chaosAmount = adcToFloat(adc);
+      break;
+    case TARGET_VEL_PATTERN: {
+      uint8_t pat = (uint8_t)adcToRange(adc, 0, 3);
+      if (pat > 3) pat = 3;
+      _velPatternIdx = pat;
+      break;
+    }
+    case TARGET_VEL_PATTERN_DEPTH:
+      _velPatternDepth = adcToFloat(adc);
+      break;
+```
+
+Add getters:
+```cpp
+    float   getChaosAmount() const       { return _chaosAmount; }
+    uint8_t getVelPatternIdx() const     { return _velPatternIdx; }
+    float   getVelPatternDepth() const   { return _velPatternDepth; }
+```
+
+Add to `isPerBankTarget()` (PotRouter.cpp:577):
+```cpp
+    case TARGET_CHAOS:
+    case TARGET_VEL_PATTERN:
+    case TARGET_VEL_PATTERN_DEPTH:
+        return true;
+```
+
+Add to `getRangeForTarget()` and `seedCatchValues()` following existing patterns.
+
+### Main loop: pot-to-LoopEngine routing (main.cpp, after arp routing block ~line 707)
+
+Mirrors the existing arp routing pattern at `main.cpp:698-707`:
+
+```cpp
+  // --- Musical params: push live to LoopEngine (if LOOP bank) ---
+  // Same pattern as arp routing above (main.cpp:698-707)
+  if (potSlot.type == BANK_LOOP && potSlot.loopEngine) {
+    potSlot.loopEngine->setShuffleDepth(s_potRouter.getShuffleDepth());
+    potSlot.loopEngine->setShuffleTemplate(s_potRouter.getShuffleTemplate());
+    potSlot.loopEngine->setChaosAmount(s_potRouter.getChaosAmount());
+    potSlot.loopEngine->setVelPatternIdx(s_potRouter.getVelPatternIdx());
+    potSlot.loopEngine->setVelPatternDepth(s_potRouter.getVelPatternDepth());
+    potSlot.loopEngine->setBaseVelocity(s_potRouter.getBaseVelocity());
+    potSlot.loopEngine->setVelocityVariation(s_potRouter.getVelocityVariation());
+  }
+```
+
+**Shared targets** (`TARGET_SHUFFLE_DEPTH`, `TARGET_SHUFFLE_TEMPLATE`) write to PotRouter's
+single `_shuffleDepth`/`_shuffleTemplate` members. The main loop routes them to the correct
+engine based on the foreground bank type. This works because:
+- PotRouter is the intermediary — it stores the value
+- Main loop reads PotRouter getters and writes to the active engine
+- Bank switch triggers `resetPerBankCatch()` which reseeds from stored values
 
 ### LOOP default mapping
 
@@ -692,6 +810,7 @@ for (uint8_t i = 0; i < NUM_BANKS && loopIdx < 2; i++) {
 No ArpScheduler rename. LoopEngine tick/processEvents called directly:
 
 ```
+ 8.  Play/Stop pad — ARPEG (existing) + LOOP (NEW, same block)
  9.  processNormalMode() or processArpMode() or processLoopMode()
 10.  ArpScheduler.tick()                    // unchanged
 10b. ArpScheduler.processEvents()           // unchanged
@@ -700,7 +819,93 @@ No ArpScheduler rename. LoopEngine tick/processEvents called directly:
 11.  MidiEngine.flush()
 ```
 
+**Critical**: LOOP play/stop/rec handling is at step 8, **outside** the `isHolding()` guard
+(main.cpp:557-576), parallel to the existing arp play/stop block. This ensures the user can
+start/stop recording while holding the left button (e.g., after a bank switch).
+
+```cpp
+  // --- Play/Stop pad (main.cpp:557) — ARPEG + LOOP ---
+  {
+    BankSlot& psSlot = s_bankManager.getCurrentSlot();
+
+    // ARPEG: existing code (lines 560-571, unchanged)
+    if (s_playStopPad < NUM_KEYS && psSlot.type == BANK_ARPEG
+        && psSlot.arpEngine && psSlot.arpEngine->isHoldOn()) {
+      // ... existing arp play/stop ...
+
+    // LOOP: state machine transitions (NEW — same block, same priority)
+    } else if (s_playStopPad < NUM_KEYS && psSlot.type == BANK_LOOP
+               && psSlot.loopEngine) {
+      bool psPressed = state.keyIsPressed[s_playStopPad];
+      if (psPressed && !s_lastPlayStopState) {
+        handleLoopPlayStop(psSlot);  // tap/double-tap/long-press dispatcher
+      }
+      // Long press detection: track hold duration for STOPPED→EMPTY clear
+      if (psPressed) {
+        if (!s_lastPlayStopState) _playStopPressTime = millis();
+      } else if (s_lastPlayStopState) {
+        // Release: check if it was a long press (>500ms)
+        if ((millis() - _playStopPressTime) >= LONG_PRESS_MS
+            && psSlot.loopEngine->getState() == LoopEngine::STOPPED) {
+          psSlot.loopEngine->clear();
+        }
+      }
+      s_lastPlayStopState = psPressed;
+
+    } else {
+      // Not ARPEG-HOLD or LOOP: reset edge detection
+      s_lastPlayStopState = ...;
+    }
+  }
+```
+
+`handleLoopPlayStop()` dispatches based on current state:
+```cpp
+void handleLoopPlayStop(BankSlot& slot) {
+    LoopEngine* eng = slot.loopEngine;
+    LoopEngine::State ls = eng->getState();
+
+    switch (ls) {
+      case LoopEngine::EMPTY:
+        eng->startRecording();
+        s_leds.triggerConfirm(CONFIRM_LOOP_REC);
+        break;
+      case LoopEngine::RECORDING:
+        eng->stopRecording(s_clockManager.getSmoothedBPM());  // bar-snap → PLAYING
+        s_leds.triggerConfirm(CONFIRM_PLAY);
+        break;
+      case LoopEngine::PLAYING:
+        // Tap = OVERDUBBING, double-tap = STOPPED (checked via doubleTapMs)
+        if (isDoubleTap()) {
+          eng->stop(s_transport);
+          s_leds.triggerConfirm(CONFIRM_STOP);
+        } else {
+          eng->startOverdub();
+          s_leds.triggerConfirm(CONFIRM_LOOP_REC);
+        }
+        break;
+      case LoopEngine::OVERDUBBING:
+        if (isDoubleTap()) {
+          eng->stop(s_transport);
+          s_leds.triggerConfirm(CONFIRM_STOP);
+        } else {
+          eng->stopOverdub();  // merge → PLAYING
+          s_leds.triggerConfirm(CONFIRM_PLAY);
+        }
+        break;
+      case LoopEngine::STOPPED:
+        eng->play(s_clockManager, s_clockManager.getSmoothedBPM());
+        s_leds.triggerConfirm(CONFIRM_PLAY);
+        break;
+    }
+}
+```
+
 ### processLoopMode() (inline in loop())
+
+**Important**: LOOP bypasses ScaleResolver — uses `s_transport.sendNoteOn/Off()` directly
+(not `s_midiEngine.noteOn()` which takes padIndex+scale). Live presses go through the
+same `_noteRefCount[]` as loop playback to prevent duplicate noteOn/premature noteOff.
 
 ```cpp
 if (slot.type == BANK_LOOP && slot.loopEngine) {
@@ -712,18 +917,39 @@ if (slot.type == BANK_LOOP && slot.loopEngine) {
         if (pressed && !wasPressed) {
             uint8_t note = eng->padToNote(p);
             uint8_t vel = slot.baseVelocity; // +/- variation applied here
-            s_midiEngine.noteOn(note, vel, slot.channel);
+            // Refcount: only send MIDI noteOn on 0→1
+            if (eng->noteRefIncrement(note)) {
+                s_transport.sendNoteOn(note, vel, slot.channel);
+            }
             if (eng->getState() == LoopEngine::OVERDUBBING) {
                 eng->recordNoteOn(p, vel);
             }
         } else if (!pressed && wasPressed) {
             uint8_t note = eng->padToNote(p);
-            s_midiEngine.noteOff(note, 0, slot.channel);
+            // Refcount: only send MIDI noteOff on 1→0
+            if (eng->noteRefDecrement(note)) {
+                s_transport.sendNoteOff(note, 0, slot.channel);
+            }
             if (eng->getState() == LoopEngine::OVERDUBBING) {
                 eng->recordNoteOff(p);
             }
         }
     }
+}
+```
+
+Refcount helpers (in LoopEngine):
+```cpp
+// Returns true if this is the 0→1 transition (caller should send noteOn)
+bool noteRefIncrement(uint8_t note) {
+    return (_noteRefCount[note]++ == 0);
+}
+// Returns true if this is the 1→0 transition (caller should send noteOff)
+bool noteRefDecrement(uint8_t note) {
+    if (_noteRefCount[note] > 0) {
+        return (--_noteRefCount[note] == 0);
+    }
+    return false;
 }
 ```
 
