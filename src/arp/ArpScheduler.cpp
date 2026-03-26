@@ -141,18 +141,3 @@ void ArpScheduler::processEvents() {
   }
 }
 
-// =================================================================
-// resetSync — align tick tracking after MIDI Start
-// =================================================================
-// Without this, _lastClockTick holds the pre-reset value (e.g. 5000)
-// while ClockManager._currentTick is now 0. The unsigned subtraction
-// 0 - 5000 wraps to ~4 billion, causing a burst of thousands of steps.
-
-void ArpScheduler::resetSync() {
-  if (_clock) {
-    _lastClockTick = _clock->getCurrentTick();
-  }
-  for (uint8_t i = 0; i < _slotCount; i++) {
-    _slots[i].tickAccum = 0;
-  }
-}

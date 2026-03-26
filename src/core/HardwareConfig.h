@@ -195,7 +195,6 @@ enum ClockMode : uint8_t {
   NUM_CLOCK_MODES = 2
 };
 const uint8_t DEFAULT_CLOCK_MODE         = CLOCK_SLAVE;
-const uint8_t DEFAULT_FOLLOW_TRANSPORT   = 1;  // yes — slave follows DAW Start/Stop/Continue
 const uint8_t DEFAULT_PANIC_ON_RECONNECT = 1;  // yes — CC123 on all channels when BLE reconnects
 
 // --- Arp Start Quantize (per-bank, set in Tool 4) ---

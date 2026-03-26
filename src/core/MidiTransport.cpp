@@ -20,15 +20,13 @@ static USBMIDI usbMidi(DEVICE_NAME_USB);
 static std::atomic<bool> s_bleConnected{false};
 static std::atomic<uint8_t> s_bleIntervalSetting{BLE_NORMAL};
 
-// Clock reception callbacks (set by main.cpp, called from USB poll + BLE callback)
-static MidiClockCallback     s_clockCb     = nullptr;
-static MidiTransportCallback s_transportCb = nullptr;
+// Clock reception callback (set by main.cpp, called from USB poll + BLE callback)
+static MidiClockCallback s_clockCb = nullptr;
 
 // BLE system real-time callback (called from NimBLE task)
 static void onBleSystemRT(uint8_t status) {
   if (status == 0xF8 && s_clockCb)     s_clockCb(1);        // BLE clock tick
-  if ((status == 0xFA || status == 0xFB || status == 0xFC) && s_transportCb)
-    s_transportCb(status, 1);                                 // BLE start/continue/stop
+  // 0xFA/0xFB/0xFC (Start/Continue/Stop) intentionally ignored — ILLPAD is an instrument, not a transport follower
 }
 
 static void onBleConnected() {
@@ -129,8 +127,7 @@ void MidiTransport::update() {
       if (cin == 0x0F) {  // CIN 0x0F = Single Byte (system real-time)
         uint8_t status = pkt.byte1;
         if (status == 0xF8 && s_clockCb)     s_clockCb(0);        // USB clock tick
-        if ((status == 0xFA || status == 0xFB || status == 0xFC) && s_transportCb)
-          s_transportCb(status, 0);                                 // USB start/continue/stop
+        // 0xFA/0xFB/0xFC (Start/Continue/Stop) intentionally ignored
       }
     }
   }
@@ -150,10 +147,6 @@ void MidiTransport::setBleInterval(uint8_t interval) {
 
 void MidiTransport::setClockCallback(MidiClockCallback cb) {
   s_clockCb = cb;
-}
-
-void MidiTransport::setTransportCallback(MidiTransportCallback cb) {
-  s_transportCb = cb;
 }
 
 // =================================================================

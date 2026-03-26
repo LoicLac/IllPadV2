@@ -5,11 +5,10 @@
 
 ClockManager::ClockManager()
   : _lastExternalTickUs(0), _lastSource(0), _newTickAvailable(false),
-    _startReceived(false), _stopReceived(false),
     _tickIntervalIdx(0), _tickIntervalCount(0), _prevTickUs(0),
     _pllBPM(120.0f), _pllTickInterval(0.0f), _lastKnownBPM(0.0f),
     _activeSource(SRC_INTERNAL),
-    _masterMode(false), _followTransport(true), _transport(nullptr),
+    _masterMode(false), _transport(nullptr),
     _internalBPM(120), _currentTick(0), _lastTickTimeUs(0),
     _rawTickCount(0)
 {
@@ -35,41 +34,12 @@ void ClockManager::onMidiClockTick(uint8_t source) {
   _newTickAvailable.store(true, std::memory_order_release);
 }
 
-void ClockManager::onMidiStart() {
-  if (_masterMode) return;     // Master ignores external transport
-  if (!_followTransport) return;
-  _startReceived.store(true, std::memory_order_release);
-}
-
-void ClockManager::onMidiContinue() {
-  if (_masterMode) return;     // Master ignores external transport
-  if (!_followTransport) return;
-  // Continue does NOT reset tick counter — arps resume from where they were.
-  // No flag needed: the clock keeps ticking, arps keep their position.
-  #if DEBUG_SERIAL
-  Serial.println("[CLOCK] MIDI Continue (resume, no tick reset)");
-  #endif
-}
-
-void ClockManager::onMidiStop() {
-  if (_masterMode) return;     // Master ignores external transport
-  if (!_followTransport) return;
-  _stopReceived.store(true, std::memory_order_release);
-}
-
 void ClockManager::setInternalBPM(uint16_t bpm) {
   _internalBPM = bpm;
 }
 
 void ClockManager::update() {
   uint32_t nowUs = micros();
-
-  // --- Process MIDI Start (reset tick counter for clock sync) ---
-  // The _startReceived flag is also exposed via consumeStartReceived()
-  // so main.cpp can sync arps. We peek without clearing here.
-  if (_startReceived.load(std::memory_order_relaxed)) {
-    _currentTick = 0;
-  }
 
   // --- Process new external tick (if any) ---
   if (_newTickAvailable.load(std::memory_order_acquire)) {
@@ -187,31 +157,6 @@ void ClockManager::updatePLL(uint32_t intervalUs, uint8_t source) {
 
 void ClockManager::setMasterMode(bool master) {
   _masterMode = master;
-}
-
-void ClockManager::setFollowTransport(bool follow) {
-  _followTransport = follow;
-}
-
-bool ClockManager::consumeStartReceived() {
-  // Atomic exchange: read + clear in one operation (no BLE callback race)
-  if (_startReceived.exchange(false, std::memory_order_acq_rel)) {
-    #if DEBUG_SERIAL
-    Serial.println("[CLOCK] MIDI Start (consumed)");
-    #endif
-    return true;
-  }
-  return false;
-}
-
-bool ClockManager::consumeStopReceived() {
-  if (_stopReceived.exchange(false, std::memory_order_acq_rel)) {
-    #if DEBUG_SERIAL
-    Serial.println("[CLOCK] MIDI Stop (consumed)");
-    #endif
-    return true;
-  }
-  return false;
 }
 
 uint32_t ClockManager::getCurrentTick() const  { return _currentTick; }

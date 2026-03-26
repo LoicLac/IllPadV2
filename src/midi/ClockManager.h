@@ -13,22 +13,14 @@ public:
   void begin(MidiTransport* transport = nullptr);
   void update();  // Called every loop iteration
 
-  // Callbacks from MidiTransport (BLE calls from NimBLE task!)
+  // Callback from MidiTransport (BLE calls from NimBLE task!)
   void onMidiClockTick(uint8_t source);  // 0xF8, source: 0=USB, 1=BLE
-  void onMidiStart();                     // 0xFA
-  void onMidiContinue();                  // 0xFB
-  void onMidiStop();                      // 0xFC
 
   // Internal tempo source (pot right 1)
   void setInternalBPM(uint16_t bpm);
 
   // Config (applied at boot from Tool 5 settings)
   void setMasterMode(bool master);
-  void setFollowTransport(bool follow);
-
-  // Transport flags — consumed once per loop by main.cpp
-  bool consumeStartReceived();    // true once after 0xFA (reset tick counter)
-  bool consumeStopReceived();     // true once after 0xFC (flush all arps)
 
   // Output — smoothed clock
   uint32_t getCurrentTick() const;
@@ -52,8 +44,6 @@ private:
   std::atomic<uint32_t> _lastExternalTickUs;   // micros() of last external tick
   std::atomic<uint8_t>  _lastSource;           // source of last tick (0=USB, 1=BLE)
   std::atomic<bool>     _newTickAvailable;     // flag: new tick arrived
-  std::atomic<bool>     _startReceived;        // flag: MIDI Start received
-  std::atomic<bool>     _stopReceived;         // flag: MIDI Stop received
 
   // PLL circular buffer (only accessed from Core 1 update())
   uint32_t _tickIntervals[PLL_BUFFER_SIZE];
@@ -71,7 +61,6 @@ private:
 
   // Config
   bool           _masterMode;
-  bool           _followTransport;
   MidiTransport* _transport;
 
   // Internal tempo

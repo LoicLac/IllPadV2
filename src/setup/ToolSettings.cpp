@@ -7,7 +7,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-static const uint8_t NUM_PARAMS = 8;
+static const uint8_t NUM_PARAMS = 7;
 
 static const char* s_profileNames[]   = {"Adaptive", "Expressive", "Percussive"};
 static const char* s_bleNames[]       = {"Low Latency (7.5ms)", "Normal (15ms)", "Battery Saver (30ms)", "Off (USB only)"};
@@ -46,10 +46,7 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
     case 3: // Clock Mode: cycle 0-1
       wk.clockMode = (wk.clockMode + NUM_CLOCK_MODES + dir) % NUM_CLOCK_MODES;
       break;
-    case 4: // Follow Transport: cycle 0-1
-      wk.followTransport = wk.followTransport ? 0 : 1;
-      break;
-    case 5: { // Double-Tap: step 10ms, range 100-250, accel x5
+    case 4: { // Double-Tap: step 10ms, range 100-250, accel x5
       int step = accelerated ? 50 : 10;
       int val = (int)wk.doubleTapMs + dir * step;
       if (val < DOUBLE_TAP_MS_MIN) val = DOUBLE_TAP_MS_MIN;
@@ -57,7 +54,7 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
       wk.doubleTapMs = (uint16_t)val;
       break;
     }
-    case 6: { // Bargraph Duration: step 500ms, range 1000-10000, accel x10
+    case 5: { // Bargraph Duration: step 500ms, range 1000-10000, accel x10
       int step = accelerated ? 5000 : 500;
       int val = (int)wk.potBarDurationMs + dir * step;
       if (val < (int)LED_BARGRAPH_DURATION_MIN) val = LED_BARGRAPH_DURATION_MIN;
@@ -65,7 +62,7 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
       wk.potBarDurationMs = (uint16_t)val;
       break;
     }
-    case 7: // Panic on Reconnect: cycle 0-1
+    case 6: // Panic on Reconnect: cycle 0-1
       wk.panicOnReconnect = wk.panicOnReconnect ? 0 : 1;
       break;
   }
@@ -120,21 +117,15 @@ void ToolSettings::drawDescription(uint8_t param) {
       Serial.printf(VT_DIM "    Reboot required after change." VT_RESET VT_CL "\n");
       break;
     case 4:
-      Serial.printf(VT_DIM "    Slave only. Yes: DAW Start/Stop/Continue" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    controls arps (Start=sync, Stop=silence," VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Continue=resume). No: arps ignore DAW" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    transport. Clock ticks always received." VT_RESET VT_CL "\n");
-      break;
-    case 5:
       Serial.printf(VT_DIM "    Time window to detect double-tap on ARPEG" VT_RESET VT_CL "\n");
       Serial.printf(VT_DIM "    pads (HOLD mode). Lower = faster but harder" VT_RESET VT_CL "\n");
       Serial.printf(VT_DIM "    to trigger. Range: 100-250ms." VT_RESET VT_CL "\n");
       break;
-    case 6:
+    case 5:
       Serial.printf(VT_DIM "    How long the pot bargraph stays visible" VT_RESET VT_CL "\n");
       Serial.printf(VT_DIM "    after last pot movement. Range: 1-10s." VT_RESET VT_CL "\n");
       break;
-    case 7:
+    case 6:
       Serial.printf(VT_DIM "    Yes: send CC123 (All Notes Off) on all" VT_RESET VT_CL "\n");
       Serial.printf(VT_DIM "    channels when BLE reconnects. Prevents" VT_RESET VT_CL "\n");
       Serial.printf(VT_DIM "    stuck notes after connection drop." VT_RESET VT_CL "\n");
@@ -153,7 +144,7 @@ void ToolSettings::run() {
   // Load current settings from NVS (or use defaults)
   SettingsStore wk = {EEPROM_MAGIC, SETTINGS_VERSION,
                       DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
-                      DEFAULT_CLOCK_MODE, DEFAULT_FOLLOW_TRANSPORT,
+                      DEFAULT_CLOCK_MODE,
                       DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
                       DEFAULT_PANIC_ON_RECONNECT};
   {
@@ -192,7 +183,7 @@ void ToolSettings::run() {
       if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
         wk = {EEPROM_MAGIC, SETTINGS_VERSION,
               DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
-              DEFAULT_CLOCK_MODE, DEFAULT_FOLLOW_TRANSPORT,
+              DEFAULT_CLOCK_MODE,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
               DEFAULT_PANIC_ON_RECONNECT};
         if (saveSettings(wk)) {
@@ -307,19 +298,18 @@ void ToolSettings::run() {
 
       drawParam(2, "BLE Interval:", s_bleNames[wk.bleInterval]);
       drawParam(3, "Clock Mode:", s_clockModeNames[wk.clockMode]);
-      drawParam(4, "Follow Transport:", s_yesNoNames[wk.followTransport ? 1 : 0]);
 
       char dtBuf[24];
       snprintf(dtBuf, sizeof(dtBuf), "%d ms  (%d-%d)", wk.doubleTapMs, DOUBLE_TAP_MS_MIN, DOUBLE_TAP_MS_MAX);
-      drawParam(5, "Double-Tap Window:", dtBuf);
+      drawParam(4, "Double-Tap Window:", dtBuf);
 
       char bgBuf[24];
       snprintf(bgBuf, sizeof(bgBuf), "%.1f s  (%.1f-%.1f)",
                wk.potBarDurationMs / 1000.0f,
                LED_BARGRAPH_DURATION_MIN / 1000.0f,
                LED_BARGRAPH_DURATION_MAX / 1000.0f);
-      drawParam(6, "Bargraph Duration:", bgBuf);
-      drawParam(7, "Panic on Reconnect:", s_yesNoNames[wk.panicOnReconnect ? 1 : 0]);
+      drawParam(5, "Bargraph Duration:", bgBuf);
+      drawParam(6, "Panic on Reconnect:", s_yesNoNames[wk.panicOnReconnect ? 1 : 0]);
 
       Serial.printf(VT_CL "\n");
 

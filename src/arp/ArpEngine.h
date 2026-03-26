@@ -60,7 +60,6 @@ public:
   void setHold(bool on);
   bool isHoldOn() const;
   void playStop(MidiTransport& transport);     // Toggle, restart from beginning
-  void resetStepIndex();                       // Restart sequence from beginning (MIDI Start sync)
   bool isPlaying() const;
 
   // --- Core tick (called by ArpScheduler when a step fires) ---

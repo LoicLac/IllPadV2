@@ -284,11 +284,6 @@ void setup() {
   // Clock Manager — wire MIDI clock reception callbacks
   s_clockManager.begin(&s_transport);
   s_transport.setClockCallback([](uint8_t src) { s_clockManager.onMidiClockTick(src); });
-  s_transport.setTransportCallback([](uint8_t status, uint8_t src) {
-    if (status == 0xFA) s_clockManager.onMidiStart();
-    if (status == 0xFB) s_clockManager.onMidiContinue();
-    if (status == 0xFC) s_clockManager.onMidiStop();
-  });
   #if DEBUG_SERIAL
   Serial.println("[INIT] ClockManager OK.");
   #endif
@@ -320,7 +315,6 @@ void setup() {
   s_midiEngine.setAftertouchRate(s_settings.aftertouchRate);
   s_transport.setBleInterval(s_settings.bleInterval);
   s_clockManager.setMasterMode(s_settings.clockMode == CLOCK_MASTER);
-  s_clockManager.setFollowTransport(s_settings.followTransport != 0);
   s_doubleTapMs = s_settings.doubleTapMs;
   s_leds.setPotBarDuration(s_settings.potBarDurationMs);
   s_panicOnReconnect = (s_settings.panicOnReconnect != 0);
@@ -528,31 +522,6 @@ void loop() {
 
   // --- Clock: process ticks (PLL + tick generation) ---
   s_clockManager.update();
-
-  // --- DAW transport: flush all arps on MIDI Stop (slave + followTransport) ---
-  if (s_clockManager.consumeStopReceived()) {
-    for (uint8_t i = 0; i < NUM_BANKS; i++) {
-      if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine
-          && s_banks[i].arpEngine->isPlaying()) {
-        s_banks[i].arpEngine->flushPendingNoteOffs(s_transport);
-      }
-    }
-  }
-  // Start: tick counter already reset by ClockManager.
-  // Must also reset ArpScheduler sync (prevents unsigned wrap burst)
-  // and restart playing engines from bar 1.
-  if (s_clockManager.consumeStartReceived()) {
-    // Flush old events FIRST — prevents stale noteOn/noteOff from firing
-    // after restart. Then reset step index for bar 1 sync.
-    for (uint8_t i = 0; i < NUM_BANKS; i++) {
-      if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine
-          && s_banks[i].arpEngine->isPlaying()) {
-        s_banks[i].arpEngine->flushPendingNoteOffs(s_transport);
-        s_banks[i].arpEngine->resetStepIndex();
-      }
-    }
-    s_arpScheduler.resetSync();
-  }
 
   // --- Play/Stop pad (ARPEG + HOLD ON only — in HOLD OFF this pad plays a note) ---
   {

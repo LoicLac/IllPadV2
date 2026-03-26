@@ -207,12 +207,6 @@ void ArpEngine::playStop(MidiTransport& transport) {
   #endif
 }
 
-void ArpEngine::resetStepIndex() {
-  _stepIndex = -1;
-  _shuffleStepCounter = 0;
-  _waitingForQuantize = false;  // MIDI Start bypasses quantize (already on beat 1)
-}
-
 bool ArpEngine::isPlaying() const { return _playing; }
 
 // =================================================================

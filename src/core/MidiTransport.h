@@ -3,9 +3,8 @@
 
 #include <stdint.h>
 
-// Clock callback types
+// Clock callback type
 typedef void (*MidiClockCallback)(uint8_t source);       // source: 0=USB, 1=BLE
-typedef void (*MidiTransportCallback)(uint8_t status, uint8_t source);  // status: 0xFA/0xFB/0xFC
 
 class MidiTransport {
 public:
@@ -22,9 +21,8 @@ public:
   // BLE connection interval (applied on next BLE connect)
   void setBleInterval(uint8_t interval);  // BleInterval enum (0-2)
 
-  // MIDI clock reception callbacks
+  // MIDI clock reception callback
   void setClockCallback(MidiClockCallback cb);
-  void setTransportCallback(MidiTransportCallback cb);
 
   // CC 123 All Notes Off (panic) — brute force silence on a single channel
   void sendAllNotesOff(uint8_t channel);

@@ -576,9 +576,9 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     #endif
   }
 
-  // --- Settings (profile, AT rate, BLE interval, clock, follow transport, double-tap) ---
+  // --- Settings (profile, AT rate, BLE interval, clock, double-tap, bargraph, panic) ---
   settings = {EEPROM_MAGIC, SETTINGS_VERSION, DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT,
-              DEFAULT_BLE_INTERVAL, DEFAULT_CLOCK_MODE, DEFAULT_FOLLOW_TRANSPORT,
+              DEFAULT_BLE_INTERVAL, DEFAULT_CLOCK_MODE,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT, DEFAULT_PANIC_ON_RECONNECT};
   if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
@@ -591,9 +591,9 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     }
     prefs.end();
     #if DEBUG_SERIAL
-    Serial.printf("[NVS] Settings: profile=%d, atRate=%d, bleInt=%d, clock=%d, follow=%d, dblTap=%d\n",
+    Serial.printf("[NVS] Settings: profile=%d, atRate=%d, bleInt=%d, clock=%d, dblTap=%d\n",
                   settings.baselineProfile, settings.aftertouchRate, settings.bleInterval,
-                  settings.clockMode, settings.followTransport, settings.doubleTapMs);
+                  settings.clockMode, settings.doubleTapMs);
     #endif
   }
 

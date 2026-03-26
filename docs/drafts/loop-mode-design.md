@@ -33,25 +33,35 @@ The existing clock runs at **24 PPQN** (`ClockManager::getCurrentTick()`, `ArpSc
 
 ### Solution: micros()-relative timestamps
 
-Record events as `uint32_t offsetUs` from loop start. At playback, convert BPM to loop duration and scale proportionally:
+Record events as `uint32_t offsetUs` from loop start. Events are stored in **recording-time
+coordinates** (the BPM at which they were recorded) and never rescaled. Playback uses
+**proportional position scaling** to map live tempo into recording timebase:
 - Unlimited recording resolution (~1us)
 - No PPQN conversion needed
-- Tempo changes scale the loop naturally
-- uint32_t supports loops up to ~71 minutes
+- Immediate tempo tracking — arp and loop stay in sync, no wrap delay
+- Events never need rescaling on tempo change
+- One float multiply + divide per tick (~20 cycles at 240MHz, negligible)
 
 ```cpp
-// Recording: store offset from first event
+// Recording: store offset from first event (in recording timebase)
 uint32_t offsetUs = micros() - _recordStartUs;
 
-// Playback: cursor position in microseconds
-uint32_t loopDurationUs = (uint32_t)((float)_loopLengthBars * 4.0f * 60000000.0f / _bpm);
-uint32_t positionUs = (micros() - _playStartUs) % loopDurationUs;
+// Playback: proportional position scaling
+// _recordBpm is set once at stopRecording(), never changes.
+// Events live in recording-time coordinates forever.
+uint32_t liveDurationUs   = calcLoopDurationUs(currentBPM);    // current tempo
+uint32_t recordDurationUs = calcLoopDurationUs(_recordBpm);    // recording tempo
+uint32_t elapsedUs   = (micros() - _playStartUs) % liveDurationUs;
+uint32_t positionUs  = (uint32_t)((float)elapsedUs
+                       * (float)recordDurationUs / (float)liveDurationUs);
+// positionUs is in recording timebase → matches event offsets directly
 ```
 
 ### Bar snap (at recording close)
 
 ```cpp
-uint32_t barDurationUs = (uint32_t)(4.0f * 60000000.0f / _bpm);
+_recordBpm = currentBPM;  // latch — reference timebase for all event offsets
+uint32_t barDurationUs = (uint32_t)(4.0f * 60000000.0f / _recordBpm);
 uint32_t recordedDurationUs = micros() - _recordStartUs;
 uint16_t bars = (recordedDurationUs + barDurationUs / 2) / barDurationUs;
 if (bars == 0) bars = 1;
@@ -78,7 +88,7 @@ for (uint16_t i = 0; i < _eventCount; i++) {
     BANK_LOOP   = 2,
 ```
 
-### BankSlot (KeyboardData.h:130)
+### BankSlot (KeyboardData.h:135)
 
 ```cpp
 // Add to existing struct:
@@ -119,7 +129,7 @@ class LoopEngine {
 
     // --- Loop dimensions ---
     uint16_t _loopLengthBars;        // 1-64, set at recording close
-    float    _bpm;                   // BPM at recording time
+    float    _recordBpm;             // BPM at recording close — reference timebase for all event offsets
 
     // --- Playback ---
     uint16_t _cursorIdx;             // Next event to check
@@ -138,7 +148,6 @@ class LoopEngine {
     // --- State machine ---
     enum State : uint8_t { EMPTY, RECORDING, PLAYING, OVERDUBBING, STOPPED };
     State    _state;
-    bool     _muted;
 
     // --- Recording ---
     uint32_t _recordStartUs;
@@ -175,18 +184,18 @@ public:
 
     // State transitions
     void startRecording();
-    void stopRecording(float currentBPM);  // bar-snap -> PLAYING
+    void stopRecording(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM);  // flush held pads + bar-snap -> PLAYING
     void startOverdub();
-    void stopOverdub();                     // merge -> PLAYING
+    void stopOverdub(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM);  // flush held pads + merge -> PLAYING
     void play(const ClockManager& clock, float currentBPM);  // quantized start
     void stop(MidiTransport& transport);   // flush active notes
-    void toggleMute();
+    void flushLiveNotes(MidiTransport& transport, uint8_t channel);  // CC123 + zero refcount (bank switch)
 
     // Core playback (called every loop iteration)
     void tick(MidiTransport& transport, float currentBPM);
     void processEvents(MidiTransport& transport);
 
-    // Recording input
+    // Recording input (silently drops events when buffer full)
     void recordNoteOn(uint8_t padIndex, uint8_t velocity);
     void recordNoteOff(uint8_t padIndex);
 
@@ -196,7 +205,6 @@ public:
 
     // Queries
     State    getState() const;
-    bool     isMuted() const;
     bool     isPlaying() const;     // PLAYING or OVERDUBBING
     uint16_t getEventCount() const;
     bool     consumeTickFlash();    // For LedController (fires at loop wrap)
@@ -219,33 +227,47 @@ The draft used a linear forward scan: `while (events[cursor].tick <= currentTick
 
 The arp system solves this with `PendingEvent` (`ArpEngine.h:21-26`): events are scheduled with a `fireTimeUs`, and `processEvents()` fires them when time arrives. The loop engine uses the same pattern.
 
-### Phase 1 — `tick()`: scan cursor, schedule pending noteOns
+### Phase 1 — `tick()`: proportional position scaling + scan cursor
+
+Proportional playback: events stay in recording-time coordinates, cursor position
+is scaled from live tempo into recording timebase. Tempo changes take effect
+immediately — arp and loop stay in sync with no wrap delay.
 
 ```cpp
 void LoopEngine::tick(MidiTransport& transport, float currentBPM) {
     if (_state != PLAYING && _state != OVERDUBBING) return;
 
-    uint32_t loopDurationUs = calcLoopDurationUs(currentBPM);
+    // Quantized start guard: _playStartUs may be in the future
     uint32_t now = micros();
-    uint32_t positionUs = (now - _playStartUs) % loopDurationUs;
+    if ((int32_t)(now - _playStartUs) < 0) return;
 
-    // Detect wrap (position jumped backward)
+    // Proportional position: live tempo → recording timebase
+    uint32_t liveDurationUs   = calcLoopDurationUs(currentBPM);
+    uint32_t recordDurationUs = calcLoopDurationUs(_recordBpm);
+    uint32_t elapsedUs  = (now - _playStartUs) % liveDurationUs;
+    uint32_t positionUs = (uint32_t)((float)elapsedUs
+                          * (float)recordDurationUs / (float)liveDurationUs);
+
+    // Detect wrap (position jumped backward in recording timebase)
     if (positionUs < _lastPositionUs) {
         flushActiveNotes(transport);  // noteOff for all refcount>0, then zero refcounts
         _cursorIdx = 0;
         _tickFlash = true;
+        // No rebase: _playStartUs stays fixed from play(). Unsigned modulus handles
+        // cycling correctly (even after micros() overflow at ~71 min). Removing the
+        // rebase eliminates sub-ms inter-loop phase drift that accumulated on every
+        // wrap when two loops rebased independently at slightly different times.
     }
     _lastPositionUs = positionUs;
 
-    if (_muted) return;  // cursor advances, no scheduling
-
-    // Scan events within current position window
+    // Scan events — offsets are in recording timebase, positionUs matches
     while (_cursorIdx < _eventCount &&
            _events[_cursorIdx].offsetUs <= positionUs) {
         const LoopEvent& ev = _events[_cursorIdx];
-        int32_t shuffleUs = calcShuffleOffsetUs(ev.offsetUs, loopDurationUs);
+        // Shuffle/chaos offsets are in real time (live tempo) — feels consistent at any BPM
+        int32_t shuffleUs = calcShuffleOffsetUs(ev.offsetUs, recordDurationUs);
         int32_t chaosUs   = calcChaosOffsetUs(_cursorIdx);
-        uint8_t vel       = applyVelocityPattern(ev.velocity, ev.offsetUs, loopDurationUs);
+        uint8_t vel       = applyVelocityPattern(ev.velocity, ev.offsetUs, recordDurationUs);
 
         if (ev.velocity > 0) {
             schedulePending(now + shuffleUs + chaosUs, ev.padIndex, vel);
@@ -360,15 +382,40 @@ void BankManager::switchToBank(uint8_t newBank) {
     }
   }
 
-  // All notes off on old bank's channel
+  // --- Flush live LOOP notes on outgoing bank ---
+  // LOOP bypasses MidiEngine (uses s_transport.sendNoteOn/Off directly),
+  // so _engine->allNotesOff() below does NOT reach live LOOP notes.
+  // Without this flush, held pads on a LOOP bank produce stuck notes
+  // on bank switch because processLoopMode() stops running for that bank.
+  if (cur.type == BANK_LOOP && cur.loopEngine && _transport) {
+    cur.loopEngine->flushLiveNotes(*_transport, _currentBank);
+  }
+
+  // All notes off on old bank's channel (handles NORMAL + ARPEG)
   // ... (existing code unchanged)
 }
 ```
 
-**MIDI transport during RECORDING/OVERDUBBING:**
-- MIDI Start (0xFA): **ignored** during RECORDING (loop doesn't exist yet) and OVERDUBBING (would disrupt active recording).
-- MIDI Stop (0xFC): **closes recording** (bar-snap → STOPPED, flushes active notes). Aligns with DAW's intent to halt all activity.
-- MIDI Continue (0xFB): **ignored** during RECORDING/OVERDUBBING.
+**`flushLiveNotes()`** sends noteOff for any note with refcount > 0 that came from
+live play (not loop playback). Since we can't distinguish the source of each refcount
+increment, the simplest safe approach is to send CC123 (All Notes Off) on the outgoing
+channel — this is the same panic message `MidiEngine::allNotesOff()` sends for NORMAL banks,
+but routed through `MidiTransport` directly:
+
+```cpp
+void LoopEngine::flushLiveNotes(MidiTransport& transport, uint8_t channel) {
+    // CC123 All Notes Off — brute-force silence for this channel
+    transport.sendAllNotesOff(channel);
+    // Zero the refcount array so playback doesn't see stale live-play state
+    memset(_noteRefCount, 0, sizeof(_noteRefCount));
+}
+```
+
+This fires once on bank switch. The background loop playback continues — its next noteOn
+will increment refcount from 0 (fresh start), and the corresponding noteOff will decrement
+to 0. No orphan notes.
+
+**Note:** MIDI transport messages (Start/Stop/Continue) are ignored system-wide. See DAW transport section.
 
 ### Playback start quantize
 
@@ -380,7 +427,7 @@ Reuses `ArpStartMode` enum (`HardwareConfig.h:201-208`). Per-bank, set in Tool 4
 | Beat | Delay start to next beat (24 ticks = 1 quarter note) |
 | Bar | Delay start to next bar (96 ticks = 4 quarter notes) |
 
-Applies to: STOPPED -> PLAYING transition and MIDI Start (0xFA). Recording close (RECORDING -> PLAYING) always uses Immediate — the loop should start playing back what you just recorded without waiting.
+Applies to: STOPPED -> PLAYING transition. Recording close (RECORDING -> PLAYING) always uses Immediate — the loop should start playing back what you just recorded without waiting.
 
 ```cpp
 void LoopEngine::play(const ClockManager& clock, float currentBPM) {
@@ -407,25 +454,92 @@ void LoopEngine::play(const ClockManager& clock, float currentBPM) {
 
 Stop is always immediate (same as arp — `ArpStartMode` only gates start, not stop).
 
-### Hold pad = Mute toggle
-
-Works in PLAYING, OVERDUBBING, and STOPPED states. Muted = cursor advances, pending events not scheduled, no MIDI sent. Unmute resumes at current position.
-
 ### Recording flow
 
 **First recording (EMPTY -> RECORDING):**
 1. `_waitingForFirstHit = true` — tick counter does NOT start on tap
 2. First pad press: `_recordStartUs = micros()`, first event at offsetUs = 0
 3. Subsequent noteOn/noteOff stored with `micros() - _recordStartUs`
-4. Tap play/stop to close -> bar-snap -> sort by offsetUs -> PLAYING
+4. Tap play/stop to close -> flush held pads (inject noteOff) -> bar-snap -> sort by offsetUs -> PLAYING
 
 **Overdub (PLAYING -> OVERDUBBING):**
 1. Loop continues playing normally
 2. New events into `_overdubBuf[]` with offsetUs relative to current loop position
-3. Tap to close -> sorted merge into `_events[]`
-4. If `_eventCount + _overdubCount > MAX_LOOP_EVENTS`: oldest overdub events dropped
+3. Tap to close -> `flushHeldPadsToOverdub()` -> sorted merge into `_events[]`
+4. If `_eventCount + _overdubCount > MAX_LOOP_EVENTS`: newest overdub events dropped
+
+**Critical: flush held pads on overdub close.** If the user is still holding pads
+when they tap play/stop to close the overdub, the noteOn was recorded but the noteOff
+never was. Without the flush, the merged loop has orphan noteOns → stuck notes until
+loop wrap.
+
+```cpp
+// Called by stopOverdub() BEFORE mergeOverdub()
+// Injects noteOff for any pad whose noteOn was recorded during this overdub
+void LoopEngine::flushHeldPadsToOverdub(const bool* keyIsPressed,
+                                         const uint8_t* padOrder,
+                                         float currentBPM) {
+    uint32_t liveDurationUs   = calcLoopDurationUs(currentBPM);
+    uint32_t recordDurationUs = calcLoopDurationUs(_recordBpm);
+    uint32_t elapsedUs = (micros() - _playStartUs) % liveDurationUs;
+    uint32_t positionUs = (uint32_t)((float)elapsedUs
+                          * (float)recordDurationUs / (float)liveDurationUs);
+
+    for (uint8_t i = 0; i < 48; i++) {
+        if (keyIsPressed[i] && _overdubCount < MAX_OVERDUB_EVENTS) {
+            _overdubBuf[_overdubCount++] = {positionUs, padOrder[i], 0, false};
+            // false = noteOff (isNoteOn field)
+        }
+    }
+}
+```
+
+The matching live noteOff will still fire later via `processLoopMode()` when the
+user releases the pad, but the refcount handles this: the playback noteOff from
+the injected event decrements to 0 (MIDI sent), and the later live release
+decrements from 0 → clamped (no double noteOff).
+
+### Record methods (with buffer overflow guard)
+
+```cpp
+void LoopEngine::recordNoteOn(uint8_t padIndex, uint8_t velocity) {
+    // Guard: silently drop events when buffer full.
+    // Without this, writing past _events[MAX_LOOP_EVENTS-1] corrupts adjacent memory.
+    uint16_t maxEvents = (_state == OVERDUBBING) ? MAX_OVERDUB_EVENTS : MAX_LOOP_EVENTS;
+    uint16_t& count    = (_state == OVERDUBBING) ? _overdubCount : _eventCount;
+    LoopEvent* buf     = (_state == OVERDUBBING) ? _overdubBuf : _events;
+    if (count >= maxEvents) return;
+
+    uint32_t offsetUs = currentPositionUs();  // recording-timebase offset
+    buf[count++] = {offsetUs, padIndex, velocity, true};  // true = noteOn
+}
+
+void LoopEngine::recordNoteOff(uint8_t padIndex) {
+    uint16_t maxEvents = (_state == OVERDUBBING) ? MAX_OVERDUB_EVENTS : MAX_LOOP_EVENTS;
+    uint16_t& count    = (_state == OVERDUBBING) ? _overdubCount : _eventCount;
+    LoopEvent* buf     = (_state == OVERDUBBING) ? _overdubBuf : _events;
+    if (count >= maxEvents) return;
+
+    uint32_t offsetUs = currentPositionUs();
+    buf[count++] = {offsetUs, padIndex, 0, false};  // false = noteOff
+}
+```
 
 ### Overdub merge
+
+**Why not naive insertion sort?** The old approach appended overdub events then
+insertion-sorted the full array. At max capacity (1024 + 128 = 1152 elements),
+insertion sort is O(n²) ≈ 83ms — an audible gap in the main loop.
+
+**The key insight:** `_events[]` is already sorted. `_overdubBuf[]` is NOT sorted
+(loop wrap resets position to 0 mid-overdub), but it is small (max 128 elements).
+
+**Two-step approach (~0.75ms total):**
+1. Sort `_overdubBuf` with insertion sort — O(m²) where m ≤ 128 ≈ 0.7ms
+2. Reverse merge two sorted arrays into `_events[]` — O(n+m) ≈ 50µs
+
+The reverse merge writes from the back of `_events[]`, so it never overwrites
+unread base elements (output index k starts at i+toMerge, always ahead of read index i).
 
 ```cpp
 void LoopEngine::mergeOverdub() {
@@ -433,19 +547,41 @@ void LoopEngine::mergeOverdub() {
     if (_eventCount + toMerge > MAX_LOOP_EVENTS) {
         toMerge = MAX_LOOP_EVENTS - _eventCount;
     }
-    for (uint16_t i = 0; i < toMerge; i++) {
-        _events[_eventCount++] = _overdubBuf[i];
-    }
-    // Insertion sort (small overdub count, already-sorted base)
-    for (uint16_t i = 1; i < _eventCount; i++) {
-        LoopEvent tmp = _events[i];
+    if (toMerge == 0) { _overdubCount = 0; return; }
+
+    // Step 1: sort overdub buffer (may be unsorted due to loop wrap mid-overdub)
+    // Insertion sort on ≤128 elements: ~0.7ms at 240MHz. Negligible.
+    for (uint16_t i = 1; i < toMerge; i++) {
+        LoopEvent tmp = _overdubBuf[i];
         int16_t j = i - 1;
-        while (j >= 0 && _events[j].offsetUs > tmp.offsetUs) {
-            _events[j + 1] = _events[j];
+        while (j >= 0 && _overdubBuf[j].offsetUs > tmp.offsetUs) {
+            _overdubBuf[j + 1] = _overdubBuf[j];
             j--;
         }
-        _events[j + 1] = tmp;
+        _overdubBuf[j + 1] = tmp;
     }
+
+    // Step 2: reverse merge — write from back to front
+    // Both _events[0.._eventCount-1] and _overdubBuf[0..toMerge-1] are sorted.
+    // Output fills _events[0..newCount-1] in-place without overwriting unread data.
+    uint16_t newCount = _eventCount + toMerge;
+    int16_t i = (int16_t)_eventCount - 1;   // last base element
+    int16_t j = (int16_t)toMerge - 1;       // last overdub element
+    int16_t k = (int16_t)newCount - 1;      // last output position
+
+    while (i >= 0 && j >= 0) {
+        if (_events[i].offsetUs >= _overdubBuf[j].offsetUs) {
+            _events[k--] = _events[i--];
+        } else {
+            _events[k--] = _overdubBuf[j--];
+        }
+    }
+    // Drain remaining overdub elements (base elements are already in place)
+    while (j >= 0) {
+        _events[k--] = _overdubBuf[j--];
+    }
+
+    _eventCount = newCount;
     _overdubCount = 0;
 }
 ```
@@ -482,7 +618,7 @@ int32_t LoopEngine::calcChaosOffsetUs(uint16_t eventIndex) {
     hash *= 0x5bd1e995;
     hash ^= (hash >> 15);
 
-    uint32_t barDurationUs = calcLoopDurationUs(_bpm) / _loopLengthBars;
+    uint32_t barDurationUs = calcLoopDurationUs(_recordBpm) / _loopLengthBars;
     uint32_t stepDurationUs = barDurationUs / 16;
     int32_t maxOffsetUs = stepDurationUs / 2;
 
@@ -574,6 +710,58 @@ Add to `isPerBankTarget()` (PotRouter.cpp:577):
 
 Add to `getRangeForTarget()` and `seedCatchValues()` following existing patterns.
 
+### Bank switch: loadStoredPerBank for LOOP (main.cpp, after existing arp block ~line 468)
+
+The existing `loadStoredPerBank()` at `main.cpp:468-479` only loads ARPEG params (gate,
+shuffleDepth, division, pattern, shuffleTemplate). When switching TO a LOOP bank, these
+arp-specific values are irrelevant, and LOOP-specific params (chaos, velPattern,
+velPatternDepth) have no load path. The catch system will reseed from stale PotRouter
+values, causing incorrect catch targets.
+
+**Fix**: add a LOOP branch alongside the ARPEG branch:
+
+```cpp
+    // existing ARPEG block (lines 468-474) — unchanged
+    if (newSlot.type == BANK_ARPEG && newSlot.arpEngine) {
+      gate      = newSlot.arpEngine->getGateLength();
+      // ... etc
+    }
+
+    // NEW: LOOP block — load LOOP-specific per-bank params
+    float chaos = 0.0f;
+    uint8_t velPat = 0;
+    float velPatDepth = 0.0f;
+    if (newSlot.type == BANK_LOOP && newSlot.loopEngine) {
+      chaos       = newSlot.loopEngine->getChaosAmount();
+      velPat      = newSlot.loopEngine->getVelPatternIdx();
+      velPatDepth = newSlot.loopEngine->getVelPatternDepth();
+      // Shared params: shuffleDepth and shuffleTemplate are also per-bank for LOOP
+      shufDepth   = newSlot.loopEngine->getShuffleDepth();
+      shufTmpl    = newSlot.loopEngine->getShuffleTemplate();
+    }
+
+    s_potRouter.loadStoredPerBank(
+      newSlot.baseVelocity, newSlot.velocityVariation, newSlot.pitchBendOffset,
+      gate, shufDepth, div, pat, shufTmpl
+    );
+    // NEW: load LOOP-specific params into PotRouter
+    s_potRouter.loadStoredPerBankLoop(chaos, velPat, velPatDepth);
+    s_potRouter.resetPerBankCatch();
+```
+
+**`loadStoredPerBankLoop()`** is a new PotRouter method:
+
+```cpp
+void PotRouter::loadStoredPerBankLoop(float chaos, uint8_t velPat, float velPatDepth) {
+    _chaosAmount      = chaos;
+    _velPatternIdx    = velPat;
+    _velPatternDepth  = velPatDepth;
+}
+```
+
+When the foreground bank is NOT LOOP, the LOOP params default to 0 (harmless — they are
+only read by the pot-to-LoopEngine routing block, which is gated by `BANK_LOOP`).
+
 ### Main loop: pot-to-LoopEngine routing (main.cpp, after arp routing block ~line 707)
 
 Mirrors the existing arp routing pattern at `main.cpp:698-707`:
@@ -650,27 +838,38 @@ static const PotTarget LOOP_PARAMS[] = {
 |---|---|
 | Scale pads (15) | Free as music pads |
 | Octave pads (4) | Free as music pads |
-| Hold pad | Mute/unmute toggle |
+| Hold pad | Unused (no function in LOOP mode) |
 | Play/stop pad | Rec/play/overdub/stop/clear |
 | Bank pads (8) | Unchanged |
 
-### ScaleManager impact (ScaleManager.cpp:191-210)
+### ScaleManager impact
 
-Currently guards hold/octave with `slot.type == BANK_ARPEG`. Add LOOP branch for hold pad mute:
+**Root/mode/chromatic pads (ScaleManager.cpp:123-187):** Currently process unconditionally
+for all bank types. On a LOOP bank, scale changes are meaningless (LOOP bypasses
+ScaleResolver) but would still modify `slot.scale`, fire a yellow confirmation blink,
+and trigger a wasted NVS write. **Must guard**: skip root/mode/chromatic processing
+when `slot.type == BANK_LOOP`.
 
 ```cpp
-if (_holdPad < NUM_KEYS && (slot.type == BANK_ARPEG || slot.type == BANK_LOOP)) {
-    bool pressed = keyIsPressed[_holdPad];
-    bool wasPressed = _lastScaleKeys[_holdPad];
-    if (pressed && !wasPressed) {
-        if (slot.type == BANK_ARPEG && slot.arpEngine) {
-            slot.arpEngine->setHold(!slot.arpEngine->isHoldOn());
-        } else if (slot.type == BANK_LOOP && slot.loopEngine) {
-            slot.loopEngine->toggleMute();
-        }
+// Add at top of processScalePads(), before root pad loop:
+if (slot.type == BANK_LOOP) {
+    // LOOP bypasses scale resolution — scale pads are dead in control mode.
+    // Still update _lastScaleKeys to prevent phantom edges on bank switch.
+    for (uint8_t r = 0; r < 7; r++) {
+        if (_rootPads[r] < NUM_KEYS) _lastScaleKeys[_rootPads[r]] = keyIsPressed[_rootPads[r]];
+        if (_modePads[r] < NUM_KEYS) _lastScaleKeys[_modePads[r]] = keyIsPressed[_modePads[r]];
     }
+    if (_chromaticPad < NUM_KEYS) _lastScaleKeys[_chromaticPad] = keyIsPressed[_chromaticPad];
+    // Fall through to hold/octave section (hold pad also excluded by BANK_ARPEG guard)
+    goto scaleSkipToHold;  // or restructure with an if/else
 }
 ```
+
+Alternative (cleaner, no goto): wrap the three loops (root, mode, chromatic) in
+`if (slot.type != BANK_LOOP) { ... }` and keep the `_lastScaleKeys` sync outside the guard.
+
+**Hold/octave pads (ScaleManager.cpp:189-226):** Already guarded by `slot.type == BANK_ARPEG`.
+No changes needed — the existing guard excludes LOOP banks.
 
 ---
 
@@ -684,16 +883,15 @@ LOOP uses **red/magenta** color family — visually distinct from white (NORMAL)
 // LOOP colors (red/magenta family)
 const RGB COL_LOOP        = {255,   0,  60};  // LOOP foreground — hot magenta
 const RGB COL_LOOP_DIM    = { 40,   0,  10};  // LOOP background
-const RGB COL_LOOP_REC    = {255,   0,   0};  // Recording — pure red
-const RGB COL_LOOP_MUTE   = {100,   0,  30};  // Muted indicator — dim magenta
+const RGB COL_LOOP_REC    = {255,   0,  40};  // Recording — red-magenta (distinct from COL_ERROR {255,0,0})
 ```
 
 ### Intensity constants (add to HardwareConfig.h)
 
 ```cpp
 // Foreground LOOP (modulate R channel)
-const uint8_t LED_FG_LOOP_STOP_MIN     = 51;   // Stopped: sine 20%
-const uint8_t LED_FG_LOOP_STOP_MAX     = 128;  // Stopped: sine 50%
+const uint8_t LED_FG_LOOP_STOP_MIN     = 51;   // Stopped + EMPTY: sine 20%
+const uint8_t LED_FG_LOOP_STOP_MAX     = 128;  // Stopped + EMPTY: sine 50%
 const uint8_t LED_FG_LOOP_PLAY_MIN     = 77;   // Playing: sine 30%
 const uint8_t LED_FG_LOOP_PLAY_MAX     = 230;  // Playing: sine 90%
 const uint8_t LED_FG_LOOP_PLAY_FLASH   = 255;  // Wrap flash spike 100%
@@ -710,19 +908,23 @@ const uint8_t LED_BG_LOOP_PLAY_FLASH   = 64;   // Wrap flash 25%
 
 | State | Color | Pattern | Foreground | Background |
 |---|---|---|---|---|
-| EMPTY | -- | Off | Dim magenta steady (10%) | Off (0%) |
-| RECORDING | `COL_LOOP_REC` (red) | Fast blink 200ms | 0%/100% | -- (fg only) |
+| EMPTY | `COL_LOOP` (magenta) | Slow sine pulse | 25%-30% (matches ARPEG stopped weight) | Off (0%) |
+| RECORDING | `COL_LOOP_REC` (red-magenta) | Fast blink 200ms | 0%/100% | N/A (bank switch denied) |
 | PLAYING | `COL_LOOP` (magenta) | Sine pulse + wrap flash | 30%-90%, spike 100% | 8%-20%, spike 25% |
-| OVERDUBBING | `COL_LOOP_REC` (red) | Fast pulse 150ms + sine | 50%/100% | -- (fg only) |
+| OVERDUBBING | `COL_LOOP_REC` (red-magenta) | Fast pulse 150ms + sine | 50%/100% | N/A (bank switch denied) |
 | STOPPED | `COL_LOOP` (magenta) | Slow sine | 20%-50% | 5%-16% |
-| MUTED (any) | `COL_LOOP_MUTE` | Single dim flash every 2s | 10% base + flash | Same dimmer |
 
 ### New ConfirmType values (add to LedController.h:16)
 
 ```cpp
-    CONFIRM_LOOP_REC     = 10,  // Recording started — red flash
-    CONFIRM_LOOP_MUTE    = 11,  // Mute toggled
+    CONFIRM_LOOP_REC     = 10,  // Recording/overdub started
 ```
+
+### Confirmation rendering specs
+
+| ConfirmType | Color | Pattern | Duration |
+|---|---|---|---|
+| `CONFIRM_LOOP_REC` | `COL_LOOP_REC` (red-magenta) | Double blink current LED | 200ms (2 × LED_CONFIRM_UNIT_MS) |
 
 ### LedController.cpp changes
 
@@ -749,8 +951,9 @@ In the normal bank display section (`LedController.cpp:530+`), add LOOP branch a
         } else if (ls == LoopEngine::STOPPED) {
             uint8_t sineVal = mapSine(LED_FG_LOOP_STOP_MIN, LED_FG_LOOP_STOP_MAX);
             setPixelScaled(i, COL_LOOP, sineVal);
-        } else { // EMPTY
-            setPixelScaled(i, COL_LOOP_DIM, 26); // 10%
+        } else { // EMPTY — slow sine pulse, visible like ARPEG stopped
+            uint8_t sineVal = mapSine(LED_FG_LOOP_STOP_MIN, LED_FG_LOOP_STOP_MAX);
+            setPixelScaled(i, COL_LOOP, sineVal);
         }
     } else {
         // Background
@@ -791,7 +994,14 @@ if (_slots && _slots[_currentBank].type == BANK_LOOP) {
 ### Static instantiation (main.cpp)
 
 ```cpp
-static LoopEngine s_loopEngines[2];  // Max 2 LOOP banks
+#if ENABLE_LOOP_MODE
+static LoopEngine s_loopEngines[2];  // Max 2 LOOP banks — 18.8 KB static SRAM
+#endif
+
+// At end of setup(), verify headroom:
+// #if DEBUG_SERIAL
+// Serial.printf("[HEAP] Free: %u bytes\n", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+// #endif
 
 // In setup(), after bank type loading:
 uint8_t loopIdx = 0;
@@ -823,6 +1033,13 @@ No ArpScheduler rename. LoopEngine tick/processEvents called directly:
 (main.cpp:557-576), parallel to the existing arp play/stop block. This ensures the user can
 start/stop recording while holding the left button (e.g., after a bank switch).
 
+New statics needed in main.cpp:
+```cpp
+static uint32_t _playStopPressTime = 0;    // millis() when play/stop was pressed
+static uint8_t  _playStopPressBank = 0xFF; // bank index where the press started (0xFF = none)
+static const uint32_t LONG_PRESS_MS = 500; // hold duration to clear a STOPPED loop
+```
+
 ```cpp
   // --- Play/Stop pad (main.cpp:557) — ARPEG + LOOP ---
   {
@@ -838,16 +1055,19 @@ start/stop recording while holding the left button (e.g., after a bank switch).
                && psSlot.loopEngine) {
       bool psPressed = state.keyIsPressed[s_playStopPad];
       if (psPressed && !s_lastPlayStopState) {
-        handleLoopPlayStop(psSlot);  // tap/double-tap/long-press dispatcher
+        handleLoopPlayStop(psSlot);
+        _playStopPressTime = millis();
+        _playStopPressBank = s_bankManager.getCurrentBank();  // tag which bank owns this press
       }
-      // Long press detection: track hold duration for STOPPED→EMPTY clear
-      if (psPressed) {
-        if (!s_lastPlayStopState) _playStopPressTime = millis();
-      } else if (s_lastPlayStopState) {
-        // Release: check if it was a long press (>500ms)
+      // Long press detection: only fire if release is on the SAME bank as the press.
+      // Without this guard, pressing play/stop on ARPEG bank, switching to LOOP STOPPED
+      // while still holding, then releasing would clear the wrong loop.
+      if (!psPressed && s_lastPlayStopState
+          && _playStopPressBank == s_bankManager.getCurrentBank()) {
         if ((millis() - _playStopPressTime) >= LONG_PRESS_MS
             && psSlot.loopEngine->getState() == LoopEngine::STOPPED) {
           psSlot.loopEngine->clear();
+          s_leds.triggerConfirm(CONFIRM_STOP);  // visual feedback for clear
         }
       }
       s_lastPlayStopState = psPressed;
@@ -871,7 +1091,8 @@ void handleLoopPlayStop(BankSlot& slot) {
         s_leds.triggerConfirm(CONFIRM_LOOP_REC);
         break;
       case LoopEngine::RECORDING:
-        eng->stopRecording(s_clockManager.getSmoothedBPM());  // bar-snap → PLAYING
+        eng->stopRecording(state.keyIsPressed, s_padOrder,
+                           s_clockManager.getSmoothedBPMFloat());  // flush held + bar-snap → PLAYING
         s_leds.triggerConfirm(CONFIRM_PLAY);
         break;
       case LoopEngine::PLAYING:
@@ -889,12 +1110,13 @@ void handleLoopPlayStop(BankSlot& slot) {
           eng->stop(s_transport);
           s_leds.triggerConfirm(CONFIRM_STOP);
         } else {
-          eng->stopOverdub();  // merge → PLAYING
+          eng->stopOverdub(state.keyIsPressed, s_padOrder,
+                           s_clockManager.getSmoothedBPMFloat());  // flush held + merge → PLAYING
           s_leds.triggerConfirm(CONFIRM_PLAY);
         }
         break;
       case LoopEngine::STOPPED:
-        eng->play(s_clockManager, s_clockManager.getSmoothedBPM());
+        eng->play(s_clockManager, s_clockManager.getSmoothedBPMFloat());
         s_leds.triggerConfirm(CONFIRM_PLAY);
         break;
     }
@@ -906,6 +1128,13 @@ void handleLoopPlayStop(BankSlot& slot) {
 **Important**: LOOP bypasses ScaleResolver — uses `s_transport.sendNoteOn/Off()` directly
 (not `s_midiEngine.noteOn()` which takes padIndex+scale). Live presses go through the
 same `_noteRefCount[]` as loop playback to prevent duplicate noteOn/premature noteOff.
+
+**Refcount during overdub**: A live noteOn that is suppressed by refcount (>0 because
+loop playback already sounding that note) is still recorded in the overdub buffer.
+This is correct — on next pure playback, both events fire through refcount and balance:
+original noteOn (0→1, MIDI), overdub noteOn (1→2, no MIDI), original noteOff (2→1,
+no MIDI), overdub noteOff (1→0, MIDI). No stuck notes. The refcount handles all
+overlap cases. See `flushHeldPadsToOverdub()` for the held-pad edge case.
 
 ```cpp
 if (slot.type == BANK_LOOP && slot.loopEngine) {
@@ -955,13 +1184,12 @@ bool noteRefDecrement(uint8_t note) {
 
 ### DAW transport
 
-| Event | LOOP behavior |
-|---|---|
-| MIDI Start (0xFA) | Reset cursor to 0, restart from bar 1 |
-| MIDI Stop (0xFC) | Flush active noteOffs (immediate silence) |
-| MIDI Continue (0xFB) | Resume at current position |
+MIDI Start (0xFA), Stop (0xFC), and Continue (0xFB) are **ignored** by the ILLPAD.
+The clock (0xF8) is always received for tempo sync, but transport commands do not
+affect loop or arp state. This simplification was a deliberate design decision —
+the ILLPAD is an instrument, not a transport follower.
 
-### ToolBankConfig (ToolBankConfig.cpp:156)
+### ToolBankConfig (ToolBankConfig.cpp:151)
 
 3-way cycle: NORMAL -> ARPEG -> LOOP -> NORMAL. Independent pool constraints: max 4 ARPEG, max 2 LOOP. Quantize mode shown for both ARPEG and LOOP banks (reuses `ArpStartMode` enum).
 
@@ -1009,15 +1237,49 @@ Both ArpEngine and LoopEngine include ShuffleLUT.h. Zero-risk refactor.
 | Min loop duration | 1 bar | Snap rounds up |
 | Max total sequencer banks | 4 ARP + 2 LOOP | Independent pools |
 | Persistence | None | Ephemeral, lost on reboot |
+| Static SRAM cost | 18.8 KB always allocated | Even with 0 LOOP banks configured |
+
+### Compile-time guard (optional)
+
+`#define ENABLE_LOOP_MODE 1` in HardwareConfig.h. When 0, `s_loopEngines[2]` is not
+instantiated, saving 18.8 KB. Recommended for BLE-heavy configurations where SRAM
+margins are tighter. Default: ON. Guard wraps: static LoopEngine array, processLoopMode(),
+loop tick/processEvents, BANK_LOOP enum usage, ToolBankConfig 3-way cycle.
 
 ## What LOOP Does NOT Do
 
 - No aftertouch
 - No scale / root / mode (pads map to fixed GM percussion notes)
+- No mute/unmute — use per-bank velocity (acts as volume) instead. Mute was removed because it's difficult to surface through the current hardware/LED system.
 - No **recording** quantize (free timing, microsecond resolution) — playback start quantize IS supported (Immediate/Beat/Bar)
+- No rest before first note — recording clock starts on first pad press, so beat 1 is always where the first hit lands. Patterns that enter mid-bar (e.g., pickup on "&" of 4) will shift left. This is a deliberate zero-friction choice (no count-in needed). Future enhancement: clock-synced record start using `_quantizeMode` for record-start alignment (Beat/Bar boundary).
+- No "armed" state before recording — tapping play/stop on EMPTY immediately starts recording. This matches Boss RC looper behavior. Beginners may accidentally start recording; the red LED blink is the only cue.
 - No NVS persistence of loop content
 - No pitch bend
 - No octave range control
+- No buffer-full feedback — when `_events[]` reaches 1024 entries, new events are silently dropped. Live play still sounds (MIDI sent immediately) but won't be captured. The buffer overflow guard prevents memory corruption.
+- No background mute — must bank-switch to the target bank to control it. The single-foreground model is a hardware constraint (8 LEDs, 2 buttons, no screen).
+
+## Known Limitations & Future Enhancements
+
+### LED brightness tunability
+All LOOP LED intensity constants (`LED_FG_LOOP_*`, `LED_BG_LOOP_*`) are compile-time
+values in HardwareConfig.h. A future **Tool 7 (LED Config)** should expose these as
+runtime-configurable parameters, allowing users to adjust foreground/background brightness
+per bank type. This applies to NORMAL and ARPEG intensities too.
+
+### Long-press-to-clear discoverability
+Clearing a STOPPED loop requires long-pressing play/stop (≥500ms). Nothing hints at this
+gesture. **Proposed feedback**: after 3 seconds in STOPPED state with no user input, the
+LED starts a slow fade-out pulse (period ~2s, between 5% and current stopped brightness).
+This "breathing down" pattern subtly suggests "hold to dismiss." Stops as soon as the user
+presses any pad or button.
+
+### Tempo pot in slave mode
+When synced to external clock (USB/BLE), the tempo pot still shows a bargraph on turn but
+has no musical effect (internal BPM is overridden by PLL). **TODO**: suppress bargraph
+display when `ClockManager::isExternalSync()` returns true, or show external BPM as a
+read-only indicator.
 
 ---
 
@@ -1030,14 +1292,15 @@ Both ArpEngine and LoopEngine include ShuffleLUT.h. Zero-risk refactor.
 | `core/ShuffleLUT.h/.cpp` | **New** — extracted from ArpEngine.cpp | Small |
 | `loop/LoopEngine.h/.cpp` | **New** — entire engine | Large |
 | `arp/ArpEngine.cpp` | Remove local SHUFFLE_TEMPLATES, include ShuffleLUT.h | Small |
-| `managers/PotRouter.h/.cpp` | 3 new PotTargets, LOOP context, PotMappingStore v2 + migration | Medium |
-| `managers/ScaleManager.cpp` | Hold pad: add BANK_LOOP branch for mute toggle | Small |
+| `managers/PotRouter.h/.cpp` | 3 new PotTargets, LOOP context, `loadStoredPerBankLoop()`, PotMappingStore v2 + migration | Medium |
+| `managers/ScaleManager.cpp` | Guard root/mode/chromatic pads to skip BANK_LOOP (prevent misleading blinks + wasted NVS writes) | Small |
 | `managers/NvsManager` | BankType value 2, PotMappingStore v2 migration, quantize for LOOP banks (already in `illpad_btype` qmode array) | Small |
 | `setup/ToolBankConfig` | 3-way type cycle, max 2 LOOP constraint | Medium |
 | `setup/ToolPotMapping` | `_contextIdx` replaces `_contextNormal`, LOOP pool | Medium |
 | `main.cpp` | Static LoopEngine[2], processLoopMode(), tick/processEvents | Medium |
 | `core/LedController.h` | 2 new ConfirmType values, forward-declare LoopEngine | Small |
 | `core/LedController.cpp` | LOOP RGB display states, bargraph/blink colors | Medium |
+| `managers/BankManager.cpp` | Recording lock + `flushLiveNotes()` in `switchToBank()` (line 117), needs `_transport` pointer, debug print ternary → 3-way (line 146) | Small |
 
 ### Files NOT impacted
 
@@ -1046,12 +1309,203 @@ Both ArpEngine and LoopEngine include ShuffleLUT.h. Zero-risk refactor.
 | `arp/ArpScheduler` | No rename. Loop has own tick/processEvents |
 | `arp/ArpEngine.h` | Only .cpp changes (shuffle LUT extraction) |
 | `core/CapacitiveKeyboard` | DO NOT MODIFY |
-| `midi/ClockManager` | Loop uses `getSmoothedBPM()` + `micros()`, no changes |
+| `midi/ClockManager` | Add `float getSmoothedBPMFloat()` — Loop needs float precision for proportional scaling. Existing `uint16_t getSmoothedBPM()` truncates PLL float (e.g., 120.7 → 120). Arp can keep using the uint16_t version. | Small |
 | `midi/MidiEngine` | Already supports noteOn/noteOff on any channel |
 | `midi/ScaleResolver` | LOOP bypasses scale resolution entirely |
-| `managers/BankManager` | Bank switch is already type-agnostic |
 
 ---
+
+## Known Medium Issues (to resolve during implementation)
+
+### M1. PotRouter `rebuildBindings()` — expand from 2 to 3 contexts
+
+The context loop at `PotRouter.cpp:186` is hardcoded to 2:
+
+```cpp
+// CURRENT (PotRouter.cpp:186-188):
+for (uint8_t ctx = 0; ctx < 2; ctx++) {
+  BankType btype = (ctx == 0) ? BANK_NORMAL : BANK_ARPEG;
+  const PotMapping* map = (ctx == 0) ? _mapping.normalMap : _mapping.arpegMap;
+  // ... iterates 8 slots per context, builds _bindings[]
+}
+```
+
+**5 edits required** (rest of PotRouter is context-agnostic — resolveBindings, seedCatchValues,
+resetPerBankCatch, applyBinding all loop `_numBindings` and filter by BankType):
+
+```cpp
+// FIX 1: PotRouter.h:60 — add loopMap field
+struct PotMappingStore {
+  uint16_t   magic;
+  uint8_t    version;         // bump 1 -> 2
+  uint8_t    reserved;
+  PotMapping normalMap[POT_MAPPING_SLOTS];
+  PotMapping arpegMap[POT_MAPPING_SLOTS];
+  PotMapping loopMap[POT_MAPPING_SLOTS];   // +16 bytes (8 × 2)
+};
+
+// FIX 2: PotRouter.cpp:21-47 — add LOOP defaults after ARPEG block
+static const PotMappingStore DEFAULT_MAPPING = {
+  POT_MAPPING_MAGIC, 2, 0,
+  { /* normalMap[8] — unchanged */ },
+  { /* arpegMap[8]  — unchanged */ },
+  { // loopMap[8]:
+    {TARGET_TEMPO_BPM, 0},        // R1 alone
+    {TARGET_BASE_VELOCITY, 0},    // R2 alone
+    {TARGET_VEL_PATTERN, 0},      // R3 alone
+    {TARGET_VEL_PATTERN_DEPTH,0}, // R4 alone
+    {TARGET_CHAOS, 0},            // R1 + hold
+    {TARGET_SHUFFLE_DEPTH, 0},    // R2 + hold
+    {TARGET_SHUFFLE_TEMPLATE, 0}, // R3 + hold
+    {TARGET_VELOCITY_VARIATION,0} // R4 + hold
+  }
+};
+
+// FIX 3: PotRouter.cpp:186-188 — expand context loop
+static const struct { BankType type; const PotMapping* map; } CTX[] = {
+  { BANK_NORMAL, _mapping.normalMap },
+  { BANK_ARPEG,  _mapping.arpegMap  },
+  { BANK_LOOP,   _mapping.loopMap   },
+};
+for (uint8_t ctx = 0; ctx < 3; ctx++) {
+  BankType btype = CTX[ctx].type;
+  const PotMapping* map = CTX[ctx].map;
+  // ... rest unchanged
+}
+
+// FIX 4: PotRouter.cpp:577 — add LOOP targets to isPerBankTarget()
+case TARGET_CHAOS:
+case TARGET_VEL_PATTERN:
+case TARGET_VEL_PATTERN_DEPTH:
+    return true;
+
+// FIX 5: main.cpp — add LOOP pot routing block (already in doc, see Pot Mapping section)
+```
+
+No changes needed to: `seedCatchValues()`, `resolveBindings()`, `applyBinding()`, `resetPerBankCatch()` — all iterate `_numBindings` and filter by `bind.bankType`, fully context-agnostic.
+
+---
+
+### M2. Overdub merge — replace O(n²) insertion sort with O(n+m) merge
+
+Current design (doc lines 391-399) uses full-array insertion sort after appending overdub events.
+Worst case on 1024 elements: ~83ms at 240MHz — audible MIDI gap during OVERDUBBING→PLAYING.
+
+Both `_events[0.._eventCount-1]` and `_overdubBuf[0.._overdubCount-1]` are already sorted by
+`offsetUs` (recording order = time order). Use a standard two-pointer merge:
+
+```cpp
+void LoopEngine::mergeOverdub() {
+    // Both arrays are already sorted by offsetUs.
+    // Merge into _overdubBuf as scratch (1 KB), then copy back.
+    // Follows the sorted-insert pattern from ArpEngine::addPadPosition()
+    // (ArpEngine.cpp:109-118) but at larger scale.
+
+    uint16_t toMerge = _overdubCount;
+    if (_eventCount + toMerge > MAX_LOOP_EVENTS) {
+        toMerge = MAX_LOOP_EVENTS - _eventCount;
+    }
+
+    // Phase 1: copy base events to scratch (overdub buf is free after we read it)
+    // Since overdub buf is only 128 entries (1 KB) and base is 8 KB,
+    // we merge in-place from the END to avoid needing a full 8 KB scratch buffer.
+    uint16_t totalCount = _eventCount + toMerge;
+    int16_t i = _eventCount - 1;    // end of base
+    int16_t j = toMerge - 1;        // end of overdub
+    int16_t k = totalCount - 1;     // end of merged output
+
+    // Merge backward: largest-first into the tail of _events[]
+    while (i >= 0 && j >= 0) {
+        if (_events[i].offsetUs >= _overdubBuf[j].offsetUs) {
+            _events[k--] = _events[i--];
+        } else {
+            _events[k--] = _overdubBuf[j--];
+        }
+    }
+    // Remaining overdub events (base events are already in place)
+    while (j >= 0) {
+        _events[k--] = _overdubBuf[j--];
+    }
+
+    _eventCount = totalCount;
+    _overdubCount = 0;
+}
+```
+
+**Backward merge trick**: since both arrays live in `_events[]` (base) and `_overdubBuf[]` (separate),
+merging backward into the tail of `_events[]` is safe — base elements are read before being
+overwritten. No temp buffer needed. O(n+m) = ~1152 iterations × 8-byte copy = **~40 µs**.
+This is the same pattern as `std::inplace_merge` but without the library.
+
+---
+
+### M3. ToolBankConfig — 3-way type cycle + LOOP quantize + header
+
+Current implementation at `ToolBankConfig.cpp` has binary NORMAL↔ARPEG assumptions in 8 locations.
+Key changes grounded against actual code:
+
+```cpp
+// FIX 1: Type cycling (ToolBankConfig.cpp:154-171)
+// CURRENT: binary toggle
+//   NORMAL → ARPEG (if < 4), ARPEG → NORMAL
+// CHANGE TO: 3-way cycle
+if (wkTypes[cursor] == BANK_NORMAL) {
+    if (countType(wkTypes, BANK_ARPEG) < MAX_ARP_BANKS)
+        wkTypes[cursor] = BANK_ARPEG;
+    else if (countType(wkTypes, BANK_LOOP) < MAX_LOOP_BANKS)
+        wkTypes[cursor] = BANK_LOOP;
+    else { errorShown = true; errorTime = millis(); }
+} else if (wkTypes[cursor] == BANK_ARPEG) {
+    if (countType(wkTypes, BANK_LOOP) < MAX_LOOP_BANKS)
+        wkTypes[cursor] = BANK_LOOP;
+    else
+        wkTypes[cursor] = BANK_NORMAL;
+} else { // BANK_LOOP
+    wkTypes[cursor] = BANK_NORMAL;
+}
+
+// FIX 2: Quantize guard (ToolBankConfig.cpp:173)
+// CURRENT: } else if (ev.type == NAV_DOWN && wkTypes[cursor] == BANK_ARPEG) {
+// CHANGE TO:
+} else if (ev.type == NAV_DOWN &&
+           (wkTypes[cursor] == BANK_ARPEG || wkTypes[cursor] == BANK_LOOP)) {
+
+// FIX 3: Header counter (ToolBankConfig.cpp:220-226)
+// CURRENT: "%d/4 ARPEG" with single arpCount
+// CHANGE TO:
+uint8_t arpCount = countType(wkTypes, BANK_ARPEG);
+uint8_t loopCount = countType(wkTypes, BANK_LOOP);
+snprintf(headerRight, sizeof(headerRight), "%dA %dL", arpCount, loopCount);
+
+// FIX 4: Defaults (ToolBankConfig.cpp:96-99)
+// CURRENT: (i < 4) ? BANK_NORMAL : BANK_ARPEG
+// CHANGE TO: keep same defaults (no LOOP by default — user adds via cycling)
+for (uint8_t i = 0; i < NUM_BANKS; i++) {
+  wkTypes[i] = (i < 4) ? BANK_NORMAL : BANK_ARPEG;  // unchanged
+  wkQuantize[i] = ARP_START_IMMEDIATE;
+}
+
+// FIX 5: Rendering (ToolBankConfig.cpp:247-271)
+// CURRENT: binary isArpeg ? CYAN "ARPEG" : "NORMAL"
+// CHANGE TO:
+const char* typeName;
+const char* typeColor;
+if (wkTypes[i] == BANK_ARPEG)     { typeName = "ARPEG";  typeColor = VT_CYAN; }
+else if (wkTypes[i] == BANK_LOOP) { typeName = "LOOP";   typeColor = VT_MAGENTA; }
+else                               { typeName = "NORMAL"; typeColor = ""; }
+
+// FIX 6: Quantize display (ToolBankConfig.cpp:264)
+// CURRENT: if (isArpeg) { ... show quantize ... }
+// CHANGE TO:
+if (wkTypes[i] == BANK_ARPEG || wkTypes[i] == BANK_LOOP) {
+
+// FIX 7: Error message (ToolBankConfig.cpp:283)
+// CURRENT: "Max 4 ARPEG banks!"
+// CHANGE TO: "Max reached!" (generic — both ARPEG and LOOP limits hit)
+
+// FIX 8: Description help text (ToolBankConfig.cpp:48-54)
+// Add LOOP description: "LOOP enables drum looper (max 2)"
+```
 
 ## Implementation Order
 
@@ -1060,7 +1514,7 @@ Both ArpEngine and LoopEngine include ShuffleLUT.h. Zero-risk refactor.
 3. **LoopEngine core** — state machine + recording + playback (no effects)
 4. **main.cpp wiring** — static instances + processLoopMode + tick/processEvents
 5. **ToolBankConfig** — 3-way type cycle + constraint
-6. **ScaleManager** — hold pad mute branch
+6. **ScaleManager** — guard root/mode/chromatic pads to skip BANK_LOOP
 7. **LedController** — LOOP RGB display patterns
 8. **Effects** — shuffle, chaos, velocity patterns
 9. **PotRouter + PotMappingStore v2** — new targets + NVS migration

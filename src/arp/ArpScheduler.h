@@ -35,8 +35,6 @@ public:
   // Phase 2: fire pending events for all engines (gate noteOff + shuffle noteOn)
   void processEvents();
 
-  // Reset tick tracking after MIDI Start (prevents unsigned wrap burst)
-  void resetSync();
 
 private:
   MidiTransport* _transport;
