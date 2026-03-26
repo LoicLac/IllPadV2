@@ -411,6 +411,16 @@ void PotRouter::applyBinding(uint8_t potIndex) {
 
   CatchState& cs = _catch[idx];
   float adc = _stableAdc[potIndex];
+  const PotBinding& bind = _bindings[idx];
+
+  // --- Brightness: no catch, no bargraph — direct real-time update ---
+  if (bind.target == TARGET_LED_BRIGHTNESS) {
+    _ledBrightness = (uint8_t)adcToRange(adc, bind.rangeMin, bind.rangeMax);
+    cs.storedValue = (uint16_t)adc;
+    cs.caught = true;
+    _dirty = true;
+    return;
+  }
 
   // --- Catch system ---
   if (!cs.caught) {
@@ -428,7 +438,6 @@ void PotRouter::applyBinding(uint8_t potIndex) {
   }
 
   // --- Caught: convert ADC to target value and write ---
-  const PotBinding& bind = _bindings[idx];
 
   switch (bind.target) {
     case TARGET_RESPONSE_SHAPE:
@@ -476,9 +485,7 @@ void PotRouter::applyBinding(uint8_t potIndex) {
     case TARGET_TEMPO_BPM:
       _tempoBPM = adcToRange(adc, bind.rangeMin, bind.rangeMax);
       break;
-    case TARGET_LED_BRIGHTNESS:
-      _ledBrightness = (uint8_t)adcToRange(adc, bind.rangeMin, bind.rangeMax);
-      break;
+    // TARGET_LED_BRIGHTNESS handled by early-return bypass above (no catch, no bargraph)
     case TARGET_PAD_SENSITIVITY:
       _padSensitivity = (uint8_t)adcToRange(adc, bind.rangeMin, bind.rangeMax);
       break;

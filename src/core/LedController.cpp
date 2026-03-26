@@ -11,7 +11,7 @@
 // =================================================================
 
 LedController::LedController()
-  : _strip(NUM_LEDS, LED_DATA_PIN, NEO_GRBW + NEO_KHZ800),
+  : _strip(NUM_LEDS, LED_DATA_PIN, NEO_GRB + NEO_KHZ800),
     _brightness(255),
     _currentBank(0),
     _batteryLow(false),
@@ -73,22 +73,20 @@ void LedController::begin() {
 // Pixel Helpers -- per-pixel brightness scaling (no strip.setBrightness)
 // =================================================================
 
-void LedController::setPixel(uint8_t i, const RGBW& c) {
+void LedController::setPixel(uint8_t i, const RGB& c) {
   _strip.setPixelColor(i, _strip.Color(
     (uint8_t)((uint16_t)c.r * _brightness / 255),
     (uint8_t)((uint16_t)c.g * _brightness / 255),
-    (uint8_t)((uint16_t)c.b * _brightness / 255),
-    (uint8_t)((uint16_t)c.w * _brightness / 255)
+    (uint8_t)((uint16_t)c.b * _brightness / 255)
   ));
 }
 
-void LedController::setPixelScaled(uint8_t i, const RGBW& c, uint8_t scale) {
+void LedController::setPixelScaled(uint8_t i, const RGB& c, uint8_t scale) {
   uint16_t combinedScale = (uint16_t)scale * _brightness / 255;
   _strip.setPixelColor(i, _strip.Color(
     (uint8_t)((uint16_t)c.r * combinedScale / 255),
     (uint8_t)((uint16_t)c.g * combinedScale / 255),
-    (uint8_t)((uint16_t)c.b * combinedScale / 255),
-    (uint8_t)((uint16_t)c.w * combinedScale / 255)
+    (uint8_t)((uint16_t)c.b * combinedScale / 255)
   ));
 }
 
@@ -276,8 +274,8 @@ void LedController::update() {
       _showingPotBar = false;
     } else {
       // Determine bar color based on foreground bank type
-      RGBW barColor = COL_WHITE;
-      RGBW barDim   = COL_WHITE_DIM;
+      RGB barColor = COL_WHITE;
+      RGB barDim   = COL_WHITE_DIM;
       if (_slots && _slots[_currentBank].type == BANK_ARPEG) {
         barColor = COL_BLUE;
         barDim   = COL_BLUE_DIM;
@@ -574,33 +572,33 @@ void LedController::update() {
               // Modulate B channel between LED_FG_ARP_PLAY_MIN and LED_FG_ARP_PLAY_MAX
               uint8_t bVal = LED_FG_ARP_PLAY_MIN + (uint8_t)((uint16_t)sineRaw *
                        (LED_FG_ARP_PLAY_MAX - LED_FG_ARP_PLAY_MIN) / 255);
-              RGBW col = {0, 0, bVal, 0};
+              RGB col = {0, 0, bVal};
               setPixel(i, col);
             }
           } else {
             // Foreground ARPEG stopped: blue sine pulse (30-100%)
             uint8_t bVal = LED_FG_ARP_STOP_MIN + (uint8_t)((uint16_t)sineRaw *
                      (LED_FG_ARP_STOP_MAX - LED_FG_ARP_STOP_MIN) / 255);
-            RGBW col = {0, 0, bVal, 0};
+            RGB col = {0, 0, bVal};
             setPixel(i, col);
           }
         } else {
           if (playing) {
             // Background ARPEG playing: dimmed blue sine pulse (8-20%) + dimmed tick flash
             if (flashing) {
-              RGBW col = {0, 0, LED_BG_ARP_PLAY_FLASH, 0};
+              RGB col = {0, 0, LED_BG_ARP_PLAY_FLASH};
               setPixel(i, col);
             } else {
               uint8_t bVal = LED_BG_ARP_PLAY_MIN + (uint8_t)((uint16_t)sineRaw *
                        (LED_BG_ARP_PLAY_MAX - LED_BG_ARP_PLAY_MIN) / 255);
-              RGBW col = {0, 0, bVal, 0};
+              RGB col = {0, 0, bVal};
               setPixel(i, col);
             }
           } else {
             // Background ARPEG stopped: dimmed blue sine pulse (8-25%)
             uint8_t bVal = LED_BG_ARP_STOP_MIN + (uint8_t)((uint16_t)sineRaw *
                      (LED_BG_ARP_STOP_MAX - LED_BG_ARP_STOP_MIN) / 255);
-            RGBW col = {0, 0, bVal, 0};
+            RGB col = {0, 0, bVal};
             setPixel(i, col);
           }
         }
@@ -621,7 +619,7 @@ void LedController::update() {
       uint8_t phase = elapsed / LED_CONFIRM_UNIT_MS;
       bool on = (phase % 2 == 0);
       // Determine context color: white for NORMAL, blue for ARPEG
-      RGBW blinkColor = COL_WHITE;
+      RGB blinkColor = COL_WHITE;
       if (_slots && _slots[_currentBank].type == BANK_ARPEG) {
         blinkColor = COL_BLUE;
       }

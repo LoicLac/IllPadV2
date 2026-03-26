@@ -20,7 +20,7 @@
 - **USB**: Single USB-C on GPIO 19/20 (native USB, no UART bridge)
 - **2 Buttons**: left (bank+scale+arp single-layer control), rear (battery/setup/modifier pot rear). GPIOs TBD.
 - **5 Pots**: 4 right (tempo, shape/gate, slew/pattern, velocity), 1 rear (LED brightness/sensitivity). GPIOs TBD.
-- **8 LEDs**: SK6812 RGBW NeoPixel Stick (Adafruit 2868), single data pin GPIO 4, Adafruit_NeoPixel driver
+- **8 LEDs**: WS2812 RGB NeoPixel Stick, single data pin GPIO 4, Adafruit_NeoPixel driver (NEO_GRB)
 - **Battery**: LiPo 3.7V, BQ25185 charger, ADC voltage divider
 
 Pads measure **skin contact surface area**, not mechanical force. Aftertouch = yes. Velocity from pressure = unreliable.
@@ -116,7 +116,7 @@ Step 8: ●●●●●●●●  All systems go (200ms full bar)
 
 ### Normal Display (multi-bank state)
 
-LedController drives an SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel`. Per-pixel RGBW colors defined in HardwareConfig.h (`COL_WHITE`, `COL_BLUE`, `COL_SCALE_*`, `COL_ARP_*`, `COL_ERROR`, etc.). Brightness applied per-pixel via `setPixelScaled()` — never `setBrightness()`. Intensity ranges are compile-time constants (`LED_FG_*`, `LED_BG_*`).
+LedController drives a WS2812 RGB NeoPixel strip via `Adafruit_NeoPixel` (NEO_GRB). Per-pixel RGB colors defined in HardwareConfig.h (`COL_WHITE`, `COL_BLUE`, `COL_SCALE_*`, `COL_ARP_*`, `COL_ERROR`, etc.). Brightness applied per-pixel via `setPixelScaled()` — never `setBrightness()`. Intensity ranges are compile-time constants (`LED_FG_*`, `LED_BG_*`).
 
 | State | Color | Pattern | Intensity | Rate |
 |---|---|---|---|---|
@@ -133,7 +133,7 @@ LedController drives an SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel`. Per-
 
 ### Confirmation Blinks (auto-expiring overlays)
 
-Each confirmation type has a distinct RGBW color. 10 `ConfirmType` enum values:
+Each confirmation type has a distinct RGB color. 10 `ConfirmType` enum values:
 
 | Event | ConfirmType | Color | Pattern | Duration |
 |---|---|---|---|---|
@@ -160,7 +160,7 @@ Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Play confirmati
 6. Pot bargraph       (solid bar + catch visualization, configurable duration)
 7. Confirmation blinks (10 types, color-coded, auto-expire)
 8. Calibration mode   (all off + validation flash)
-9. Normal bank display (multi-bank RGBW state with sine pulse + tick flash)
+9. Normal bank display (multi-bank RGB state with sine pulse + tick flash)
 ```
 
 ### Pot Bargraph
@@ -306,6 +306,10 @@ NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never bl
 - **CapacitiveKeyboard.cpp/.h** — pressure pipeline is musically calibrated. Do not change.
 - **Pressure tuning constants** in HardwareConfig.h (thresholds, smoothing, slew, I2C clock).
 - **platformio.ini** (unless adding lib_deps).
+
+## CRITICAL — KEEP IN SYNC
+
+- **`ItermCode/vt100_serial_terminal.py`** — the Python serial terminal is the only way to interact with setup mode. When setup tools (`src/setup/`) change input handling, escape sequences, line endings, or VT100 rendering, **always verify and update the terminal script**. The two must stay synchronised (e.g., arrow key atomic send, line ending normalization, DEC 2026 sync support).
 
 ## Conventions
 

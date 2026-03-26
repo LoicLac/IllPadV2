@@ -86,9 +86,9 @@ public:
 private:
   Adafruit_NeoPixel _strip;
 
-  // Helper: set pixel from RGBW struct (applies _brightness scaling)
-  void setPixel(uint8_t i, const RGBW& color);
-  void setPixelScaled(uint8_t i, const RGBW& color, uint8_t scale);
+  // Helper: set pixel from RGB struct (applies _brightness scaling)
+  void setPixel(uint8_t i, const RGB& color);
+  void setPixelScaled(uint8_t i, const RGB& color, uint8_t scale);
   void clearPixels();
 
   // Brightness

@@ -30,43 +30,43 @@ const int NUM_SENSORS = 4;
 const int CHANNELS_PER_SENSOR = 12;
 const int NUM_KEYS = NUM_SENSORS * CHANNELS_PER_SENSOR;  // 48
 
-// --- LEDs — 8x SK6812 RGBW NeoPixel Stick (Adafruit product 2868) ---
+// --- LEDs — 8x WS2812 RGB NeoPixel Stick (GRB wire order) ---
 const uint8_t LED_DATA_PIN = 4;  // Single GPIO for NeoPixel data line
 const int NUM_LEDS = 8;
 
-// --- RGBW Color Type ---
-struct RGBW {
-  uint8_t r, g, b, w;
+// --- RGB Color Type ---
+struct RGB {
+  uint8_t r, g, b;
 };
 
 // --- Color Palette ---
 // Base colors
-const RGBW COL_WHITE       = {  0,   0,   0, 255};  // NORMAL foreground
-const RGBW COL_WHITE_DIM   = {  0,   0,   0,  40};  // NORMAL background
-const RGBW COL_BLUE        = {  0,   0, 255,   0};  // ARPEG foreground
-const RGBW COL_BLUE_DIM    = {  0,   0,  40,   0};  // ARPEG background
+const RGB COL_WHITE       = {255, 255, 255};  // NORMAL foreground
+const RGB COL_WHITE_DIM   = { 40,  40,  40};  // NORMAL background
+const RGB COL_BLUE        = {  0,   0, 255};  // ARPEG foreground
+const RGB COL_BLUE_DIM    = {  0,   0,  40};  // ARPEG background
 
 // Scale confirmations (yellow, 3 saturations)
-const RGBW COL_SCALE_ROOT  = {255, 200,   0,   0};  // Root — vivid yellow
-const RGBW COL_SCALE_MODE  = {200, 160,   0,  60};  // Mode — pale yellow
-const RGBW COL_SCALE_CHROM = {255, 140,   0,   0};  // Chromatic — golden yellow
+const RGB COL_SCALE_ROOT  = {255, 200,   0};  // Root — vivid yellow
+const RGB COL_SCALE_MODE  = {220, 180,  40};  // Mode — pale yellow (was RGBW warm)
+const RGB COL_SCALE_CHROM = {255, 140,   0};  // Chromatic — golden yellow
 
 // Arp confirmations (blue, 3 variations)
-const RGBW COL_ARP_HOLD    = {  0,   0, 255,   0};  // Hold — deep blue
-const RGBW COL_ARP_PLAY    = {  0,  80, 255,   0};  // Play/Stop — blue-cyan
-const RGBW COL_PLAY_ACK    = {  0, 255,   0,   0};  // Play ack — green "go"
-const RGBW COL_ARP_OCTAVE  = { 80,   0, 255,   0};  // Octave — blue-violet
+const RGB COL_ARP_HOLD    = {  0,   0, 255};  // Hold — deep blue
+const RGB COL_ARP_PLAY    = {  0,  80, 255};  // Play/Stop — blue-cyan
+const RGB COL_PLAY_ACK    = {  0, 255,   0};  // Play ack — green "go"
+const RGB COL_ARP_OCTAVE  = { 80,   0, 255};  // Octave — blue-violet
 
 // System
-const RGBW COL_ERROR       = {255,   0,   0,   0};  // Error — red
-const RGBW COL_BOOT        = {  0,   0,   0, 255};  // Boot — white
-const RGBW COL_BOOT_FAIL   = {255,   0,   0,   0};  // Boot fail — red
-const RGBW COL_SETUP       = {128,   0, 255,   0};  // Setup comet — violet
+const RGB COL_ERROR       = {255,   0,   0};  // Error — red
+const RGB COL_BOOT        = {255, 255, 255};  // Boot — white
+const RGB COL_BOOT_FAIL   = {255,   0,   0};  // Boot fail — red
+const RGB COL_SETUP       = {128,   0, 255};  // Setup comet — violet
 
 // Battery gauge gradient (LED 0 = red, LED 7 = green)
-const RGBW COL_BATTERY[NUM_LEDS] = {
-  {255,   0, 0, 0}, {255,  36, 0, 0}, {255,  73, 0, 0}, {255, 145, 0, 0},
-  {200, 200, 0, 0}, {145, 255, 0, 0}, { 73, 255, 0, 0}, {  0, 255, 0, 0}
+const RGB COL_BATTERY[NUM_LEDS] = {
+  {255,   0, 0}, {255,  36, 0}, {255,  73, 0}, {255, 145, 0},
+  {200, 200, 0}, {145, 255, 0}, { 73, 255, 0}, {  0, 255, 0}
 };
 
 // --- Buttons (V2: 2 buttons, all active LOW with internal pull-up) ---
@@ -213,9 +213,9 @@ const uint8_t DOUBLE_TAP_MS_MAX     = 250;
 const uint8_t DOUBLE_TAP_MS_DEFAULT = 150;
 
 // =================================================================
-// 5. LED DISPLAY — RGBW Sine Ranges & Timing
+// 5. LED DISPLAY — RGB Sine Ranges & Timing
 // =================================================================
-// Sine range values define the min/max of the modulated channel (B or W).
+// Sine range values define the min/max of the modulated blue channel.
 // All other channels in the pixel stay at 0 during sine modulation.
 
 // --- Foreground ARPEG (modulate B channel) ---

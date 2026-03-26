@@ -92,8 +92,8 @@
 - [VT100-03] Refresh rate throttling: verify setup tool display refresh is throttled (e.g., 200-500ms intervals) to prevent serial flooding and screen flickering
 - [VT100-04] Button-as-ENTER input: verify physical button press is correctly mapped as ENTER/confirm input in setup mode, working alongside serial input
 
-## RGB LED (NeoPixel SK6812 RGBW)
-- [RGB-01] Per-pixel brightness scaling: verify setPixel() and setPixelScaled() multiply each RGBW channel by _brightness/255 manually — strip.setBrightness() must NOT be called anywhere (it's lossy and only rescales on change)
+## RGB LED (WS2812 RGB NeoPixel, NEO_GRB)
+- [RGB-01] Per-pixel brightness scaling: verify setPixel() and setPixelScaled() multiply each RGB channel by _brightness/255 manually — strip.setBrightness() must NOT be called anywhere (it's lossy and only rescales on change)
 - [RGB-02] Single strip.show() per frame: verify update() calls _strip.show() exactly once per execution path — no double-show, and every early return path includes a show() call
 - [RGB-03] ConfirmType enum caller consistency: verify every caller of triggerConfirm() uses the new split types (CONFIRM_SCALE_ROOT/MODE/CHROM, CONFIRM_HOLD_ON/OFF, CONFIRM_PLAY/STOP) — no references to old CONFIRM_SCALE or CONFIRM_HOLD remain
 - [RGB-04] Bargraph catch visualization: verify not-caught mode renders dim bar (COL_WHITE_DIM/COL_BLUE_DIM) for realLevel + bright cursor at potLevel index, and caught mode renders full bar using realLevel (0-8 count), not potLevel (0-7 index)

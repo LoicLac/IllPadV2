@@ -22,62 +22,39 @@ NavEvent InputParser::update() {
 
   char c = (char)Serial.read();
 
-  // --- ESC detected: consume full sequence immediately ---
-  // At 115200 baud, ESC [ A arrives in ~0.26ms — all bytes are in the buffer.
-  // Reading ahead avoids losing sequences when the tool loop is slow.
-  if (c == '\033' && _escState == ESC_IDLE) {
-    // Wait briefly for the rest of the sequence (max 5ms)
-    unsigned long escStart = now;
-    while (!Serial.available() && (millis() - escStart) < 5) { /* spin */ }
-    if (!Serial.available()) return ev;  // Stale ESC, discard
-
-    char c2 = (char)Serial.read();
-    if (c2 != '[') {
-      // Not an escape sequence — discard ESC, process c2 as normal char
-      c = c2;
-      // Fall through to normal char mapping below
-    } else {
-      // Got ESC [ — wait for direction byte
-      while (!Serial.available() && (millis() - escStart) < 5) { /* spin */ }
-      if (!Serial.available()) return ev;  // Incomplete, discard
-
-      char c3 = (char)Serial.read();
-      switch (c3) {
-        case 'A': ev.type = NAV_UP;    break;
-        case 'B': ev.type = NAV_DOWN;  break;
-        case 'C': ev.type = NAV_RIGHT; break;
-        case 'D': ev.type = NAV_LEFT;  break;
-        default: return ev;  // Unknown sequence, ignore
-      }
-      // Acceleration detection for LEFT/RIGHT
-      if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
-        if (ev.type == _lastArrowType && (now - _lastArrowTime) < ACCEL_WINDOW_MS) {
-          ev.accelerated = true;
-        }
-        _lastArrowType = ev.type;
-        _lastArrowTime = now;
-      }
+  // --- Escape sequence state machine ---
+  // Arrow sequences may arrive split across loop iterations (ESC, then [, then A/B/C/D).
+  // Handle incrementally instead of assuming all bytes are present at once.
+  if (_escState == ESC_IDLE) {
+    if (c == '\033') {
+      _escState = ESC_GOT_ESC;
+      _escTime = now;
       return ev;
     }
-  }
-
-  // --- Handle partial sequences from previous calls (legacy fallback) ---
-  if (_escState == ESC_GOT_ESC) {
-    _escState = ESC_IDLE;
-    if (c == '[') {
+  } else if (_escState == ESC_GOT_ESC) {
+    // Accept both CSI introducers:
+    //   ESC [ A/B/C/D  (common)
+    //   ESC O A/B/C/D  (application cursor mode)
+    if (c == '[' || c == 'O') {
       _escState = ESC_GOT_BRACKET;
+      _escTime = now;
       return ev;
     }
-    // Not '[' — fall through to normal char mapping
+
+    // Invalid continuation: drop escape context and process this byte normally.
+    _escState = ESC_IDLE;
   } else if (_escState == ESC_GOT_BRACKET) {
     _escState = ESC_IDLE;
+
     switch (c) {
       case 'A': ev.type = NAV_UP;    break;
       case 'B': ev.type = NAV_DOWN;  break;
       case 'C': ev.type = NAV_RIGHT; break;
       case 'D': ev.type = NAV_LEFT;  break;
-      default: return ev;
+      default: return ev;  // Unknown sequence, ignore
     }
+
+    // Acceleration detection for LEFT/RIGHT
     if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
       if (ev.type == _lastArrowType && (now - _lastArrowTime) < ACCEL_WINDOW_MS) {
         ev.accelerated = true;

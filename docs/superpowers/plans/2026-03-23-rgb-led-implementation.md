@@ -1,5 +1,7 @@
 # RGB LED (SK6812 RGBW) Implementation Plan
 
+> **HISTORICAL**: Hardware changed to WS2812 RGB (NEO_GRB) on 2026-03-26. RGBW references below reflect the original plan. See `src/core/HardwareConfig.h` for current RGB color definitions.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace 8 single-color PWM LEDs with an 8x SK6812 RGBW NeoPixel Stick, adding color-coded display states.

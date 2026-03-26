@@ -484,7 +484,7 @@ BankManager and ArpEngine have clean separation of concerns — BankManager has 
 ## Run — 2026-03-23 (RGB tag audit, round 1/3)
 
 ### 1. [RGB-01] Per-pixel brightness scaling — PASS
-Both setPixel() and setPixelScaled() multiply each RGBW channel by _brightness/255 manually. strip.setBrightness() is never called anywhere in src/.
+Both setPixel() and setPixelScaled() multiply each RGB channel by _brightness/255 manually. strip.setBrightness() is never called anywhere in src/.
 
 ### 2. [RGB-02] Single strip.show() per frame — PASS
 Every execution path through update() calls _strip.show() exactly once — each early-return path has a single show before the return, and all fall-through paths converge on the single show at line 638.

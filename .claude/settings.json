@@ -6,7 +6,8 @@
       "Bash(ls /Users/loic/Code/PROJECTS/ILLPAD_V2/.pio/libdeps/esp32-s3-devkitc-1/ESP32-BLE-MIDI/library.*)",
       "Bash(ls /Users/loic/Code/PROJECTS/ILLPAD_V2/.pio/libdeps/esp32-s3-devkitc-1/ESP32-BLE-MIDI/*.json)",
       "Read(//Users/loic/**)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(grep -r \"Adafruit_NeoPixel\\\\|neopixel\\\\|NeoPixel\\\\|WS2812\" /Users/loic/Code/PROJECTS/ILLPAD_V2/src --include=*.h --include=*.cpp)"
     ],
     "additionalDirectories": [
       "/Users/loic/Code/PROJECTS/ILLPAD_V2/.claude"

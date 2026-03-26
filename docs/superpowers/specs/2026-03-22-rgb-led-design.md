@@ -1,5 +1,7 @@
 # RGB LED Display Design — SK6812 RGBW NeoPixel Stick
 
+> **HISTORICAL**: Hardware changed to WS2812 RGB (NEO_GRB) on 2026-03-26. RGBW references below reflect the original design. See `src/core/HardwareConfig.h` for current RGB color definitions.
+
 **Date**: 2026-03-22
 **Branch**: `feature/rgb-leds`
 **Hardware**: Adafruit NeoPixel Stick 8x SK6812 RGBW (product 2868)
