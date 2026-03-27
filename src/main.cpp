@@ -634,14 +634,15 @@ void loop() {
             if (s_lastPressTime[i] > 0 &&
                 (now - s_lastPressTime[i]) < (uint32_t)s_doubleTapMs) {
               slot.arpEngine->removePadPosition(pos);
+              s_lastPressTime[i] = 0;  // Reset so next tap always adds
             } else {
               slot.arpEngine->addPadPosition(pos);
+              s_lastPressTime[i] = now;
             }
           } else {
             // HOLD OFF: press = add
             slot.arpEngine->addPadPosition(pos);
           }
-          s_lastPressTime[i] = now;
 
         } else if (!pressed && wasPressed) {
           if (!slot.arpEngine->isHoldOn()) {

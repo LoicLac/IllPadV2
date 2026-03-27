@@ -35,7 +35,9 @@ ClockManager::update() → _currentTick++
 → ArpScheduler::tick()
   → tickAccum += ticksElapsed
   → while (tickAccum >= divisor):
-      ArpEngine::tick()
+      synthTick = currentTick - tickAccum
+      ArpEngine::tick(synthTick, globalTick=currentTick)
+        → quantize check uses globalTick (NOT synthTick)
         → resolve position → MIDI note via ScaleResolver
         → schedule noteOff FIRST (atomic pair)
         → if shuffle: schedule noteOn (delayed)
@@ -132,7 +134,7 @@ All lock-free. No mutex anywhere in runtime code.
 | Orphan notes on mode change | noteOff uses wrong note number | `_lastResolvedNote` usage in `MidiEngine.cpp` |
 | MIDI flood from noisy ADC | CC toggling ±1 at boundary | `PotRouter.cpp` CC dirty check, hysteresis |
 | Timing burst after clock glitch | ArpScheduler fires many steps | `ArpScheduler.cpp` ticksElapsed guard (capped at 24 ticks = 1 quarter note) |
-| BLE/USB tick contamination | PLL mixes intervals from 2 sources | `ClockManager.cpp` source filtering |
+| BLE/USB tick contamination | PLL mixes intervals from 2 sources | `ClockManager.cpp` per-source atomic counters (`_pendingUsbTicks`, `_pendingBleTicks`) + per-source timestamps — only the active source feeds the PLL |
 | Button combo confusion | Rear+left held simultaneously | `PotRouter::resolveBindings` mask checks |
 
 ---

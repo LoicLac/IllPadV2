@@ -65,7 +65,10 @@ public:
   // --- Core tick (called by ArpScheduler when a step fires) ---
   // stepDurationUs = real-time duration of one step in microseconds,
   // computed by ArpScheduler from BPM and division.
-  void tick(MidiTransport& transport, uint32_t stepDurationUs, uint32_t currentTick);
+  // globalTick = absolute clock tick (for quantize boundary check).
+  // currentTick = per-step synthesized tick (for burst handling).
+  void tick(MidiTransport& transport, uint32_t stepDurationUs,
+            uint32_t currentTick, uint32_t globalTick);
 
   // --- Event processing (called every loop iteration by ArpScheduler) ---
   // Fires any pending noteOn/noteOff events whose time has arrived.

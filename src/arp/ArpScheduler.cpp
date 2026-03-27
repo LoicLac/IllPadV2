@@ -123,7 +123,7 @@ void ArpScheduler::tick() {
 
       // Synthesize a tick value that advances with each burst step
       uint32_t synthTick = currentTick - _slots[i].tickAccum;
-      eng->tick(*_transport, stepDurationUs, synthTick);
+      eng->tick(*_transport, stepDurationUs, synthTick, currentTick);
 
       _slots[i].tickAccum -= divisor;
     }

@@ -1,28 +1,22 @@
 ---
-name: debug
-description: "Use when debugging ILLPAD V2 firmware bugs, fixing issues, investigating stuck notes, MIDI problems, timing glitches, or any unexpected behavior. Triggers on: debug, bug, fix, fixe, probleme, stuck notes, bloque, ghost notes, notes bloquees, crash, glitch."
+name: diagnostique
+description: "Diagnostic read-only de bugs firmware ILLPAD V2. Analyse le code, trace le flow, identifie la cause racine, propose un fix SANS modifier de fichier. Triggers: diagnostique, diagnose, bug, probleme, stuck notes, bloque, ghost notes, notes bloquees, crash, glitch."
 user-invocable: true
+model-invocable: true
 ---
 
-# /debug — Systematic Debug for ILLPAD V2
+# /diagnostique — Diagnostic firmware ILLPAD V2
 
-Debug ILLPAD V2 firmware bugs with a structured pipeline. Finds root cause, verifies regressions, teaches debugging methodology.
+Diagnostic read-only. Trouve la cause racine, propose un fix, **ne modifie AUCUN fichier source**.
 
-## Parse Arguments
+## Mode
 
-Read the argument string passed to the skill:
-- Starts with `fix` → `mode = "fix"`, description = rest of string
-- Anything else → `mode = "diagnose"`, description = full string
-
-**`/debug [description]`** — diagnose, propose fix, STOP. Do NOT modify any source file.
-**`/debug fix [description]`** — diagnose, apply fix, compile, present result.
+**mode = "diagnose"** — toujours. Pour appliquer un fix, utiliser `/repare`.
 
 ## CRITICAL RULES
 
-- **`diagnose` mode: NEVER modify source files.** Present the fix, wait for user approval.
-- **`fix` mode: apply the fix, then compile** with `~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1`
+- **NEVER modify source files.** Present the fix, wait for user approval.
 - **NEVER modify** `CapacitiveKeyboard.cpp/.h` (musically calibrated, DO NOT TOUCH)
-- **After fixing**: if any of the 5 documented flows changed, update `docs/architecture-briefing.md`
 
 ## Phase 1 — COMPRENDRE
 
@@ -32,12 +26,12 @@ Read these files IN ORDER before touching anything else:
 2. `.claude/CLAUDE.md` — full spec (only if architecture-briefing doesn't cover the area)
 
 Then identify:
-- **Which flow(s)** are involved? (Pad→MIDI, Arp Tick, Bank Switch, Scale Change, Pot→Param)
+- **Which flow(s)** are involved? (Pad->MIDI, Arp Tick, Bank Switch, Scale Change, Pot->Param)
 - **Which files** are in the chain? (use File Map by Domain, section 5)
 - **Does it match a known bug pattern?** (section 4: stale state, orphan notes, MIDI flood, timing burst, tick contamination, button confusion)
 
 Tell the user what you found:
-> "Flow concerné : **[flow name]**. Je commence par [starting point] parce que [reason]."
+> "Flow concerne : **[flow name]**. Je commence par [starting point] parce que [reason]."
 
 ## Phase 2 — TRIER
 
@@ -50,7 +44,7 @@ Evaluate complexity BEFORE diving into code:
 | **CROSS-CUTTING** | Multi-flow, timing, dual-core, or touches invariants | Full pipeline + parallel agents to verify adjacent flows |
 
 Tell the user your assessment:
-> "Complexité : **[TRIVIAL/STANDARD/CROSS-CUTTING]** — [one-line justification]"
+> "Complexite : **[TRIVIAL/STANDARD/CROSS-CUTTING]** — [one-line justification]"
 
 ## Phase 3 — TRACER
 
@@ -60,17 +54,17 @@ Follow the code path of the identified flow. Use the "Key files" references in a
 For each step in the flow:
   1. Read the relevant code
   2. Check: does this step do what architecture-briefing says it should?
-  3. If mismatch found → potential root cause
-  4. If no mismatch → move to next step
+  3. If mismatch found -> potential root cause
+  4. If no mismatch -> move to next step
 ```
 
 **Check known bug patterns** (architecture-briefing section 4):
-- Stale state after bank switch → check catch targets, per-bank params
-- Orphan notes on mode change → check `_lastResolvedNote` usage
-- MIDI flood from noisy ADC → check CC dirty flag, hysteresis
-- Timing burst after clock glitch → check ticksElapsed guard
-- BLE/USB tick contamination → check source filtering
-- Button combo confusion → check `resolveBindings` mask
+- Stale state after bank switch -> check catch targets, per-bank params
+- Orphan notes on mode change -> check `_lastResolvedNote` usage
+- MIDI flood from noisy ADC -> check CC dirty flag, hysteresis
+- Timing burst after clock glitch -> check ticksElapsed guard
+- BLE/USB tick contamination -> check source filtering
+- Button combo confusion -> check `resolveBindings` mask
 
 **Isolate root cause** — ask yourself: "Is this the CAUSE or just a SYMPTOM?"
 - Symptom: "notes stay stuck after bank switch"
@@ -111,9 +105,7 @@ Agent per affected flow:
    Report: SAFE or RISK with explanation."
 ```
 
-## Phase 5 — PROPOSER ou FIXER
-
-### Mode `diagnose` (default)
+## Phase 5 — PROPOSER
 
 Present the fix proposal clearly:
 
@@ -127,38 +119,28 @@ Present the fix proposal clearly:
 [code snippet showing the fix]
 
 **Invariants verifies** : [list which passed]
-**Flows adjacents** : [list which were checked, or "aucun impacte"]
+**Flows adjacents** : [list which were checked, or "aucun impact"]
 ```
 
-Then STOP. Do not modify any file. Wait for user to say go.
-
-### Mode `fix`
-
-1. Apply the fix (Edit tool)
-2. Compile: `~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1`
-3. If compilation fails: diagnose the error, fix, recompile
-4. If any of the 5 documented flows changed: update `docs/architecture-briefing.md`
-5. Present the result
+Then STOP. Do not modify any file. Wait for user to say `/repare`.
 
 ## Phase 6 — RESUME PEDAGOGIQUE
 
-ALWAYS end with this structured summary, regardless of mode:
+ALWAYS end with this structured summary:
 
 ```markdown
 ## Debug Report
 
 ### Demarche
 [Which flow I identified first and WHY. Where I started looking and WHY.
-This teaches the user to think about debugging systematically — not the
-technical details, but the PROCESS of narrowing down.]
+This teaches the user to think about debugging systematically.]
 
 ### Cause racine
 [What was broken, in one clear sentence. Then a brief explanation of
-WHY it was broken — the underlying mechanism, not just "line X was wrong".]
+WHY it was broken — the underlying mechanism.]
 
-### Fix
-[What changed, with file:line references. For `diagnose` mode: what SHOULD
-change. For `fix` mode: what DID change.]
+### Fix propose
+[What SHOULD change, with file:line references.]
 
 ### Regressions verifiees
 [List each invariant checked with result. List each adjacent flow checked.]
@@ -167,14 +149,7 @@ change. For `fix` mode: what DID change.]
 - Flow adjacent (Arp Tick): OK — [one-line reason]
 
 ### Bonne pratique
-[ONE debugging lesson that applies beyond this specific bug. Examples:
-- "When a bug involves a transition (bank switch, mode change), always
-  check the ORDER of operations first — most transition bugs come from
-  steps executed too early or too late."
-- "When notes are stuck, trace backwards from noteOff, not forward from
-  noteOn — the bug is almost always in the cleanup path, not the trigger."
-- "When a pot value jumps unexpectedly, check the catch system first —
-  stale storedValues after bank switch are the #1 cause."]
+[ONE debugging lesson that applies beyond this specific bug.]
 ```
 
 ## Red Flags — STOP if you catch yourself doing these
@@ -182,7 +157,7 @@ change. For `fix` mode: what DID change.]
 | Thought | What to do instead |
 |---------|-------------------|
 | "I'll just quickly fix this obvious thing" | TRIER first. Even obvious bugs deserve 10 seconds of triage. |
-| "Let me modify the code to see if..." | In `diagnose` mode, you MUST NOT touch code. Read and reason. |
+| "Let me modify the code to see if..." | You MUST NOT touch code. Read and reason. |
 | "The bug is probably in [guess]" | Read the flow in architecture-briefing. Follow the chain. Don't guess. |
 | "I'll fix the symptom for now" | Find the ROOT CAUSE. Symptom fixes create new bugs. |
 | "This is too complex to verify all invariants" | Check them anyway. Skipping invariant checks is how regressions happen. |

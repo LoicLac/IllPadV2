@@ -119,7 +119,7 @@ LedController drives a WS2812 RGB NeoPixel strip via `Adafruit_NeoPixel` (NEO_GR
 |---|---|---|---|---|
 | Current NORMAL | White (W channel) | Solid | 100% | — |
 | Current ARPEG stopped | Blue | Sine pulse | 30%↔100% | ~1.5s period |
-| Current ARPEG playing | Blue | Sine pulse + tick flash | 30%↔80%, spike 100% on beat | Pulse ~1.5s, flash 30ms |
+| Current ARPEG playing | Blue | Sine pulse + white tick flash | 30%↔80%, spike white 100% on beat | Pulse ~1.5s, flash 30ms |
 | Background NORMAL | White dim | Solid | ~10% | — |
 | Background ARPEG stopped | Blue dim | Sine pulse | 8%↔25% | ~1.5s period |
 | Background ARPEG playing | Blue dim | Sine pulse + tick flash | 8%↔20%, spike 25% on beat | Pulse ~1.5s, flash 30ms |
@@ -152,7 +152,7 @@ Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Play confirmati
 1. Boot mode          (progressive white fill / red failure blink)
 2. Setup comet        (violet comet during Tools 1-6)
 3. Chase pattern      (calibration entry — white chase)
-4. Error              (LEDs 4-5 blink red 500ms — sensing task stall)
+4. Error              (LEDs 3-4 blink red 500ms — sensing task stall)
 5. Battery gauge      (8-LED red→green gradient bar, 3s)
 6. Pot bargraph       (solid bar + catch visualization, configurable duration)
 7. Confirmation blinks (10 types, color-coded, auto-expire)
@@ -254,7 +254,7 @@ VT100 terminal, serial input + button = ENTER.
 
 ### Tool 6 — Pot Mapping UX
 
-Two context pages (NORMAL / ARPEG), toggle with ENTER. Physical pot detection: turn a pot (or hold-left + turn) to select a slot. Pool line always visible showing all assignable parameters, color-coded: GREEN = available, DIM = already assigned. `< >` cycles through pool, immediately assigns. Steal logic: picking an already-assigned param orphans the source slot to "empty". CC enters CC# sub-mode immediately (`< >` adjusts number, ENTER confirms, `q` cancels and restores previous assignment). PB: max one per context, auto-steals. `s` saves to NVS + applies live. `d` resets current context to defaults. `q` prompts if unsaved changes.
+Two context pages (NORMAL / ARPEG), toggle with ENTER. Physical pot detection: turn a pot (or hold-left + turn) to select a slot. Pool line always visible showing all assignable parameters, color-coded: GREEN = available, DIM = already assigned. `< >` cycles through pool, Enter confirms assignment. Steal logic: picking an already-assigned param orphans the source slot to "empty". CC enters CC# sub-mode immediately (`< >` adjusts number, ENTER confirms, `q` cancels and restores previous assignment). PB: max one per context, auto-steals. `s` saves to NVS + applies live. `d` resets current context to defaults. `q` prompts if unsaved changes.
 
 ## Source Files
 

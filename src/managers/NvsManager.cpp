@@ -34,7 +34,7 @@ NvsManager::NvsManager()
     _pitchBendDirty[i] = false;
     _arpPotDirty[i] = false;
     _pendingScale[i] = {true, 2, 0};  // chromatic, root C, Ionian
-    _pendingTypes[i] = (i >= 3) ? BANK_ARPEG : BANK_NORMAL;  // Banks 1-3 NORMAL, 4-8 ARPEG
+    _pendingTypes[i] = (i >= 4) ? BANK_ARPEG : BANK_NORMAL;  // Banks 1-4 NORMAL, 5-8 ARPEG
     _pendingBaseVel[i] = DEFAULT_BASE_VELOCITY;
     _pendingVelVar[i] = DEFAULT_VELOCITY_VARIATION;
     _pendingPitchBend[i] = DEFAULT_PITCH_BEND_OFFSET;

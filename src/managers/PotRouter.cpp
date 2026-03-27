@@ -504,7 +504,7 @@ void PotRouter::applyBinding(uint8_t potIndex) {
         if (_ccBindingIdx[s] == (uint8_t)idx) {
           // Hysteresis: only update when value changes by ≥2 to prevent ADC noise flood
           int8_t diff = (int8_t)val - (int8_t)_ccValue[s];
-          if (diff > 1 || diff < -1 || val == 0 || val == 127) {
+          if (diff > 1 || diff < -1 || ((val == 0 || val == 127) && val != _ccValue[s])) {
             _ccValue[s] = val;
             _ccDirty[s] = true;
           }
@@ -550,7 +550,10 @@ void PotRouter::applyBinding(uint8_t potIndex) {
   _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f);
   _bargraphCaught = true;
   _bargraphDirty = true;
-  _dirty = true;
+  // Only set NVS dirty for non-volatile targets (CC/PB are volatile, not saved)
+  if (bind.target != TARGET_MIDI_CC && bind.target != TARGET_MIDI_PITCHBEND) {
+    _dirty = true;
+  }
 }
 
 // =================================================================

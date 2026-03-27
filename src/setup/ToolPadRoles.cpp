@@ -19,8 +19,8 @@ static const char* GRID_BANK_LABELS[] = {
 };
 
 static const char* GRID_SCALE_LABELS[] = {
-  " RtC", "RtC#", " RtD", "RtD#", " RtE", " RtF", " RtG",
-  "MdIo", "MdDo", "MdPh", "MdLy", "MdMx", "MdLo", "MdAe", " Chr"
+  " RtA", " RtB", " RtC", " RtD", " RtE", " RtF", " RtG",
+  "MdIo", "MdDo", "MdPh", "MdLy", "MdMx", "MdAe", "MdLo", " Chr"
 };
 
 static const char* GRID_ARP_LABELS[] = {
@@ -33,8 +33,8 @@ static const char* POOL_BANK_LABELS[] = {
 };
 
 static const char* POOL_SCALE_LABELS[] = {
-  "RtC", "RtC#", "RtD", "RtD#", "RtE", "RtF", "RtG",
-  "MdIo", "MdDo", "MdPh", "MdLy", "MdMx", "MdLo", "MdAe", "Chr"
+  "RtA", "RtB", "RtC", "RtD", "RtE", "RtF", "RtG",
+  "MdIo", "MdDo", "MdPh", "MdLy", "MdMx", "MdAe", "MdLo", "Chr"
 };
 
 static const char* POOL_ARP_LABELS[] = {
@@ -48,10 +48,10 @@ static const char* BANK_DESCS[] = {
 };
 
 static const char* SCALE_DESCS[] = {
-  "Root note: C",  "Root note: C#", "Root note: D",  "Root note: D#",
+  "Root note: A",  "Root note: B",  "Root note: C",  "Root note: D",
   "Root note: E",  "Root note: F",  "Root note: G",
   "Mode: Ionian (Major)",  "Mode: Dorian",  "Mode: Phrygian",
-  "Mode: Lydian",  "Mode: Mixolydian",  "Mode: Locrian",  "Mode: Aeolian (Minor)",
+  "Mode: Lydian",  "Mode: Mixolydian",  "Mode: Aeolian (Minor)",  "Mode: Locrian",
   "Chromatic toggle"
 };
 

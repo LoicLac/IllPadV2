@@ -4,10 +4,10 @@
 #include <Arduino.h>
 
 ClockManager::ClockManager()
-  : _lastExternalTickUs(0), _lastUsbTickUs(0), _lastSource(0), _pendingTickCount(0),
+  : _lastUsbTickUs(0), _lastBleTickUs(0), _pendingUsbTicks(0), _pendingBleTicks(0),
     _tickIntervalCount(0), _prevTickUs(0),
     _pllBPM(120.0f), _pllTickInterval(0.0f), _lastKnownBPM(0.0f),
-    _activeSource(SRC_INTERNAL),
+    _activeSource(SRC_INTERNAL), _lastKnownEntryUs(0),
     _masterMode(false), _transport(nullptr),
     _internalBPM(120), _currentTick(0), _lastTickTimeUs(0),
     _rawTickCount(0)
@@ -29,12 +29,13 @@ void ClockManager::begin(MidiTransport* transport) {
 void ClockManager::onMidiClockTick(uint8_t source) {
   if (_masterMode) return;  // Ignore external ticks in master mode
   uint32_t now = micros();
-  _lastExternalTickUs.store(now, std::memory_order_release);
-  _lastSource.store(source, std::memory_order_relaxed);
   if (source == 0) {
-    _lastUsbTickUs.store(now, std::memory_order_relaxed);  // USB-only timestamp
+    _lastUsbTickUs.store(now, std::memory_order_release);
+    _pendingUsbTicks.fetch_add(1, std::memory_order_release);
+  } else {
+    _lastBleTickUs.store(now, std::memory_order_release);
+    _pendingBleTicks.fetch_add(1, std::memory_order_release);
   }
-  _pendingTickCount.fetch_add(1, std::memory_order_release);
 }
 
 void ClockManager::setInternalBPM(uint16_t bpm) {
@@ -44,25 +45,35 @@ void ClockManager::setInternalBPM(uint16_t bpm) {
 void ClockManager::update() {
   uint32_t nowUs = micros();
 
-  // --- Process pending external ticks (atomic count — handles BLE bursts) ---
-  uint8_t pendingTicks = _pendingTickCount.exchange(0, std::memory_order_acquire);
-  if (pendingTicks > 0) {
-    uint32_t tickUs = _lastExternalTickUs.load(std::memory_order_acquire);
-    uint8_t  source = _lastSource.load(std::memory_order_relaxed);
+  // --- Process pending external ticks (per-source counters — no cross-contamination) ---
+  uint8_t usbTicks = _pendingUsbTicks.exchange(0, std::memory_order_acquire);
+  uint8_t bleTicks = _pendingBleTicks.exchange(0, std::memory_order_acquire);
 
+  if (usbTicks > 0 || bleTicks > 0) {
     // Update source priority: USB > BLE
     ClockSource prevSource = _activeSource;
-    if (source == 0) {
+    if (usbTicks > 0) {
       _activeSource = SRC_USB;
     } else if (_activeSource != SRC_USB) {
       _activeSource = SRC_BLE;
     }
 
-    // Filter: reject BLE ticks when USB is the active source
-    // Prevents interleaved intervals from corrupting the PLL
-    if (source == 1 && _activeSource == SRC_USB) {
-      // BLE tick ignored — USB has priority
-    } else {
+    // Select the active source's ticks only — ignore the other source entirely
+    uint8_t  activeTicks = 0;
+    uint32_t activeTickUs = 0;
+    uint8_t  activeSourceId = 0;
+
+    if (_activeSource == SRC_USB && usbTicks > 0) {
+      activeTicks = usbTicks;
+      activeTickUs = _lastUsbTickUs.load(std::memory_order_acquire);
+      activeSourceId = 0;
+    } else if (_activeSource == SRC_BLE && bleTicks > 0) {
+      activeTicks = bleTicks;
+      activeTickUs = _lastBleTickUs.load(std::memory_order_acquire);
+      activeSourceId = 1;
+    }
+
+    if (activeTicks > 0) {
       // Reset _prevTickUs on source change to avoid one garbage interval
       if (_activeSource != prevSource) {
         _prevTickUs = 0;
@@ -73,35 +84,34 @@ void ClockManager::update() {
       }
 
       // Calculate interval from previous tick.
-      // Divide by pendingTicks to recover per-tick interval when a burst arrived.
+      // Divide by activeTicks to recover per-tick interval when a burst arrived.
       if (_prevTickUs > 0) {
-        uint32_t totalInterval = tickUs - _prevTickUs;
-        uint32_t interval = totalInterval / pendingTicks;
+        uint32_t totalInterval = activeTickUs - _prevTickUs;
+        uint32_t interval = totalInterval / activeTicks;
         // Sanity check: ignore intervals < 2ms (>1250 BPM) or > 2s (< 1.25 BPM)
         if (interval > 2000 && interval < 2000000) {
-          updatePLL(interval, source);
+          updatePLL(interval, activeSourceId);
         }
       }
-      _prevTickUs = tickUs;
+      _prevTickUs = activeTickUs;
     }
 
-    _rawTickCount += pendingTicks;
+    _rawTickCount += usbTicks + bleTicks;
   }
 
   // --- Timeout: external clock lost ---
   // Each source checks its own timestamp to enforce USB > BLE priority on dropout.
   if (_activeSource == SRC_USB || _activeSource == SRC_BLE) {
     uint32_t lastActiveTick = (_activeSource == SRC_USB)
-        ? _lastUsbTickUs.load(std::memory_order_relaxed)     // USB: isolated timestamp
-        : _lastExternalTickUs.load(std::memory_order_relaxed); // BLE: only source here
+        ? _lastUsbTickUs.load(std::memory_order_relaxed)
+        : _lastBleTickUs.load(std::memory_order_relaxed);
 
     if (lastActiveTick > 0 && (nowUs - lastActiveTick) > EXTERNAL_TIMEOUT_US) {
       bool switchedToBle = false;
       if (_activeSource == SRC_USB) {
         // USB timed out — check if BLE is still alive
-        uint32_t lastAny = _lastExternalTickUs.load(std::memory_order_relaxed);
-        if (_lastSource.load(std::memory_order_relaxed) == 1
-            && lastAny > 0 && (nowUs - lastAny) < EXTERNAL_TIMEOUT_US) {
+        uint32_t lastBle = _lastBleTickUs.load(std::memory_order_relaxed);
+        if (lastBle > 0 && (nowUs - lastBle) < EXTERNAL_TIMEOUT_US) {
           _activeSource = SRC_BLE;
           _prevTickUs = 0;
           _tickIntervalCount = 0;
@@ -114,6 +124,7 @@ void ClockManager::update() {
       if (!switchedToBle) {
         if (_lastKnownBPM > 0.0f) {
           _activeSource = SRC_LAST_KNOWN;
+          _lastKnownEntryUs = nowUs;
           _pllBPM = _lastKnownBPM;
           _pllTickInterval = 60000000.0f / (_pllBPM * 24.0f);
           #if DEBUG_SERIAL
@@ -131,6 +142,15 @@ void ClockManager::update() {
     }
   }
 
+  // --- SRC_LAST_KNOWN timeout: fall to internal after 5s ---
+  if (_activeSource == SRC_LAST_KNOWN &&
+      _lastKnownEntryUs > 0 && (nowUs - _lastKnownEntryUs) > LAST_KNOWN_TIMEOUT_US) {
+    _activeSource = SRC_INTERNAL;
+    #if DEBUG_SERIAL
+    Serial.println("[CLOCK] Source: internal (last known timed out)");
+    #endif
+  }
+
   // --- Update tick interval for internal/last_known sources ---
   if (_activeSource == SRC_INTERNAL) {
     _pllBPM = (float)_internalBPM;
@@ -141,16 +161,21 @@ void ClockManager::update() {
   // --- Generate ticks at _pllTickInterval ---
   if (_pllTickInterval > 0.0f) {
     uint32_t interval = (uint32_t)_pllTickInterval;
-    if (interval > 0 && (nowUs - _lastTickTimeUs) >= interval) {
-      _currentTick++;
-      _lastTickTimeUs += interval;  // Accumulate to avoid drift
-      // Guard against large gaps (e.g. after timeout) — don't burst-fire ticks
-      if ((nowUs - _lastTickTimeUs) > interval * 2) {
+    if (interval > 0) {
+      // Guard against large gaps (e.g. after timeout) — reset accumulator
+      if ((nowUs - _lastTickTimeUs) > interval * 4) {
         _lastTickTimeUs = nowUs;
       }
-      // Master: send clock tick to USB+BLE
-      if (_masterMode && _transport) {
-        _transport->sendClockTick();
+      // Catch up missed ticks (max 4 per call to avoid burst-fire)
+      uint8_t ticksGenerated = 0;
+      while ((nowUs - _lastTickTimeUs) >= interval && ticksGenerated < 4) {
+        _currentTick++;
+        _lastTickTimeUs += interval;  // Accumulate to avoid drift
+        ticksGenerated++;
+        // Master: send clock tick to USB+BLE
+        if (_masterMode && _transport) {
+          _transport->sendClockTick();
+        }
       }
     }
   }
@@ -180,4 +205,4 @@ void ClockManager::setMasterMode(bool master) {
 
 uint32_t ClockManager::getCurrentTick() const  { return _currentTick; }
 uint16_t ClockManager::getSmoothedBPM() const  { return (uint16_t)_pllBPM; }
-bool     ClockManager::isExternalSync() const   { return _activeSource != SRC_INTERNAL; }
+bool     ClockManager::isExternalSync() const   { return _activeSource == SRC_USB || _activeSource == SRC_BLE; }

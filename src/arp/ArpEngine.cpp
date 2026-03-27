@@ -285,7 +285,8 @@ void ArpEngine::rebuildSequence() {
 //   4. Schedule noteOff (at noteOnTime + gate duration)
 //   5. Advance step counter and shuffle counter
 
-void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs, uint32_t currentTick) {
+void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
+                     uint32_t currentTick, uint32_t globalTick) {
   // --- Empty pile: flush everything and return ---
   if (_positionCount == 0) {
     flushPendingNoteOffs(transport);
@@ -308,7 +309,7 @@ void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs, uint32_t
   // --- Quantized start: wait for beat/bar boundary ---
   if (_waitingForQuantize) {
     uint16_t boundary = (_quantizeMode == ARP_START_BAR) ? 96 : 24;
-    if (currentTick % boundary != 0) return;  // Not on boundary yet
+    if (globalTick % boundary != 0) return;  // Not on boundary yet
     _waitingForQuantize = false;               // Boundary reached, proceed
   }
 
