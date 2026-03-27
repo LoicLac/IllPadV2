@@ -171,6 +171,7 @@ void ToolSettings::run() {
 
   // Save original for reboot-required change detection
   SettingsStore original = wk;
+  bool needsReboot = false;
 
   InputParser input;
   uint8_t cursor = 0;
@@ -256,16 +257,9 @@ void ToolSettings::run() {
           editing = false;
           _ui->showSaved();
 
-          // Show reboot notice if needed
-          bool needReboot = false;
-          if (wk.bleInterval != original.bleInterval) {
-            needReboot = true;
-          }
-          if (wk.clockMode != original.clockMode) {
-            needReboot = true;
-          }
-          if (needReboot) {
-            // Will show on next redraw via status line
+          if (wk.bleInterval != original.bleInterval ||
+              wk.clockMode != original.clockMode) {
+            needsReboot = true;
           }
           original = wk;
           screenDirty = true;
@@ -345,9 +339,8 @@ void ToolSettings::run() {
         Serial.printf(VT_DIM "  [Up/Down] navigate  [Enter] edit  [d] defaults  [q] quit" VT_RESET VT_CL "\n");
       }
 
-      // Show reboot warning if BLE/Clock changed from original
-      if (wk.bleInterval != original.bleInterval || wk.clockMode != original.clockMode) {
-        Serial.printf(VT_YELLOW "  Reboot required for BLE/Clock changes." VT_RESET VT_CL "\n");
+      if (needsReboot) {
+        Serial.printf(VT_YELLOW "  * Reboot required for BLE/Clock changes." VT_RESET VT_CL "\n");
       }
 
       _ui->vtFrameEnd();

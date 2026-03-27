@@ -138,62 +138,39 @@ const char* ToolPadRoles::poolItemColor(uint8_t line) const {
 void ToolPadRoles::buildRoleMap() {
   memset(_roleMap, ROLE_NONE, NUM_KEYS);
   for (int i = 0; i < NUM_KEYS; i++) {
-    memcpy(_roleLabels[i], "  -- ", 6);
+    memcpy(_roleLabels[i], " -- ", 5);
   }
+
+  // Collision-safe role setter: marks ROLE_COLLISION (red) if pad already assigned
+  auto setRole = [&](uint8_t pad, uint8_t role, const char* label) {
+    if (pad >= NUM_KEYS) return;
+    if (_roleMap[pad] != ROLE_NONE) {
+      _roleMap[pad] = ROLE_COLLISION;
+      snprintf(_roleLabels[pad], 6, " !! ");
+    } else {
+      _roleMap[pad] = role;
+      snprintf(_roleLabels[pad], 6, "%s", label);
+    }
+  };
 
   // Bank pads
-  for (int i = 0; i < NUM_BANKS; i++) {
-    uint8_t pad = _wkBankPads[i];
-    if (pad < NUM_KEYS) {
-      _roleMap[pad] = ROLE_BANK;
-      snprintf(_roleLabels[pad], 6, "%s", GRID_BANK_LABELS[i]);
-    }
-  }
-
+  for (int i = 0; i < NUM_BANKS; i++)
+    setRole(_wkBankPads[i], ROLE_BANK, GRID_BANK_LABELS[i]);
   // Root pads
-  for (int i = 0; i < 7; i++) {
-    uint8_t pad = _wkRootPads[i];
-    if (pad < NUM_KEYS) {
-      _roleMap[pad] = ROLE_SCALE;
-      snprintf(_roleLabels[pad], 6, "%s", GRID_SCALE_LABELS[i]);
-    }
-  }
-
+  for (int i = 0; i < 7; i++)
+    setRole(_wkRootPads[i], ROLE_SCALE, GRID_SCALE_LABELS[i]);
   // Mode pads
-  for (int i = 0; i < 7; i++) {
-    uint8_t pad = _wkModePads[i];
-    if (pad < NUM_KEYS) {
-      _roleMap[pad] = ROLE_SCALE;
-      snprintf(_roleLabels[pad], 6, "%s", GRID_SCALE_LABELS[7 + i]);
-    }
-  }
-
+  for (int i = 0; i < 7; i++)
+    setRole(_wkModePads[i], ROLE_SCALE, GRID_SCALE_LABELS[7 + i]);
   // Chromatic pad
-  if (_wkChromPad < NUM_KEYS) {
-    _roleMap[_wkChromPad] = ROLE_SCALE;
-    snprintf(_roleLabels[_wkChromPad], 6, "%s", GRID_SCALE_LABELS[14]);
-  }
-
+  setRole(_wkChromPad, ROLE_SCALE, GRID_SCALE_LABELS[14]);
   // Hold pad
-  if (_wkHoldPad < NUM_KEYS) {
-    _roleMap[_wkHoldPad] = ROLE_ARP;
-    snprintf(_roleLabels[_wkHoldPad], 6, "%s", GRID_ARP_LABELS[0]);
-  }
-
+  setRole(_wkHoldPad, ROLE_ARP, GRID_ARP_LABELS[0]);
   // Play/Stop pad
-  if (_wkPlayStopPad < NUM_KEYS) {
-    _roleMap[_wkPlayStopPad] = ROLE_ARP;
-    snprintf(_roleLabels[_wkPlayStopPad], 6, "%s", GRID_ARP_LABELS[1]);
-  }
-
+  setRole(_wkPlayStopPad, ROLE_ARP, GRID_ARP_LABELS[1]);
   // Octave pads (1-4)
-  for (int i = 0; i < 4; i++) {
-    uint8_t pad = _wkOctavePads[i];
-    if (pad < NUM_KEYS) {
-      _roleMap[pad] = ROLE_ARP;
-      snprintf(_roleLabels[pad], 6, "%s", GRID_ARP_LABELS[2 + i]);
-    }
-  }
+  for (int i = 0; i < 4; i++)
+    setRole(_wkOctavePads[i], ROLE_ARP, GRID_ARP_LABELS[2 + i]);
 }
 
 // =================================================================
@@ -364,7 +341,7 @@ void ToolPadRoles::drawGrid() {
   int selectedPad = _gridRow * 12 + _gridCol;
 
   // Column headers
-  Serial.printf("      ");
+  Serial.printf("  ");
   for (int col = 0; col < 12; col++) {
     Serial.printf(" %02d  ", col + 1);
   }
@@ -376,10 +353,8 @@ void ToolPadRoles::drawGrid() {
       int pad = row * 12 + col;
 
       if (pad == selectedPad) {
-        // Selected cell: cyan brackets
-        // Trim leading space from label for bracket display
-        const char* lbl = _roleLabels[pad];
-        Serial.printf(VT_CYAN "[%s]" VT_RESET, lbl);
+        // Selected cell: cyan brackets, trim leading space for 5-char cell
+        Serial.printf(VT_CYAN "[%s]" VT_RESET, _roleLabels[pad] + 1);
       } else {
         const char* color;
         switch (_roleMap[pad]) {

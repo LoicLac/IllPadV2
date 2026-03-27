@@ -31,9 +31,10 @@ bool ToolBankConfig::saveConfig(const BankType* types, const uint8_t* quantize) 
   prefs.putBytes("qmode", quantize, NUM_BANKS);
   prefs.end();
 
-  // Update live bank slots after successful NVS write
+  // Update live bank slots + quantize cache after successful NVS write
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     _banks[i].type = types[i];
+    if (_nvs) _nvs->setLoadedQuantizeMode(i, quantize[i]);
   }
   return true;
 }

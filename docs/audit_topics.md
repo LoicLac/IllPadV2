@@ -4,7 +4,7 @@
 - [MEM-01] Double buffer atomics: verify s_active uses memory_order_release on store (Core 0) and memory_order_acquire on load (Core 1), forming a correct happens-before relationship
 - [MEM-02] No volatile for inter-core sync: verify zero uses of volatile for shared state between cores — all inter-core data uses std::atomic
 - [MEM-03] Slow param atomics: verify pot-to-Core0 parameters (shape, slew, sensitivity) use std::atomic with memory_order_relaxed on both store and load
-- [MEM-04] Clock callback atomics: verify ClockManager atomic operations from BLE/USB callbacks (different task context) use correct release/acquire pairing with _newTickAvailable as the synchronization point
+- [MEM-04] Clock callback atomics: verify ClockManager per-source counters (_pendingUsbTicks, _pendingBleTicks) and timestamps (_lastUsbTickUs, _lastBleTickUs) use correct acquire on exchange (Core 1) and release on store (callback context)
 - [MEM-05] NVS dirty flag data race: verify _pending* compound structs (ScaleConfig, ArpPotStore) shared between loop and NVS task cannot cause partial reads — assess actual risk on ESP32
 
 ## Note Integrity
@@ -24,8 +24,8 @@
 
 ## Arp Timing
 - [ARPT-01] Quantized start boundaries: verify Beat snaps to next multiple of 24 ticks and Bar to next multiple of 96 ticks
-- [ARPT-02] MIDI Start bypasses quantize: verify 0xFA reception sets _waitingForQuantize = false so arp fires immediately
-- [ARPT-03] Stop is always immediate: verify arp stop (both play/stop pad and MIDI Stop 0xFC) never waits for a quantize boundary
+- [ARPT-02] Quantized start on HOLD OFF 0-to-1 finger: verify the first pad press in HOLD OFF mode respects quantizeMode (Immediate/Beat/Bar) on the 0→1 finger transition, same as play/stop pad in HOLD ON
+- [ARPT-03] Stop is always immediate: verify arp stop (play/stop pad in HOLD ON, or all fingers released in HOLD OFF) never waits for a quantize boundary — stop fires instantly regardless of quantizeMode
 - [ARPT-04] Shuffle offset formula: verify offset = template[step%16] * depth * stepDuration / 100, matching the spec exactly
 - [ARPT-05] Shuffle step counter resets: verify counter resets on all 3 conditions — play/stop toggle, pile 0-to-1 note, pattern change
 
@@ -39,12 +39,12 @@
 ## Clock & Transport
 - [CLK-01] PLL smoothing: verify ClockManager PLL reduces BLE jitter by averaging/filtering incoming tick intervals rather than using raw timestamps
 - [CLK-02] Clock source priority: verify USB > BLE > last known > internal fallback ordering is implemented
-- [CLK-03] MIDI Start resets tick counter: verify 0xFA sets _currentTick = 0 for bar-1 restart
-- [CLK-04] MIDI Continue does not reset: verify 0xFB resumes without resetting tick counter (arps continue from position)
-- [CLK-05] Follow Transport gating: verify Start/Stop/Continue are ignored when followTransport = false, but clock ticks (0xF8) are always received regardless
+- [CLK-03] Start/Stop/Continue unconditionally ignored: verify 0xFA/0xFB/0xFC are never handled in MidiTransport or ClockManager — no callbacks, no state changes, only a comment documenting the design choice
+- [CLK-04] Stale timestamp cleared on timeout: verify ClockManager clears _lastUsbTickUs and _lastBleTickUs to 0 when falling back to SRC_LAST_KNOWN or SRC_INTERNAL, preventing false "alive" detection after micros() wraps (~71.6 min)
+- [CLK-05] PLL raw seed count: verify updatePLL() seeds the first 3 raw samples without IIR filtering (counter threshold < 4), then applies IIR from sample 4 onward
 
 ## LED System
-- [LED-01] Priority state machine order: verify update() if/else chain matches spec priority exactly — boot > chase > error > battery > bargraph > confirmation > calibration > normal
+- [LED-01] Priority state machine order: verify update() if/else chain matches spec priority exactly — boot > setup comet > chase > error > battery > bargraph > confirmation > calibration > normal (9 levels)
 - [LED-02] Sine pulse integer math: verify the 64-entry LUT is precomputed at boot and update() uses only integer math (no float) for sine pulse rendering
 - [LED-03] Tick flash consume-once: verify consumeTickFlash() returns true exactly once per arp step and the flash is held for LED_TICK_FLASH_DURATION_MS
 - [LED-04] Confirmation preemption: verify new confirmation blink unconditionally overwrites any active confirmation (no queuing, no priority between confirmation types)

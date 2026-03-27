@@ -71,8 +71,8 @@ Critical path first, secondary after. MIDI latency depends on this order.
 
 ```
 1. Read double buffer (instant)              ← CRITICAL PATH START
-2. Read buttons (left + rear)
-3. USB MIDI transport update (clock polling)
+2. USB MIDI transport update (clock polling)
+3. Read buttons (left + rear)
 4. BankManager.update()                       ← left button
 5. ScaleManager.update()                      ← left button (same as bank)
 5b. Consume scale/octave/hold flags + LED confirmations
@@ -247,14 +247,14 @@ VT100 terminal, serial input + button = ENTER.
 [2] Pad Ordering           — touch low→high, positions 1-48, no base note
 [3] Pad Roles              — bank(8) + scale(15) + arp(6: hold+play/stop+4 octave), color grid, collision check
 [4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
-[5] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, battery cal
+[5] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
 [6] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
 [0] Reboot
 ```
 
 ### Tool 6 — Pot Mapping UX
 
-Two context pages (NORMAL / ARPEG), toggle with ENTER. Physical pot detection: turn a pot (or hold-left + turn) to select a slot. Pool line always visible showing all assignable parameters, color-coded: GREEN = available, DIM = already assigned. `< >` cycles through pool, Enter confirms assignment. Steal logic: picking an already-assigned param orphans the source slot to "empty". CC enters CC# sub-mode immediately (`< >` adjusts number, ENTER confirms, `q` cancels and restores previous assignment). PB: max one per context, auto-steals. `s` saves to NVS + applies live. `d` resets current context to defaults. `q` prompts if unsaved changes.
+Two context pages (NORMAL / ARPEG), toggle with `t`. Physical pot detection: turn a pot (or hold-left + turn) to select a slot. Pool line always visible showing all assignable parameters, color-coded: GREEN = available, DIM = already assigned. `< >` cycles through pool, Enter confirms assignment and auto-saves to NVS. Steal logic: picking an already-assigned param orphans the source slot to "empty". CC enters CC# sub-mode immediately (`< >` adjusts number, ENTER confirms, `q` cancels and restores previous assignment). PB: max one per context, auto-steals. `d` resets current context to defaults. `q` exits.
 
 ## Source Files
 

@@ -391,15 +391,22 @@ void ToolCalibration::run() {
           }
           Serial.printf(VT_CL "\n");
         } else {
-          Serial.printf("  No keys calibrated." VT_CL "\n");
+          Serial.printf(VT_RED "  No keys calibrated." VT_RESET VT_CL "\n");
         }
         Serial.printf(VT_CL "\n");
-        Serial.printf("  [Enter] Save   [r] Redo all   [q] Back to menu" VT_CL "\n");
+        if (st.count > 0) {
+          Serial.printf("  [Enter] Save   [r] Redo all   [q] Back to menu" VT_CL "\n");
+        } else {
+          Serial.printf("  [r] Redo all   [q] Back to menu" VT_CL "\n");
+        }
         _ui->vtFrameEnd();
       }
 
       if (ev.type == NAV_ENTER) {
-        state = CAL_SAVE;
+        // Only allow save if at least one pad was calibrated
+        int calCount = 0;
+        for (int i = 0; i < NUM_KEYS; i++) { if (calibrated[i]) calCount++; }
+        if (calCount > 0) state = CAL_SAVE;
       }
       else if (ev.type == NAV_CHAR && (ev.ch == 'r' || ev.ch == 'R')) {
         memset(calibrated, 0, sizeof(calibrated));

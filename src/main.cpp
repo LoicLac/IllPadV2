@@ -145,6 +145,7 @@ static void midiPanic() {
 // Arduino setup() — runs on Core 1
 // =================================================================
 void setup() {
+  uint32_t bootStartMs = millis();  // True boot time for setup window
   Serial.begin(115200);
   delay(500);
   Serial.println();
@@ -239,8 +240,8 @@ void setup() {
 
         if (held) {
           setupRequested = true;
+          break;
         }
-        break;
       }
       delay(10);
     }
@@ -464,6 +465,14 @@ void loop() {
   bool leftHeld = (digitalRead(BTN_LEFT_PIN) == LOW);
   bool rearHeld = (digitalRead(BTN_REAR_PIN) == LOW);
 
+  // Snapshot hold state BEFORE ScaleManager may toggle it (for play/stop check below)
+  bool holdBeforeUpdate = false;
+  {
+    BankSlot& snap = s_bankManager.getCurrentSlot();
+    if (snap.type == BANK_ARPEG && snap.arpEngine)
+      holdBeforeUpdate = snap.arpEngine->isHoldOn();
+  }
+
   // --- Managers (both use left button — single-layer control) ---
   bool bankSwitched = s_bankManager.update(state.keyIsPressed, leftHeld);
   s_scaleManager.update(state.keyIsPressed, leftHeld, s_bankManager.getCurrentSlot());
@@ -545,8 +554,13 @@ void loop() {
   // --- Play/Stop pad (ARPEG + HOLD ON only — in HOLD OFF this pad plays a note) ---
   {
     BankSlot& psSlot = s_bankManager.getCurrentSlot();
+    // Use pre-toggle hold state when same bank (prevents same-frame hold+playStop loss).
+    // After bank switch, use live state (ScaleManager toggled hold on the new bank, not old).
+    bool holdForPS = bankSwitched
+        ? (psSlot.type == BANK_ARPEG && psSlot.arpEngine && psSlot.arpEngine->isHoldOn())
+        : holdBeforeUpdate;
     if (s_playStopPad < NUM_KEYS && psSlot.type == BANK_ARPEG
-        && psSlot.arpEngine && psSlot.arpEngine->isHoldOn()) {
+        && psSlot.arpEngine && holdForPS) {
       bool psPressed = state.keyIsPressed[s_playStopPad];
       if (psPressed && !s_lastPlayStopState) {
         psSlot.arpEngine->playStop(s_transport);
@@ -612,6 +626,7 @@ void loop() {
       bool holdNow = slot.arpEngine->isHoldOn();
       if (s_lastHoldState[curBank] && !holdNow) {
         for (int j = 0; j < NUM_KEYS; j++) {
+          if (j == s_holdPad || j == s_playStopPad) continue;
           if (!state.keyIsPressed[j]) {
             slot.arpEngine->removePadPosition(s_padOrder[j]);
           }

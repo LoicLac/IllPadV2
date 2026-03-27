@@ -392,6 +392,9 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       size_t len = prefs.getBytesLength(key);
       if (len == sizeof(ScaleConfig)) {
         prefs.getBytes(key, &banks[i].scale, sizeof(ScaleConfig));
+        // Clamp to valid range — corrupt NVS would cause OOB in ScaleResolver
+        if (banks[i].scale.root > 6) banks[i].scale.root = 2;  // default C
+        if (banks[i].scale.mode > 6) banks[i].scale.mode = 0;  // default Ionian
         #if DEBUG_SERIAL
         Serial.printf("[NVS] Scale bank %d: chrom=%d root=%d mode=%d\n",
                       i, banks[i].scale.chromatic, banks[i].scale.root, banks[i].scale.mode);
@@ -409,6 +412,8 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       uint8_t types[NUM_BANKS];
       prefs.getBytes(BANKTYPE_NVS_KEY, types, NUM_BANKS);
       for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        // Validate — corrupt NVS byte must not produce invalid BankType
+        if (types[i] > BANK_ARPEG) types[i] = BANK_NORMAL;
         banks[i].type = (BankType)types[i];
       }
       #if DEBUG_SERIAL
@@ -419,6 +424,10 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     len = prefs.getBytesLength("qmode");
     if (len == NUM_BANKS) {
       prefs.getBytes("qmode", _loadedQuantize, NUM_BANKS);
+      for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        if (_loadedQuantize[i] >= NUM_ARP_START_MODES)
+          _loadedQuantize[i] = DEFAULT_ARP_START_MODE;
+      }
       #if DEBUG_SERIAL
       Serial.println("[NVS] Quantize modes loaded.");
       #endif
@@ -642,6 +651,10 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
 uint8_t NvsManager::getLoadedQuantizeMode(uint8_t bank) const {
   if (bank >= NUM_BANKS) return DEFAULT_ARP_START_MODE;
   return _loadedQuantize[bank];
+}
+
+void NvsManager::setLoadedQuantizeMode(uint8_t bank, uint8_t mode) {
+  if (bank < NUM_BANKS) _loadedQuantize[bank] = mode;
 }
 
 const ArpPotStore& NvsManager::getLoadedArpParams(uint8_t bankIdx) const {

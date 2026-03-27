@@ -41,6 +41,7 @@ public:
 
   // Access loaded quantize modes (per-bank, for ArpEngine init at boot)
   uint8_t getLoadedQuantizeMode(uint8_t bank) const;
+  void    setLoadedQuantizeMode(uint8_t bank, uint8_t mode);
 
   // Access loaded arp params (for ArpEngine init at boot, after loadAll)
   const ArpPotStore& getLoadedArpParams(uint8_t bankIdx) const;

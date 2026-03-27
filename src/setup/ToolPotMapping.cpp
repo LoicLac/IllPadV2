@@ -277,8 +277,6 @@ void ToolPotMapping::drawScreen() {
   drawDescription();
   Serial.printf(VT_CL "\n");
   drawHelpLine();
-
-  _ui->vtFrameEnd();
 }
 
 // =================================================================
@@ -658,11 +656,12 @@ void ToolPotMapping::run() {
 
       drawScreen();
 
-      // Extra line for defaults confirmation
       if (confirmDefaults) {
         Serial.printf(VT_YELLOW "  Reset %s context to defaults? (y/n)" VT_RESET VT_CL "\n",
                       _contextNormal ? "NORMAL" : "ARPEG");
       }
+
+      _ui->vtFrameEnd();
     }
 
     delay(5);

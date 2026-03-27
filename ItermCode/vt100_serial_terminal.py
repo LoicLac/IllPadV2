@@ -294,9 +294,6 @@ def run(port_name):
 
     orig_rows, orig_cols = check_and_resize(stdout)
 
-    stdout.write(VT_CLEAR_HOME + VT_HIDE_CURSOR)
-    stdout.flush()
-
     signal.signal(signal.SIGINT, _sigint_handler)
 
     ser = None
@@ -306,6 +303,9 @@ def run(port_name):
         stdout.write(f"\r\nFailed to open port: {e}\r\n")
         stdout.flush()
         sys.exit(1)
+
+    stdout.write(VT_CLEAR_HOME + VT_HIDE_CURSOR)
+    stdout.flush()
 
     old_stdin = set_raw_mode(stdin_fd)
     stdout_buf = sys.stdout.buffer
