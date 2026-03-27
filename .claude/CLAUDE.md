@@ -34,9 +34,9 @@ Pads measure **skin contact surface area**, not mechanical force. Aftertouch = y
 
 ### Double Buffer (NOT mutex)
 
-Inter-core sync uses `std::atomic<uint8_t>` for the read index — not mutex, not volatile.
-- Core 0 owns `s_writeIndex` (plain uint8_t). Core 0 publishes via `s_readIndex.store(memory_order_release)`.
-- Core 1 reads via `s_readIndex.load(memory_order_acquire)`. Never blocks.
+Inter-core sync uses `std::atomic<uint8_t>` `s_active` — not mutex, not volatile.
+- Core 0 computes `writeIdx = 1 - s_active.load()` locally, writes to `s_buffers[writeIdx]`, then publishes via `s_active.store(writeIdx, memory_order_release)`.
+- Core 1 reads via `s_active.load(memory_order_acquire)` to get the latest buffer. Never blocks.
 - Slow params (pots → Core 0): `std::atomic<float>` / `std::atomic<uint16_t>` with `memory_order_relaxed`.
 
 ### 8 Banks Always Alive
@@ -55,7 +55,7 @@ BankSlot { channel, type(NORMAL|ARPEG), scaleConfig, arpEngine*, isForeground,
 
 1. **Pad Ordering** `padOrder[48]`: physical pad → rank 0-47 (low to high). Set once in Tool 2. All banks share it.
 2. **Scale Config** per bank: chromatic or scale (root + mode). Root = base note in both modes. Runtime-switchable via left button hold.
-3. **Control Pad Assignment**: 29 pads with control roles (bank 8 + scale 15 + arp 6 + octave 4). One role per pad. Set in Tool 3.
+3. **Control Pad Assignment**: 29 pads with control roles (bank 8 + scale 15 + arp 6 incl. 4 octave). One role per pad. Set in Tool 3.
 
 ### Note Resolution
 

@@ -103,10 +103,10 @@ All lock-free. No mutex anywhere in runtime code.
 | Response shape | `atomic<float>` | Core 1 | Core 0 | relaxed |
 | Slew rate | `atomic<uint16_t>` | Core 1 | Core 0 | relaxed |
 | Pad sensitivity | `atomic<uint8_t>` | Core 1 | Core 0 | relaxed |
-| Clock tick count | `atomic<uint8_t>` `_pendingTickCount` | NimBLE task / USB cb | Core 1 | release/acquire |
-| Last tick time (any) | `atomic<uint32_t>` `_lastExternalTickUs` | NimBLE task / USB cb | Core 1 | release/acquire |
-| Last tick time (USB) | `atomic<uint32_t>` `_lastUsbTickUs` | USB callback | Core 1 | relaxed |
-| Last tick source | `atomic<uint8_t>` `_lastSource` | NimBLE task / USB cb | Core 1 | relaxed |
+| USB tick count | `atomic<uint8_t>` `_pendingUsbTicks` | USB callback | Core 1 | release/acquire |
+| BLE tick count | `atomic<uint8_t>` `_pendingBleTicks` | NimBLE task | Core 1 | release/acquire |
+| Last USB tick time | `atomic<uint32_t>` `_lastUsbTickUs` | USB callback | Core 1 | relaxed |
+| Last BLE tick time | `atomic<uint32_t>` `_lastBleTickUs` | NimBLE task | Core 1 | relaxed |
 
 ---
 

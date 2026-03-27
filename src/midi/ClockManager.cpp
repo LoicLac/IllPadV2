@@ -96,7 +96,7 @@ void ClockManager::update() {
       _prevTickUs = activeTickUs;
     }
 
-    _rawTickCount += usbTicks + bleTicks;
+    _rawTickCount += activeTicks;
   }
 
   // --- Timeout: external clock lost ---
@@ -121,7 +121,11 @@ void ClockManager::update() {
           #endif
         }
       }
+      // Clear stale timestamp of the timed-out source to prevent
+      // false "alive" detection after micros() wraps (~71.6 min)
       if (!switchedToBle) {
+        _lastUsbTickUs.store(0, std::memory_order_relaxed);
+        _lastBleTickUs.store(0, std::memory_order_relaxed);
         if (_lastKnownBPM > 0.0f) {
           _activeSource = SRC_LAST_KNOWN;
           _lastKnownEntryUs = nowUs;
@@ -188,9 +192,9 @@ void ClockManager::updatePLL(uint32_t intervalUs, uint8_t source) {
   float newBPM = 60000000.0f / ((float)intervalUs * 24.0f);
   float alpha = (source == 0) ? PLL_ALPHA_USB : PLL_ALPHA_BLE;
 
-  if (_tickIntervalCount < 3) _tickIntervalCount++;
-  if (_tickIntervalCount < 3) {
-    _pllBPM = newBPM;  // First samples: seed with raw value
+  if (_tickIntervalCount < 4) _tickIntervalCount++;
+  if (_tickIntervalCount < 4) {
+    _pllBPM = newBPM;  // First 3 samples: seed with raw value
   } else {
     _pllBPM = _pllBPM * (1.0f - alpha) + newBPM * alpha;
   }

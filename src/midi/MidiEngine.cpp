@@ -139,8 +139,10 @@ void MidiEngine::flush() {
   uint8_t count = 0;
   while (_atTail != _atHead && count < FLUSH_BATCH) {
     const AftertouchEvent& evt = _atRing[_atTail];
-    _transport->sendPolyAftertouch(_channel, evt.note, evt.pressure);
     _atTail = (_atTail + 1) % AT_RING_SIZE;
+    // Skip stale events: pad was released (noteOff cleared _lastResolvedNote)
+    if (_lastResolvedNote[evt.pad] == 0xFF) continue;
+    _transport->sendPolyAftertouch(_channel, evt.note, evt.pressure);
     count++;
   }
 }
