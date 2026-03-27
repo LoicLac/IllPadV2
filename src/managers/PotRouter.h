@@ -91,6 +91,10 @@ public:
   // Reset catch for per-bank params (call on bank switch)
   void resetPerBankCatch();
 
+  // Re-seed catch targets from current output values (call after loadStoredPerBank on bank switch)
+  // keepGlobalCatch=true: preserve catch state for global targets (bank switch path)
+  void seedCatchValues(bool keepGlobalCatch = false);
+
   // Load NVS-saved values (call BEFORE begin(), so catch seeds are correct).
   void loadStoredGlobals(float shape, uint16_t slew, uint16_t deadzone,
                          uint16_t tempo, uint8_t ledBright, uint8_t padSens);
@@ -158,9 +162,6 @@ private:
 
   // Rebuild _bindings[] from _mapping + fixed rear bindings
   void rebuildBindings();
-
-  // Seed catch values from current output values (used by begin() and applyMapping())
-  void seedCatchValues();
 
   // Range lookup for a target
   static void getRangeForTarget(PotTarget t, uint16_t& lo, uint16_t& hi);

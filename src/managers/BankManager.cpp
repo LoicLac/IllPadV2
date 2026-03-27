@@ -117,8 +117,9 @@ bool BankManager::isHolding() const {
 void BankManager::switchToBank(uint8_t newBank) {
   if (newBank >= NUM_BANKS || newBank == _currentBank) return;
 
-  // All notes off on old bank's channel
+  // Reset pitch bend to center on old bank's channel, then all notes off
   if (_engine) {
+    _engine->sendPitchBend(8192);  // PB center before switching channel
     _engine->allNotesOff();
   }
 

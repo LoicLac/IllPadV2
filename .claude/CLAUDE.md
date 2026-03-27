@@ -78,20 +78,17 @@ Critical path first, secondary after. MIDI latency depends on this order.
 5b. Consume scale/octave/hold flags + LED confirmations
     (ARPEG scale change: flush noteOffs before re-resolve)
 6. ClockManager.update()                      ← PLL + tick generation
-7. DAW transport: consume Start/Stop flags
-    Stop → flush all playing arps (immediate silence)
-    Start → flush + resetStepIndex + resetSync (bar 1 restart)
-8. Play/Stop pad (ARPEG + HOLD ON only)
-9. processNormalMode() or processArpMode()
-10. ArpScheduler.tick()                       ← all background arps
-10b. ArpScheduler.processEvents()             ← gate noteOff + shuffle noteOn
-11. MidiEngine.flush()                        ← CRITICAL PATH END
-12. PotRouter.update()                        ← SECONDARY (5 pots)
-12b. Send MIDI CC/PB if dirty                 ← from user-assigned pot mappings
-13. BatteryMonitor.update()
-14. LedController.update()                    ← multi-bank state + confirmations
-15. NvsManager.notifyIfDirty()                ← non-blocking signal to NVS task
-16. vTaskDelay(1)
+7. Play/Stop pad (ARPEG + HOLD ON only)
+8. processNormalMode() or processArpMode()
+9. ArpScheduler.tick()                       ← all background arps
+9b. ArpScheduler.processEvents()             ← gate noteOff + shuffle noteOn
+10. MidiEngine.flush()                        ← CRITICAL PATH END
+11. PotRouter.update()                        ← SECONDARY (5 pots)
+11b. Send MIDI CC/PB if dirty                 ← from user-assigned pot mappings
+12. BatteryMonitor.update()
+13. LedController.update()                    ← multi-bank state + confirmations
+14. NvsManager.notifyIfDirty()                ← non-blocking signal to NVS task
+15. vTaskDelay(1)
 ```
 
 ## Boot Sequence
@@ -103,7 +100,7 @@ Step 1: ●○○○○○○○  LED hardware ready
 Step 2: ●●○○○○○○  I2C bus ready
 Step 3: ●●●○○○○○  Keyboard OK
         ●●◉○○○○○  ← Step 3 BLINKS = keyboard/MPR121 FAILED (halts forever)
-        [setup mode detection window — chase pattern if rear button held 3s]
+        [setup mode detection: 3s window to press rear button, then hold 3s — chase pattern during hold]
 Step 4: ●●●●○○○○  MIDI Transport (USB + BLE) started
 Step 5: ●●●●●○○○  NVS loaded
 Step 6: ●●●●●●○○  Arp system ready
@@ -123,7 +120,7 @@ LedController drives a WS2812 RGB NeoPixel strip via `Adafruit_NeoPixel` (NEO_GR
 | Current NORMAL | White (W channel) | Solid | 100% | — |
 | Current ARPEG stopped | Blue | Sine pulse | 30%↔100% | ~1.5s period |
 | Current ARPEG playing | Blue | Sine pulse + tick flash | 30%↔80%, spike 100% on beat | Pulse ~1.5s, flash 30ms |
-| Background NORMAL | — | Off | 0% | — |
+| Background NORMAL | White dim | Solid | ~10% | — |
 | Background ARPEG stopped | Blue dim | Sine pulse | 8%↔25% | ~1.5s period |
 | Background ARPEG playing | Blue dim | Sine pulse + tick flash | 8%↔20%, spike 25% on beat | Pulse ~1.5s, flash 30ms |
 
@@ -145,7 +142,7 @@ Each confirmation type has a distinct RGB color. 10 `ConfirmType` enum values:
 | Hold OFF | `CONFIRM_HOLD_OFF` | Deep blue | Fade-out | 300ms |
 | Play | `CONFIRM_PLAY` | Green ack → blue-cyan ramp | Ack flash + 3 beat-synced flashes | Beat-synced (4 steps) |
 | Stop | `CONFIRM_STOP` | Blue-cyan | Fade-out | 300ms |
-| Octave | `CONFIRM_OCTAVE` | Blue-violet | Single blink of N LEDs (1-4) | 100ms |
+| Octave | `CONFIRM_OCTAVE` | Blue-violet | Triple blink of a 2-LED group (octave 1→LEDs 0-1, 2→LEDs 2-3, 3→LEDs 4-5, 4→LEDs 6-7) | 300ms |
 
 Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Play confirmation uses `ClockManager` for beat sync (fallback: 200ms/beat if no clock). Priority: below error/battery/bargraph, above normal display. New confirmation preempts active one.
 
@@ -153,8 +150,8 @@ Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Play confirmati
 
 ```
 1. Boot mode          (progressive white fill / red failure blink)
-2. Chase pattern      (calibration entry — white chase)
-3. Setup comet        (violet comet during Tools 1-6)
+2. Setup comet        (violet comet during Tools 1-6)
+3. Chase pattern      (calibration entry — white chase)
 4. Error              (LEDs 4-5 blink red 500ms — sensing task stall)
 5. Battery gauge      (8-LED red→green gradient bar, 3s)
 6. Pot bargraph       (solid bar + catch visualization, configurable duration)
@@ -165,7 +162,7 @@ Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Play confirmati
 
 ### Pot Bargraph
 
-`showPotBargraph(realLevel, potLevel, caught)` — 3 params. Shows target level as solid bar + physical pot position indicator. Catch state visualized: uncaught pots show pot position dimly until caught. Configurable duration via Tool 5 Settings (parameter 8). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
+`showPotBargraph(realLevel, potLevel, caught)` — 3 params. Shows target level as solid bar + physical pot position indicator. Catch state visualized: uncaught pots show pot position dimly until caught. Configurable duration via Tool 5 Settings (parameter 6, 0-indexed as case 5). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
 
 ## Buttons
 
@@ -173,7 +170,7 @@ Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Play confirmati
 - **Left (hold + pot)**: modifier for 4 right pots (2nd slot: division, AT deadzone/shuffle depth, pitch bend/shuffle template, velocity variation).
 - **Play/Stop pad**: ARPEG + HOLD ON only — toggles arp transport. In HOLD OFF mode, this pad is a regular music pad (enters the arp pile like any other pad). On NORMAL banks, always a regular music pad.
 - **Rear (press)**: battery gauge (3s).
-- **Rear (hold 3s at boot)**: setup mode.
+- **Rear (boot, two-phase)**: press within 3s of boot, then hold 3s → setup mode (chase LED during hold).
 - **Rear (hold + pot rear)**: modifier for rear pot (pad sensitivity).
 
 ## Arpeggiator
@@ -186,7 +183,7 @@ Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Play confirmati
 
 5 patterns (Up/Down/UpDown/Random/Order) via pot right 3. 1-4 octaves via 4 pads in single-layer control (hold left + octave pad). Up to 48 positions (192 steps with 4 oct). Division via hold+pot right 1 (9 binary values: 4/1→1/64). Gate/shuffle/velocity per-bank via pots.
 
-**Quantized start** (per-bank, set in Tool 4): Immediate (fire on next division boundary), Beat (snap to next 1/4 note, 24 ticks), or Bar (snap to next bar, 96 ticks). Stop is always immediate. MIDI Start (0xFA) bypasses quantize. HOLD OFF auto-play also respects quantize on 0→1 finger transition.
+**Quantized start** (per-bank, set in Tool 4): Immediate (fire on next division boundary), Beat (snap to next 1/4 note, 24 ticks), or Bar (snap to next bar, 96 ticks). Stop is always immediate. HOLD OFF auto-play also respects quantize on 0→1 finger transition.
 
 **Shuffle**: 5 groove templates (16 steps each), depth 0.0–1.0 via pot (extreme: notes can overlap across steps). Template selected via hold+pot right 3 (5 discrete values). Depth controls intensity, template controls groove shape. Shuffle offset = template[step%16] × depth × stepDuration / 100. Gate and shuffle use a unified time-based event system with reference counting (up to 36 pending events per engine): ArpScheduler.tick() schedules noteOn (with shuffle delay) and noteOff (at noteOnTime + stepDuration × gateLength), ArpScheduler.processEvents() fires them in real time. Overlapping notes handled via per-note refcount (MIDI noteOn only on 0→1, noteOff only on 1→0). Shuffle step counter resets on: play/stop toggle, pile 0→1 note, pattern change.
 
@@ -229,22 +226,19 @@ The 4 right pots × 2 layers = **8 slots per context** (NORMAL and ARPEG indepen
 
 ## MIDI Clock & Transport
 
-ClockManager receives 0xF8/0xFA/0xFB/0xFC via USB+BLE. Priority: USB > BLE > last known > internal (pot right 1).
+ClockManager receives 0xF8 (clock ticks) via USB+BLE. Priority: USB > BLE > last known > internal (pot right 1). Start/Stop/Continue (0xFA/0xFB/0xFC) are intentionally ignored — the ILLPAD is an instrument, not a transport follower.
 **PLL** smooths BLE jitter (±15ms → ±1-2ms). ArpEngines sync to smoothed clock.
 
 **ILLPAD never sends Start/Stop/Continue** — only clock ticks (0xF8) in master mode. The ILLPAD is an instrument, not a transport controller.
 
 ### Transport Behavior by Mode
 
-| Mode | Clock ticks | Start (0xFA) | Continue (0xFB) | Stop (0xFC) | Sends |
-|---|---|---|---|---|---|
-| **Slave, follow=ON** | PLL sync | Reset tick counter (re-sync to bar 1) | Resume (no tick reset, arps continue from position) | Flush all arp noteOffs (immediate silence) | Nothing |
-| **Slave, follow=OFF** | PLL sync | Ignore | Ignore | Ignore | Nothing |
-| **Master** | Generate from pot tempo | Ignore | Ignore | Ignore | Ticks only (0xF8) |
+| Mode | Clock ticks (0xF8) | Start/Stop/Continue | Sends |
+|---|---|---|---|
+| **Slave** | PLL sync | Ignored | Nothing |
+| **Master** | Generate from pot tempo | Ignored | Ticks only (0xF8) |
 
-**Follow Transport** is configurable via Tool 5 Settings ("Follow Transport: Yes/No"). Default: Yes. Only applies in Slave mode. Clock ticks are always received regardless of this setting — only Start/Continue/Stop are gated.
-
-## Setup Mode (hold rear button 3s at boot)
+## Setup Mode (press rear within 3s of boot, then hold 3s)
 
 VT100 terminal, serial input + button = ENTER.
 
@@ -253,7 +247,7 @@ VT100 terminal, serial input + button = ENTER.
 [2] Pad Ordering           — touch low→high, positions 1-48, no base note
 [3] Pad Roles              — bank(8) + scale(15) + arp(6: hold+play/stop+4 octave), color grid, collision check
 [4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
-[5] Settings               — profile, AT rate, BLE interval, clock, follow transport, double-tap, bargraph duration
+[5] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, battery cal
 [6] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
 [0] Reboot
 ```
@@ -285,7 +279,7 @@ src/
 | `illpad_nmap` | padOrder[48] (positions, NOT MIDI notes) |
 | `illpad_bpad` | bankPads[8] |
 | `illpad_bank` | current bank (0-7) |
-| `illpad_set` | settings (profile, AT rate, BLE interval, clock mode, follow transport, double-tap, bargraph duration) |
+| `illpad_set` | settings (profile, AT rate, BLE interval, clock mode, double-tap, bargraph duration, panic-on-reconnect, battery ADC cal) |
 | `illpad_pot` | global pot params (shape, slew, AT deadzone) |
 | `illpad_tempo` | tempo BPM (global) |
 | `illpad_btype` | bank types[8] (NORMAL/ARPEG) + quantize modes[8] (Immediate/Beat/Bar) |
@@ -309,6 +303,7 @@ NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never bl
 
 ## CRITICAL — KEEP IN SYNC
 
+- **`docs/architecture-briefing.md`** — runtime data flows, inter-core sync points, invariants, dirty flags. Used by subagents (testmusicien, audit) and new sessions for quick context. **Update when you change a function in any of the 5 documented flows** (pad→MIDI, arp tick, bank switch, scale change, pot→param).
 - **`ItermCode/vt100_serial_terminal.py`** — the Python serial terminal is the only way to interact with setup mode. When setup tools (`src/setup/`) change input handling, escape sequences, line endings, or VT100 rendering, **always verify and update the terminal script**. The two must stay synchronised (e.g., arrow key atomic send, line ending normalization, DEC 2026 sync support).
 
 ## Conventions

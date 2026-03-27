@@ -280,8 +280,8 @@ void ToolPadOrdering::run() {
           _ui->vtClear();
           Serial.printf(VT_YELLOW VT_BOLD "  Only %d/%d pads assigned." VT_RESET "\n", uniqueAssigned, NUM_KEYS);
           Serial.printf(VT_CL "\n");
-          Serial.printf("  Unassigned pads will use position 0 (lowest pitch).\n");
-          Serial.printf("  They will all play the same note.\n");
+          Serial.printf("  Unassigned pads will get sequential positions\n");
+          Serial.printf("  after the last assigned pad.\n");
           Serial.printf(VT_CL "\n");
           Serial.printf("  [Enter] Save anyway   [q] Cancel\n");
 
@@ -322,6 +322,20 @@ void ToolPadOrdering::run() {
     case ORD_SAVE: {
       _ui->vtClear();
       Serial.printf(VT_BOLD "  Saving pad ordering..." VT_RESET "\n");
+
+      // Fill unassigned pads with sequential positions after the assigned ones
+      uint8_t assignedTotal = 0;
+      for (uint8_t i = 0; i < NUM_KEYS; i++) {
+        if (orderMap[i] != 0xFF) assignedTotal++;
+      }
+      if (assignedTotal < NUM_KEYS) {
+        uint8_t nextPos = assignedTotal;
+        for (uint8_t i = 0; i < NUM_KEYS; i++) {
+          if (orderMap[i] == 0xFF) {
+            orderMap[i] = nextPos++;
+          }
+        }
+      }
 
       // Build NoteMapStore
       NoteMapStore nms;

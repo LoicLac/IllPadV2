@@ -241,7 +241,7 @@ void PotRouter::rebuildBindings() {
 // seedCatchValues — seed catch from current output values
 // Extracted for use by both begin() and applyMapping().
 // =================================================================
-void PotRouter::seedCatchValues() {
+void PotRouter::seedCatchValues(bool keepGlobalCatch) {
   for (uint8_t i = 0; i < _numBindings; i++) {
     const PotBinding& bind = _bindings[i];
     float norm = 0.5f;  // fallback mid-range
@@ -300,7 +300,9 @@ void PotRouter::seedCatchValues() {
     }
 
     _catch[i].storedValue = (uint16_t)(norm * 4095.0f);
-    _catch[i].caught = false;
+    if (!keepGlobalCatch || isPerBankTarget(_bindings[i].target)) {
+      _catch[i].caught = false;
+    }
   }
 }
 
@@ -395,10 +397,14 @@ void PotRouter::resolveBindings(bool btnLeft, bool btnRear, BankType type) {
       }
     }
 
-    if (bestIdx != _activeIdx[p] && _activeIdx[p] >= 0) {
-      _catch[_activeIdx[p]].caught = false;
+    // Only reset catch when binding changes to a DIFFERENT valid binding
+    // (not when going to -1 / no match, e.g. rear button held on right pots)
+    if (bestIdx != _activeIdx[p]) {
+      if (_activeIdx[p] >= 0 && bestIdx >= 0) {
+        _catch[_activeIdx[p]].caught = false;
+      }
+      _activeIdx[p] = bestIdx;
     }
-    _activeIdx[p] = bestIdx;
   }
 }
 
@@ -496,7 +502,9 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       uint8_t val = (uint8_t)adcToRange(adc, 0, 127);
       for (uint8_t s = 0; s < _ccSlotCount; s++) {
         if (_ccBindingIdx[s] == (uint8_t)idx) {
-          if (val != _ccValue[s]) {
+          // Hysteresis: only update when value changes by ≥2 to prevent ADC noise flood
+          int8_t diff = (int8_t)val - (int8_t)_ccValue[s];
+          if (diff > 1 || diff < -1 || val == 0 || val == 127) {
             _ccValue[s] = val;
             _ccDirty[s] = true;
           }
@@ -537,7 +545,7 @@ void PotRouter::applyBinding(uint8_t potIndex) {
     }
   }
 
-  _bargraphLevel = (uint8_t)(adc * 8.0f / 4096.0f);
+  _bargraphLevel = (uint8_t)(adc * 8.0f / 4095.0f);
   if (_bargraphLevel > 8) _bargraphLevel = 8;
   _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f);
   _bargraphCaught = true;

@@ -194,8 +194,11 @@ enum ClockMode : uint8_t {
   CLOCK_MASTER = 1,   // Generate clock from pot tempo
   NUM_CLOCK_MODES = 2
 };
-const uint8_t DEFAULT_CLOCK_MODE         = CLOCK_SLAVE;
-const uint8_t DEFAULT_PANIC_ON_RECONNECT = 1;  // yes — CC123 on all channels when BLE reconnects
+const uint8_t  DEFAULT_CLOCK_MODE         = CLOCK_SLAVE;
+const uint8_t  DEFAULT_PANIC_ON_RECONNECT = 1;  // yes — CC123 on all channels when BLE reconnects
+const uint16_t DEFAULT_BAT_ADC_AT_FULL    = 0;  // 0 = uncalibrated, uses theoretical value
+// Theoretical ADC at full (4.2V): 4.2 / BAT_DIVIDER_RATIO / 3.3 * 4095 ≈ 2606
+const uint16_t BAT_ADC_FULL_THEORETICAL   = 2606;
 
 // --- Arp Start Quantize (per-bank, set in Tool 4) ---
 enum ArpStartMode : uint8_t {

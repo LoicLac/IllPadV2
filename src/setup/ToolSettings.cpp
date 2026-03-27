@@ -7,7 +7,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-static const uint8_t NUM_PARAMS = 7;
+static const uint8_t NUM_PARAMS = 8;
 
 static const char* s_profileNames[]   = {"Adaptive", "Expressive", "Percussive"};
 static const char* s_bleNames[]       = {"Low Latency (7.5ms)", "Normal (15ms)", "Battery Saver (30ms)", "Off (USB only)"};
@@ -64,6 +64,8 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
     }
     case 6: // Panic on Reconnect: cycle 0-1
       wk.panicOnReconnect = wk.panicOnReconnect ? 0 : 1;
+      break;
+    case 7: // Battery Calibration: no left/right adjustment
       break;
   }
 }
@@ -130,6 +132,11 @@ void ToolSettings::drawDescription(uint8_t param) {
       Serial.printf(VT_DIM "    channels when BLE reconnects. Prevents" VT_RESET VT_CL "\n");
       Serial.printf(VT_DIM "    stuck notes after connection drop." VT_RESET VT_CL "\n");
       break;
+    case 7:
+      Serial.printf(VT_DIM "    Calibrate battery ADC at full charge." VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    Plug in charger, wait for full, press" VT_RESET VT_CL "\n");
+      Serial.printf(VT_DIM "    [Enter] to read and save the ADC value." VT_RESET VT_CL "\n");
+      break;
   }
   Serial.printf(VT_DIM "  ----------------------------------------" VT_RESET VT_CL "\n");
 }
@@ -146,7 +153,7 @@ void ToolSettings::run() {
                       DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
                       DEFAULT_CLOCK_MODE,
                       DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
-                      DEFAULT_PANIC_ON_RECONNECT};
+                      DEFAULT_PANIC_ON_RECONNECT, DEFAULT_BAT_ADC_AT_FULL};
   {
     Preferences prefs;
     if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
@@ -185,7 +192,7 @@ void ToolSettings::run() {
               DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
               DEFAULT_CLOCK_MODE,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
-              DEFAULT_PANIC_ON_RECONNECT};
+              DEFAULT_PANIC_ON_RECONNECT, DEFAULT_BAT_ADC_AT_FULL};
         if (saveSettings(wk)) {
           original = wk;
           _ui->showSaved();
@@ -240,6 +247,10 @@ void ToolSettings::run() {
         adjustParam(wk, cursor, +1, ev.accelerated);
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
+        // Battery cal: read ADC now instead of adjusting
+        if (cursor == 7) {
+          wk.batAdcAtFull = (uint16_t)analogRead(BAT_ADC_PIN);
+        }
         // Save on confirm
         if (saveSettings(wk)) {
           editing = false;
@@ -310,6 +321,14 @@ void ToolSettings::run() {
                LED_BARGRAPH_DURATION_MAX / 1000.0f);
       drawParam(5, "Bargraph Duration:", bgBuf);
       drawParam(6, "Panic on Reconnect:", s_yesNoNames[wk.panicOnReconnect ? 1 : 0]);
+
+      char batBuf[32];
+      if (wk.batAdcAtFull > 0) {
+        snprintf(batBuf, sizeof(batBuf), "Calibrated (%d)", wk.batAdcAtFull);
+      } else {
+        snprintf(batBuf, sizeof(batBuf), "Not calibrated");
+      }
+      drawParam(7, "Battery Cal:", batBuf);
 
       Serial.printf(VT_CL "\n");
 

@@ -102,6 +102,8 @@ void ArpScheduler::tick() {
   if (currentTick == _lastClockTick) return;  // No new ticks
 
   uint32_t ticksElapsed = currentTick - _lastClockTick;
+  // Guard against burst-firing too many steps on clock source transitions
+  if (ticksElapsed > 24) ticksElapsed = 24;  // Max 1 quarter note of catch-up (fits event queue at all divisions)
   _lastClockTick = currentTick;
 
   for (uint8_t i = 0; i < _slotCount; i++) {
@@ -119,7 +121,9 @@ void ArpScheduler::tick() {
       if (bpm == 0) bpm = 120;  // Safety fallback
       uint32_t stepDurationUs = (uint32_t)2500000UL * divisor / bpm;
 
-      eng->tick(*_transport, stepDurationUs, currentTick);
+      // Synthesize a tick value that advances with each burst step
+      uint32_t synthTick = currentTick - _slots[i].tickAccum;
+      eng->tick(*_transport, stepDurationUs, synthTick);
 
       _slots[i].tickAccum -= divisor;
     }

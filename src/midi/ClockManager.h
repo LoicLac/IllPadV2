@@ -35,20 +35,18 @@ private:
     SRC_LAST_KNOWN
   };
 
-  static constexpr uint8_t  PLL_BUFFER_SIZE    = 24;   // 24 ticks = 1 quarter note
   static constexpr uint32_t EXTERNAL_TIMEOUT_US = 2000000; // 2s in microseconds
   static constexpr float    PLL_ALPHA_USB      = 0.3f;
-  static constexpr float    PLL_ALPHA_BLE      = 0.1f;
+  static constexpr float    PLL_ALPHA_BLE      = 0.15f;
 
   // Raw tick reception (written by BLE callback on NimBLE task)
-  std::atomic<uint32_t> _lastExternalTickUs;   // micros() of last external tick
+  std::atomic<uint32_t> _lastExternalTickUs;   // micros() of last tick (any source)
+  std::atomic<uint32_t> _lastUsbTickUs;        // micros() of last USB tick only
   std::atomic<uint8_t>  _lastSource;           // source of last tick (0=USB, 1=BLE)
-  std::atomic<bool>     _newTickAvailable;     // flag: new tick arrived
+  std::atomic<uint8_t>  _pendingTickCount;     // ticks received since last update()
 
-  // PLL circular buffer (only accessed from Core 1 update())
-  uint32_t _tickIntervals[PLL_BUFFER_SIZE];
-  uint8_t  _tickIntervalIdx;
-  uint8_t  _tickIntervalCount;
+  // PLL state (only accessed from Core 1 update())
+  uint8_t  _tickIntervalCount; // counts samples for seed guard (first 3 = raw)
   uint32_t _prevTickUs;        // previous tick timestamp (for interval calc)
 
   // PLL state

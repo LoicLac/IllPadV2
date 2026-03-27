@@ -537,14 +537,15 @@ void ToolPotMapping::run() {
       } else if (ev.type == NAV_ENTER) {
         // Confirm CC assignment
         PotMapping* map = currentMap();
-        map[_cursor].target = TARGET_MIDI_CC;
-        map[_cursor].ccNumber = _ccNumber;
-        // Check for duplicate CC# — steal
+        // Check for duplicate CC# BEFORE assigning cursor (otherwise
+        // findSlotWithTarget may find the cursor itself if cursor < existing)
         int8_t dup = findSlotWithTarget(TARGET_MIDI_CC, _ccNumber);
         if (dup >= 0 && dup != (int8_t)_cursor) {
           map[dup].target = TARGET_EMPTY;
           map[dup].ccNumber = 0;
         }
+        map[_cursor].target = TARGET_MIDI_CC;
+        map[_cursor].ccNumber = _ccNumber;
         if (saveMapping()) {
           _ui->showSaved();
           _ccEditing = false;

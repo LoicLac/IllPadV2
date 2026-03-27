@@ -22,6 +22,7 @@
 #include "managers/BankManager.h"
 #include "managers/ScaleManager.h"
 #include "managers/PotRouter.h"
+#include "managers/BatteryMonitor.h"
 #include "managers/NvsManager.h"
 
 // Setup
@@ -51,6 +52,7 @@ static LedController      s_leds;
 static BankManager        s_bankManager;
 static ScaleManager       s_scaleManager;
 static PotRouter          s_potRouter;
+static BatteryMonitor     s_batteryMonitor;
 static NvsManager         s_nvsManager;
 static SetupManager       s_setupManager;
 static ClockManager       s_clockManager;
@@ -151,10 +153,12 @@ void setup() {
   // LEDs first — needed for boot progress and error feedback
   s_leds.begin();
   s_leds.showBootProgress(1);  // Step 1: LED hardware ready
+  s_leds.update();
 
   // I2C
   Wire.begin(SDA_PIN, SCL_PIN, I2C_CLOCK_HZ);
   s_leds.showBootProgress(2);  // Step 2: I2C bus ready
+  s_leds.update();
   #if DEBUG_SERIAL
   Serial.println("[INIT] I2C OK.");
   #endif
@@ -167,6 +171,7 @@ void setup() {
     for (;;) { s_leds.update(); delay(10); }
   }
   s_leds.showBootProgress(3);  // Step 3: keyboard OK
+  s_leds.update();
   #if DEBUG_SERIAL
   Serial.println("[INIT] Keyboard OK.");
   #endif
@@ -217,6 +222,7 @@ void setup() {
       if (digitalRead(BTN_REAR_PIN) == LOW) {
         // Button pressed — now wait for CAL_HOLD_DURATION_MS hold
         uint32_t holdStart = millis();
+        s_leds.endBoot();     // Exit boot display so chase is visible
         s_leds.startChase();  // Chase LED animation while holding
         bool held = true;
 
@@ -276,6 +282,7 @@ void setup() {
     }
   }
   s_leds.showBootProgress(4);  // Step 4: starting MIDI
+  s_leds.update();
   s_transport.begin();
   #if DEBUG_SERIAL
   Serial.println("[INIT] MIDI Transport OK.");
@@ -306,6 +313,7 @@ void setup() {
   // Apply loaded bank
   s_banks[currentBank].isForeground = true;
   s_leds.showBootProgress(5);  // Step 5: NVS loaded
+  s_leds.update();
   #if DEBUG_SERIAL
   Serial.printf("[INIT] NVS loaded. Bank=%d\n", currentBank);
   #endif
@@ -318,6 +326,7 @@ void setup() {
   s_doubleTapMs = s_settings.doubleTapMs;
   s_leds.setPotBarDuration(s_settings.potBarDurationMs);
   s_panicOnReconnect = (s_settings.panicOnReconnect != 0);
+  s_batteryMonitor.setAdcAtFull(s_settings.batAdcAtFull);
 
   // Apply loaded tempo to ClockManager (loadAll set it on PotRouter,
   // but ClockManager was initialized before loadAll with default 120)
@@ -365,6 +374,7 @@ void setup() {
     }
   }
   s_leds.showBootProgress(6);  // Step 6: Arp system ready
+  s_leds.update();
   #if DEBUG_SERIAL
   Serial.println("[INIT] ArpScheduler OK.");
   #endif
@@ -395,9 +405,13 @@ void setup() {
   Serial.println("[INIT] ScaleManager OK.");
   #endif
 
+  // Battery Monitor
+  s_batteryMonitor.begin(&s_leds);
+
   // Pot Router
   s_potRouter.begin();
   s_leds.showBootProgress(7);  // Step 7: managers ready
+  s_leds.update();
   #if DEBUG_SERIAL
   Serial.println("[INIT] PotRouter OK.");
   #endif
@@ -418,6 +432,7 @@ void setup() {
   s_bootTimestamp = millis();
 
   s_leds.showBootProgress(8);  // Step 8: all systems go (full bar)
+  s_leds.update();
   delay(200);                   // Brief full-bar display before switching to bank mode
   s_leds.endBoot();             // Exit boot mode, switch to normal bank display
 
@@ -477,6 +492,7 @@ void loop() {
       newSlot.baseVelocity, newSlot.velocityVariation, newSlot.pitchBendOffset,
       gate, shufDepth, div, pat, shufTmpl
     );
+    s_potRouter.seedCatchValues(true);  // Re-seed; keep global catch (only reset per-bank)
     s_potRouter.resetPerBankCatch();
   }
 
@@ -492,9 +508,8 @@ void loop() {
     BankSlot& scSlot = s_bankManager.getCurrentSlot();
     s_nvsManager.queueScaleWrite(bank, scSlot.scale);
     if (scSlot.type == BANK_ARPEG && scSlot.arpEngine) {
-      // Flush old notes before scale change — prevents stuck notes when
-      // a pile position resolves to a different MIDI note in the new scale
-      scSlot.arpEngine->flushPendingNoteOffs(s_transport);
+      // No flush — pending events carry their own resolved MIDI notes
+      // and complete naturally via refcount. Next tick resolves with new scale.
       scSlot.arpEngine->setScaleConfig(scSlot.scale);
     }
     switch (scaleChange) {
@@ -513,11 +528,15 @@ void loop() {
     s_leds.triggerConfirm(CONFIRM_OCTAVE, newOct);
   }
 
-  // LED confirmation on hold toggle
+  // LED confirmation on hold toggle + reset double-tap timestamps
   if (holdToggled) {
     BankSlot& holdSlot = s_bankManager.getCurrentSlot();
     bool holdIsOn = (holdSlot.type == BANK_ARPEG && holdSlot.arpEngine && holdSlot.arpEngine->isHoldOn());
     s_leds.triggerConfirm(holdIsOn ? CONFIRM_HOLD_ON : CONFIRM_HOLD_OFF);
+    // Clear double-tap timestamps on OFF→ON to prevent false removals
+    if (holdIsOn) {
+      memset(s_lastPressTime, 0, sizeof(s_lastPressTime));
+    }
   }
 
   // --- Clock: process ticks (PLL + tick generation) ---
@@ -634,6 +653,36 @@ void loop() {
     }
   }
 
+  // Clean up stuck notes on left-button release edge (NORMAL mode only).
+  // While left is held, MIDI processing is skipped but s_lastKeys keeps tracking,
+  // so pad-release edges are consumed without generating noteOff.
+  {
+    static bool s_wasHolding = false;
+    bool holdingNow = s_bankManager.isHolding() || s_scaleManager.isHolding();
+    if (s_wasHolding && !holdingNow) {
+      BankSlot& relSlot = s_bankManager.getCurrentSlot();
+      if (relSlot.type == BANK_NORMAL) {
+        for (int i = 0; i < NUM_KEYS; i++) {
+          if (!state.keyIsPressed[i]) {
+            s_midiEngine.noteOff(i);  // no-op if pad has no active note
+          }
+        }
+      } else if (relSlot.type == BANK_ARPEG && relSlot.arpEngine
+                 && !relSlot.arpEngine->isHoldOn()) {
+        // HOLD OFF: remove positions released during left-hold.
+        // s_lastKeys consumed the release edges — removePadPosition never fired.
+        // Skip holdPad (owned by ScaleManager, never in the pile).
+        for (int i = 0; i < NUM_KEYS; i++) {
+          if (i == s_holdPad) continue;
+          if (!state.keyIsPressed[i]) {
+            relSlot.arpEngine->removePadPosition(s_padOrder[i]);  // idempotent
+          }
+        }
+      }
+    }
+    s_wasHolding = holdingNow;
+  }
+
   // Always sync edge state — prevents ghost notes when button releases
   for (int i = 0; i < NUM_KEYS; i++) {
     s_lastKeys[i] = state.keyIsPressed[i];
@@ -703,6 +752,10 @@ void loop() {
       s_potRouter.isBargraphCaught()
     );
   }
+
+  // Battery monitor (periodic check + rear button → gauge)
+  s_batteryMonitor.update(rearHeld);
+  s_leds.setBatteryLow(s_batteryMonitor.isLow());
 
   s_leds.update();
 
