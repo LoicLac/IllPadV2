@@ -51,8 +51,8 @@ void SetupManager::run() {
   // Debounce: wait for entry conditions to settle
   delay(200);
 
-  _ui.initTerminal();
-  _ui.vtClear();
+  _ui.vtClear();          // sends ESC[H — Python script boot sync triggers on this
+  _ui.initTerminal();     // iTerm2 sequences AFTER home cursor (so Python passes them through)
   bool screenDirty = true;
   unsigned long lastRefresh = 0;
 

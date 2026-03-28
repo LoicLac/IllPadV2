@@ -92,7 +92,7 @@ void SetupUI::drawSection(const char* label) {
 }
 
 void SetupUI::drawFrameLine(const char* fmt, ...) {
-  char buf[256];
+  char buf[512];
   va_list args;
   va_start(args, fmt);
   vsnprintf(buf, sizeof(buf), fmt, args);
@@ -205,10 +205,12 @@ void SetupUI::flashSaved() {
   for (uint8_t i = 0; i < 3; i++) {
     vtMoveTo(2, 1);
     drawConsoleHeaderFlash(true);
-    delay(20);
+    Serial.flush();
+    delay(50);
     vtMoveTo(2, 1);
     drawConsoleHeaderFlash(false);
-    delay(20);
+    Serial.flush();
+    delay(50);
   }
   if (_leds) _leds->playValidation();
 }
