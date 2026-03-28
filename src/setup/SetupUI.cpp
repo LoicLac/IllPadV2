@@ -1,6 +1,7 @@
 #include "SetupUI.h"
 #include "../core/LedController.h"
 #include "../core/KeyboardData.h"
+#include "../managers/PotRouter.h"
 #include <Arduino.h>
 #include <Preferences.h>
 #include <stdarg.h>
@@ -291,6 +292,17 @@ void SetupUI::printMainMenu() {
     prefs.end();
   } else { setStatus = '!'; }
 
+  char potStatus = ' ';
+  if (prefs.begin(POTMAP_NVS_NAMESPACE, true)) {
+    size_t len = prefs.getBytesLength(POTMAP_NVS_KEY);
+    if (len == sizeof(PotMappingStore)) {
+      PotMappingStore tmp;
+      prefs.getBytes(POTMAP_NVS_KEY, &tmp, sizeof(PotMappingStore));
+      potStatus = (tmp.magic == EEPROM_MAGIC && tmp.version == POTMAP_VERSION) ? 'v' : '!';
+    } else { potStatus = '!'; }
+    prefs.end();
+  } else { potStatus = '!'; }
+
   auto statusStr = [](char s) -> const char* {
     if (s == 'v') return VT_REVERSE VT_GREEN " ok " VT_RESET;
     if (s == '!') return VT_DIM " -- " VT_RESET;
@@ -312,7 +324,7 @@ void SetupUI::printMainMenu() {
   drawFrameLine("[3]  Pad Roles                     " VT_DIM "bank / scale / arp pads" VT_RESET "             %s", statusStr(roleStatus));
   drawFrameLine("[4]  Bank Config                   " VT_DIM "NORMAL vs ARPEG, quantize" VT_RESET "           %s", statusStr(bankStatus));
   drawFrameLine("[5]  Settings                      " VT_DIM "preferences & connectivity" VT_RESET "          %s", statusStr(setStatus));
-  drawFrameLine("[6]  Pot Mapping                   " VT_DIM "parameter assignments" VT_RESET);
+  drawFrameLine("[6]  Pot Mapping                   " VT_DIM "parameter assignments" VT_RESET "              %s", statusStr(potStatus));
   drawFrameEmpty();
 
   // System section
