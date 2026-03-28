@@ -324,7 +324,7 @@ void SetupUI::printMainMenu() {
   drawFrameLine("[3]  Pad Roles                     " VT_DIM "bank / scale / arp pads" VT_RESET "             %s", statusStr(roleStatus));
   drawFrameLine("[4]  Bank Config                   " VT_DIM "NORMAL vs ARPEG, quantize" VT_RESET "           %s", statusStr(bankStatus));
   drawFrameLine("[5]  Settings                      " VT_DIM "preferences & connectivity" VT_RESET "          %s", statusStr(setStatus));
-  drawFrameLine("[6]  Pot Mapping                   " VT_DIM "parameter assignments" VT_RESET "              %s", statusStr(potStatus));
+  drawFrameLine("[6]  Pot Mapping                   " VT_DIM "parameter assignments" VT_RESET "               %s", statusStr(potStatus));
   drawFrameEmpty();
 
   // System section
