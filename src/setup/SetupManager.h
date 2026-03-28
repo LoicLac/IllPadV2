@@ -10,6 +10,7 @@
 #include "ToolBankConfig.h"
 #include "ToolSettings.h"
 #include "ToolPotMapping.h"
+#include "ToolLedSettings.h"
 
 class CapacitiveKeyboard;
 class LedController;
@@ -44,6 +45,7 @@ private:
   ToolBankConfig      _toolBankConfig;
   ToolSettings        _toolSettings;
   ToolPotMapping      _toolPotMapping;
+  ToolLedSettings     _toolLedSettings;
 
 };
 

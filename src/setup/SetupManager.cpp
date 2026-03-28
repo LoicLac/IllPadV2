@@ -33,6 +33,7 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _toolBankConfig.begin(leds, nvs, &_ui, banks);
   _toolSettings.begin(keyboard, leds, nvs, &_ui);
   _toolPotMapping.begin(leds, &_ui, potRouter);
+  _toolLedSettings.begin(leds, nvs, &_ui);
 }
 
 static InputParser s_input;
@@ -100,6 +101,12 @@ void SetupManager::run() {
 
       case '6':
         _toolPotMapping.run();
+        _ui.vtClear();
+        screenDirty = true;
+        break;
+
+      case '7':
+        _toolLedSettings.run();
         _ui.vtClear();
         screenDirty = true;
         break;

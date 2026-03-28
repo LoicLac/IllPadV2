@@ -303,6 +303,17 @@ void SetupUI::printMainMenu() {
     prefs.end();
   } else { potStatus = '!'; }
 
+  char ledStatus = ' ';
+  if (prefs.begin(LED_SETTINGS_NVS_NAMESPACE, true)) {
+    size_t len = prefs.getBytesLength(LED_SETTINGS_NVS_KEY);
+    if (len == sizeof(LedSettingsStore)) {
+      LedSettingsStore tmp;
+      prefs.getBytes(LED_SETTINGS_NVS_KEY, &tmp, sizeof(LedSettingsStore));
+      ledStatus = (tmp.magic == EEPROM_MAGIC && tmp.version == LED_SETTINGS_VERSION) ? 'v' : '!';
+    } else { ledStatus = '!'; }
+    prefs.end();
+  } else { ledStatus = '!'; }
+
   auto statusStr = [](char s) -> const char* {
     if (s == 'v') return VT_REVERSE VT_GREEN " ok " VT_RESET;
     if (s == '!') return VT_DIM " -- " VT_RESET;
@@ -325,6 +336,7 @@ void SetupUI::printMainMenu() {
   drawFrameLine("[4]  Bank Config                   " VT_DIM "NORMAL vs ARPEG, quantize" VT_RESET "           %s", statusStr(bankStatus));
   drawFrameLine("[5]  Settings                      " VT_DIM "preferences & connectivity" VT_RESET "          %s", statusStr(setStatus));
   drawFrameLine("[6]  Pot Mapping                   " VT_DIM "parameter assignments" VT_RESET "               %s", statusStr(potStatus));
+  drawFrameLine("[7]  LED Settings                  " VT_DIM "intensity & timing" VT_RESET "                %s", statusStr(ledStatus));
   drawFrameEmpty();
 
   // System section
@@ -340,7 +352,7 @@ void SetupUI::printMainMenu() {
   drawFrameEmpty();
 
   // Control bar
-  drawControlBar("Type 0-6");
+  drawControlBar("Type 0-7");
 
   vtFrameEnd();
 }
