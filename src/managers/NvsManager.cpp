@@ -28,6 +28,40 @@ NvsManager::NvsManager()
   , _potPendingSave(false)
   , _anyPadPressed(false)
 {
+  // Default LED settings
+  _ledSettings.magic = EEPROM_MAGIC;
+  _ledSettings.version = LED_SETTINGS_VERSION;
+  _ledSettings.reserved = 0;
+  _ledSettings.normalFgIntensity = 255;
+  _ledSettings.normalBgIntensity = 40;
+  _ledSettings.fgArpStopMin = 77;
+  _ledSettings.fgArpStopMax = 255;
+  _ledSettings.fgArpPlayMin = 77;
+  _ledSettings.fgArpPlayMax = 204;
+  _ledSettings.fgTickFlash = 255;
+  _ledSettings.bgArpStopMin = 20;
+  _ledSettings.bgArpStopMax = 64;
+  _ledSettings.bgArpPlayMin = 20;
+  _ledSettings.bgArpPlayMax = 51;
+  _ledSettings.bgTickFlash = 64;
+  _ledSettings.absoluteMax = 255;
+  _ledSettings.pulsePeriodMs = 1472;
+  _ledSettings.tickFlashDurationMs = 30;
+  _ledSettings.bankBlinks = 3;
+  _ledSettings.bankDurationMs = 300;
+  _ledSettings.bankBrightnessPct = 50;
+  _ledSettings.scaleRootBlinks = 2;
+  _ledSettings.scaleRootDurationMs = 200;
+  _ledSettings.scaleModeBlinks = 2;
+  _ledSettings.scaleModeDurationMs = 200;
+  _ledSettings.scaleChromBlinks = 2;
+  _ledSettings.scaleChromDurationMs = 200;
+  _ledSettings.holdOnFlashMs = 150;
+  _ledSettings.holdFadeMs = 300;
+  _ledSettings.playBeatCount = 3;
+  _ledSettings.octaveBlinks = 3;
+  _ledSettings.octaveDurationMs = 300;
+
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     _scaleDirty[i] = false;
     _velocityDirty[i] = false;
@@ -607,6 +641,25 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     #endif
   }
 
+  // --- LED settings (Tool 7) ---
+  {
+    Preferences lprefs;
+    if (lprefs.begin(LED_SETTINGS_NVS_NAMESPACE, true)) {
+      size_t len = lprefs.getBytesLength(LED_SETTINGS_NVS_KEY);
+      if (len == sizeof(LedSettingsStore)) {
+        LedSettingsStore tmp;
+        lprefs.getBytes(LED_SETTINGS_NVS_KEY, &tmp, sizeof(LedSettingsStore));
+        if (tmp.magic == EEPROM_MAGIC && tmp.version == LED_SETTINGS_VERSION) {
+          _ledSettings = tmp;
+          #if DEBUG_SERIAL
+          Serial.println("[NVS] LED settings loaded.");
+          #endif
+        }
+      }
+      lprefs.end();
+    }
+  }
+
   // --- Pot mapping (user-configurable pot assignments) ---
   if (prefs.begin(POTMAP_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(POTMAP_NVS_KEY);
@@ -661,6 +714,10 @@ const ArpPotStore& NvsManager::getLoadedArpParams(uint8_t bankIdx) const {
   static const ArpPotStore defaultArp = {2048, 0, DIV_1_8, ARP_UP, 1, 0};
   if (bankIdx >= NUM_BANKS) return defaultArp;
   return _pendingArpPot[bankIdx];
+}
+
+const LedSettingsStore& NvsManager::getLoadedLedSettings() const {
+  return _ledSettings;
 }
 
 // =================================================================

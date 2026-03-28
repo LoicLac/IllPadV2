@@ -46,6 +46,9 @@ public:
   // Access loaded arp params (for ArpEngine init at boot, after loadAll)
   const ArpPotStore& getLoadedArpParams(uint8_t bankIdx) const;
 
+  // Access loaded LED settings (for LedController init at boot, after loadAll)
+  const LedSettingsStore& getLoadedLedSettings() const;
+
   // Update pad-pressed state (call from loop before notifyIfDirty)
   void setAnyPadPressed(bool pressed);
 
@@ -91,6 +94,9 @@ private:
   uint8_t     _pendingLedBright;
   uint8_t     _pendingPadSens;
   uint8_t     _pendingPadOrder[NUM_KEYS];
+
+  // LED settings (loaded at boot from NVS)
+  LedSettingsStore _ledSettings;
 
   // Global pot params (shape, slew, deadzone) — stored as raw values
   float       _pendingResponseShape;

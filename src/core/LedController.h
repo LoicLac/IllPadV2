@@ -2,6 +2,7 @@
 #define LED_CONTROLLER_H
 
 #include "HardwareConfig.h"
+#include "KeyboardData.h"
 #include <Adafruit_NeoPixel.h>
 #include <stdint.h>
 
@@ -50,6 +51,9 @@ public:
 
   // Bargraph persistence
   void setPotBarDuration(uint16_t ms);
+
+  // LED settings (from NVS)
+  void loadLedSettings(const LedSettingsStore& store);
 
   // Boot
   void showBootProgress(uint8_t step);
@@ -105,6 +109,34 @@ private:
 
   // Multi-bank state
   const BankSlot* _slots;
+
+  // LED settings (loaded from NVS, defaults from HardwareConfig.h)
+  uint8_t  _normalFgIntensity;
+  uint8_t  _normalBgIntensity;
+  uint8_t  _fgArpStopMin, _fgArpStopMax;
+  uint8_t  _fgArpPlayMin, _fgArpPlayMax;
+  uint8_t  _fgTickFlash;
+  uint8_t  _bgArpStopMin, _bgArpStopMax;
+  uint8_t  _bgArpPlayMin, _bgArpPlayMax;
+  uint8_t  _bgTickFlash;
+  uint8_t  _absoluteMax;
+  uint16_t _pulsePeriodMs;
+  uint8_t  _tickFlashDurationMs;
+  uint8_t  _bankBlinks;
+  uint16_t _bankDurationMs;
+  uint8_t  _bankBrightnessPct;
+  uint8_t  _scaleRootBlinks;
+  uint16_t _scaleRootDurationMs;
+  uint8_t  _scaleModeBlinks;
+  uint16_t _scaleModeDurationMs;
+  uint8_t  _scaleChromBlinks;
+  uint16_t _scaleChromDurationMs;
+  uint8_t  _holdOnFlashMs;
+  uint16_t _holdFadeMs;
+  uint8_t  _playBeatCount;
+  uint8_t  _octaveBlinks;
+  uint16_t _octaveDurationMs;
+
   uint8_t _sineTable[256];
   unsigned long _flashStartTime[NUM_LEDS];
 

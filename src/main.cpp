@@ -326,6 +326,7 @@ void setup() {
   s_clockManager.setMasterMode(s_settings.clockMode == CLOCK_MASTER);
   s_doubleTapMs = s_settings.doubleTapMs;
   s_leds.setPotBarDuration(s_settings.potBarDurationMs);
+  s_leds.loadLedSettings(s_nvsManager.getLoadedLedSettings());
   s_panicOnReconnect = (s_settings.panicOnReconnect != 0);
   s_batteryMonitor.setAdcAtFull(s_settings.batAdcAtFull);
 

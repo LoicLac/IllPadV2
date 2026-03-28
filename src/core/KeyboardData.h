@@ -114,6 +114,52 @@ struct ArpPotStore {
 };
 
 // =================================================================
+// LED Settings (Tool 7)
+// =================================================================
+#define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
+#define LED_SETTINGS_NVS_KEY       "ledsettings"
+#define LED_SETTINGS_VERSION       1
+
+struct LedSettingsStore {
+  uint16_t magic;
+  uint8_t  version;
+  uint8_t  reserved;
+  // NORMAL banks
+  uint8_t  normalFgIntensity;     // default 255
+  uint8_t  normalBgIntensity;     // default 40
+  // ARPEG banks
+  uint8_t  fgArpStopMin;          // default 77
+  uint8_t  fgArpStopMax;          // default 255
+  uint8_t  fgArpPlayMin;          // default 77
+  uint8_t  fgArpPlayMax;          // default 204
+  uint8_t  fgTickFlash;           // default 255 (absolute)
+  uint8_t  bgArpStopMin;          // default 20
+  uint8_t  bgArpStopMax;          // default 64
+  uint8_t  bgArpPlayMin;          // default 20
+  uint8_t  bgArpPlayMax;          // default 51
+  uint8_t  bgTickFlash;           // default 64 (absolute)
+  uint8_t  absoluteMax;           // default 255
+  // TIMING
+  uint16_t pulsePeriodMs;         // default 1472
+  uint8_t  tickFlashDurationMs;   // default 30
+  // CONFIRMATIONS
+  uint8_t  bankBlinks;            // 1-3, default 3
+  uint16_t bankDurationMs;        // default 300
+  uint8_t  bankBrightnessPct;     // default 50
+  uint8_t  scaleRootBlinks;       // default 2
+  uint16_t scaleRootDurationMs;   // default 200
+  uint8_t  scaleModeBlinks;       // default 2
+  uint16_t scaleModeDurationMs;   // default 200
+  uint8_t  scaleChromBlinks;      // default 2
+  uint16_t scaleChromDurationMs;  // default 200
+  uint8_t  holdOnFlashMs;         // default 150
+  uint16_t holdFadeMs;            // default 300
+  uint8_t  playBeatCount;         // 1-4, default 3
+  uint8_t  octaveBlinks;          // default 3
+  uint16_t octaveDurationMs;      // default 300
+};
+
+// =================================================================
 // V2 — Bank Types & Scale Config
 // =================================================================
 
