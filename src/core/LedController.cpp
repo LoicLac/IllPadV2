@@ -91,14 +91,22 @@ void LedController::setPixelScaled(uint8_t i, const RGB& c, uint8_t scale) {
 }
 
 void LedController::setPixelAbsolute(uint8_t i, const RGB& c) {
-  _strip.setPixelColor(i, _strip.Color(c.r, c.g, c.b));
+  // Capped by LED_ABSOLUTE_MAX (compile-time ceiling for absolute events)
+  const uint8_t cap = LED_ABSOLUTE_MAX;
+  _strip.setPixelColor(i, _strip.Color(
+    (uint8_t)((uint16_t)c.r * cap / 255),
+    (uint8_t)((uint16_t)c.g * cap / 255),
+    (uint8_t)((uint16_t)c.b * cap / 255)
+  ));
 }
 
 void LedController::setPixelAbsoluteScaled(uint8_t i, const RGB& c, uint8_t scale) {
+  // scale first, then cap by LED_ABSOLUTE_MAX
+  uint16_t combined = (uint16_t)scale * LED_ABSOLUTE_MAX / 255;
   _strip.setPixelColor(i, _strip.Color(
-    (uint8_t)((uint16_t)c.r * scale / 255),
-    (uint8_t)((uint16_t)c.g * scale / 255),
-    (uint8_t)((uint16_t)c.b * scale / 255)
+    (uint8_t)((uint16_t)c.r * combined / 255),
+    (uint8_t)((uint16_t)c.g * combined / 255),
+    (uint8_t)((uint16_t)c.b * combined / 255)
   ));
 }
 

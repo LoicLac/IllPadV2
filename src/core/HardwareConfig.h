@@ -248,6 +248,11 @@ const uint8_t  LED_CONFIRM_PLAY_STEPS      = 4;    // Play: total flashes (1 ack
 const uint8_t  LED_CONFIRM_OCTAVE_PHASES   = 6;    // Octave: triple blink = 300ms
 const uint8_t  LED_CONFIRM_BRIGHTNESS_PCT  = 50;   // Bank switch blink brightness (% of global)
 
+// --- Absolute Brightness Cap ---
+// Maximum brightness for events that bypass global brightness (tick flash, errors, etc.)
+// 255 = full power (default). Lower to tame absolute events on bright LED strips.
+const uint8_t  LED_ABSOLUTE_MAX             = 255;
+
 // --- Setup Comet Chase ---
 const uint8_t  LED_SETUP_CHASE_SPEED_MS    = 180;  // Time per step (~2.5s round trip)
 
