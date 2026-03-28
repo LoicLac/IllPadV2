@@ -240,7 +240,7 @@ ClockManager receives 0xF8 (clock ticks) via USB+BLE. Priority: USB > BLE > last
 
 ## Setup Mode (press rear within 3s of boot, then hold 3s)
 
-VT100 terminal, serial input + button = ENTER.
+VT100 terminal, serial keyboard input only (no physical button in setup mode).
 
 ```
 [1] Pressure Calibration  — unchanged from V1
