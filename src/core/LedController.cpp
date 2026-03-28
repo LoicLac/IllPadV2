@@ -49,10 +49,10 @@ LedController::LedController()
     _batteryDisplayStart(0),
     _batLowLastBurstTime(0)
 {
-  // Precompute sine LUT -- 64 entries covering one full period (0-255 output range)
+  // Precompute sine LUT -- 256 entries covering one full period (0-255 output range)
   // Only runs once at boot, no float in update()
-  for (uint8_t i = 0; i < 64; i++) {
-    _sineTable[i] = (uint8_t)(127.5f + 127.5f * sinf((float)i * 6.2831853f / 64.0f));
+  for (uint16_t i = 0; i < 256; i++) {
+    _sineTable[i] = (uint8_t)(127.5f + 127.5f * sinf((float)i * 6.2831853f / 256.0f));
   }
   // Init tick flash timers
   for (uint8_t i = 0; i < NUM_LEDS; i++) {
@@ -539,9 +539,9 @@ void LedController::update() {
   clearPixels();
 
   if (_slots) {
-    // Sine LUT index: divide period into 64 steps
-    const uint8_t lutStep = LED_PULSE_PERIOD_MS / 64;  // ~23ms
-    uint8_t sineIdx = (uint8_t)((now / lutStep) % 64);
+    // Sine LUT index: divide period into 256 steps
+    const uint8_t lutStep = LED_PULSE_PERIOD_MS / 256;  // ~5.7ms
+    uint8_t sineIdx = (uint8_t)((now / (lutStep > 0 ? lutStep : 1)) % 256);
     uint8_t sineRaw = _sineTable[sineIdx];
 
     for (uint8_t i = 0; i < NUM_LEDS; i++) {

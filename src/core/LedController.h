@@ -105,7 +105,7 @@ private:
 
   // Multi-bank state
   const BankSlot* _slots;
-  uint8_t _sineTable[64];
+  uint8_t _sineTable[256];
   unsigned long _flashStartTime[NUM_LEDS];
 
   // Clock manager (for play beat detection)
