@@ -10,13 +10,9 @@ class SetupUI;
 // =================================================================
 // ToolPotMapping — Tool 6: user-configurable pot parameter assignments
 //
-// UX: two pages (NORMAL / ARPEG), toggled with 't'.
-// Up/Down navigates slots (0-7). Enter toggles edit mode.
-// In edit mode, Left/Right cycles the assignable pool.
-// Enter confirms assignment + saves to NVS.
-// CC target enters CC# sub-editor (Left/Right adjust, accel x10).
-// Steal logic: picking an already-assigned param shows y/n prompt.
-// Physical pot detection: turn a pot to jump cursor (when not editing).
+// Two-column layout (Alone | + Hold), side by side.
+// Up/Down = R1-R4, Left/Right = switch column.
+// Enter = edit (pool cycling), 't' = toggle NORMAL/ARPEG context.
 // =================================================================
 class ToolPotMapping {
 public:
@@ -30,55 +26,52 @@ private:
   SetupUI*       _ui;
   PotRouter*     _potRouter;
 
-  // Working copy (edited, only committed on save)
+  // Working copy
   PotMappingStore _wk;
 
-  // Current UI state
+  // UI state
   bool    _contextNormal;    // true=NORMAL, false=ARPEG
-  uint8_t _cursor;           // 0-7: which slot
-  bool    _editing;          // true = navigating pool
-  uint8_t _poolIdx;          // index in current pool
-  bool    _ccEditing;        // true = in CC# sub-editor
-  uint8_t _ccNumber;         // CC# being edited (0-127)
-  bool    _confirmSteal;     // true = waiting for y/n on steal
-  int8_t  _stealSourceSlot;  // slot that would be orphaned
-  PotTarget _stealTarget;    // target being stolen
+  uint8_t _cursorRow;        // 0-3 (R1-R4)
+  uint8_t _cursorCol;        // 0=Alone, 1=+Hold
+  bool    _editing;
+  uint8_t _poolIdx;
+  bool    _ccEditing;
+  uint8_t _ccNumber;
+  bool    _confirmSteal;
+  int8_t  _stealSourceSlot;
+  PotTarget _stealTarget;
+  bool    _nvsSaved;
 
-  // Pool: list of assignable targets for each context
+  // Pool
   static const uint8_t MAX_POOL = 12;
   PotTarget _pool[MAX_POOL];
   uint8_t   _poolCount;
 
   void buildPool();
   void drawScreen();
-  void drawSlotLine(uint8_t slot);
+  void drawTwoColumnLayout();
   void drawPoolLine();
-  void drawDescription();
-  void drawHelpLine();
+  void drawInfoPanel();
 
-  // Find which slot in current context has a given target (returns -1 if none)
+  // Helpers
+  uint8_t cursorToSlot() const;  // Convert row+col to slot index 0-7
   int8_t findSlotWithTarget(PotTarget t, uint8_t ccNum = 0) const;
-
-  // Get current context map pointer
   PotMapping* currentMap();
   const PotMapping* currentMapConst() const;
-
-  // Slot display name (e.g. "R1 alone", "R2 + hold")
   static const char* slotName(uint8_t slot);
+  static const char* targetName(PotTarget t);
 
-  // Pot ADC detection (direct reads, not through PotRouter)
+  // Pot detection
   uint16_t _potBaseline[4];
   void samplePotBaselines();
   int8_t detectMovedPot(bool btnLeftHeld);
 
-  // Target name for display
-  static const char* targetName(PotTarget t);
-
-  // Save to NVS (direct Preferences call, blocking)
+  // NVS
   bool saveMapping();
-
-  // Assign target to current slot, handling steal + CC + PB
   void assignCurrentTarget();
+
+  // Description for each target
+  void printTargetDescription(PotTarget t);
 };
 
 #endif // TOOL_POT_MAPPING_H
