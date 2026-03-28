@@ -220,10 +220,8 @@ void SetupUI::flashSaved() {
 // =================================================================
 
 void SetupUI::initTerminal() {
-  Serial.print(ITERM_SET_BG);
-  Serial.print(ITERM_SET_FG);
-  Serial.print(ITERM_TAB_TITLE);
-  Serial.print(ITERM_BADGE);
+  // Only resize — OSC sequences (palette, badge, title) don't survive
+  // serial passthrough reliably. Palette is handled by the Python terminal script.
   Serial.print(ITERM_RESIZE);
 }
 

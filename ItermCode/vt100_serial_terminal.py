@@ -34,9 +34,9 @@ RECONNECT_S      = 2.0
 BOOT_FLUSH_S     = 0.5          # Seconds to discard ESP32 boot garbage
 CONFIG_FILE      = os.path.expanduser("~/.illpad_terminal")
 
-# Target window size — fits ILLPAD48 setup UI (grid 72 cols, ~28 rows + margin)
-TARGET_COLS      = 82
-TARGET_ROWS      = 34
+# Target window size — NASA console layout (spacious, room for descriptions + future tools)
+TARGET_COLS      = 120
+TARGET_ROWS      = 50
 
 # I/O polling interval — lower = snappier input, higher = less CPU
 SELECT_TIMEOUT_S = 0.02         # 20ms — good balance for interactive terminal
@@ -48,6 +48,12 @@ VT_HIDE_CURSOR   = "\x1b[?25l"
 VT_SHOW_CURSOR   = "\x1b[?25h"
 VT_RESET_ATTRS   = "\x1b[0m"
 VT_RESIZE        = "\x1b[8;{rows};{cols}t"
+
+# iTerm2 Amber Phosphor CRT palette
+ITERM_AMBER_BG   = "\x1b]1337;SetColors=bg=1a0e00\x07"
+ITERM_AMBER_FG   = "\x1b]1337;SetColors=fg=ffaa33\x07"
+ITERM_RESET_BG   = "\x1b]1337;SetColors=bg=default\x07"
+ITERM_RESET_FG   = "\x1b]1337;SetColors=fg=default\x07"
 
 
 # ── Port persistence ──────────────────────────────────────────────────────────
@@ -304,6 +310,8 @@ def run(port_name):
         stdout.flush()
         sys.exit(1)
 
+    # Amber Phosphor CRT palette (iTerm2 proprietary)
+    stdout.write(ITERM_AMBER_BG + ITERM_AMBER_FG)
     stdout.write(VT_CLEAR_HOME + VT_HIDE_CURSOR)
     stdout.flush()
 
@@ -367,6 +375,8 @@ def run(port_name):
         restore_mode(stdin_fd, old_stdin)
         signal.signal(signal.SIGINT, signal.SIG_DFL)
 
+        # Restore iTerm2 default palette + terminal state
+        stdout.write(ITERM_RESET_BG + ITERM_RESET_FG)
         stdout.write(VT_SHOW_CURSOR + VT_RESET_ATTRS + "\r\n")
 
         if orig_rows and orig_cols:

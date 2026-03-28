@@ -32,6 +32,7 @@ void ToolPadOrdering::begin(CapacitiveKeyboard* keyboard, LedController* leds,
 
 void ToolPadOrdering::run() {
   if (!_keyboard || !_leds || !_ui || !_padOrder) return;
+  Serial.print(ITERM_RESIZE);
 
   enum OrdState {
     ORD_REVIEW,       // Show current config (NEW)
@@ -111,7 +112,7 @@ void ToolPadOrdering::run() {
         _ui->drawSection("CURRENT ORDERING");
         _ui->drawFrameEmpty();
 
-        _ui->drawGrid(GRID_ORDERING, 0, nullptr, nullptr, reviewDone, -1, 0, false, existingOrder);
+        _ui->drawCellGrid(GRID_ORDERING, 0, nullptr, nullptr, reviewDone, -1, 0, false, existingOrder);
 
         _ui->drawFrameEmpty();
         _ui->drawSection("INFO");
@@ -192,6 +193,7 @@ void ToolPadOrdering::run() {
             }
 
             if (assignedCount >= NUM_KEYS) {
+
               _ui->vtClear();
               state = ORD_RECAP;
               screenDirty = true;
@@ -218,7 +220,7 @@ void ToolPadOrdering::run() {
         _ui->drawSection("TOUCH PADS FROM LOWEST TO HIGHEST");
         _ui->drawFrameEmpty();
 
-        _ui->drawGrid(GRID_ORDERING, 0, nullptr, nullptr, assigned,
+        _ui->drawCellGrid(GRID_ORDERING, 0, nullptr, nullptr, assigned,
                  activeKey, (uint16_t)assignedCount, activeIsDone, orderMap);
 
         _ui->drawFrameEmpty();
@@ -277,6 +279,7 @@ void ToolPadOrdering::run() {
           memcpy(_padOrder, orderMap, NUM_KEYS);
           nvsSaved = true;
           _ui->flashSaved();
+          _ui->setProgress(-1);
           _ui->vtClear();
           state = ORD_DONE;
           confirmDefaults = false;
@@ -298,11 +301,13 @@ void ToolPadOrdering::run() {
         lastRefresh = 0;
       }
       else if (ev.type == NAV_CHAR && (ev.ch == 's' || ev.ch == 'S')) {
+        _ui->setProgress(-1);
         _ui->vtClear();
         state = ORD_RECAP;
         screenDirty = true;
       }
       else if (ev.type == NAV_QUIT) {
+        _ui->setProgress(-1);
         _ui->vtClear();
         state = ORD_DONE;
       }
@@ -327,7 +332,7 @@ void ToolPadOrdering::run() {
         _ui->drawSection("FINAL ORDERING");
         _ui->drawFrameEmpty();
 
-        _ui->drawGrid(GRID_ORDERING, 0, nullptr, nullptr, assigned, -1, 0, false, orderMap);
+        _ui->drawCellGrid(GRID_ORDERING, 0, nullptr, nullptr, assigned, -1, 0, false, orderMap);
 
         _ui->drawFrameEmpty();
         _ui->drawSection("INFO");
