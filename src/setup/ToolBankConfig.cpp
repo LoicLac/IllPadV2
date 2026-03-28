@@ -78,6 +78,8 @@ void ToolBankConfig::run() {
     }
   }
 
+  Serial.print(ITERM_RESIZE);
+
   InputParser input;
   uint8_t cursor = 0;
   bool editing = false;

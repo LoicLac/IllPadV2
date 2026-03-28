@@ -401,7 +401,9 @@ void ToolPotMapping::drawPoolLine() {
   const PotMapping* map = currentMapConst();
   uint8_t slot = cursorToSlot();
 
-  Serial.print(VT_DIM "|" VT_RESET "  " VT_DIM "Pool:" VT_RESET " ");
+  char buf[256];
+  int pos = 0;
+  pos += snprintf(buf + pos, sizeof(buf) - pos, VT_DIM "Pool:" VT_RESET " ");
 
   for (uint8_t i = 0; i < _poolCount; i++) {
     PotTarget t = _pool[i];
@@ -411,25 +413,25 @@ void ToolPotMapping::drawPoolLine() {
       isAssigned = (owner >= 0 && owner != (int8_t)slot);
     }
 
-    // Is this the current slot's target?
     bool isCurrentTarget = (map[slot].target == t);
-    if (t == TARGET_MIDI_CC) isCurrentTarget = false;  // Multiple CCs allowed
+    if (t == TARGET_MIDI_CC) isCurrentTarget = false;
 
     bool isCursor = inEdit && (_poolIdx == i);
 
     if (isCursor) {
-      Serial.printf(VT_REVERSE VT_BOLD " %s " VT_RESET " ", targetName(t));
+      pos += snprintf(buf + pos, sizeof(buf) - pos, VT_REVERSE VT_BOLD " %s " VT_RESET " ", targetName(t));
     } else if (isCurrentTarget && !inEdit) {
-      Serial.printf(VT_CYAN "%s" VT_RESET " ", targetName(t));
+      pos += snprintf(buf + pos, sizeof(buf) - pos, VT_CYAN "%s" VT_RESET " ", targetName(t));
     } else if (isAssigned) {
-      Serial.printf(VT_DIM "%s" VT_RESET " ", targetName(t));
+      pos += snprintf(buf + pos, sizeof(buf) - pos, VT_DIM "%s" VT_RESET " ", targetName(t));
     } else if (inEdit) {
-      Serial.printf(VT_BRIGHT_GREEN "%s" VT_RESET " ", targetName(t));
+      pos += snprintf(buf + pos, sizeof(buf) - pos, VT_BRIGHT_GREEN "%s" VT_RESET " ", targetName(t));
     } else {
-      Serial.printf("%s ", targetName(t));
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%s ", targetName(t));
     }
   }
-  Serial.print(VT_CL "\n");
+
+  _ui->drawFrameLine("%s", buf);
 }
 
 // =================================================================
@@ -535,6 +537,8 @@ void ToolPotMapping::run() {
   _stealSourceSlot = -1;
   _stealTarget = TARGET_EMPTY;
   _nvsSaved = true;  // Loaded from NVS
+
+  Serial.print(ITERM_RESIZE);
 
   buildPool();
   samplePotBaselines();

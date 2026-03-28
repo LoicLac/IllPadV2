@@ -189,6 +189,8 @@ void ToolSettings::run() {
     }
   }
 
+  Serial.print(ITERM_RESIZE);
+
   SettingsStore original = wk;
   bool needsReboot = false;
   bool nvsSaved = true;  // Assume saved on entry (loaded from NVS)

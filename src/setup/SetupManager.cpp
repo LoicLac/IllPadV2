@@ -51,6 +51,7 @@ void SetupManager::run() {
   // Debounce: wait for entry conditions to settle
   delay(200);
 
+  _ui.initTerminal();
   _ui.vtClear();
   bool screenDirty = true;
   unsigned long lastRefresh = 0;
