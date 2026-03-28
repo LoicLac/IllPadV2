@@ -3,12 +3,14 @@
 #include "../core/KeyboardData.h"
 #include <Arduino.h>
 #include <Preferences.h>
+#include <stdarg.h>
 
 // =================================================================
 // Constructor
 // =================================================================
 
-SetupUI::SetupUI() : _leds(nullptr) {}
+SetupUI::SetupUI()
+  : _leds(nullptr) {}
 
 void SetupUI::begin(LedController* leds) {
   _leds = leds;
@@ -23,14 +25,223 @@ void SetupUI::vtHome()       { Serial.print(VT_HOME); }
 void SetupUI::vtFrameStart() { Serial.print(VT_HOME VT_SYNC_START); }
 void SetupUI::vtFrameEnd()   { Serial.print("\033[J" VT_SYNC_END); }
 
+void SetupUI::vtMoveTo(uint8_t row, uint8_t col) {
+  Serial.printf("\033[%d;%dH", row, col);
+}
+
 // =================================================================
-// Header banner
+// Helpers
+// =================================================================
+
+uint16_t SetupUI::visibleLen(const char* s) {
+  uint16_t len = 0;
+  bool inEsc = false;
+  while (*s) {
+    if (*s == '\033') {
+      inEsc = true;
+    } else if (inEsc) {
+      if ((*s >= 'A' && *s <= 'Z') || (*s >= 'a' && *s <= 'z')) inEsc = false;
+    } else if ((*s & 0xC0) != 0x80) {
+      len++;
+    }
+    s++;
+  }
+  return len;
+}
+
+void SetupUI::printRepeat(char c, uint8_t n) {
+  for (uint8_t i = 0; i < n; i++) Serial.print(c);
+}
+
+void SetupUI::printRepeatStr(const char* s, uint8_t n) {
+  for (uint8_t i = 0; i < n; i++) Serial.print(s);
+}
+
+// =================================================================
+// Console Frame Primitives
+// =================================================================
+
+void SetupUI::drawFrameTop() {
+  Serial.print(VT_DIM);
+  Serial.print(UNI_TL);
+  printRepeatStr(UNI_H, CONSOLE_W - 2);
+  Serial.print(UNI_TR);
+  Serial.print(VT_RESET VT_CL "\n");
+}
+
+void SetupUI::drawFrameBottom() {
+  Serial.print(VT_DIM);
+  Serial.print(UNI_BL);
+  printRepeatStr(UNI_H, CONSOLE_W - 2);
+  Serial.print(UNI_BR);
+  Serial.print(VT_RESET VT_CL "\n");
+}
+
+void SetupUI::drawSection(const char* label) {
+  Serial.print(VT_DIM);
+  Serial.print(UNI_SLT);
+  Serial.print(UNI_SH UNI_SH " ");
+  Serial.print(VT_RESET VT_CYAN);
+  Serial.print(label);
+  Serial.print(VT_RESET VT_DIM " ");
+  uint16_t labelVis = visibleLen(label);
+  uint8_t remaining = (CONSOLE_W - 2) - 3 - labelVis - 1;
+  printRepeatStr(UNI_SH, remaining);
+  Serial.print(UNI_SRT);
+  Serial.print(VT_RESET VT_CL "\n");
+}
+
+void SetupUI::drawFrameLine(const char* fmt, ...) {
+  char buf[256];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(buf, sizeof(buf), fmt, args);
+  va_end(args);
+
+  uint16_t vis = visibleLen(buf);
+  Serial.print(VT_DIM);
+  Serial.print(UNI_V);
+  Serial.print(VT_RESET);
+  Serial.print("  ");
+  Serial.print(buf);
+  int16_t pad = (int16_t)(CONSOLE_W - 5) - (int16_t)vis;
+  if (pad > 0) {
+    for (int16_t i = 0; i < pad; i++) Serial.print(' ');
+  }
+  Serial.print(" ");
+  Serial.print(VT_DIM);
+  Serial.print(UNI_V);
+  Serial.print(VT_RESET VT_CL "\n");
+}
+
+void SetupUI::drawFrameEmpty() {
+  Serial.print(VT_DIM);
+  Serial.print(UNI_V);
+  Serial.print(VT_RESET);
+  printRepeat(' ', CONSOLE_W - 2);
+  Serial.print(VT_DIM);
+  Serial.print(UNI_V);
+  Serial.print(VT_RESET VT_CL "\n");
+}
+
+// =================================================================
+// Console Header — reverse-video title bar with NVS badge
+// =================================================================
+
+void SetupUI::drawConsoleHeader(const char* toolName, bool nvsSaved) {
+  drawFrameTop();
+
+  Serial.print(VT_DIM);
+  Serial.print(UNI_V);
+  Serial.print(VT_RESET);
+  Serial.print("  ");
+  Serial.print(VT_REVERSE VT_BOLD " ILLPAD48 SETUP CONSOLE " VT_RESET);
+  Serial.print("     ");
+  Serial.print(toolName);
+
+  const char* badge = nvsSaved
+    ? VT_REVERSE VT_GREEN " NVS:OK " VT_RESET
+    : VT_REVERSE VT_YELLOW " NVS:-- " VT_RESET;
+  uint16_t badgeVis = 8;
+  uint16_t titleVis = 24 + 5 + visibleLen(toolName);
+  int16_t gap = (int16_t)(CONSOLE_W - 5) - (int16_t)titleVis - (int16_t)badgeVis;
+  if (gap > 0) {
+    for (int16_t i = 0; i < gap; i++) Serial.print(' ');
+  }
+  Serial.print(badge);
+  Serial.print(" ");
+  Serial.print(VT_DIM);
+  Serial.print(UNI_V);
+  Serial.print(VT_RESET VT_CL "\n");
+
+  Serial.print(VT_DIM);
+  Serial.print(UNI_LT);
+  printRepeatStr(UNI_H, CONSOLE_W - 2);
+  Serial.print(UNI_RT);
+  Serial.print(VT_RESET VT_CL "\n");
+}
+
+// =================================================================
+// Control Bar — fixed at bottom
+// =================================================================
+
+void SetupUI::drawControlBar(const char* controls) {
+  Serial.print(VT_DIM);
+  Serial.print(UNI_LT);
+  printRepeatStr(UNI_H, CONSOLE_W - 2);
+  Serial.print(UNI_RT);
+  Serial.print(VT_RESET VT_CL "\n");
+
+  drawFrameLine("%s", controls);
+
+  Serial.print(VT_DIM);
+  Serial.print(UNI_BL);
+  printRepeatStr(UNI_H, CONSOLE_W - 2);
+  Serial.print(UNI_BR);
+  Serial.print(VT_RESET VT_CL "\n");
+}
+
+// =================================================================
+// Save Flash — 120ms inline pulse
+// =================================================================
+
+void SetupUI::drawConsoleHeaderFlash(bool flash) {
+  Serial.print(VT_DIM);
+  Serial.print(UNI_V);
+  Serial.print(VT_RESET);
+  Serial.print("  ");
+  if (flash) {
+    Serial.print(VT_BOLD " ILLPAD48 SETUP CONSOLE " VT_RESET);
+  } else {
+    Serial.print(VT_REVERSE VT_BOLD " ILLPAD48 SETUP CONSOLE " VT_RESET);
+  }
+  printRepeat(' ', CONSOLE_W - 2 - 2 - 24);
+  Serial.print(VT_DIM);
+  Serial.print(UNI_V);
+  Serial.print(VT_RESET VT_CL);
+}
+
+void SetupUI::flashSaved() {
+  for (uint8_t i = 0; i < 3; i++) {
+    vtMoveTo(2, 1);
+    drawConsoleHeaderFlash(true);
+    delay(20);
+    vtMoveTo(2, 1);
+    drawConsoleHeaderFlash(false);
+    delay(20);
+  }
+  if (_leds) _leds->playValidation();
+}
+
+// =================================================================
+// iTerm2 Terminal Integration
+// =================================================================
+
+void SetupUI::initTerminal() {
+  Serial.print(ITERM_SET_BG);
+  Serial.print(ITERM_SET_FG);
+  Serial.print(ITERM_TAB_TITLE);
+  Serial.print(ITERM_BADGE);
+  Serial.print(ITERM_RESIZE);
+}
+
+void SetupUI::setProgress(int8_t percent) {
+  if (percent < 0) {
+    Serial.print(ITERM_PROGRESS_END);
+  } else {
+    char buf[32];
+    snprintf(buf, sizeof(buf), ITERM_PROGRESS_FMT, (int)percent);
+    Serial.print(buf);
+  }
+}
+
+// =================================================================
+// Legacy Header (backward compat during migration)
 // =================================================================
 
 void SetupUI::drawHeader(const char* title, const char* rightText) {
-  Serial.printf(VT_BOLD "========================================================" VT_RESET VT_CL "\n");
-  Serial.printf(VT_BOLD "  ILLPAD48 -- %-16s  %s" VT_RESET VT_CL "\n", title, rightText);
-  Serial.printf(VT_BOLD "========================================================" VT_RESET VT_CL "\n");
+  drawConsoleHeader(title, true);
+  (void)rightText;  // Absorbed into toolName in new API
 }
 
 // =================================================================
@@ -40,41 +251,36 @@ void SetupUI::drawHeader(const char* title, const char* rightText) {
 void SetupUI::printMainMenu() {
   // Quick NVS status checks (read-only, ~1ms each)
   Preferences prefs;
-  char calStatus = ' ';   // ' '=unchecked, 'v'=ok, '!'=missing
+  char calStatus = ' ';
   char ordStatus = ' ';
   char roleStatus = ' ';
   char bankStatus = ' ';
   char setStatus = ' ';
 
-  // Tool 1: Calibration — check if CalDataStore exists with valid magic
   if (prefs.begin(CAL_PREFERENCES_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(CAL_PREFERENCES_KEY);
     calStatus = (len == sizeof(CalDataStore)) ? 'v' : '!';
     prefs.end();
   } else { calStatus = '!'; }
 
-  // Tool 2: Pad Ordering — check if NoteMapStore exists
   if (prefs.begin(NOTEMAP_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(NOTEMAP_NVS_KEY);
     ordStatus = (len == sizeof(NoteMapStore)) ? 'v' : '!';
     prefs.end();
   } else { ordStatus = '!'; }
 
-  // Tool 3: Pad Roles — check if bank pads exist
   if (prefs.begin(BANKPAD_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(BANKPAD_NVS_KEY);
     roleStatus = (len > 0) ? 'v' : '!';
     prefs.end();
   } else { roleStatus = '!'; }
 
-  // Tool 4: Bank Config — check if bank types exist
   if (prefs.begin(BANKTYPE_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(BANKTYPE_NVS_KEY);
     bankStatus = (len == NUM_BANKS) ? 'v' : '!';
     prefs.end();
   } else { bankStatus = '!'; }
 
-  // Tool 5: Settings — check if SettingsStore exists with current version
   if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
     if (len == sizeof(SettingsStore)) {
@@ -85,29 +291,47 @@ void SetupUI::printMainMenu() {
     prefs.end();
   } else { setStatus = '!'; }
 
-  // Helper lambda for status indicator
   auto statusStr = [](char s) -> const char* {
-    if (s == 'v') return VT_GREEN " ok" VT_RESET;
-    if (s == '!') return VT_YELLOW " --" VT_RESET;
-    return "   ";
+    if (s == 'v') return VT_REVERSE VT_GREEN " ok " VT_RESET;
+    if (s == '!') return VT_DIM " -- " VT_RESET;
+    return "    ";
   };
 
   vtFrameStart();
-  Serial.printf(VT_BOLD "========================================================" VT_RESET VT_CL "\n");
-  Serial.printf(VT_BOLD "             ILLPAD48 -- SETUP MODE" VT_RESET VT_CL "\n");
-  Serial.printf(VT_BOLD "========================================================" VT_RESET VT_CL "\n");
-  Serial.printf(VT_CL "\n");
-  Serial.printf("   [1] Pressure Calibration  " VT_DIM "(sensitivity tuning)" VT_RESET "      %s" VT_CL "\n", statusStr(calStatus));
-  Serial.printf("   [2] Pad Ordering          " VT_DIM "(pitch mapping, low->high)" VT_RESET "%s" VT_CL "\n", statusStr(ordStatus));
-  Serial.printf("   [3] Pad Roles             " VT_DIM "(bank/scale/arp pads)" VT_RESET "     %s" VT_CL "\n", statusStr(roleStatus));
-  Serial.printf("   [4] Bank Config           " VT_DIM "(NORMAL vs ARPEG)" VT_RESET "         %s" VT_CL "\n", statusStr(bankStatus));
-  Serial.printf("   [5] Settings              " VT_DIM "(preferences & BLE)" VT_RESET "       %s" VT_CL "\n", statusStr(setStatus));
-  Serial.printf("   [6] Pot Mapping           " VT_DIM "(parameter assignments)" VT_RESET VT_CL "\n");
-  Serial.printf(VT_CL "\n");
-  Serial.printf("   [0] Reboot & Exit Setup" VT_CL "\n");
-  Serial.printf(VT_CL "\n");
-  Serial.printf("  " VT_DIM "ok = saved    -- = defaults" VT_RESET VT_CL "\n");
-  Serial.printf("  Type 0-6" VT_CL "\n");
+
+  // Header
+  drawConsoleHeader("MAIN MENU", true);
+
+  drawFrameEmpty();
+
+  // Tools section
+  drawSection("CONFIGURATION TOOLS");
+  drawFrameEmpty();
+  drawFrameLine("[1]  Pressure Calibration          " VT_DIM "sensitivity tuning" VT_RESET "                  %s", statusStr(calStatus));
+  drawFrameLine("[2]  Pad Ordering                  " VT_DIM "pitch mapping, low to high" VT_RESET "          %s", statusStr(ordStatus));
+  drawFrameLine("[3]  Pad Roles                     " VT_DIM "bank / scale / arp pads" VT_RESET "             %s", statusStr(roleStatus));
+  drawFrameLine("[4]  Bank Config                   " VT_DIM "NORMAL vs ARPEG, quantize" VT_RESET "           %s", statusStr(bankStatus));
+  drawFrameLine("[5]  Settings                      " VT_DIM "preferences & connectivity" VT_RESET "          %s", statusStr(setStatus));
+  drawFrameLine("[6]  Pot Mapping                   " VT_DIM "parameter assignments" VT_RESET);
+  drawFrameEmpty();
+
+  // System section
+  drawSection("SYSTEM");
+  drawFrameEmpty();
+  drawFrameLine("[0]  Reboot & Exit Setup");
+  drawFrameEmpty();
+
+  // Status section
+  drawSection("STATUS");
+  drawFrameEmpty();
+  drawFrameLine(VT_REVERSE VT_GREEN " ok " VT_RESET " = saved to NVS flash     " VT_DIM "--" VT_RESET " = running on factory defaults");
+  drawFrameEmpty();
+
+  // Control bar
+  drawFrameBottom();
+  drawFrameLine("Type 0-6");
+  drawFrameBottom();
+
   vtFrameEnd();
 }
 
@@ -136,117 +360,128 @@ void SetupUI::printError(const char* msg) {
 }
 
 // =================================================================
-// 4x12 Pad Grid — 3 modes
+// 4x12 Cell Grid — Unicode borders, 4 modes
 // =================================================================
 
-void SetupUI::drawGrid(
-  GridMode mode,
-  uint16_t target,
-  uint16_t baselines[],
-  uint16_t measuredDeltas[],
-  bool     done[],
-  int      activeKey,
-  uint16_t activeDelta,
-  bool     activeIsDone,
-  uint8_t  orderMap[]
+void SetupUI::drawCellGrid(
+  GridMode mode, uint16_t target, uint16_t baselines[],
+  uint16_t measuredDeltas[], bool done[], int activeKey,
+  uint16_t activeDelta, bool activeIsDone, uint8_t orderMap[],
+  const char roleLabels[][6], const uint8_t roleMap[]
 ) {
-  static const char* labels[] = { "A", "B", "C", "D" };
+  // Build horizontal separator lines
+  char topLine[256], midLine[256], botLine[256];
+  int tp = 0, mp = 0, bp = 0;
+  tp += snprintf(topLine + tp, sizeof(topLine) - tp, "    " VT_DIM);
+  mp += snprintf(midLine + mp, sizeof(midLine) - mp, "    " VT_DIM);
+  bp += snprintf(botLine + bp, sizeof(botLine) - bp, "    " VT_DIM);
 
-  Serial.printf("       Ch0  Ch1  Ch2  Ch3  Ch4  Ch5  Ch6  Ch7  Ch8  Ch9  Ch10 Ch11" VT_CL "\n");
+  for (uint8_t col = 0; col < 12; col++) {
+    tp += snprintf(topLine + tp, sizeof(topLine) - tp, "%s" UNI_CH UNI_CH UNI_CH UNI_CH UNI_CH,
+                   col == 0 ? UNI_CTL : UNI_CT);
+    mp += snprintf(midLine + mp, sizeof(midLine) - mp, "%s" UNI_CH UNI_CH UNI_CH UNI_CH UNI_CH,
+                   col == 0 ? UNI_CLT : UNI_CX);
+    bp += snprintf(botLine + bp, sizeof(botLine) - bp, "%s" UNI_CH UNI_CH UNI_CH UNI_CH UNI_CH,
+                   col == 0 ? UNI_CBL : UNI_CB);
+  }
+  tp += snprintf(topLine + tp, sizeof(topLine) - tp, UNI_CTR VT_RESET);
+  mp += snprintf(midLine + mp, sizeof(midLine) - mp, UNI_CRT VT_RESET);
+  bp += snprintf(botLine + bp, sizeof(botLine) - bp, UNI_CBR VT_RESET);
 
-  for (int row = 0; row < NUM_SENSORS; row++) {
-    Serial.printf("  %s:  ", labels[row]);
-    for (int col = 0; col < CHANNELS_PER_SENSOR; col++) {
-      int key = row * CHANNELS_PER_SENSOR + col;
+  drawFrameLine("%s", topLine);
 
-      if (mode == GRID_BASELINE) {
-        uint16_t val = baselines[key];
+  for (uint8_t row = 0; row < 4; row++) {
+    char rowBuf[512];
+    int pos = 0;
+    pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "    ");
+
+    for (uint8_t col = 0; col < 12; col++) {
+      int key = row * 12 + col;
+      pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, VT_DIM UNI_CV VT_RESET);
+
+      if (mode == GRID_ROLES && roleLabels && roleMap) {
+        if (key == activeKey) {
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                          VT_CYAN VT_BOLD "%5s" VT_RESET, roleLabels[key]);
+        } else {
+          const char* color;
+          switch (roleMap[key]) {
+            case 1:    color = VT_BLUE;   break;
+            case 2:    color = VT_GREEN;  break;
+            case 3:    color = VT_YELLOW; break;
+            case 0xFF: color = VT_RED;    break;
+            default:   color = VT_DIM;    break;
+          }
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                          "%s%5s" VT_RESET, color, roleLabels[key]);
+        }
+      } else if (mode == GRID_ORDERING) {
+        if (key == activeKey && orderMap) {
+          if (activeIsDone) {
+            pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                            VT_MAGENTA " *%2u*" VT_RESET, (unsigned)(orderMap[key] + 1));
+          } else {
+            pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                            VT_CYAN " >%2u<" VT_RESET, (unsigned)(activeDelta + 1));
+          }
+        } else if (done && done[key] && orderMap) {
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                          VT_GREEN "  %2u " VT_RESET, (unsigned)(orderMap[key] + 1));
+        } else {
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, VT_DIM "  -- " VT_RESET);
+        }
+      } else if (mode == GRID_BASELINE) {
+        uint16_t val = baselines ? baselines[key] : 0;
         uint16_t tol = target / 10;
         int diff = (int)val - (int)target;
         if (diff < 0) diff = -diff;
         const char* color = ((uint16_t)diff <= tol) ? VT_GREEN : VT_YELLOW;
-        Serial.printf("%s%4u " VT_RESET, color, val);
-      }
-      else if (mode == GRID_MEASUREMENT) {
+        pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "%s %4u" VT_RESET, color, val);
+      } else if (mode == GRID_MEASUREMENT) {
         if (key == activeKey) {
           if (activeIsDone) {
-            Serial.printf(VT_MAGENTA "*%3u*" VT_RESET, activeDelta);
+            pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                            VT_MAGENTA " *%2u*" VT_RESET, activeDelta);
           } else {
-            Serial.printf(VT_CYAN ">%3u<" VT_RESET, activeDelta);
+            pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                            VT_CYAN " >%2u<" VT_RESET, activeDelta);
           }
-        }
-        else if (done[key]) {
-          uint16_t d = measuredDeltas[key];
-          const char* color = (d >= CAL_PRESSURE_MIN_DELTA_TO_VALIDATE) ? VT_GREEN : VT_RED;
-          Serial.printf("%s%4u " VT_RESET, color, d);
-        }
-        else {
-          Serial.printf(VT_DIM " --- " VT_RESET);
-        }
-      }
-      else if (mode == GRID_ORDERING) {
-        if (key == activeKey && orderMap != nullptr) {
-          if (activeIsDone) {
-            // Touching already-assigned pad: show existing position in magenta
-            Serial.printf(VT_MAGENTA "*%3u*" VT_RESET, (uint16_t)(orderMap[key] + 1));
-          } else {
-            // Active pad: show next position being assigned
-            Serial.printf(VT_CYAN ">%3u<" VT_RESET, activeDelta + 1);  // activeDelta = nextPosition (0-based), display 1-based
-          }
-        }
-        else if (done[key] && orderMap != nullptr) {
-          Serial.printf(VT_GREEN "%4u " VT_RESET, (uint16_t)(orderMap[key] + 1));
-        }
-        else {
-          Serial.printf(VT_DIM " --- " VT_RESET);
+        } else if (done && done[key]) {
+          uint16_t d = measuredDeltas ? measuredDeltas[key] : 0;
+          const char* color = (d >= 50) ? VT_GREEN : VT_RED;
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "%s %4u" VT_RESET, color, d);
+        } else {
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, VT_DIM "  -- " VT_RESET);
         }
       }
     }
-    Serial.print(VT_CL "\n");
+    pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, VT_DIM UNI_CV VT_RESET);
+    drawFrameLine("%s", rowBuf);
+
+    if (row < 3) {
+      drawFrameLine("%s", midLine);
+    }
   }
+
+  drawFrameLine("%s", botLine);
 }
 
 // =================================================================
-// 4x12 Pad Roles Grid — colored 5-char labels
+// Legacy Grid Wrappers (delegate to drawCellGrid)
 // =================================================================
 
+void SetupUI::drawGrid(
+  GridMode mode, uint16_t target, uint16_t baselines[],
+  uint16_t measuredDeltas[], bool done[], int activeKey,
+  uint16_t activeDelta, bool activeIsDone, uint8_t orderMap[]
+) {
+  drawCellGrid(mode, target, baselines, measuredDeltas, done,
+               activeKey, activeDelta, activeIsDone, orderMap);
+}
+
 void SetupUI::drawRolesGrid(const uint8_t roleMap[], const char roleLabels[][6], int activeKey) {
-  static const char* rowLabels[] = { "A", "B", "C", "D" };
-
-  // Column headers (5-char wide)
-  Serial.printf("       Ch0   Ch1   Ch2   Ch3   Ch4   Ch5   Ch6   Ch7   Ch8   Ch9   Ch10  Ch11" VT_CL "\n");
-
-  for (int row = 0; row < NUM_SENSORS; row++) {
-    Serial.printf("  %s: ", rowLabels[row]);
-    for (int col = 0; col < CHANNELS_PER_SENSOR; col++) {
-      int key = row * CHANNELS_PER_SENSOR + col;
-
-      if (key == activeKey) {
-        // Highlighted: cyan with brackets
-        Serial.printf(VT_CYAN VT_BOLD ">%.5s<" VT_RESET, roleLabels[key]);
-      } else {
-        const char* color;
-        switch (roleMap[key]) {
-          case 1:    color = VT_BLUE;   break;  // ROLE_BANK
-          case 2:    color = VT_GREEN;  break;  // ROLE_SCALE
-          case 3:    color = VT_YELLOW; break;  // ROLE_ARP
-          case 0xFF: color = VT_RED;    break;  // ROLE_COLLISION
-          default:   color = VT_DIM;    break;  // ROLE_NONE
-        }
-        Serial.printf("%s %-.5s" VT_RESET, color, roleLabels[key]);
-      }
-    }
-    Serial.print(VT_CL "\n");
-  }
-
-  // Legend
-  Serial.printf(VT_CL "\n");
-  Serial.printf("  " VT_BLUE "Bank" VT_RESET "  "
-                VT_GREEN "Scale" VT_RESET "  "
-                VT_YELLOW "Arp" VT_RESET "  "
-                VT_RED "Collision" VT_RESET "  "
-                VT_DIM "---" VT_RESET VT_CL "\n");
-  Serial.printf("  Bank: BNK 1-8   Scale: RootA-G, ModIo/Do/Ph/Ly/Mx/Ae/Lo, CHROM   Arp: HOLD, PL/ST" VT_CL "\n");
+  drawCellGrid(GRID_ROLES, 0, nullptr, nullptr, nullptr,
+               activeKey, 0, false, nullptr, roleLabels, roleMap);
 }
 
 // =================================================================
@@ -264,7 +499,6 @@ void SetupUI::showPadFeedback(uint8_t padIndex) {
 
 void SetupUI::showCollision(uint8_t padIndex) {
   (void)padIndex;
-  // Rapid blink to signal collision — reuse validation pattern
   if (_leds) _leds->playValidation();
 }
 
