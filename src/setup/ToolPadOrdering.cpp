@@ -27,37 +27,54 @@ void ToolPadOrdering::begin(CapacitiveKeyboard* keyboard, LedController* leds,
 }
 
 // =================================================================
-// run() — V2 Pad Ordering Tool (NEW design, not a V1 port)
-//
-// Touch pads from lowest to highest pitch.
-// Assigns rank positions 0-47 (displayed as 1-48).
-// No base note question — root is set at runtime via ScaleManager.
-// Partial save allowed via [s].
+// run() — V2 Pad Ordering (NASA console, touch=auto-assign, review state)
 // =================================================================
 
 void ToolPadOrdering::run() {
   if (!_keyboard || !_leds || !_ui || !_padOrder) return;
 
   enum OrdState {
+    ORD_REVIEW,       // Show current config (NEW)
     ORD_MEASUREMENT,
     ORD_RECAP,
     ORD_SAVE,
     ORD_DONE
   };
 
-  OrdState state = ORD_MEASUREMENT;
+  // Check if we have existing NVS data
+  bool hasExistingOrder = false;
+  uint8_t existingOrder[NUM_KEYS];
+  {
+    Preferences prefs;
+    if (prefs.begin(NOTEMAP_NVS_NAMESPACE, true)) {
+      size_t len = prefs.getBytesLength(NOTEMAP_NVS_KEY);
+      if (len == sizeof(NoteMapStore)) {
+        NoteMapStore tmp;
+        prefs.getBytes(NOTEMAP_NVS_KEY, &tmp, sizeof(NoteMapStore));
+        if (tmp.magic == EEPROM_MAGIC && tmp.version == NOTEMAP_VERSION) {
+          memcpy(existingOrder, tmp.noteMap, NUM_KEYS);
+          hasExistingOrder = true;
+        }
+      }
+      prefs.end();
+    }
+  }
 
-  // Capture reference baselines (quick snapshot)
+  OrdState state = hasExistingOrder ? ORD_REVIEW : ORD_MEASUREMENT;
+  bool nvsSaved = hasExistingOrder;
+
+  // Capture reference baselines
   uint16_t referenceBaselines[NUM_KEYS];
   captureBaselines(*_keyboard, referenceBaselines);
 
   // Ordering state
   uint8_t orderMap[NUM_KEYS];
   bool    assigned[NUM_KEYS];
-  uint8_t assignHistory[NUM_KEYS];  // stack: assignHistory[i] = key assigned at step i
+  uint8_t assignHistory[NUM_KEYS];
   int     assignedCount = 0;
   int     activeKey = -1;
   int     lastActiveKey = -1;
+  bool    confirmDefaults = false;
 
   memset(orderMap, 0xFF, sizeof(orderMap));
   memset(assigned, 0, sizeof(assigned));
@@ -76,7 +93,78 @@ void ToolPadOrdering::run() {
     switch (state) {
 
     // =============================================================
-    // MEASUREMENT — touch-to-assign positions
+    // REVIEW — show current ordering (NEW state)
+    // =============================================================
+    case ORD_REVIEW: {
+      if (screenDirty) {
+        screenDirty = false;
+
+        // Build display: show existing order in green
+        bool reviewDone[NUM_KEYS];
+        for (int i = 0; i < NUM_KEYS; i++) {
+          reviewDone[i] = true;  // All pads shown as "done" (green)
+        }
+
+        _ui->vtFrameStart();
+        _ui->drawConsoleHeader("TOOL 2: PAD ORDERING", nvsSaved);
+        _ui->drawFrameEmpty();
+        _ui->drawSection("CURRENT ORDERING");
+        _ui->drawFrameEmpty();
+
+        _ui->drawGrid(GRID_ORDERING, 0, nullptr, nullptr, reviewDone, -1, 0, false, existingOrder);
+
+        _ui->drawFrameEmpty();
+        _ui->drawSection("INFO");
+        _ui->drawFrameLine(VT_BRIGHT_GREEN "Current pad ordering loaded from NVS." VT_RESET);
+        _ui->drawFrameLine(VT_DIM "Each number = rank position (1=lowest pitch, 48=highest)." VT_RESET);
+        _ui->drawFrameLine(VT_DIM "This defines which pad plays which note in the scale." VT_RESET);
+        _ui->drawFrameEmpty();
+
+        _ui->drawControlBar(VT_DIM "[RET] RE-ORDER FROM SCRATCH  [d] DFLT  [q] KEEP CURRENT" VT_RESET);
+        _ui->vtFrameEnd();
+      }
+
+      if (ev.type == NAV_ENTER) {
+        // Start re-ordering
+        memset(orderMap, 0xFF, sizeof(orderMap));
+        memset(assigned, 0, sizeof(assigned));
+        assignedCount = 0;
+        activeKey = -1;
+        lastActiveKey = -1;
+        captureBaselines(*_keyboard, referenceBaselines);
+        _ui->vtClear();
+        lastRefresh = 0;
+        state = ORD_MEASUREMENT;
+      }
+      else if (ev.type == NAV_DEFAULTS) {
+        // Direct default
+        for (int i = 0; i < NUM_KEYS; i++) {
+          existingOrder[i] = (uint8_t)i;
+        }
+        NoteMapStore nms;
+        nms.magic = EEPROM_MAGIC;
+        nms.version = NOTEMAP_VERSION;
+        nms.reserved = 0;
+        memcpy(nms.noteMap, existingOrder, NUM_KEYS);
+        Preferences prefs;
+        if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
+          prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
+          prefs.end();
+        }
+        memcpy(_padOrder, existingOrder, NUM_KEYS);
+        nvsSaved = true;
+        _ui->flashSaved();
+        screenDirty = true;
+      }
+      else if (ev.type == NAV_QUIT) {
+        _ui->vtClear();
+        state = ORD_DONE;
+      }
+      break;
+    }
+
+    // =============================================================
+    // MEASUREMENT — touch-to-assign (auto-assign, no Enter needed)
     // =============================================================
     case ORD_MEASUREMENT: {
       _keyboard->pollAllSensorData();
@@ -86,99 +174,115 @@ void ToolPadOrdering::run() {
       if (detected >= 0) {
         if (detected != lastActiveKey) {
           activeKey = detected;
+
+          // --- AUTO-ASSIGN: touch = immediate assignment ---
+          if (!assigned[activeKey]) {
+            assignHistory[assignedCount] = (uint8_t)activeKey;
+            orderMap[activeKey] = (uint8_t)assignedCount;
+            assigned[activeKey] = true;
+            assignedCount++;
+            _leds->playValidation();
+
+            // Refresh baselines for remaining unassigned pads
+            _keyboard->pollAllSensorData();
+            uint16_t freshBl[NUM_KEYS];
+            _keyboard->getBaselineData(freshBl);
+            for (int i = 0; i < NUM_KEYS; i++) {
+              if (!assigned[i]) referenceBaselines[i] = freshBl[i];
+            }
+
+            if (assignedCount >= NUM_KEYS) {
+              _ui->vtClear();
+              state = ORD_RECAP;
+              screenDirty = true;
+              break;
+            }
+          }
         }
         lastActiveKey = detected;
       }
-      // detected == -1: pad released — keep activeKey for ENTER validation
 
-      // Refresh display
+      // Refresh display at interval
       if (millis() - lastRefresh >= 200) {
         lastRefresh = millis();
 
-        _ui->vtFrameStart();
-        char info[32];
-        snprintf(info, sizeof(info), "Assigned: %d/%d", assignedCount, NUM_KEYS);
-        _ui->drawHeader("PAD ORDERING", info);
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  === TOUCH PADS FROM LOWEST TO HIGHEST ===" VT_CL "\n");
-        Serial.printf(VT_CL "\n");
-
         bool activeIsDone = (activeKey >= 0) && assigned[activeKey];
+
+        _ui->vtFrameStart();
+
+        char info[32];
+        snprintf(info, sizeof(info), "TOOL 2: PAD ORDERING  %d/%d", assignedCount, NUM_KEYS);
+        _ui->drawConsoleHeader(info, nvsSaved);
+        _ui->drawFrameEmpty();
+
+        _ui->drawSection("TOUCH PADS FROM LOWEST TO HIGHEST");
+        _ui->drawFrameEmpty();
+
         _ui->drawGrid(GRID_ORDERING, 0, nullptr, nullptr, assigned,
                  activeKey, (uint16_t)assignedCount, activeIsDone, orderMap);
 
-        Serial.printf(VT_CL "\n");
+        _ui->drawFrameEmpty();
 
-        // Detail box
+        // Info section
+        _ui->drawSection("INFO");
+
         if (detected == -2) {
-          Serial.printf("  +-- " VT_YELLOW "Multiple pads detected" VT_RESET " -----------------+" VT_CL "\n");
-          Serial.printf("  |  Lift off and touch ONE pad at a time       |" VT_CL "\n");
-          Serial.printf("  +---------------------------------------------+" VT_CL "\n");
-          Serial.printf(VT_CL "\n");
-        }
-        else if (activeKey >= 0) {
+          _ui->drawFrameLine(VT_YELLOW "Multiple pads detected!" VT_RESET VT_DIM " Lift off and touch ONE pad at a time." VT_RESET);
+        } else if (activeKey >= 0 && activeIsDone) {
           int sensor = activeKey / CHANNELS_PER_SENSOR;
           int channel = activeKey % CHANNELS_PER_SENSOR;
-          char sc = 'A' + sensor;
-
-          if (activeIsDone) {
-            Serial.printf("  +-- Key %d (%c:Ch%d) " VT_MAGENTA "ALREADY ASSIGNED" VT_RESET " -------+" VT_CL "\n",
-                          activeKey, sc, channel);
-            Serial.printf("  |  Position: %-3d   (touch another pad)           |" VT_CL "\n",
-                          orderMap[activeKey] + 1);
-            Serial.printf("  |  Use [r] in recap to redo all                  |" VT_CL "\n");
-            Serial.printf("  +---------------------------------------------+" VT_CL "\n");
-          } else {
-            Serial.printf("  +-- Active: Key %d (Sensor %c, Channel %d) ------+" VT_CL "\n",
-                          activeKey, sc, channel);
-            Serial.printf("  |  Will be assigned position: %-3d               |" VT_CL "\n",
-                          assignedCount + 1);
-            Serial.printf("  |  [Enter] to confirm                           |" VT_CL "\n");
-            Serial.printf("  +---------------------------------------------+" VT_CL "\n");
-          }
-        }
-        else {
-          Serial.printf("  +-- Waiting... --------------------------------+" VT_CL "\n");
-          Serial.printf("  |  Touch pad for position %-3d                   |" VT_CL "\n",
-                        assignedCount + 1);
-          Serial.printf("  +---------------------------------------------+" VT_CL "\n");
-          Serial.printf(VT_CL "\n");
+          _ui->drawFrameLine(VT_MAGENTA "Key %d" VT_RESET VT_DIM " (Sensor %c, Ch%d) -- already assigned at position %d." VT_RESET,
+                             activeKey, 'A' + sensor, channel, orderMap[activeKey] + 1);
+        } else if (activeKey >= 0) {
+          int sensor = activeKey / CHANNELS_PER_SENSOR;
+          int channel = activeKey % CHANNELS_PER_SENSOR;
+          _ui->drawFrameLine(VT_CYAN "Key %d" VT_RESET VT_DIM " (Sensor %c, Ch%d) -- assigned position %d." VT_RESET,
+                             activeKey, 'A' + sensor, channel, assignedCount);
+        } else {
+          _ui->drawFrameLine(VT_DIM "Touch pad for position %d / %d. Auto-assigns on contact." VT_RESET,
+                             assignedCount + 1, NUM_KEYS);
         }
 
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  Next position: %d/%d" VT_CL "\n", assignedCount + 1, NUM_KEYS);
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  [Enter] Assign   [u] Undo   [d] Defaults   [s] Save   [q] Abort" VT_CL "\n");
+        _ui->drawFrameLine(VT_DIM "Each pad touch assigns the next rank (lowest pitch to highest)." VT_RESET);
+        _ui->drawFrameEmpty();
+
+        // Control bar
+        if (confirmDefaults) {
+          _ui->drawControlBar(VT_DIM "Reset to linear order 0-47? [y/n]" VT_RESET);
+        } else {
+          _ui->drawControlBar(VT_DIM "[TOUCH] auto-assign  [u] UNDO  [d] DFLT  [s] SAVE  [q] ABORT" VT_RESET);
+        }
         _ui->vtFrameEnd();
       }
 
-      // Handle input
-      if (ev.type == NAV_ENTER && activeKey >= 0) {
-        if (assigned[activeKey]) {
-          // Already assigned — ignore (use [r] to redo all)
-          break;
-        }
-        assignHistory[assignedCount] = (uint8_t)activeKey;
-        orderMap[activeKey] = (uint8_t)assignedCount;
-        assigned[activeKey] = true;
-        assignedCount++;
-        _leds->playValidation();
-
-        // Refresh baselines for unassigned pads (compensate drift)
-        _keyboard->pollAllSensorData();
-        uint16_t freshBl[NUM_KEYS];
-        _keyboard->getBaselineData(freshBl);
-        for (int i = 0; i < NUM_KEYS; i++) {
-          if (!assigned[i]) referenceBaselines[i] = freshBl[i];
-        }
-
-        if (assignedCount >= NUM_KEYS) {
+      // Handle keyboard input
+      if (confirmDefaults) {
+        if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+          for (int i = 0; i < NUM_KEYS; i++) {
+            orderMap[i] = (uint8_t)i;
+            assigned[i] = true;
+            assignHistory[i] = (uint8_t)i;
+          }
+          assignedCount = NUM_KEYS;
+          NoteMapStore nms;
+          nms.magic = EEPROM_MAGIC;
+          nms.version = NOTEMAP_VERSION;
+          nms.reserved = 0;
+          memcpy(nms.noteMap, orderMap, NUM_KEYS);
+          Preferences prefs;
+          if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
+            prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
+            prefs.end();
+          }
+          memcpy(_padOrder, orderMap, NUM_KEYS);
+          nvsSaved = true;
+          _ui->flashSaved();
           _ui->vtClear();
-          state = ORD_RECAP;
-          screenDirty = true;
-        } else {
-          activeKey = -1;
-          lastActiveKey = -1;
+          state = ORD_DONE;
+          confirmDefaults = false;
+        } else if (ev.type != NAV_NONE) {
+          confirmDefaults = false;
+          lastRefresh = 0;  // Force redraw
         }
       }
       else if (ev.type == NAV_CHAR && (ev.ch == 'u' || ev.ch == 'U') && assignedCount > 0) {
@@ -190,44 +294,8 @@ void ToolPadOrdering::run() {
         lastActiveKey = -1;
       }
       else if (ev.type == NAV_DEFAULTS) {
-        // Reset to linear order 0-47
-        _ui->vtClear();
-        Serial.printf("  Reset to default order (0-47)? [y/n]\n");
-        while (true) {
-          NavEvent ce = input.update();
-          if (ce.type == NAV_CHAR && (ce.ch == 'y' || ce.ch == 'Y')) {
-            for (int i = 0; i < NUM_KEYS; i++) {
-              orderMap[i] = (uint8_t)i;
-              assigned[i] = true;
-              assignHistory[i] = (uint8_t)i;
-            }
-            assignedCount = NUM_KEYS;
-            // Direct NVS write
-            NoteMapStore nms;
-            nms.magic = EEPROM_MAGIC;
-            nms.version = NOTEMAP_VERSION;
-            nms.reserved = 0;
-            memcpy(nms.noteMap, orderMap, NUM_KEYS);
-            Preferences prefs;
-            if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
-              prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
-              prefs.end();
-            }
-            memcpy(_padOrder, orderMap, NUM_KEYS);
-            _ui->showSaved();
-            _ui->vtClear();
-            state = ORD_DONE;
-            break;
-          }
-          if (ce.type == NAV_CHAR && (ce.ch == 'n' || ce.ch == 'N')) {
-            _ui->vtClear();
-            screenDirty = true;
-            lastRefresh = 0;
-            break;
-          }
-          _leds->update();
-          delay(5);
-        }
+        confirmDefaults = true;
+        lastRefresh = 0;
       }
       else if (ev.type == NAV_CHAR && (ev.ch == 's' || ev.ch == 'S')) {
         _ui->vtClear();
@@ -245,7 +313,6 @@ void ToolPadOrdering::run() {
     // RECAP
     // =============================================================
     case ORD_RECAP: {
-      // Count actually assigned (at case scope so ENTER handler can access it)
       int uniqueAssigned = 0;
       for (int i = 0; i < NUM_KEYS; i++) {
         if (assigned[i]) uniqueAssigned++;
@@ -255,46 +322,28 @@ void ToolPadOrdering::run() {
         screenDirty = false;
 
         _ui->vtFrameStart();
-        _ui->drawHeader("PAD ORDERING", "COMPLETE");
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  === FINAL ORDERING ===" VT_CL "\n");
-        Serial.printf(VT_CL "\n");
+        _ui->drawConsoleHeader("TOOL 2: PAD ORDERING  COMPLETE", nvsSaved);
+        _ui->drawFrameEmpty();
+        _ui->drawSection("FINAL ORDERING");
+        _ui->drawFrameEmpty();
 
         _ui->drawGrid(GRID_ORDERING, 0, nullptr, nullptr, assigned, -1, 0, false, orderMap);
 
-        Serial.printf(VT_CL "\n");
+        _ui->drawFrameEmpty();
+        _ui->drawSection("INFO");
         if (uniqueAssigned == NUM_KEYS) {
-          Serial.printf(VT_GREEN "  All %d pads assigned." VT_RESET VT_CL "\n", NUM_KEYS);
+          _ui->drawFrameLine(VT_BRIGHT_GREEN "All %d pads assigned." VT_RESET, NUM_KEYS);
         } else {
-          Serial.printf(VT_YELLOW "  %d/%d pads assigned (partial)." VT_RESET VT_CL "\n",
-                        uniqueAssigned, NUM_KEYS);
+          _ui->drawFrameLine(VT_YELLOW "%d/%d pads assigned (partial)." VT_RESET, uniqueAssigned, NUM_KEYS);
+          _ui->drawFrameLine(VT_DIM "Unassigned pads get sequential positions after the last assigned pad." VT_RESET);
         }
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  [Enter] Save   [r] Redo all   [q] Back to menu" VT_CL "\n");
+        _ui->drawFrameEmpty();
+
+        _ui->drawControlBar(VT_DIM "[RET] SAVE  [r] REDO ALL  [q] BACK TO MENU" VT_RESET);
         _ui->vtFrameEnd();
       }
 
       if (ev.type == NAV_ENTER) {
-        // Partial save warning: explain consequences before proceeding
-        if (uniqueAssigned < NUM_KEYS) {
-          _ui->vtClear();
-          Serial.printf(VT_YELLOW VT_BOLD "  Only %d/%d pads assigned." VT_RESET "\n", uniqueAssigned, NUM_KEYS);
-          Serial.printf(VT_CL "\n");
-          Serial.printf("  Unassigned pads will get sequential positions\n");
-          Serial.printf("  after the last assigned pad.\n");
-          Serial.printf(VT_CL "\n");
-          Serial.printf("  [Enter] Save anyway   [q] Cancel\n");
-
-          // Wait for confirmation
-          while (true) {
-            NavEvent ce = input.update();
-            if (ce.type == NAV_ENTER) break;  // Confirmed
-            if (ce.type == NAV_QUIT) { screenDirty = true; break; }
-            _leds->update();
-            delay(5);
-          }
-          if (screenDirty) break;  // User cancelled, back to recap
-        }
         state = ORD_SAVE;
       }
       else if (ev.type == NAV_CHAR && (ev.ch == 'r' || ev.ch == 'R')) {
@@ -317,13 +366,10 @@ void ToolPadOrdering::run() {
     }
 
     // =============================================================
-    // SAVE — direct Preferences write (NVS task not running)
+    // SAVE
     // =============================================================
     case ORD_SAVE: {
-      _ui->vtClear();
-      Serial.printf(VT_BOLD "  Saving pad ordering..." VT_RESET "\n");
-
-      // Fill unassigned pads with sequential positions after the assigned ones
+      // Fill unassigned pads
       uint8_t assignedTotal = 0;
       for (uint8_t i = 0; i < NUM_KEYS; i++) {
         if (orderMap[i] != 0xFF) assignedTotal++;
@@ -337,28 +383,20 @@ void ToolPadOrdering::run() {
         }
       }
 
-      // Build NoteMapStore
       NoteMapStore nms;
       nms.magic = EEPROM_MAGIC;
       nms.version = NOTEMAP_VERSION;
       nms.reserved = 0;
       memcpy(nms.noteMap, orderMap, NUM_KEYS);
 
-      // Direct NVS write
       Preferences prefs;
       if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
         prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
         prefs.end();
-        Serial.printf(VT_GREEN "  Pad ordering saved successfully." VT_RESET "\n");
-      } else {
-        Serial.printf(VT_RED "  Error: could not open NVS namespace!" VT_RESET "\n");
       }
 
-      // Update live padOrder array
       memcpy(_padOrder, orderMap, NUM_KEYS);
-
-      _leds->playValidation();
-      Serial.printf("  Returning to menu...\n");
+      _ui->flashSaved();
       delay(800);
       _ui->vtClear();
       state = ORD_DONE;

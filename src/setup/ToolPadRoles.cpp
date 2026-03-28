@@ -10,10 +10,9 @@
 #include <string.h>
 
 // =================================================================
-// Short labels for pool items (4 chars max for grid, longer for pool)
+// Short labels for pool items
 // =================================================================
 
-// Grid labels: 4-char, used in the 4x12 grid display
 static const char* GRID_BANK_LABELS[] = {
   " Bk1", " Bk2", " Bk3", " Bk4", " Bk5", " Bk6", " Bk7", " Bk8"
 };
@@ -27,7 +26,6 @@ static const char* GRID_ARP_LABELS[] = {
   " Hld", " P/S", " Oc1", " Oc2", " Oc3", " Oc4"
 };
 
-// Pool labels: used in the pool line display
 static const char* POOL_BANK_LABELS[] = {
   "Bk1", "Bk2", "Bk3", "Bk4", "Bk5", "Bk6", "Bk7", "Bk8"
 };
@@ -39,25 +37,6 @@ static const char* POOL_SCALE_LABELS[] = {
 
 static const char* POOL_ARP_LABELS[] = {
   "Hld", "P/S", "Oc1", "Oc2", "Oc3", "Oc4"
-};
-
-// Description strings for each pool item
-static const char* BANK_DESCS[] = {
-  "Bank 1 selector pad", "Bank 2 selector pad", "Bank 3 selector pad", "Bank 4 selector pad",
-  "Bank 5 selector pad", "Bank 6 selector pad", "Bank 7 selector pad", "Bank 8 selector pad"
-};
-
-static const char* SCALE_DESCS[] = {
-  "Root note: A",  "Root note: B",  "Root note: C",  "Root note: D",
-  "Root note: E",  "Root note: F",  "Root note: G",
-  "Mode: Ionian (Major)",  "Mode: Dorian",  "Mode: Phrygian",
-  "Mode: Lydian",  "Mode: Mixolydian",  "Mode: Aeolian (Minor)",  "Mode: Locrian",
-  "Chromatic toggle"
-};
-
-static const char* ARP_DESCS[] = {
-  "Hold toggle (ARPEG only)", "Play/Stop (ARPEG + HOLD ON)",
-  "Octave range 1", "Octave range 2", "Octave range 3", "Octave range 4"
 };
 
 // =================================================================
@@ -73,7 +52,7 @@ ToolPadRoles::ToolPadRoles()
     _gridRow(0), _gridCol(0), _editing(false),
     _poolLine(0), _poolIdx(0),
     _confirmSteal(false), _stealFromPad(0xFF),
-    _confirmDefaults(false)
+    _confirmDefaults(false), _confirmClearAll(false), _nvsSaved(false)
 {
   memset(_wkBankPads, 0xFF, sizeof(_wkBankPads));
   memset(_wkRootPads, 0xFF, sizeof(_wkRootPads));
@@ -109,7 +88,7 @@ uint8_t ToolPadRoles::poolLineSize(uint8_t line) const {
     case 1: return POOL_BANK_COUNT;
     case 2: return POOL_SCALE_COUNT;
     case 3: return POOL_ARP_COUNT;
-    default: return 0;  // line 0 = "none", no items
+    default: return 0;
   }
 }
 
@@ -119,15 +98,6 @@ const char* ToolPadRoles::poolItemLabel(uint8_t line, uint8_t index) const {
     case 2: return (index < POOL_SCALE_COUNT) ? POOL_SCALE_LABELS[index] : "???";
     case 3: return (index < POOL_ARP_COUNT)   ? POOL_ARP_LABELS[index]   : "???";
     default: return "none";
-  }
-}
-
-const char* ToolPadRoles::poolItemColor(uint8_t line) const {
-  switch (line) {
-    case 1: return VT_BLUE;
-    case 2: return VT_GREEN;
-    case 3: return VT_YELLOW;
-    default: return VT_DIM;
   }
 }
 
@@ -141,7 +111,6 @@ void ToolPadRoles::buildRoleMap() {
     memcpy(_roleLabels[i], " -- ", 5);
   }
 
-  // Collision-safe role setter: marks ROLE_COLLISION (red) if pad already assigned
   auto setRole = [&](uint8_t pad, uint8_t role, const char* label) {
     if (pad >= NUM_KEYS) return;
     if (_roleMap[pad] != ROLE_NONE) {
@@ -153,33 +122,25 @@ void ToolPadRoles::buildRoleMap() {
     }
   };
 
-  // Bank pads
   for (int i = 0; i < NUM_BANKS; i++)
     setRole(_wkBankPads[i], ROLE_BANK, GRID_BANK_LABELS[i]);
-  // Root pads
   for (int i = 0; i < 7; i++)
     setRole(_wkRootPads[i], ROLE_SCALE, GRID_SCALE_LABELS[i]);
-  // Mode pads
   for (int i = 0; i < 7; i++)
     setRole(_wkModePads[i], ROLE_SCALE, GRID_SCALE_LABELS[7 + i]);
-  // Chromatic pad
   setRole(_wkChromPad, ROLE_SCALE, GRID_SCALE_LABELS[14]);
-  // Hold pad
   setRole(_wkHoldPad, ROLE_ARP, GRID_ARP_LABELS[0]);
-  // Play/Stop pad
   setRole(_wkPlayStopPad, ROLE_ARP, GRID_ARP_LABELS[1]);
-  // Octave pads (1-4)
   for (int i = 0; i < 4; i++)
     setRole(_wkOctavePads[i], ROLE_ARP, GRID_ARP_LABELS[2 + i]);
 }
 
 // =================================================================
-// getRoleForPad — returns {line, index} for a pad's current role
+// getRoleForPad / findPadWithRole / assignRole / clearRole
 // =================================================================
 
 PadRole ToolPadRoles::getRoleForPad(uint8_t pad) const {
   if (pad >= NUM_KEYS) return {0, 0};
-
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     if (_wkBankPads[i] == pad) return {1, i};
   }
@@ -195,24 +156,20 @@ PadRole ToolPadRoles::getRoleForPad(uint8_t pad) const {
   for (uint8_t i = 0; i < 4; i++) {
     if (_wkOctavePads[i] == pad) return {3, (uint8_t)(2 + i)};
   }
-  return {0, 0};  // none
+  return {0, 0};
 }
-
-// =================================================================
-// findPadWithRole — which pad has this role? 0xFF = none
-// =================================================================
 
 uint8_t ToolPadRoles::findPadWithRole(uint8_t line, uint8_t index) const {
   switch (line) {
-    case 1:  // Bank
+    case 1:
       if (index < NUM_BANKS) return _wkBankPads[index];
       break;
-    case 2:  // Scale
+    case 2:
       if (index < 7) return _wkRootPads[index];
       if (index < 14) return _wkModePads[index - 7];
       if (index == 14) return _wkChromPad;
       break;
-    case 3:  // Arp
+    case 3:
       if (index == 0) return _wkHoldPad;
       if (index == 1) return _wkPlayStopPad;
       if (index >= 2 && index <= 5) return _wkOctavePads[index - 2];
@@ -221,21 +178,17 @@ uint8_t ToolPadRoles::findPadWithRole(uint8_t line, uint8_t index) const {
   return 0xFF;
 }
 
-// =================================================================
-// assignRole — write a role into the working arrays
-// =================================================================
-
 void ToolPadRoles::assignRole(uint8_t pad, uint8_t line, uint8_t index) {
   switch (line) {
-    case 1:  // Bank
+    case 1:
       if (index < NUM_BANKS) _wkBankPads[index] = pad;
       break;
-    case 2:  // Scale
+    case 2:
       if (index < 7) _wkRootPads[index] = pad;
       else if (index < 14) _wkModePads[index - 7] = pad;
       else if (index == 14) _wkChromPad = pad;
       break;
-    case 3:  // Arp
+    case 3:
       if (index == 0) _wkHoldPad = pad;
       else if (index == 1) _wkPlayStopPad = pad;
       else if (index >= 2 && index <= 5) _wkOctavePads[index - 2] = pad;
@@ -243,13 +196,8 @@ void ToolPadRoles::assignRole(uint8_t pad, uint8_t line, uint8_t index) {
   }
 }
 
-// =================================================================
-// clearRole — remove whatever role a pad currently has
-// =================================================================
-
 void ToolPadRoles::clearRole(uint8_t pad) {
   if (pad >= NUM_KEYS) return;
-
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     if (_wkBankPads[i] == pad) _wkBankPads[i] = 0xFF;
   }
@@ -267,14 +215,20 @@ void ToolPadRoles::clearRole(uint8_t pad) {
   }
 }
 
-// =================================================================
-// resetToDefaults — factory default pad assignments
-// =================================================================
+void ToolPadRoles::clearAllRoles() {
+  memset(_wkBankPads, 0xFF, sizeof(_wkBankPads));
+  memset(_wkRootPads, 0xFF, sizeof(_wkRootPads));
+  memset(_wkModePads, 0xFF, sizeof(_wkModePads));
+  _wkChromPad    = 0xFF;
+  _wkHoldPad     = 0xFF;
+  _wkPlayStopPad = 0xFF;
+  memset(_wkOctavePads, 0xFF, sizeof(_wkOctavePads));
+}
 
 void ToolPadRoles::resetToDefaults() {
-  for (uint8_t i = 0; i < NUM_BANKS; i++) _wkBankPads[i] = i;         // pads 0-7
-  for (uint8_t i = 0; i < 7; i++) _wkRootPads[i] = 8 + i;            // pads 8-14
-  for (uint8_t i = 0; i < 7; i++) _wkModePads[i] = 15 + i;           // pads 15-21
+  for (uint8_t i = 0; i < NUM_BANKS; i++) _wkBankPads[i] = i;
+  for (uint8_t i = 0; i < 7; i++) _wkRootPads[i] = 8 + i;
+  for (uint8_t i = 0; i < 7; i++) _wkModePads[i] = 15 + i;
   _wkChromPad    = 22;
   _wkHoldPad     = 23;
   _wkPlayStopPad = 24;
@@ -292,7 +246,6 @@ bool ToolPadRoles::saveAll() {
   Preferences prefs;
   bool ok = true;
 
-  // Bank pads
   BankPadStore bps;
   bps.magic    = EEPROM_MAGIC;
   bps.version  = BANKPAD_VERSION;
@@ -303,7 +256,6 @@ bool ToolPadRoles::saveAll() {
     prefs.end();
   } else { ok = false; }
 
-  // Scale pads
   if (prefs.begin(SCALE_PAD_NVS_NAMESPACE, false)) {
     prefs.putBytes(SCALE_PAD_ROOT_KEY, _wkRootPads, 7);
     prefs.putBytes(SCALE_PAD_MODE_KEY, _wkModePads, 7);
@@ -311,7 +263,6 @@ bool ToolPadRoles::saveAll() {
     prefs.end();
   } else { ok = false; }
 
-  // Arp pads
   if (prefs.begin(ARP_PAD_NVS_NAMESPACE, false)) {
     prefs.putUChar(ARP_PAD_HOLD_KEY, _wkHoldPad);
     prefs.putUChar(ARP_PAD_PS_KEY, _wkPlayStopPad);
@@ -321,7 +272,6 @@ bool ToolPadRoles::saveAll() {
 
   if (!ok) return false;
 
-  // Update live values only after all writes succeeded
   memcpy(_bankPads, _wkBankPads, NUM_BANKS);
   memcpy(_rootPads, _wkRootPads, 7);
   memcpy(_modePads, _wkModePads, 7);
@@ -330,6 +280,7 @@ bool ToolPadRoles::saveAll() {
   *_playStopPad  = _wkPlayStopPad;
   if (_octavePads) memcpy(_octavePads, _wkOctavePads, 4);
 
+  _nvsSaved = true;
   return true;
 }
 
@@ -341,20 +292,22 @@ void ToolPadRoles::drawGrid() {
   int selectedPad = _gridRow * 12 + _gridCol;
 
   // Column headers
-  Serial.printf("  ");
+  Serial.print(VT_DIM "|" VT_RESET "  " VT_DIM);
   for (int col = 0; col < 12; col++) {
     Serial.printf(" %02d  ", col + 1);
   }
-  Serial.printf(VT_CL "\n");
+  // Pad to frame edge
+  Serial.print(VT_RESET);
+  for (int i = 0; i < 55; i++) Serial.print(' ');
+  Serial.print(VT_DIM "|" VT_RESET VT_CL "\n");
 
   for (int row = 0; row < 4; row++) {
-    Serial.printf("  ");
+    Serial.print(VT_DIM "|" VT_RESET "  ");
     for (int col = 0; col < 12; col++) {
       int pad = row * 12 + col;
 
       if (pad == selectedPad) {
-        // Selected cell: cyan brackets, trim leading space for 5-char cell
-        Serial.printf(VT_CYAN "[%s]" VT_RESET, _roleLabels[pad] + 1);
+        Serial.printf(VT_CYAN VT_BOLD "[%s]" VT_RESET, _roleLabels[pad] + 1);
       } else {
         const char* color;
         switch (_roleMap[pad]) {
@@ -367,209 +320,230 @@ void ToolPadRoles::drawGrid() {
         Serial.printf("%s %s" VT_RESET, color, _roleLabels[pad]);
       }
     }
-    Serial.printf(VT_CL "\n");
+    // Pad to frame edge
+    for (int i = 0; i < 55; i++) Serial.print(' ');
+    Serial.print(VT_DIM "|" VT_RESET VT_CL "\n");
   }
 }
 
 // =================================================================
-// drawPool — 3 pool lines + "none" option, with highlighting
+// drawPool — 3 pool lines + "none" option
+// BUG FIX: When _editing == false, pool is a STATIC INVENTORY.
+//          No reverse, no bold tracking of currentRole.
+//          When _editing == true, pool is an ACTIVE SELECTOR.
 // =================================================================
 
 void ToolPadRoles::drawPool() {
   int selectedPad = _gridRow * 12 + _gridCol;
-  PadRole currentRole = getRoleForPad((uint8_t)selectedPad);
 
   // "none" line (poolLine 0)
   {
     bool isSelectedLine = _editing && (_poolLine == 0);
+    Serial.print(VT_DIM "|" VT_RESET "  ");
     if (isSelectedLine) {
-      Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " ");
-      Serial.printf(VT_REVERSE " none " VT_RESET);
-    } else if (currentRole.line == 0) {
-      // Current pad has no role — highlight "none"
-      Serial.printf("    " VT_REVERSE " none " VT_RESET);
+      Serial.print(VT_CYAN VT_BOLD "> " VT_RESET);
+      Serial.print(VT_REVERSE " none " VT_RESET);
     } else {
-      Serial.printf("    " VT_DIM "none" VT_RESET);
+      Serial.print("  " VT_DIM "none" VT_RESET);
     }
-    Serial.printf(VT_CL "\n");
+    // Pad to frame width
+    uint8_t used = isSelectedLine ? 10 : 6;
+    for (int i = used; i < CONSOLE_W - 5; i++) Serial.print(' ');
+    Serial.print(" " VT_DIM "|" VT_RESET VT_CL "\n");
   }
 
-  // Bank line (poolLine 1)
-  {
-    bool isSelectedLine = _editing && (_poolLine == 1);
+  // Helper to draw one pool line
+  auto drawPoolLine = [&](uint8_t lineNum, const char* label,
+                          const char* const* labels, uint8_t count,
+                          const char* lineColor) {
+    bool isSelectedLine = _editing && (_poolLine == lineNum);
+
+    Serial.print(VT_DIM "|" VT_RESET "  ");
     if (isSelectedLine) {
-      Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " " VT_DIM "Bank: " VT_RESET " ");
+      Serial.printf(VT_CYAN VT_BOLD "> " VT_RESET VT_DIM "%-6s" VT_RESET " ", label);
     } else {
-      Serial.printf("    " VT_DIM "Bank: " VT_RESET " ");
+      Serial.printf("  " VT_DIM "%-6s" VT_RESET " ", label);
     }
-    for (uint8_t i = 0; i < POOL_BANK_COUNT; i++) {
+
+    for (uint8_t i = 0; i < count; i++) {
       bool isCursor = isSelectedLine && (_poolIdx == i);
-      bool isCurrentRole = (currentRole.line == 1 && currentRole.index == i);
-      uint8_t owner = findPadWithRole(1, i);
+      uint8_t owner = findPadWithRole(lineNum, i);
       bool assignedElsewhere = (owner < NUM_KEYS && owner != (uint8_t)selectedPad);
 
       if (isCursor) {
-        Serial.printf(VT_REVERSE VT_BOLD " %s " VT_RESET " ", POOL_BANK_LABELS[i]);
-      } else if (isCurrentRole) {
-        Serial.printf(VT_BLUE VT_BOLD "%s" VT_RESET " ", POOL_BANK_LABELS[i]);
-      } else if (assignedElsewhere) {
-        Serial.printf(VT_DIM "%s" VT_RESET " ", POOL_BANK_LABELS[i]);
+        // Edit mode cursor
+        Serial.printf(VT_REVERSE VT_BOLD " %s " VT_RESET " ", labels[i]);
       } else if (_editing) {
-        Serial.printf(VT_BLUE "%s" VT_RESET " ", POOL_BANK_LABELS[i]);
+        // Edit mode: show availability
+        if (assignedElsewhere) {
+          Serial.printf(VT_DIM "%s" VT_RESET " ", labels[i]);
+        } else {
+          Serial.printf("%s%s" VT_RESET " ", lineColor, labels[i]);
+        }
       } else {
-        Serial.printf(VT_DIM "%s" VT_RESET " ", POOL_BANK_LABELS[i]);
+        // --- BUG FIX: Grid-nav mode = STATIC inventory ---
+        // No bold, no reverse, no currentRole tracking.
+        // Just show assigned=dim, unassigned=line color (faint).
+        if (owner < NUM_KEYS) {
+          Serial.printf(VT_DIM "%s" VT_RESET " ", labels[i]);
+        } else {
+          Serial.printf("%s%s" VT_RESET " ", lineColor, labels[i]);
+        }
       }
     }
-    Serial.printf(VT_CL "\n");
-  }
+    Serial.print(VT_CL "\n");
+  };
 
-  // Scale line (poolLine 2)
-  {
-    bool isSelectedLine = _editing && (_poolLine == 2);
-    if (isSelectedLine) {
-      Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " " VT_DIM "Scale:" VT_RESET " ");
-    } else {
-      Serial.printf("    " VT_DIM "Scale:" VT_RESET " ");
-    }
-    for (uint8_t i = 0; i < POOL_SCALE_COUNT; i++) {
-      bool isCursor = isSelectedLine && (_poolIdx == i);
-      bool isCurrentRole = (currentRole.line == 2 && currentRole.index == i);
-      uint8_t owner = findPadWithRole(2, i);
-      bool assignedElsewhere = (owner < NUM_KEYS && owner != (uint8_t)selectedPad);
+  drawPoolLine(1, "Bank:", POOL_BANK_LABELS, POOL_BANK_COUNT, VT_BLUE);
+  drawPoolLine(2, "Scale:", POOL_SCALE_LABELS, POOL_SCALE_COUNT, VT_GREEN);
+  drawPoolLine(3, "Arp:", POOL_ARP_LABELS, POOL_ARP_COUNT, VT_YELLOW);
+}
 
-      if (isCursor) {
-        Serial.printf(VT_REVERSE VT_BOLD " %s " VT_RESET " ", POOL_SCALE_LABELS[i]);
-      } else if (isCurrentRole) {
-        Serial.printf(VT_GREEN VT_BOLD "%s" VT_RESET " ", POOL_SCALE_LABELS[i]);
-      } else if (assignedElsewhere) {
-        Serial.printf(VT_DIM "%s" VT_RESET " ", POOL_SCALE_LABELS[i]);
-      } else if (_editing) {
-        Serial.printf(VT_GREEN "%s" VT_RESET " ", POOL_SCALE_LABELS[i]);
+// =================================================================
+// printRoleDescription — detailed info for a role (pool item)
+// =================================================================
+
+void ToolPadRoles::printRoleDescription(uint8_t line, uint8_t index) {
+  switch (line) {
+    case 0:
+      _ui->drawFrameLine(VT_DIM "Remove role from this pad. It will play music notes in all modes." VT_RESET);
+      break;
+    case 1:  // Bank
+      _ui->drawFrameLine("Bank %d selector  " VT_DIM "--  MIDI channel %d" VT_RESET, index + 1, index + 1);
+      _ui->drawFrameLine(VT_DIM "Hold LEFT + press this pad to switch foreground bank." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "AllNotesOff sent on previous bank. Arp banks continue in background." VT_RESET);
+      break;
+    case 2:  // Scale
+      if (index < 7) {
+        static const char* noteNames[] = {"A", "B", "C", "D", "E", "F", "G"};
+        _ui->drawFrameLine("Root note: %s  " VT_DIM "--  sets base pitch for scale resolution" VT_RESET, noteNames[index]);
+        _ui->drawFrameLine(VT_DIM "Hold LEFT + press to change root. Applies to current bank's scale." VT_RESET);
+        _ui->drawFrameLine(VT_DIM "In chromatic mode, root = lowest note. In scale mode, root = tonic." VT_RESET);
+      } else if (index < 14) {
+        static const char* modeNames[] = {"Ionian (Major)", "Dorian", "Phrygian", "Lydian",
+                                           "Mixolydian", "Aeolian (Minor)", "Locrian"};
+        static const char* modeIntervals[] = {"1 2 3 4 5 6 7", "1 2 b3 4 5 6 b7", "1 b2 b3 4 5 b6 b7",
+                                               "1 2 3 #4 5 6 7", "1 2 3 4 5 6 b7", "1 2 b3 4 5 b6 b7",
+                                               "1 b2 b3 4 b5 b6 b7"};
+        uint8_t mi = index - 7;
+        _ui->drawFrameLine("Mode: %s  " VT_DIM "--  intervals: %s" VT_RESET, modeNames[mi], modeIntervals[mi]);
+        _ui->drawFrameLine(VT_DIM "Hold LEFT + press to set mode. 7 pads mapped to padOrder positions." VT_RESET);
+        _ui->drawFrameLine(VT_DIM "Scale change on NORMAL bank: allNotesOff. On ARPEG: re-resolves at next tick." VT_RESET);
       } else {
-        Serial.printf(VT_DIM "%s" VT_RESET " ", POOL_SCALE_LABELS[i]);
+        _ui->drawFrameLine("Chromatic toggle  " VT_DIM "--  switches between chromatic and scale mode" VT_RESET);
+        _ui->drawFrameLine(VT_DIM "Chromatic = all semitones from root. Scale = filtered through mode intervals." VT_RESET);
+        _ui->drawFrameLine(VT_DIM "Hold LEFT + press to toggle. Per-bank setting, saved to NVS." VT_RESET);
       }
-    }
-    Serial.printf(VT_CL "\n");
-  }
-
-  // Arp line (poolLine 3)
-  {
-    bool isSelectedLine = _editing && (_poolLine == 3);
-    if (isSelectedLine) {
-      Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " " VT_DIM "Arp:  " VT_RESET " ");
-    } else {
-      Serial.printf("    " VT_DIM "Arp:  " VT_RESET " ");
-    }
-    for (uint8_t i = 0; i < POOL_ARP_COUNT; i++) {
-      bool isCursor = isSelectedLine && (_poolIdx == i);
-      bool isCurrentRole = (currentRole.line == 3 && currentRole.index == i);
-      uint8_t owner = findPadWithRole(3, i);
-      bool assignedElsewhere = (owner < NUM_KEYS && owner != (uint8_t)selectedPad);
-
-      if (isCursor) {
-        Serial.printf(VT_REVERSE VT_BOLD " %s " VT_RESET " ", POOL_ARP_LABELS[i]);
-      } else if (isCurrentRole) {
-        Serial.printf(VT_YELLOW VT_BOLD "%s" VT_RESET " ", POOL_ARP_LABELS[i]);
-      } else if (assignedElsewhere) {
-        Serial.printf(VT_DIM "%s" VT_RESET " ", POOL_ARP_LABELS[i]);
-      } else if (_editing) {
-        Serial.printf(VT_YELLOW "%s" VT_RESET " ", POOL_ARP_LABELS[i]);
+      break;
+    case 3:  // Arp
+      if (index == 0) {
+        _ui->drawFrameLine("HOLD toggle  " VT_DIM "--  ARPEG banks only" VT_RESET);
+        _ui->drawFrameLine(VT_DIM "HOLD OFF: press=add to pile, release=remove. Arp stops when all fingers up." VT_RESET);
+        _ui->drawFrameLine(VT_DIM "HOLD ON: press=add, double-tap=remove. Pile persists. Use Play/Stop for transport." VT_RESET);
+      } else if (index == 1) {
+        _ui->drawFrameLine("Play/Stop  " VT_DIM "--  ARPEG + HOLD ON only" VT_RESET);
+        _ui->drawFrameLine(VT_DIM "Toggles arp transport. Restarts sequence from beginning on Play." VT_RESET);
+        _ui->drawFrameLine(VT_DIM "In HOLD OFF mode, this pad plays as a regular music pad." VT_RESET);
       } else {
-        Serial.printf(VT_DIM "%s" VT_RESET " ", POOL_ARP_LABELS[i]);
+        _ui->drawFrameLine("Octave range %d  " VT_DIM "--  ARPEG banks only" VT_RESET, index - 1);
+        _ui->drawFrameLine(VT_DIM "Sets arp octave span. 1 = original notes, 4 = 4 octaves." VT_RESET);
+        _ui->drawFrameLine(VT_DIM "48 pile positions x 4 octaves = up to 192 steps per cycle." VT_RESET);
       }
-    }
-    Serial.printf(VT_CL "\n");
+      break;
   }
 }
 
 // =================================================================
-// drawDescription — context-sensitive help for highlighted item
+// printPadDescription — info for a specific pad (in grid-nav mode)
 // =================================================================
 
-void ToolPadRoles::drawDescription() {
-  Serial.printf(VT_CL "\n");
+void ToolPadRoles::printPadDescription(uint8_t pad) {
+  PadRole role = getRoleForPad(pad);
+  if (role.line == 0) {
+    _ui->drawFrameLine(VT_BRIGHT_WHITE "Pad %d" VT_RESET VT_DIM "  --  no role assigned" VT_RESET, pad + 1);
+    _ui->drawFrameLine(VT_DIM "This pad is free. It will play music notes in all modes." VT_RESET);
+    _ui->drawFrameLine(VT_DIM "Press [RET] to assign a role from the pool." VT_RESET);
+  } else {
+    _ui->drawFrameLine(VT_BRIGHT_WHITE "Pad %d" VT_RESET, pad + 1);
+    printRoleDescription(role.line, role.index);
+  }
+}
 
+// =================================================================
+// drawInfoPanel — context-sensitive info (ALWAYS follows cursor)
+// =================================================================
+
+void ToolPadRoles::drawInfoPanel() {
   if (_confirmSteal) {
-    Serial.printf(VT_YELLOW "  Already assigned to pad %d. Replace? (y/n)" VT_RESET VT_CL "\n",
-                  _stealFromPad + 1);
+    _ui->drawFrameLine(VT_YELLOW "Already assigned to pad %d. Replace? (y/n)" VT_RESET,
+                       _stealFromPad + 1);
     return;
   }
 
   if (_confirmDefaults) {
-    Serial.printf(VT_YELLOW "  Reset all roles to defaults? (y/n)" VT_RESET VT_CL "\n");
+    _ui->drawFrameLine(VT_YELLOW "Reset all roles to factory defaults? (y/n)" VT_RESET);
+    return;
+  }
+
+  if (_confirmClearAll) {
+    _ui->drawFrameLine(VT_YELLOW "Clear ALL roles from all 48 pads? (y/n)" VT_RESET);
     return;
   }
 
   if (_editing) {
-    if (_poolLine == 0) {
-      Serial.printf(VT_DIM "  Remove role from this pad." VT_RESET VT_CL "\n");
-    } else {
-      const char* desc = "";
-      switch (_poolLine) {
-        case 1: desc = (_poolIdx < POOL_BANK_COUNT)  ? BANK_DESCS[_poolIdx]  : ""; break;
-        case 2: desc = (_poolIdx < POOL_SCALE_COUNT) ? SCALE_DESCS[_poolIdx] : ""; break;
-        case 3: desc = (_poolIdx < POOL_ARP_COUNT)   ? ARP_DESCS[_poolIdx]   : ""; break;
-      }
-      Serial.printf(VT_DIM "  %s" VT_RESET VT_CL "\n", desc);
-    }
+    // Pool mode: info follows pool cursor
+    printRoleDescription(_poolLine, _poolIdx);
   } else {
-    // Show current pad info
-    int pad = _gridRow * 12 + _gridCol;
-    PadRole role = getRoleForPad((uint8_t)pad);
-    if (role.line == 0) {
-      Serial.printf(VT_DIM "  Pad %d: no role assigned" VT_RESET VT_CL "\n", pad + 1);
-    } else {
-      const char* desc = "";
-      switch (role.line) {
-        case 1: desc = (role.index < POOL_BANK_COUNT)  ? BANK_DESCS[role.index]  : ""; break;
-        case 2: desc = (role.index < POOL_SCALE_COUNT) ? SCALE_DESCS[role.index] : ""; break;
-        case 3: desc = (role.index < POOL_ARP_COUNT)   ? ARP_DESCS[role.index]   : ""; break;
-      }
-      Serial.printf(VT_DIM "  Pad %d: %s" VT_RESET VT_CL "\n", pad + 1, desc);
-    }
+    // Grid mode: info follows grid cursor
+    uint8_t pad = _gridRow * 12 + _gridCol;
+    printPadDescription(pad);
   }
 }
 
 // =================================================================
-// drawHelpLine — bottom help text
+// drawControlBar
 // =================================================================
 
-void ToolPadRoles::drawHelpLine() {
-  Serial.printf(VT_CL "\n");
-
-  if (_confirmSteal || _confirmDefaults) {
-    // No extra help — prompt is in description area
+void ToolPadRoles::drawControlBar() {
+  if (_confirmSteal || _confirmDefaults || _confirmClearAll) {
+    _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
     return;
   }
 
   if (_editing) {
-    Serial.printf(VT_DIM "  [Up/Down] pool line  [Left/Right] cycle  [Enter] assign  [q] cancel" VT_RESET VT_CL "\n");
+    _ui->drawControlBar(VT_DIM "[^v] pool line  [<>] cycle  [RET] assign  [q] cancel" VT_RESET);
   } else {
-    Serial.printf(VT_DIM "  [Arrows] navigate  [Enter] edit  [Touch] jump  [d] defaults  [q] quit" VT_RESET VT_CL "\n");
+    _ui->drawControlBar(VT_DIM "[^v<>] NAV  [RET] EDIT  [TOUCH] JUMP  [d] DFLT  [r] CLEAR  [q] EXIT" VT_RESET);
   }
 }
 
 // =================================================================
-// drawScreen — full VT100 redraw
+// drawScreen — full NASA console redraw
 // =================================================================
 
 void ToolPadRoles::drawScreen() {
   _ui->vtFrameStart();
-  _ui->drawHeader("PAD ROLES", "Grid + Pool");
-  Serial.printf(VT_CL "\n");
+  _ui->drawConsoleHeader("TOOL 3: PAD ROLES", _nvsSaved);
 
+  _ui->drawFrameEmpty();
+
+  // Grid section
+  _ui->drawSection("GRID");
   drawGrid();
-  Serial.printf(VT_CL "\n");
-  drawPool();
-  drawDescription();
-  drawHelpLine();
+  _ui->drawFrameEmpty();
 
-  // Legend
-  Serial.printf(VT_CL "\n");
-  Serial.printf("  " VT_BLUE "Bank" VT_RESET "  "
-                VT_GREEN "Scale" VT_RESET "  "
-                VT_YELLOW "Arp" VT_RESET "  "
-                VT_DIM "-- none" VT_RESET VT_CL "\n");
+  // Pool section
+  _ui->drawSection("POOL -- " VT_BLUE "Bank" VT_RESET VT_BOLD " -- " VT_GREEN "Scale" VT_RESET VT_BOLD " -- " VT_YELLOW "Arp");
+  drawPool();
+  _ui->drawFrameEmpty();
+
+  // Info section
+  _ui->drawSection("INFO");
+  drawInfoPanel();
+  _ui->drawFrameEmpty();
+
+  // Control bar
+  drawControlBar();
 
   _ui->vtFrameEnd();
 }
@@ -590,6 +564,15 @@ void ToolPadRoles::run() {
   _wkPlayStopPad = *_playStopPad;
   if (_octavePads) memcpy(_wkOctavePads, _octavePads, 4);
 
+  // Check initial NVS status
+  {
+    Preferences prefs;
+    if (prefs.begin(BANKPAD_NVS_NAMESPACE, true)) {
+      _nvsSaved = (prefs.getBytesLength(BANKPAD_NVS_KEY) > 0);
+      prefs.end();
+    }
+  }
+
   // Reset navigation state
   _gridRow = 0;
   _gridCol = 0;
@@ -599,8 +582,8 @@ void ToolPadRoles::run() {
   _confirmSteal = false;
   _stealFromPad = 0xFF;
   _confirmDefaults = false;
+  _confirmClearAll = false;
 
-  // Capture baselines for touch detection
   captureBaselines(*_keyboard, _refBaselines);
 
   _ui->vtClear();
@@ -610,15 +593,15 @@ void ToolPadRoles::run() {
     _leds->update();
     _keyboard->pollAllSensorData();
 
+
     // --- Touch detection (jump to cell) ---
-    if (!_confirmSteal && !_confirmDefaults) {
+    if (!_confirmSteal && !_confirmDefaults && !_confirmClearAll) {
       int detected = detectActiveKey(*_keyboard, _refBaselines);
       if (detected >= 0) {
         uint8_t newRow = (uint8_t)(detected / 12);
         uint8_t newCol = (uint8_t)(detected % 12);
         if (newRow != _gridRow || newCol != _gridCol) {
           if (_editing) {
-            // Exit edit mode, discard, jump to new cell
             _editing = false;
           }
           _gridRow = newRow;
@@ -635,7 +618,7 @@ void ToolPadRoles::run() {
       if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
         resetToDefaults();
         if (saveAll()) {
-          _ui->showSaved();
+          _ui->flashSaved();
         }
         _confirmDefaults = false;
         screenDirty = true;
@@ -652,22 +635,42 @@ void ToolPadRoles::run() {
       continue;
     }
 
+    // --- Clear-all confirmation sub-mode ---
+    if (_confirmClearAll) {
+      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+        clearAllRoles();
+        if (saveAll()) {
+          _ui->flashSaved();
+        }
+        _confirmClearAll = false;
+        screenDirty = true;
+      } else if (ev.type != NAV_NONE) {
+        _confirmClearAll = false;
+        screenDirty = true;
+      }
+      if (screenDirty) {
+        buildRoleMap();
+        drawScreen();
+        screenDirty = false;
+      }
+      delay(5);
+      continue;
+    }
+
     // --- Steal confirmation sub-mode ---
     if (_confirmSteal) {
       if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
-        // Steal: clear the role from the other pad, assign to current
         clearRole(_stealFromPad);
         int pad = _gridRow * 12 + _gridCol;
-        clearRole((uint8_t)pad);  // clear current pad's old role if any
+        clearRole((uint8_t)pad);
         assignRole((uint8_t)pad, _poolLine, _poolIdx);
         if (saveAll()) {
-          _ui->showSaved();
+          _ui->flashSaved();
           _editing = false;
         }
         _confirmSteal = false;
         screenDirty = true;
       } else if (ev.type != NAV_NONE) {
-        // Cancel steal — stay in edit mode
         _confirmSteal = false;
         screenDirty = true;
       }
@@ -683,7 +686,6 @@ void ToolPadRoles::run() {
     // --- Main navigation ---
     if (ev.type == NAV_QUIT) {
       if (_editing) {
-        // Cancel editing
         _editing = false;
         screenDirty = true;
       } else {
@@ -694,6 +696,12 @@ void ToolPadRoles::run() {
 
     if (ev.type == NAV_DEFAULTS && !_editing) {
       _confirmDefaults = true;
+      screenDirty = true;
+    }
+
+    // [r] = Clear All
+    if (ev.type == NAV_CHAR && (ev.ch == 'r' || ev.ch == 'R') && !_editing) {
+      _confirmClearAll = true;
       screenDirty = true;
     }
 
@@ -726,13 +734,11 @@ void ToolPadRoles::run() {
         }
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
-        // Enter edit mode
         _editing = true;
         int pad = _gridRow * 12 + _gridCol;
         PadRole role = getRoleForPad((uint8_t)pad);
         _poolLine = role.line;
         _poolIdx = role.index;
-        // If none (line 0), start on line 0 idx 0
         screenDirty = true;
       }
     } else {
@@ -740,7 +746,6 @@ void ToolPadRoles::run() {
       if (ev.type == NAV_UP) {
         if (_poolLine == 0) _poolLine = 3;
         else _poolLine--;
-        // Clamp poolIdx to new line size
         uint8_t sz = poolLineSize(_poolLine);
         if (sz > 0 && _poolIdx >= sz) _poolIdx = sz - 1;
         screenDirty = true;
@@ -768,26 +773,22 @@ void ToolPadRoles::run() {
         int pad = _gridRow * 12 + _gridCol;
 
         if (_poolLine == 0) {
-          // Assign "none" — remove role
           clearRole((uint8_t)pad);
           if (saveAll()) {
-            _ui->showSaved();
+            _ui->flashSaved();
             _editing = false;
           }
           screenDirty = true;
         } else {
-          // Check if this role is already assigned to another pad
           uint8_t owner = findPadWithRole(_poolLine, _poolIdx);
           if (owner < NUM_KEYS && owner != (uint8_t)pad) {
-            // Enter steal confirmation
             _confirmSteal = true;
             _stealFromPad = owner;
           } else {
-            // Direct assign
-            clearRole((uint8_t)pad);  // remove old role first
+            clearRole((uint8_t)pad);
             assignRole((uint8_t)pad, _poolLine, _poolIdx);
             if (saveAll()) {
-              _ui->showSaved();
+              _ui->flashSaved();
               _editing = false;
             }
           }

@@ -14,6 +14,16 @@ static const char* s_bleNames[]       = {"Low Latency (7.5ms)", "Normal (15ms)",
 static const char* s_clockModeNames[] = {"Slave", "Master"};
 static const char* s_yesNoNames[]     = {"No", "Yes"};
 
+// Category boundaries (param index ranges)
+static const uint8_t CAT_PERF_START = 0;
+static const uint8_t CAT_PERF_END   = 2;   // 0,1
+static const uint8_t CAT_CONN_START = 2;
+static const uint8_t CAT_CONN_END   = 4;   // 2,3
+static const uint8_t CAT_TIME_START = 4;
+static const uint8_t CAT_TIME_END   = 6;   // 4,5
+static const uint8_t CAT_SAFE_START = 6;
+static const uint8_t CAT_SAFE_END   = 8;   // 6,7
+
 ToolSettings::ToolSettings()
   : _keyboard(nullptr), _leds(nullptr), _nvs(nullptr), _ui(nullptr) {}
 
@@ -25,14 +35,14 @@ void ToolSettings::begin(CapacitiveKeyboard* keyboard, LedController* leds, NvsM
 }
 
 // =================================================================
-// adjustParam — apply directional step with clamping/wrapping
+// adjustParam
 // =================================================================
 void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool accelerated) {
   switch (param) {
-    case 0: // Baseline Profile: cycle 0-2
+    case 0:
       wk.baselineProfile = (wk.baselineProfile + NUM_BASELINE_PROFILES + dir) % NUM_BASELINE_PROFILES;
       break;
-    case 1: { // Aftertouch Rate: step 5ms, range 10-100, accel x5
+    case 1: {
       int step = accelerated ? 25 : 5;
       int val = (int)wk.aftertouchRate + dir * step;
       if (val < AT_RATE_MIN) val = AT_RATE_MIN;
@@ -40,13 +50,13 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
       wk.aftertouchRate = (uint8_t)val;
       break;
     }
-    case 2: // BLE Interval: cycle 0-3
+    case 2:
       wk.bleInterval = (wk.bleInterval + NUM_BLE_INTERVALS + dir) % NUM_BLE_INTERVALS;
       break;
-    case 3: // Clock Mode: cycle 0-1
+    case 3:
       wk.clockMode = (wk.clockMode + NUM_CLOCK_MODES + dir) % NUM_CLOCK_MODES;
       break;
-    case 4: { // Double-Tap: step 10ms, range 100-250, accel x5
+    case 4: {
       int step = accelerated ? 50 : 10;
       int val = (int)wk.doubleTapMs + dir * step;
       if (val < DOUBLE_TAP_MS_MIN) val = DOUBLE_TAP_MS_MIN;
@@ -54,7 +64,7 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
       wk.doubleTapMs = (uint16_t)val;
       break;
     }
-    case 5: { // Bargraph Duration: step 500ms, range 1000-10000, accel x10
+    case 5: {
       int step = accelerated ? 5000 : 500;
       int val = (int)wk.potBarDurationMs + dir * step;
       if (val < (int)LED_BARGRAPH_DURATION_MIN) val = LED_BARGRAPH_DURATION_MIN;
@@ -62,16 +72,16 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
       wk.potBarDurationMs = (uint16_t)val;
       break;
     }
-    case 6: // Panic on Reconnect: cycle 0-1
+    case 6:
       wk.panicOnReconnect = wk.panicOnReconnect ? 0 : 1;
       break;
-    case 7: // Battery Calibration: no left/right adjustment
+    case 7:
       break;
   }
 }
 
 // =================================================================
-// saveSettings — write to NVS, apply live where possible
+// saveSettings
 // =================================================================
 bool ToolSettings::saveSettings(const SettingsStore& wk) {
   SettingsStore toSave = wk;
@@ -82,7 +92,6 @@ bool ToolSettings::saveSettings(const SettingsStore& wk) {
   prefs.putBytes(SETTINGS_NVS_KEY, &toSave, sizeof(SettingsStore));
   prefs.end();
 
-  // Apply baseline profile immediately if keyboard available
   if (_keyboard) {
     _keyboard->setBaselineProfile(toSave.baselineProfile);
   }
@@ -90,65 +99,76 @@ bool ToolSettings::saveSettings(const SettingsStore& wk) {
 }
 
 // =================================================================
-// drawDescription — show help text for the selected parameter
+// drawDescription — expanded per-parameter info
 // =================================================================
 void ToolSettings::drawDescription(uint8_t param) {
-  Serial.printf(VT_DIM "  ----------------------------------------" VT_RESET VT_CL "\n");
   switch (param) {
     case 0:
-      Serial.printf(VT_DIM "    Controls MPR121 baseline adaptation." VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Adaptive = balanced (default)." VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Expressive = slower recovery, more dynamic." VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Percussive = fast recovery, tight response." VT_RESET VT_CL "\n");
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Baseline Profile" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Controls MPR121 capacitive baseline tracking algorithm." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Adaptive: balanced drift compensation. Good for most uses (default)." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Expressive: slower recovery after release. Wider dynamic range for" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "  sustained pressure gestures. More susceptible to drift." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Percussive: fast recovery. Tight staccato response, minimal aftertouch." VT_RESET);
       break;
     case 1:
-      Serial.printf(VT_DIM "    Min interval between aftertouch messages" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    per pad (10-100ms). Lower = smoother but" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    more MIDI traffic. Default: 25ms (~40Hz)." VT_RESET VT_CL "\n");
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Aftertouch Rate" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Min interval between poly-aftertouch MIDI messages per pad." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Lower = smoother expression but higher MIDI bandwidth." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "At 25ms (default): ~40 AT msg/sec/pad. 10 fingers = ~400 msg/sec total." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "USB handles this easily. BLE may drop some at very low rates." VT_RESET);
       break;
     case 2:
-      Serial.printf(VT_DIM "    Low Latency: 7.5ms (best response, more battery)" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Normal: 15ms (Apple compatible, default)" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Battery Saver: 30ms (saves battery, higher latency)" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Off: BLE disabled, USB only (saves RAM, faster boot)" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Reboot required after change." VT_RESET VT_CL "\n");
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "BLE Interval" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Connection interval negotiated with host. Lower = less latency." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "7.5ms: best for live perf, ~2x battery. 15ms: Apple-compatible default." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "30ms: touring/battery mode. Off: BLE disabled, saves ~40KB RAM." VT_RESET);
+      _ui->drawFrameLine(VT_REVERSE VT_YELLOW " Reboot required after change " VT_RESET);
       break;
     case 3:
-      Serial.printf(VT_DIM "    Slave: sync to external clock (DAW)." VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Master: generate clock from pot tempo." VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Reboot required after change." VT_RESET VT_CL "\n");
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Clock Mode" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Slave: sync arp tempo to incoming MIDI clock (0xF8) from DAW." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "USB clock has priority over BLE. PLL smooths BLE jitter." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Master: generate clock from pot tempo (10-260 BPM), broadcast." VT_RESET);
+      _ui->drawFrameLine(VT_REVERSE VT_YELLOW " Reboot required after change " VT_RESET);
       break;
     case 4:
-      Serial.printf(VT_DIM "    Time window to detect double-tap on ARPEG" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    pads (HOLD mode). Lower = faster but harder" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    to trigger. Range: 100-250ms." VT_RESET VT_CL "\n");
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Double-Tap Window" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Time window for detecting double-tap on ARPEG pads in HOLD ON mode." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Double-tap removes a note from the arp pile." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Lower = faster double-tap but harder to trigger. Range: 100-250ms." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "If you miss double-taps, increase this value." VT_RESET);
       break;
     case 5:
-      Serial.printf(VT_DIM "    How long the pot bargraph stays visible" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    after last pot movement. Range: 1-10s." VT_RESET VT_CL "\n");
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Bargraph Duration" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "How long the LED pot bargraph stays visible after last pot movement." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Shows target value + physical pot position + catch state." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Longer = more time to read. Shorter = less visual interruption." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Range: 1.0-10.0 seconds. Default: 3.0s." VT_RESET);
       break;
     case 6:
-      Serial.printf(VT_DIM "    Yes: send CC123 (All Notes Off) on all" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    channels when BLE reconnects. Prevents" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    stuck notes after connection drop." VT_RESET VT_CL "\n");
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Panic on Reconnect" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "When BLE reconnects after a connection drop, send CC#123" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "(All Notes Off) on all 8 channels. Prevents stuck notes" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "that survive a BLE dropout. Recommended: Yes for live use." VT_RESET);
       break;
     case 7:
-      Serial.printf(VT_DIM "    Calibrate battery ADC at full charge." VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    Plug in charger, wait for full, press" VT_RESET VT_CL "\n");
-      Serial.printf(VT_DIM "    [Enter] to read and save the ADC value." VT_RESET VT_CL "\n");
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Battery Calibration" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Stores the ADC reading at 100%% charge (full LiPo, charger connected)." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Used to calculate accurate battery percentage display." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Calibrate once after hardware assembly. Plug charger, wait for" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "full charge LED, then press [RET] to sample current ADC value." VT_RESET);
       break;
   }
-  Serial.printf(VT_DIM "  ----------------------------------------" VT_RESET VT_CL "\n");
 }
 
 // =================================================================
-// run() — Unified arrow navigation with immediate save per param
+// run() — Settings with named category sections
 // =================================================================
 
 void ToolSettings::run() {
   if (!_ui) return;
 
-  // Load current settings from NVS (or use defaults)
   SettingsStore wk = {EEPROM_MAGIC, SETTINGS_VERSION,
                       DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
                       DEFAULT_CLOCK_MODE,
@@ -169,9 +189,9 @@ void ToolSettings::run() {
     }
   }
 
-  // Save original for reboot-required change detection
   SettingsStore original = wk;
   bool needsReboot = false;
+  bool nvsSaved = true;  // Assume saved on entry (loaded from NVS)
 
   InputParser input;
   uint8_t cursor = 0;
@@ -186,7 +206,7 @@ void ToolSettings::run() {
 
     NavEvent ev = input.update();
 
-    // --- Defaults confirmation sub-mode ---
+    // --- Defaults confirmation ---
     if (confirmDefaults) {
       if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
         wk = {EEPROM_MAGIC, SETTINGS_VERSION,
@@ -196,7 +216,8 @@ void ToolSettings::run() {
               DEFAULT_PANIC_ON_RECONNECT, DEFAULT_BAT_ADC_AT_FULL};
         if (saveSettings(wk)) {
           original = wk;
-          _ui->showSaved();
+          nvsSaved = true;
+          _ui->flashSaved();
         }
         confirmDefaults = false;
         screenDirty = true;
@@ -211,7 +232,6 @@ void ToolSettings::run() {
     // --- Main navigation ---
     if (ev.type == NAV_QUIT) {
       if (editing) {
-        // Cancel edit — revert working copy to last saved state
         wk = original;
         editing = false;
         screenDirty = true;
@@ -240,7 +260,6 @@ void ToolSettings::run() {
         screenDirty = true;
       }
     } else {
-      // Editing mode
       if (ev.type == NAV_LEFT) {
         adjustParam(wk, cursor, -1, ev.accelerated);
         screenDirty = true;
@@ -248,25 +267,18 @@ void ToolSettings::run() {
         adjustParam(wk, cursor, +1, ev.accelerated);
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
-        // Battery cal: read ADC now instead of adjusting
         if (cursor == 7) {
           wk.batAdcAtFull = (uint16_t)analogRead(BAT_ADC_PIN);
         }
-        // Save on confirm
         if (saveSettings(wk)) {
           editing = false;
-          _ui->showSaved();
-
+          nvsSaved = true;
+          _ui->flashSaved();
           if (wk.bleInterval != original.bleInterval ||
               wk.clockMode != original.clockMode) {
             needsReboot = true;
           }
           original = wk;
-          screenDirty = true;
-        } else {
-          // NVS write failed — stay in edit mode, show inline error
-          Serial.printf("\r\n" VT_RED "  NVS write failed!" VT_RESET);
-          delay(1500);
           screenDirty = true;
         }
       }
@@ -277,70 +289,96 @@ void ToolSettings::run() {
       screenDirty = false;
 
       _ui->vtFrameStart();
-      _ui->drawHeader("SETTINGS", "");
-      Serial.printf(VT_CL "\n");
+      _ui->drawConsoleHeader("TOOL 5: SETTINGS", nvsSaved);
+      _ui->drawFrameEmpty();
 
-      // Helper lambda for rendering a param line
+      // Helper for param line
       auto drawParam = [&](uint8_t idx, const char* label, const char* value) {
         bool selected = (cursor == idx);
         bool isEditing = selected && editing;
-        if (selected) {
-          if (isEditing) {
-            Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " %-24s" VT_CYAN "[%s]" VT_RESET VT_CL "\n", label, value);
-          } else {
-            Serial.printf("  " VT_CYAN VT_BOLD ">" VT_RESET " %-24s" VT_CYAN "%s" VT_RESET VT_CL "\n", label, value);
-          }
+        if (isEditing) {
+          _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET "%-26s" VT_CYAN "[%s]" VT_RESET, label, value);
+        } else if (selected) {
+          _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET "%-26s" VT_BRIGHT_WHITE "%s" VT_RESET, label, value);
         } else {
-          Serial.printf("    %-24s%s" VT_CL "\n", label, value);
+          _ui->drawFrameLine("  %-26s%s", label, value);
         }
       };
 
+      // --- PERFORMANCE ---
+      _ui->drawSection("PERFORMANCE");
       drawParam(0, "Baseline Profile:", s_profileNames[wk.baselineProfile]);
+      {
+        char atBuf[24];
+        snprintf(atBuf, sizeof(atBuf), "%d ms  (%d-%d)", wk.aftertouchRate, AT_RATE_MIN, AT_RATE_MAX);
+        drawParam(1, "Aftertouch Rate:", atBuf);
+      }
+      _ui->drawFrameEmpty();
 
-      char atBuf[24];
-      snprintf(atBuf, sizeof(atBuf), "%d ms  (%d-%d)", wk.aftertouchRate, AT_RATE_MIN, AT_RATE_MAX);
-      drawParam(1, "Aftertouch Rate:", atBuf);
-
+      // --- CONNECTIVITY ---
+      _ui->drawSection("CONNECTIVITY");
       drawParam(2, "BLE Interval:", s_bleNames[wk.bleInterval]);
       drawParam(3, "Clock Mode:", s_clockModeNames[wk.clockMode]);
+      _ui->drawFrameEmpty();
 
-      char dtBuf[24];
-      snprintf(dtBuf, sizeof(dtBuf), "%d ms  (%d-%d)", wk.doubleTapMs, DOUBLE_TAP_MS_MIN, DOUBLE_TAP_MS_MAX);
-      drawParam(4, "Double-Tap Window:", dtBuf);
-
-      char bgBuf[24];
-      snprintf(bgBuf, sizeof(bgBuf), "%.1f s  (%.1f-%.1f)",
-               wk.potBarDurationMs / 1000.0f,
-               LED_BARGRAPH_DURATION_MIN / 1000.0f,
-               LED_BARGRAPH_DURATION_MAX / 1000.0f);
-      drawParam(5, "Bargraph Duration:", bgBuf);
-      drawParam(6, "Panic on Reconnect:", s_yesNoNames[wk.panicOnReconnect ? 1 : 0]);
-
-      char batBuf[32];
-      if (wk.batAdcAtFull > 0) {
-        snprintf(batBuf, sizeof(batBuf), "Calibrated (%d)", wk.batAdcAtFull);
-      } else {
-        snprintf(batBuf, sizeof(batBuf), "Not calibrated");
+      // --- TIMING ---
+      _ui->drawSection("TIMING");
+      {
+        char dtBuf[24];
+        snprintf(dtBuf, sizeof(dtBuf), "%d ms  (%d-%d)", wk.doubleTapMs, DOUBLE_TAP_MS_MIN, DOUBLE_TAP_MS_MAX);
+        drawParam(4, "Double-Tap Window:", dtBuf);
       }
-      drawParam(7, "Battery Cal:", batBuf);
+      {
+        char bgBuf[24];
+        snprintf(bgBuf, sizeof(bgBuf), "%.1f s  (%.1f-%.1f)",
+                 wk.potBarDurationMs / 1000.0f,
+                 LED_BARGRAPH_DURATION_MIN / 1000.0f,
+                 LED_BARGRAPH_DURATION_MAX / 1000.0f);
+        drawParam(5, "Bargraph Duration:", bgBuf);
+      }
+      _ui->drawFrameEmpty();
 
-      Serial.printf(VT_CL "\n");
+      // --- SAFETY ---
+      _ui->drawSection("SAFETY");
+      drawParam(6, "Panic on Reconnect:", s_yesNoNames[wk.panicOnReconnect ? 1 : 0]);
+      {
+        char batBuf[32];
+        if (wk.batAdcAtFull > 0) {
+          snprintf(batBuf, sizeof(batBuf), "Calibrated (%d)", wk.batAdcAtFull);
+        } else {
+          snprintf(batBuf, sizeof(batBuf), "Not calibrated");
+        }
+        drawParam(7, "Battery Cal:", batBuf);
+      }
+      _ui->drawFrameEmpty();
 
-      // Description box
-      drawDescription(cursor);
-
-      Serial.printf(VT_CL "\n");
+      // --- INFO ---
+      _ui->drawSection("INFO");
 
       if (confirmDefaults) {
-        Serial.printf(VT_YELLOW "  Reset to defaults? (y/n)" VT_RESET VT_CL "\n");
-      } else if (editing) {
-        Serial.printf(VT_DIM "  [Left/Right] change value  [Enter] confirm & save" VT_RESET VT_CL "\n");
+        _ui->drawFrameLine(VT_YELLOW "Reset ALL settings to factory defaults? (y/n)" VT_RESET);
+        _ui->drawFrameEmpty();
+        _ui->drawFrameEmpty();
+        _ui->drawFrameEmpty();
+        _ui->drawFrameEmpty();
       } else {
-        Serial.printf(VT_DIM "  [Up/Down] navigate  [Enter] edit  [d] defaults  [q] quit" VT_RESET VT_CL "\n");
+        drawDescription(cursor);
       }
 
       if (needsReboot) {
-        Serial.printf(VT_YELLOW "  * Reboot required for BLE/Clock changes." VT_RESET VT_CL "\n");
+        _ui->drawFrameEmpty();
+        _ui->drawFrameLine(VT_REVERSE VT_YELLOW " * Reboot required for BLE/Clock changes * " VT_RESET);
+      }
+
+      _ui->drawFrameEmpty();
+
+      // Control bar
+      if (confirmDefaults) {
+        _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
+      } else if (editing) {
+        _ui->drawControlBar(VT_DIM "[</>] CHANGE VALUE  [RET] CONFIRM & SAVE  [q] CANCEL" VT_RESET);
+      } else {
+        _ui->drawControlBar(VT_DIM "[^v] NAV  [RET] EDIT  [d] DFLT  [q] EXIT" VT_RESET);
       }
 
       _ui->vtFrameEnd();
