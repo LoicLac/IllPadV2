@@ -57,8 +57,8 @@ One USB-C socket is exposed on the enclosure. A 6-wire cable connects it to the 
 | **Red** | VBUS (+5V) | Charger board **VU** pad | Brings USB power to the charger |
 | **Black** | GND | Charger board **G** pad (and the shared GND bus) | Common ground |
 | **White** | D− (data minus) | ESP32 **GPIO19** | USB data line |
-| **Green** | D+ (data plus) | ESP32 **GPIO20** | USB data line |
-| **Blue** | CC1 | 5.1kΩ resistor, then to **GND** | Tells the computer "a USB device is here" |
+| **blue** | D+ (data plus) | ESP32 **GPIO20** | USB data line |
+| **green** | CC1 | 5.1kΩ resistor, then to **GND** | Tells the computer "a USB device is here" |
 | **Yellow** | CC2 | 5.1kΩ resistor, then to **GND** | Same (needed for both orientations of USB-C plug) |
 
 The two 5.1kΩ resistors on CC1/CC2 are mandatory. Without them, the computer will not recognize the device.
@@ -111,7 +111,7 @@ Every GPIO pin used in this project, and what connects to it.
 | **17** | Output | LED 7 → 220Ω → GND | Bank 7 indicator |
 | **18** | Output | LED 8 → 220Ω → GND | Bank 8 indicator |
 | **19** | Bidirectional | USB D− (White wire) | Native USB — do not use for anything else |
-| **20** | Bidirectional | USB D+ (Green wire) | Native USB — do not use for anything else |
+| **20** | Bidirectional | USB D+ (BLUE wire) | Native USB — do not use for anything else |
 | **3** | Input (digital) | Rear button → GND | Active LOW, internal pull-up enabled |
 
 Power pins (not GPIO):
@@ -311,7 +311,7 @@ Charger BAT pad ──┤100kΩ├──┬──► ESP32 GPIO10
 Two 5.1kΩ resistors tell the USB host that a USB device is connected. They go between the CC wires from the USB-C passthrough and GND.
 
 ```
-Blue wire (CC1) ──┤5.1kΩ├──► GND
+green wire (CC1) ──┤5.1kΩ├──► GND
 Yellow wire (CC2) ──┤5.1kΩ├──► GND
 ```
 
@@ -355,7 +355,7 @@ The charger's 5V output supports up to 1A — well within budget.
         │  │ 5V OUT + ┼──────┼─────┼──┼──┼──┼─►│              │  │
         │  │ 5V OUT - ┼──────┼─ GND┘  │  │  │  │              │  │
         │  │          │      │     │  │  │  │  │ GPIO19 ◄─────┼──┼─ White (D-)
-        │  │ BAT ─────┼──►🔋│     │  │  │  │  │ GPIO20 ◄─────┼──┼─ Green (D+)
+        │  │ BAT ─────┼──►🔋│     │  │  │  │  │ GPIO20 ◄─────┼──┼─ blue (D+)
         │  │   │      │      │     │  │  │  │  │              │  │
         │  └───┼──────┘      │     │  │  │  │  │ GPIO8 (SDA) ─┼──┼─► MPR121 ×4
         │      │             │     │  │  │  │  │ GPIO9 (SCL) ─┼──┼─► MPR121 ×4
@@ -381,7 +381,7 @@ The charger's 5V output supports up to 1A — well within budget.
         │      │             │     │  │  │  │  │              │  │
         │      │             │     │  │  │  │  └──────────────┘  │
         │      │             │     │  │  │  │                    │
-        │    Blue ──┤5.1kΩ├──► GND │  │  │  │                    │
+        │    green ──┤5.1kΩ├──► GND │  │  │  │                    │
         │   Yellow ─┤5.1kΩ├──► GND │  │  │  │                    │
         │                          │  │  │  │                    │
         └──────────────────────────┼──┼──┼──┼────────────────────┘

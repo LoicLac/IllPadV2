@@ -199,7 +199,7 @@ private:
   uint8_t     _padSensitivity;
 
   // Output values — MIDI CC/PB (Phase 2)
-  static const uint8_t MAX_CC_SLOTS = 8;
+  static const uint8_t MAX_CC_SLOTS = 16;  // 8 NORMAL + 8 ARPEG slots can all be CC
   uint8_t  _ccNumber[MAX_CC_SLOTS];
   uint8_t  _ccValue[MAX_CC_SLOTS];
   bool     _ccDirty[MAX_CC_SLOTS];

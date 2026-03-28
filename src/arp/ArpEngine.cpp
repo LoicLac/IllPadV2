@@ -153,7 +153,7 @@ void ArpEngine::removePadPosition(uint8_t padOrderPos) {
     _positionOrder[_orderCount] = 0xFF;
   }
 
-  _sequenceDirty = true;
+  if (found) _sequenceDirty = true;
 
   #if DEBUG_SERIAL
   if (found) {
@@ -350,10 +350,10 @@ void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
   uint8_t midiNote = ScaleResolver::resolve(padIndex, _padOrder, _scale);
   if (midiNote == 0xFF) return;
 
-  // Apply octave transposition — fold down if out of range
+  // Apply octave transposition — fold down until in range
   uint8_t finalNote = midiNote + octOffset * 12;
-  if (finalNote > 127) finalNote -= 12;
-  if (finalNote > 127) return;  // Still out of range, skip this step
+  while (finalNote > 127) finalNote -= 12;
+  if (finalNote > 127) return;  // Safety: should not happen after fold
 
   // --- Calculate velocity with variation ---
   uint8_t vel = _baseVelocity;

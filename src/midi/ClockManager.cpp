@@ -121,11 +121,15 @@ void ClockManager::update() {
           #endif
         }
       }
-      // Clear stale timestamp of the timed-out source to prevent
-      // false "alive" detection after micros() wraps (~71.6 min)
+      // Clear only the timed-out source's timestamp to prevent
+      // false "alive" detection after micros() wraps (~71.6 min).
+      // Don't wipe the other source — a concurrent BLE callback may have
+      // just stored a fresh timestamp that we'd race against.
       if (!switchedToBle) {
-        _lastUsbTickUs.store(0, std::memory_order_relaxed);
-        _lastBleTickUs.store(0, std::memory_order_relaxed);
+        if (_activeSource == SRC_USB)
+          _lastUsbTickUs.store(0, std::memory_order_relaxed);
+        else
+          _lastBleTickUs.store(0, std::memory_order_relaxed);
         if (_lastKnownBPM > 0.0f) {
           _activeSource = SRC_LAST_KNOWN;
           _lastKnownEntryUs = nowUs;
@@ -205,6 +209,14 @@ void ClockManager::updatePLL(uint32_t intervalUs, uint8_t source) {
 
 void ClockManager::setMasterMode(bool master) {
   _masterMode = master;
+  if (master) {
+    // Drain any external ticks that arrived before master mode was set
+    _pendingUsbTicks.exchange(0, std::memory_order_relaxed);
+    _pendingBleTicks.exchange(0, std::memory_order_relaxed);
+    _activeSource = SRC_INTERNAL;
+    _prevTickUs = 0;
+    _tickIntervalCount = 0;
+  }
 }
 
 uint32_t ClockManager::getCurrentTick() const  { return _currentTick; }

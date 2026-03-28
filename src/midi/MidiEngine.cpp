@@ -97,6 +97,8 @@ void MidiEngine::allNotesOff() {
   // Drain aftertouch queue — stale events from old channel
   _atHead = 0;
   _atTail = 0;
+  // Reset AT rate limiter so first touch on new bank responds instantly
+  memset(_lastAftertouchMs, 0, sizeof(_lastAftertouchMs));
 }
 
 // =================================================================
@@ -140,8 +142,8 @@ void MidiEngine::flush() {
   while (_atTail != _atHead && count < FLUSH_BATCH) {
     const AftertouchEvent& evt = _atRing[_atTail];
     _atTail = (_atTail + 1) % AT_RING_SIZE;
-    // Skip stale events: pad was released (noteOff cleared _lastResolvedNote)
-    if (_lastResolvedNote[evt.pad] == 0xFF) continue;
+    // Skip stale events: pad released OR note changed (rapid re-press)
+    if (_lastResolvedNote[evt.pad] != evt.note) continue;
     _transport->sendPolyAftertouch(_channel, evt.note, evt.pressure);
     count++;
   }

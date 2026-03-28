@@ -565,6 +565,8 @@ void PotRouter::resetPerBankCatch() {
       _catch[i].caught = false;
     }
   }
+  // Clear stale PB dirty flag — prevents old bank's PB firing on new channel
+  _midiPbDirty = false;
 }
 
 // =================================================================

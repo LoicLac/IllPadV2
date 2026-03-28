@@ -143,7 +143,7 @@ private:
   //   - pile goes from 0 to 1 note
   //   - pattern change
   // Used as index into groove template: template[counter % 16]
-  uint8_t _shuffleStepCounter;   // Only used modulo 16, wraps at 255 (harmless)
+  uint16_t _shuffleStepCounter;  // Only used modulo 16, uint16_t avoids groove reset at 255
   bool    _tickFlash;            // Set true on each tick(), consumed by LedController
   bool    _waitingForQuantize;  // True after play until quantize boundary reached
   uint8_t _quantizeMode;        // ArpStartMode (0=immediate, 1=beat, 2=bar)

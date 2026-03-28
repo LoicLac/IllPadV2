@@ -251,7 +251,7 @@ def _read_keyboard_input(stdin_fd):
 
     Returns bytes, or None for exit keys (Ctrl-], Ctrl-C).
     """
-    ch = sys.stdin.buffer.read(1)
+    ch = os.read(stdin_fd, 1)
     if not ch:
         return None
 
@@ -270,7 +270,7 @@ def _read_keyboard_input(stdin_fd):
         r, _, _ = select.select([stdin_fd], [], [], 0.001)  # 1ms non-blocking
         if not r:
             break
-        b = sys.stdin.buffer.read(1)
+        b = os.read(stdin_fd, 1)
         if not b:
             break
         buf += b
