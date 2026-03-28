@@ -328,9 +328,7 @@ void SetupUI::printMainMenu() {
   drawFrameEmpty();
 
   // Control bar
-  drawFrameBottom();
-  drawFrameLine("Type 0-6");
-  drawFrameBottom();
+  drawControlBar("Type 0-6");
 
   vtFrameEnd();
 }
