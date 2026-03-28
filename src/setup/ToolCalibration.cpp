@@ -4,7 +4,9 @@
 #include "InputParser.h"
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
+#include "../core/KeyboardData.h"
 #include <Arduino.h>
+#include <Preferences.h>
 
 // =================================================================
 // Sensitivity Presets (exact V1 values)
@@ -45,13 +47,17 @@ static bool runStabilizationPhase(
 ) {
   // Run autoconfig
   ui.vtClear();
-  Serial.printf("  Sensitivity: %s (target: %u)" VT_CL "\n", sensitivityLabel, targetBaseline);
-  Serial.printf(VT_CL "\n");
-  Serial.printf("  Running MPR121 autoconfiguration..." VT_CL "\n");
+  ui.vtFrameStart();
+  char headerBuf[64];
+  snprintf(headerBuf, sizeof(headerBuf), "TOOL 1: %s  %s (%u)", title, sensitivityLabel, targetBaseline);
+  ui.drawConsoleHeader(headerBuf, true);
+  ui.drawFrameEmpty();
+  ui.drawFrameLine("Running MPR121 autoconfiguration...");
+  ui.drawFrameEmpty();
+  ui.drawFrameBottom();
+  ui.vtFrameEnd();
   keyboard.runAutoconfiguration(targetBaseline);
   delay(CAL_AUTOCONFIG_COUNTDOWN_MS);
-  Serial.printf("  Done." VT_CL "\n");
-  delay(500);
   ui.vtClear();
 
   // Stabilization loop — show live baseline grid
@@ -79,23 +85,22 @@ static bool runStabilizationPhase(
       }
 
       ui.vtFrameStart();
-      char info[40];
-      snprintf(info, sizeof(info), "Sensitivity: %s", sensitivityLabel);
-      ui.drawHeader(title, info);
-      Serial.printf(VT_CL "\n");
-      Serial.printf("  === BASELINE STABILIZATION === (target: %u)" VT_CL "\n", targetBaseline);
-      Serial.printf(VT_CL "\n");
+      snprintf(headerBuf, sizeof(headerBuf), "TOOL 1: %s  %s (%u)", title, sensitivityLabel, targetBaseline);
+      ui.drawConsoleHeader(headerBuf, true);
+      ui.drawFrameEmpty();
+      ui.drawSection("GRID");
 
       ui.drawGrid(GRID_BASELINE, targetBaseline, currentBaselines, nullptr, nullptr, -1, 0, false, nullptr);
 
-      Serial.printf(VT_CL "\n");
+      ui.drawFrameEmpty();
+      ui.drawSection("STATUS");
       if (stableCount == NUM_KEYS) {
-        Serial.printf("  Status: " VT_GREEN "%d/%d stable" VT_RESET VT_CL "\n", stableCount, NUM_KEYS);
+        ui.drawFrameLine("Stability: " VT_GREEN "%d/%d stable" VT_RESET, stableCount, NUM_KEYS);
       } else {
-        Serial.printf("  Status: " VT_YELLOW "Settling... %d/%d" VT_RESET VT_CL "\n", stableCount, NUM_KEYS);
+        ui.drawFrameLine("Stability: " VT_YELLOW "Settling... %d/%d" VT_RESET, stableCount, NUM_KEYS);
       }
-      Serial.printf(VT_CL "\n");
-      Serial.printf("  Press Enter to continue  [q] Abort" VT_CL "\n");
+      ui.drawFrameEmpty();
+      ui.drawControlBar(VT_DIM "[RET] CONTINUE  [q] ABORT" VT_RESET);
       ui.vtFrameEnd();
     }
 
@@ -117,6 +122,7 @@ static bool runStabilizationPhase(
 
 void ToolCalibration::run() {
   if (!_keyboard || !_leds || !_ui) return;
+  Serial.print(ITERM_RESIZE);
 
   // Top-level states (same as V1 STATE_TOOL1_*)
   enum CalState {
@@ -128,6 +134,16 @@ void ToolCalibration::run() {
   };
 
   CalState state = CAL_SENSITIVITY;
+
+  // Check NVS for existing calibration data
+  bool nvsSaved = false;
+  {
+    Preferences p;
+    if (p.begin(CAL_PREFERENCES_NAMESPACE, true)) {
+      nvsSaved = (p.getBytesLength(CAL_PREFERENCES_KEY) == sizeof(CalDataStore));
+      p.end();
+    }
+  }
 
   // Shared state
   uint16_t referenceBaselines[NUM_KEYS];
@@ -195,23 +211,25 @@ void ToolCalibration::run() {
         lastRefresh = millis();
         screenDirty = false;
         _ui->vtFrameStart();
-        Serial.printf(VT_BOLD "========================================================" VT_RESET VT_CL "\n");
-        Serial.printf(VT_BOLD "  ILLPAD48 -- PRESSURE CALIBRATION" VT_RESET VT_CL "\n");
-        Serial.printf(VT_BOLD "========================================================" VT_RESET VT_CL "\n");
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  Select sensitivity preset:" VT_CL "\n");
-        Serial.printf(VT_CL "\n");
+        _ui->drawConsoleHeader("TOOL 1: PRESSURE CALIBRATION", nvsSaved);
+        _ui->drawFrameEmpty();
+        _ui->drawSection("SENSITIVITY PRESETS");
+        _ui->drawFrameEmpty();
         for (int i = 0; i < NUM_SENSITIVITY_LEVELS; i++) {
           if (i == sensitivityIndex) {
-            Serial.printf(VT_REVERSE "   [%d] %-16s (target: %u)" VT_RESET VT_CL "\n",
-                          i + 1, sensitivityNames[i], sensitivityTargets[i]);
+            _ui->drawFrameLine(VT_REVERSE " [%d] %-16s (target: %u)" VT_RESET,
+                               i + 1, sensitivityNames[i], sensitivityTargets[i]);
           } else {
-            Serial.printf("   [%d] %-16s (target: %u)" VT_CL "\n",
-                          i + 1, sensitivityNames[i], sensitivityTargets[i]);
+            _ui->drawFrameLine(" [%d] %-16s (target: %u)",
+                               i + 1, sensitivityNames[i], sensitivityTargets[i]);
           }
         }
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  Type 1-3 to select, Enter to confirm  [q] Back" VT_CL "\n");
+        _ui->drawFrameEmpty();
+        _ui->drawSection("INFO");
+        _ui->drawFrameLine(VT_DIM "Select a sensitivity preset, then press Enter to start." VT_RESET);
+        _ui->drawFrameLine(VT_DIM "Higher sensitivity = more range but may clip on thick pads." VT_RESET);
+        _ui->drawFrameEmpty();
+        _ui->drawControlBar(VT_DIM "[1-3] SELECT  [RET] CONFIRM  [q] BACK" VT_RESET);
         _ui->vtFrameEnd();
       }
       break;
@@ -250,25 +268,24 @@ void ToolCalibration::run() {
         }
 
         _ui->vtFrameStart();
-        char info[32];
-        snprintf(info, sizeof(info), "Done: %d/%d", doneCount, NUM_KEYS);
-        _ui->drawHeader("CALIBRATION", info);
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  === PRESS EACH PAD WITH MAXIMUM FORCE ===" VT_CL "\n");
-        Serial.printf(VT_CL "\n");
+        char info[48];
+        snprintf(info, sizeof(info), "TOOL 1: CALIBRATION  %d/%d", doneCount, NUM_KEYS);
+        _ui->drawConsoleHeader(info, nvsSaved);
+        _ui->drawFrameEmpty();
+        _ui->drawSection("GRID");
 
         bool activeIsDone = (activeKey >= 0) && calibrated[activeKey];
         _ui->drawGrid(GRID_MEASUREMENT, 0, referenceBaselines, measuredDeltas, calibrated,
                  activeKey, currentMaxDelta, activeIsDone, nullptr);
 
-        Serial.printf(VT_CL "\n");
+        _ui->drawFrameEmpty();
 
         // Detail box
+        _ui->drawSection("INFO");
         if (detected == -2) {
-          Serial.printf("  +-- " VT_YELLOW "Multiple pads detected" VT_RESET " -----------------+" VT_CL "\n");
-          Serial.printf("  |  Lift off and touch ONE pad at a time       |" VT_CL "\n");
-          Serial.printf("  +---------------------------------------------+" VT_CL "\n");
-          Serial.printf(VT_CL "\n");
+          _ui->drawFrameLine(VT_YELLOW "Multiple pads detected!" VT_RESET);
+          _ui->drawFrameLine("Lift off and touch ONE pad at a time.");
+          _ui->drawFrameEmpty();
         }
         else if (activeKey >= 0) {
           int sensor = activeKey / CHANNELS_PER_SENSOR;
@@ -279,44 +296,40 @@ void ToolCalibration::run() {
           uint16_t delta = (bl > f) ? (bl - f) : 0;
 
           if (activeIsDone) {
-            Serial.printf("  +-- Key %d (%c:Ch%d) " VT_MAGENTA "ALREADY CALIBRATED" VT_RESET " -----+" VT_CL "\n",
-                          activeKey, sc, channel);
-            Serial.printf("  |  Previous: %-5u   Current delta: %-5u       |" VT_CL "\n",
-                          measuredDeltas[activeKey], delta);
-            Serial.printf("  |  [Enter] Overwrite   or touch another         |" VT_CL "\n");
-            Serial.printf("  +---------------------------------------------+" VT_CL "\n");
+            _ui->drawFrameLine(VT_CYAN "Key %d" VT_RESET " (%c:Ch%d)  " VT_MAGENTA "ALREADY CALIBRATED" VT_RESET,
+                               activeKey, sc, channel);
+            _ui->drawFrameLine("Previous: %-5u   Current delta: %-5u",
+                               measuredDeltas[activeKey], delta);
+            _ui->drawFrameLine(VT_DIM "[Enter] Overwrite   or touch another" VT_RESET);
           } else {
-            Serial.printf("  +-- Active: Key %d (Sensor %c, Channel %d) ------+" VT_CL "\n",
-                          activeKey, sc, channel);
-            Serial.printf("  |  Baseline: %-5u  Filtered: %-5u  Delta: %-5u|" VT_CL "\n",
-                          bl, f, delta);
+            _ui->drawFrameLine(VT_CYAN "Key %d" VT_RESET " (Sensor %c, Channel %d)",
+                               activeKey, sc, channel);
+            _ui->drawFrameLine("Baseline: %-5u  Filtered: %-5u  Delta: %-5u",
+                               bl, f, delta);
             if (currentMaxDelta > 0 && currentMaxDelta < CAL_PRESSURE_MIN_DELTA_TO_VALIDATE) {
-              Serial.printf("  |  Max delta: " VT_YELLOW "%-5u" VT_RESET "  (low -- press harder)      |" VT_CL "\n",
-                            currentMaxDelta);
+              _ui->drawFrameLine("Max delta: " VT_YELLOW "%-5u" VT_RESET "  (low -- press harder)",
+                                 currentMaxDelta);
             } else {
-              Serial.printf("  |  Max delta: %-5u                             |" VT_CL "\n",
-                            currentMaxDelta);
+              _ui->drawFrameLine("Max delta: %-5u", currentMaxDelta);
             }
-            Serial.printf("  +---------------------------------------------+" VT_CL "\n");
           }
         }
         else {
-          Serial.printf("  +-- Waiting... --------------------------------+" VT_CL "\n");
-          Serial.printf("  |  Press any uncalibrated pad with MAX force     |" VT_CL "\n");
-          Serial.printf("  +---------------------------------------------+" VT_CL "\n");
-          Serial.printf(VT_CL "\n");
+          _ui->drawFrameLine(VT_DIM "Press any uncalibrated pad with MAX force." VT_RESET);
+          _ui->drawFrameEmpty();
         }
 
-        Serial.printf(VT_CL "\n");
+        _ui->drawFrameEmpty();
+        _ui->drawSection("STATS");
         CalStats st = computeStats(measuredDeltas, calibrated);
         if (st.count > 0) {
-          Serial.printf("  Progress: %d/%d   Min: %u  Max: %u  Avg: %u" VT_CL "\n",
-                        st.count, NUM_KEYS, st.minVal, st.maxVal, st.avgVal);
+          _ui->drawFrameLine("Progress: %d/%d   Min: %u  Max: %u  Avg: %u",
+                             st.count, NUM_KEYS, st.minVal, st.maxVal, st.avgVal);
         } else {
-          Serial.printf("  Progress: 0/%d" VT_CL "\n", NUM_KEYS);
+          _ui->drawFrameLine("Progress: 0/%d", NUM_KEYS);
         }
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  [Enter] Validate   [s] Save   [q] Abort" VT_CL "\n");
+        _ui->drawFrameEmpty();
+        _ui->drawControlBar(VT_DIM "[RET] VALIDATE  [s] SAVE  [q] ABORT" VT_RESET);
         _ui->vtFrameEnd();
       }
 
@@ -372,32 +385,33 @@ void ToolCalibration::run() {
       if (screenDirty) {
         screenDirty = false;
         _ui->vtFrameStart();
-        _ui->drawHeader("CALIBRATION", "COMPLETE");
-        Serial.printf(VT_CL "\n");
-        Serial.printf("  === FINAL RESULTS ===   Sensitivity: %s (%u)" VT_CL "\n",
-                      sensitivityNames[sensitivityIndex], sensitivityTargets[sensitivityIndex]);
-        Serial.printf(VT_CL "\n");
+        _ui->drawConsoleHeader("TOOL 1: CALIBRATION COMPLETE", nvsSaved);
+        _ui->drawFrameEmpty();
+        _ui->drawSection("GRID");
 
         _ui->drawGrid(GRID_MEASUREMENT, 0, referenceBaselines, measuredDeltas, calibrated, -1, 0, false, nullptr);
 
-        Serial.printf(VT_CL "\n");
+        _ui->drawFrameEmpty();
+        _ui->drawSection("STATS");
+        _ui->drawFrameLine("Sensitivity: %s (%u)",
+                           sensitivityNames[sensitivityIndex], sensitivityTargets[sensitivityIndex]);
         CalStats st = computeStats(measuredDeltas, calibrated);
         if (st.count > 0) {
-          Serial.printf("  Min: %u   Max: %u   Avg: %u   ", st.minVal, st.maxVal, st.avgVal);
           if (st.warnings > 0) {
-            Serial.printf(VT_RED "Warnings: %d keys below %u" VT_RESET, st.warnings, CAL_PRESSURE_MIN_DELTA_TO_VALIDATE);
+            _ui->drawFrameLine("Min: %u   Max: %u   Avg: %u   " VT_RED "Warnings: %d keys below %u" VT_RESET,
+                               st.minVal, st.maxVal, st.avgVal, st.warnings, CAL_PRESSURE_MIN_DELTA_TO_VALIDATE);
           } else {
-            Serial.printf(VT_GREEN "All keys OK" VT_RESET);
+            _ui->drawFrameLine("Min: %u   Max: %u   Avg: %u   " VT_GREEN "All keys OK" VT_RESET,
+                               st.minVal, st.maxVal, st.avgVal);
           }
-          Serial.printf(VT_CL "\n");
         } else {
-          Serial.printf(VT_RED "  No keys calibrated." VT_RESET VT_CL "\n");
+          _ui->drawFrameLine(VT_RED "No keys calibrated." VT_RESET);
         }
-        Serial.printf(VT_CL "\n");
+        _ui->drawFrameEmpty();
         if (st.count > 0) {
-          Serial.printf("  [Enter] Save   [r] Redo all   [q] Back to menu" VT_CL "\n");
+          _ui->drawControlBar(VT_DIM "[RET] SAVE  [r] REDO ALL  [q] BACK" VT_RESET);
         } else {
-          Serial.printf("  [r] Redo all   [q] Back to menu" VT_CL "\n");
+          _ui->drawControlBar(VT_DIM "[r] REDO ALL  [q] BACK" VT_RESET);
         }
         _ui->vtFrameEnd();
       }
@@ -429,12 +443,26 @@ void ToolCalibration::run() {
     // =============================================================
     case CAL_SAVE: {
       _ui->vtClear();
-      Serial.printf(VT_BOLD "  Saving calibration data..." VT_RESET "\n");
+      _ui->vtFrameStart();
+      _ui->drawConsoleHeader("TOOL 1: SAVING", true);
+      _ui->drawFrameEmpty();
+      _ui->drawFrameLine(VT_BOLD "Saving calibration data..." VT_RESET);
+      _ui->drawFrameEmpty();
+      _ui->drawFrameBottom();
+      _ui->vtFrameEnd();
       _keyboard->calculateAdaptiveThresholds();
       _keyboard->saveCalibrationData();
       _leds->playValidation();
-      Serial.printf(VT_GREEN "  Calibration saved successfully." VT_RESET "\n");
-      Serial.printf("  Returning to menu...\n");
+      nvsSaved = true;
+      _ui->vtClear();
+      _ui->vtFrameStart();
+      _ui->drawConsoleHeader("TOOL 1: SAVING", true);
+      _ui->drawFrameEmpty();
+      _ui->drawFrameLine(VT_GREEN "Calibration saved successfully." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Returning to menu..." VT_RESET);
+      _ui->drawFrameEmpty();
+      _ui->drawFrameBottom();
+      _ui->vtFrameEnd();
       delay(800);
       _ui->vtClear();
       state = CAL_DONE;
