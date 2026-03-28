@@ -52,7 +52,11 @@ void SetupManager::run() {
   delay(200);
 
   _ui.vtClear();          // sends ESC[H — Python script boot sync triggers on this
-  _ui.initTerminal();     // iTerm2 sequences AFTER home cursor (so Python passes them through)
+  Serial.flush();         // ensure vtClear reaches Python before iTerm2 sequences
+  delay(100);             // let Python script complete boot sync and enter main loop
+  _ui.initTerminal();     // iTerm2 sequences: palette, badge, title, resize
+  Serial.flush();
+  delay(50);              // let iTerm2 process the sequences before first frame
   bool screenDirty = true;
   unsigned long lastRefresh = 0;
 
