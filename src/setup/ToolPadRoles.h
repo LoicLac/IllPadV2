@@ -14,15 +14,18 @@ class SetupUI;
 enum PadRoleCode : uint8_t {
   ROLE_NONE      = 0,
   ROLE_BANK      = 1,
-  ROLE_SCALE     = 2,
-  ROLE_ARP       = 3,
+  ROLE_ROOT      = 2,
+  ROLE_MODE      = 3,
+  ROLE_OCTAVE    = 4,
+  ROLE_HOLD      = 5,
+  ROLE_PLAYSTOP  = 6,
   ROLE_COLLISION = 0xFF
 };
 
 // Unified role identifier (pool item)
 struct PadRole {
-  uint8_t line;   // 0=none, 1=bank, 2=scale, 3=arp
-  uint8_t index;  // index within that line (bank 0-7, scale 0-14, arp 0-5)
+  uint8_t line;   // 0=none, 1=bank, 2=root, 3=mode, 4=octave, 5=hold, 6=play/stop
+  uint8_t index;  // index within that line
 };
 
 class ToolPadRoles {
@@ -69,11 +72,13 @@ private:
   uint8_t _gridRow;       // 0-3 (4 rows of 12)
   uint8_t _gridCol;       // 0-11
   bool    _editing;       // true = pool navigation mode
-  uint8_t _poolLine;      // 0=none, 1=bank, 2=scale, 3=arp
+  uint8_t _poolLine;      // 0=clear, 1=bank, 2=root, 3=mode, 4=octave, 5=hold, 6=play/stop
   uint8_t _poolIdx;       // index within current pool line
   bool    _confirmSteal;  // true = waiting for y/n steal confirmation
   uint8_t _stealFromPad;  // pad that currently owns the role being stolen
-  bool    _confirmDefaults; // true = waiting for y/n defaults confirmation
+  bool    _confirmDefaults;  // true = waiting for y/n defaults confirmation
+  bool    _confirmClearAll;  // true = waiting for y/n clear-all confirmation
+  bool    _nvsSaved;         // NVS status for header badge
 
   // Touch detection baselines
   uint16_t _refBaselines[NUM_KEYS];
@@ -84,13 +89,18 @@ private:
   uint8_t findPadWithRole(uint8_t line, uint8_t index) const;
   void    assignRole(uint8_t pad, uint8_t line, uint8_t index);
   void    clearRole(uint8_t pad);
+  void    clearAllRoles();
   void    resetToDefaults();
   bool    saveAll();
 
   // Pool line sizes
-  static const uint8_t POOL_BANK_COUNT  = 8;
-  static const uint8_t POOL_SCALE_COUNT = 15;
-  static const uint8_t POOL_ARP_COUNT   = 6;
+  static const uint8_t POOL_BANK_COUNT     = 8;
+  static const uint8_t POOL_ROOT_COUNT     = 7;
+  static const uint8_t POOL_MODE_COUNT     = 8;   // 7 modes + chromatic
+  static const uint8_t POOL_OCTAVE_COUNT   = 4;
+  static const uint8_t POOL_HOLD_COUNT     = 1;
+  static const uint8_t POOL_PLAYSTOP_COUNT = 1;
+  static const uint8_t POOL_LINE_COUNT     = 7;   // 0=clear, 1-6=categories
 
   uint8_t poolLineSize(uint8_t line) const;
 
@@ -98,12 +108,13 @@ private:
   void drawScreen();
   void drawGrid();
   void drawPool();
-  void drawDescription();
-  void drawHelpLine();
+  void drawInfoPanel();
+  void drawControlBar();
 
-  // Pool label helpers
+  // Description helpers
   const char* poolItemLabel(uint8_t line, uint8_t index) const;
-  const char* poolItemColor(uint8_t line) const;
+  void printRoleDescription(uint8_t line, uint8_t index);
+  void printPadDescription(uint8_t pad);
 };
 
 #endif // TOOL_PAD_ROLES_H

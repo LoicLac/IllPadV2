@@ -17,27 +17,41 @@ static const char* GRID_BANK_LABELS[] = {
   " Bk1", " Bk2", " Bk3", " Bk4", " Bk5", " Bk6", " Bk7", " Bk8"
 };
 
-static const char* GRID_SCALE_LABELS[] = {
-  " RtA", " RtB", " RtC", " RtD", " RtE", " RtF", " RtG",
+// Grid labels now split: root, mode, octave, hold, play/stop
+static const char* GRID_ROOT_LABELS[] = {
+  " RtA", " RtB", " RtC", " RtD", " RtE", " RtF", " RtG"
+};
+
+static const char* GRID_MODE_LABELS[] = {
   "MdIo", "MdDo", "MdPh", "MdLy", "MdMx", "MdAe", "MdLo", " Chr"
 };
 
-static const char* GRID_ARP_LABELS[] = {
-  " Hld", " P/S", " Oc1", " Oc2", " Oc3", " Oc4"
+static const char* GRID_OCTAVE_LABELS[] = {
+  " Oc1", " Oc2", " Oc3", " Oc4"
 };
 
+static const char* GRID_HOLD_LABELS[] = { " Hld" };
+static const char* GRID_PLAYSTOP_LABELS[] = { " P/S" };
+
+// Pool display labels (no leading space)
 static const char* POOL_BANK_LABELS[] = {
   "Bk1", "Bk2", "Bk3", "Bk4", "Bk5", "Bk6", "Bk7", "Bk8"
 };
 
-static const char* POOL_SCALE_LABELS[] = {
-  "RtA", "RtB", "RtC", "RtD", "RtE", "RtF", "RtG",
-  "MdIo", "MdDo", "MdPh", "MdLy", "MdMx", "MdAe", "MdLo", "Chr"
+static const char* POOL_ROOT_LABELS[] = {
+  "A", "B", "C", "D", "E", "F", "G"
 };
 
-static const char* POOL_ARP_LABELS[] = {
-  "Hld", "P/S", "Oc1", "Oc2", "Oc3", "Oc4"
+static const char* POOL_MODE_LABELS[] = {
+  "Ion", "Dor", "Phr", "Lyd", "Mix", "Aeo", "Loc", "Chr"
 };
+
+static const char* POOL_OCTAVE_LABELS[] = {
+  "1", "2", "3", "4"
+};
+
+static const char* POOL_HOLD_LABELS[] = { "Hld" };
+static const char* POOL_PLAYSTOP_LABELS[] = { "P/S" };
 
 // =================================================================
 // Constructor
@@ -86,18 +100,24 @@ void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
 uint8_t ToolPadRoles::poolLineSize(uint8_t line) const {
   switch (line) {
     case 1: return POOL_BANK_COUNT;
-    case 2: return POOL_SCALE_COUNT;
-    case 3: return POOL_ARP_COUNT;
+    case 2: return POOL_ROOT_COUNT;
+    case 3: return POOL_MODE_COUNT;
+    case 4: return POOL_OCTAVE_COUNT;
+    case 5: return POOL_HOLD_COUNT;
+    case 6: return POOL_PLAYSTOP_COUNT;
     default: return 0;
   }
 }
 
 const char* ToolPadRoles::poolItemLabel(uint8_t line, uint8_t index) const {
   switch (line) {
-    case 1: return (index < POOL_BANK_COUNT)  ? POOL_BANK_LABELS[index]  : "???";
-    case 2: return (index < POOL_SCALE_COUNT) ? POOL_SCALE_LABELS[index] : "???";
-    case 3: return (index < POOL_ARP_COUNT)   ? POOL_ARP_LABELS[index]   : "???";
-    default: return "none";
+    case 1: return (index < POOL_BANK_COUNT)     ? POOL_BANK_LABELS[index]     : "???";
+    case 2: return (index < POOL_ROOT_COUNT)     ? POOL_ROOT_LABELS[index]     : "???";
+    case 3: return (index < POOL_MODE_COUNT)     ? POOL_MODE_LABELS[index]     : "???";
+    case 4: return (index < POOL_OCTAVE_COUNT)   ? POOL_OCTAVE_LABELS[index]   : "???";
+    case 5: return (index < POOL_HOLD_COUNT)     ? POOL_HOLD_LABELS[index]     : "???";
+    case 6: return (index < POOL_PLAYSTOP_COUNT) ? POOL_PLAYSTOP_LABELS[index] : "???";
+    default: return "---";
   }
 }
 
@@ -125,14 +145,14 @@ void ToolPadRoles::buildRoleMap() {
   for (int i = 0; i < NUM_BANKS; i++)
     setRole(_wkBankPads[i], ROLE_BANK, GRID_BANK_LABELS[i]);
   for (int i = 0; i < 7; i++)
-    setRole(_wkRootPads[i], ROLE_SCALE, GRID_SCALE_LABELS[i]);
+    setRole(_wkRootPads[i], ROLE_ROOT, GRID_ROOT_LABELS[i]);
   for (int i = 0; i < 7; i++)
-    setRole(_wkModePads[i], ROLE_SCALE, GRID_SCALE_LABELS[7 + i]);
-  setRole(_wkChromPad, ROLE_SCALE, GRID_SCALE_LABELS[14]);
-  setRole(_wkHoldPad, ROLE_ARP, GRID_ARP_LABELS[0]);
-  setRole(_wkPlayStopPad, ROLE_ARP, GRID_ARP_LABELS[1]);
+    setRole(_wkModePads[i], ROLE_MODE, GRID_MODE_LABELS[i]);
+  setRole(_wkChromPad, ROLE_MODE, GRID_MODE_LABELS[7]);  // Chr is last mode label
+  setRole(_wkHoldPad, ROLE_HOLD, GRID_HOLD_LABELS[0]);
+  setRole(_wkPlayStopPad, ROLE_PLAYSTOP, GRID_PLAYSTOP_LABELS[0]);
   for (int i = 0; i < 4; i++)
-    setRole(_wkOctavePads[i], ROLE_ARP, GRID_ARP_LABELS[2 + i]);
+    setRole(_wkOctavePads[i], ROLE_OCTAVE, GRID_OCTAVE_LABELS[i]);
 }
 
 // =================================================================
@@ -148,14 +168,14 @@ PadRole ToolPadRoles::getRoleForPad(uint8_t pad) const {
     if (_wkRootPads[i] == pad) return {2, i};
   }
   for (uint8_t i = 0; i < 7; i++) {
-    if (_wkModePads[i] == pad) return {2, (uint8_t)(7 + i)};
+    if (_wkModePads[i] == pad) return {3, i};
   }
-  if (_wkChromPad == pad) return {2, 14};
-  if (_wkHoldPad == pad) return {3, 0};
-  if (_wkPlayStopPad == pad) return {3, 1};
+  if (_wkChromPad == pad) return {3, 7};
   for (uint8_t i = 0; i < 4; i++) {
-    if (_wkOctavePads[i] == pad) return {3, (uint8_t)(2 + i)};
+    if (_wkOctavePads[i] == pad) return {4, i};
   }
+  if (_wkHoldPad == pad) return {5, 0};
+  if (_wkPlayStopPad == pad) return {6, 0};
   return {0, 0};
 }
 
@@ -166,13 +186,19 @@ uint8_t ToolPadRoles::findPadWithRole(uint8_t line, uint8_t index) const {
       break;
     case 2:
       if (index < 7) return _wkRootPads[index];
-      if (index < 14) return _wkModePads[index - 7];
-      if (index == 14) return _wkChromPad;
       break;
     case 3:
+      if (index < 7) return _wkModePads[index];
+      if (index == 7) return _wkChromPad;
+      break;
+    case 4:
+      if (index < 4) return _wkOctavePads[index];
+      break;
+    case 5:
       if (index == 0) return _wkHoldPad;
-      if (index == 1) return _wkPlayStopPad;
-      if (index >= 2 && index <= 5) return _wkOctavePads[index - 2];
+      break;
+    case 6:
+      if (index == 0) return _wkPlayStopPad;
       break;
   }
   return 0xFF;
@@ -185,13 +211,19 @@ void ToolPadRoles::assignRole(uint8_t pad, uint8_t line, uint8_t index) {
       break;
     case 2:
       if (index < 7) _wkRootPads[index] = pad;
-      else if (index < 14) _wkModePads[index - 7] = pad;
-      else if (index == 14) _wkChromPad = pad;
       break;
     case 3:
+      if (index < 7) _wkModePads[index] = pad;
+      else if (index == 7) _wkChromPad = pad;
+      break;
+    case 4:
+      if (index < 4) _wkOctavePads[index] = pad;
+      break;
+    case 5:
       if (index == 0) _wkHoldPad = pad;
-      else if (index == 1) _wkPlayStopPad = pad;
-      else if (index >= 2 && index <= 5) _wkOctavePads[index - 2] = pad;
+      break;
+    case 6:
+      if (index == 0) _wkPlayStopPad = pad;
       break;
   }
 }
@@ -304,16 +336,7 @@ void ToolPadRoles::drawGrid() {
 void ToolPadRoles::drawPool() {
   int selectedPad = _gridRow * 12 + _gridCol;
 
-  // "none" line (poolLine 0)
-  {
-    bool isSelectedLine = _editing && (_poolLine == 0);
-    if (isSelectedLine) {
-      _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET VT_REVERSE " none " VT_RESET);
-    } else {
-      _ui->drawFrameLine("  " VT_DIM "none" VT_RESET);
-    }
-  }
-
+  // Helper to draw one pool category line
   auto drawPoolLine = [&](uint8_t lineNum, const char* label,
                           const char* const* labels, uint8_t count,
                           const char* lineColor) {
@@ -322,9 +345,9 @@ void ToolPadRoles::drawPool() {
     int pos = 0;
 
     if (isSelectedLine) {
-      pos += snprintf(buf + pos, sizeof(buf) - pos, VT_CYAN VT_BOLD "> " VT_RESET VT_DIM "%-6s" VT_RESET " ", label);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, VT_CYAN VT_BOLD "> " VT_RESET "%-11s ", label);
     } else {
-      pos += snprintf(buf + pos, sizeof(buf) - pos, "  " VT_DIM "%-6s" VT_RESET " ", label);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "  %-11s ", label);
     }
 
     for (uint8_t i = 0; i < count; i++) {
@@ -352,9 +375,23 @@ void ToolPadRoles::drawPool() {
     _ui->drawFrameLine("%s", buf);
   };
 
-  drawPoolLine(1, "Bank:", POOL_BANK_LABELS, POOL_BANK_COUNT, VT_BLUE);
-  drawPoolLine(2, "Scale:", POOL_SCALE_LABELS, POOL_SCALE_COUNT, VT_GREEN);
-  drawPoolLine(3, "Arp:", POOL_ARP_LABELS, POOL_ARP_COUNT, VT_YELLOW);
+  // 6 category lines with distinct colors
+  drawPoolLine(1, "Bank:",      POOL_BANK_LABELS,     POOL_BANK_COUNT,     VT_BLUE);
+  drawPoolLine(2, "Root:",      POOL_ROOT_LABELS,     POOL_ROOT_COUNT,     VT_GREEN);
+  drawPoolLine(3, "Mode:",      POOL_MODE_LABELS,     POOL_MODE_COUNT,     VT_CYAN);
+  drawPoolLine(4, "Octave:",    POOL_OCTAVE_LABELS,   POOL_OCTAVE_COUNT,   VT_YELLOW);
+  drawPoolLine(5, "Hold:",      POOL_HOLD_LABELS,     POOL_HOLD_COUNT,     VT_MAGENTA);
+  drawPoolLine(6, "Play/Stop:", POOL_PLAYSTOP_LABELS, POOL_PLAYSTOP_COUNT, VT_BRIGHT_RED);
+
+  // Clear action at the bottom
+  {
+    bool isSelectedLine = _editing && (_poolLine == 0);
+    if (isSelectedLine) {
+      _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET VT_DIM "[---] clear role" VT_RESET);
+    } else {
+      _ui->drawFrameLine("  " VT_DIM "[---] clear role" VT_RESET);
+    }
+  }
 }
 
 // =================================================================
@@ -367,46 +404,47 @@ void ToolPadRoles::printRoleDescription(uint8_t line, uint8_t index) {
       _ui->drawFrameLine(VT_DIM "Remove role from this pad. It will play music notes in all modes." VT_RESET);
       break;
     case 1:  // Bank
-      _ui->drawFrameLine("Bank %d selector  " VT_DIM "--  MIDI channel %d" VT_RESET, index + 1, index + 1);
+      _ui->drawFrameLine(VT_BLUE "Bank %d selector" VT_RESET "  " VT_DIM "--  MIDI channel %d" VT_RESET, index + 1, index + 1);
       _ui->drawFrameLine(VT_DIM "Hold LEFT + press this pad to switch foreground bank." VT_RESET);
       _ui->drawFrameLine(VT_DIM "AllNotesOff sent on previous bank. Arp banks continue in background." VT_RESET);
       break;
-    case 2:  // Scale
+    case 2: {  // Root
+      static const char* noteNames[] = {"A", "B", "C", "D", "E", "F", "G"};
+      _ui->drawFrameLine(VT_GREEN "Root note: %s" VT_RESET "  " VT_DIM "--  sets base pitch for scale resolution" VT_RESET, noteNames[index]);
+      _ui->drawFrameLine(VT_DIM "Hold LEFT + press to change root. Applies to current bank's scale." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "In chromatic mode, root = lowest note. In scale mode, root = tonic." VT_RESET);
+      break;
+    }
+    case 3:  // Mode
       if (index < 7) {
-        static const char* noteNames[] = {"A", "B", "C", "D", "E", "F", "G"};
-        _ui->drawFrameLine("Root note: %s  " VT_DIM "--  sets base pitch for scale resolution" VT_RESET, noteNames[index]);
-        _ui->drawFrameLine(VT_DIM "Hold LEFT + press to change root. Applies to current bank's scale." VT_RESET);
-        _ui->drawFrameLine(VT_DIM "In chromatic mode, root = lowest note. In scale mode, root = tonic." VT_RESET);
-      } else if (index < 14) {
         static const char* modeNames[] = {"Ionian (Major)", "Dorian", "Phrygian", "Lydian",
                                            "Mixolydian", "Aeolian (Minor)", "Locrian"};
         static const char* modeIntervals[] = {"1 2 3 4 5 6 7", "1 2 b3 4 5 6 b7", "1 b2 b3 4 5 b6 b7",
                                                "1 2 3 #4 5 6 7", "1 2 3 4 5 6 b7", "1 2 b3 4 5 b6 b7",
                                                "1 b2 b3 4 b5 b6 b7"};
-        uint8_t mi = index - 7;
-        _ui->drawFrameLine("Mode: %s  " VT_DIM "--  intervals: %s" VT_RESET, modeNames[mi], modeIntervals[mi]);
+        _ui->drawFrameLine(VT_CYAN "Mode: %s" VT_RESET "  " VT_DIM "--  intervals: %s" VT_RESET, modeNames[index], modeIntervals[index]);
         _ui->drawFrameLine(VT_DIM "Hold LEFT + press to set mode. 7 pads mapped to padOrder positions." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Scale change on NORMAL bank: allNotesOff. On ARPEG: re-resolves at next tick." VT_RESET);
       } else {
-        _ui->drawFrameLine("Chromatic toggle  " VT_DIM "--  switches between chromatic and scale mode" VT_RESET);
+        _ui->drawFrameLine(VT_CYAN "Chromatic toggle" VT_RESET "  " VT_DIM "--  switches between chromatic and scale mode" VT_RESET);
         _ui->drawFrameLine(VT_DIM "Chromatic = all semitones from root. Scale = filtered through mode intervals." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Hold LEFT + press to toggle. Per-bank setting, saved to NVS." VT_RESET);
       }
       break;
-    case 3:  // Arp
-      if (index == 0) {
-        _ui->drawFrameLine("HOLD toggle  " VT_DIM "--  ARPEG banks only" VT_RESET);
-        _ui->drawFrameLine(VT_DIM "HOLD OFF: press=add to pile, release=remove. Arp stops when all fingers up." VT_RESET);
-        _ui->drawFrameLine(VT_DIM "HOLD ON: press=add, double-tap=remove. Pile persists. Use Play/Stop for transport." VT_RESET);
-      } else if (index == 1) {
-        _ui->drawFrameLine("Play/Stop  " VT_DIM "--  ARPEG + HOLD ON only" VT_RESET);
-        _ui->drawFrameLine(VT_DIM "Toggles arp transport. Restarts sequence from beginning on Play." VT_RESET);
-        _ui->drawFrameLine(VT_DIM "In HOLD OFF mode, this pad plays as a regular music pad." VT_RESET);
-      } else {
-        _ui->drawFrameLine("Octave range %d  " VT_DIM "--  ARPEG banks only" VT_RESET, index - 1);
-        _ui->drawFrameLine(VT_DIM "Sets arp octave span. 1 = original notes, 4 = 4 octaves." VT_RESET);
-        _ui->drawFrameLine(VT_DIM "48 pile positions x 4 octaves = up to 192 steps per cycle." VT_RESET);
-      }
+    case 4:  // Octave
+      _ui->drawFrameLine(VT_YELLOW "Octave range %d" VT_RESET "  " VT_DIM "--  ARPEG banks only" VT_RESET, index + 1);
+      _ui->drawFrameLine(VT_DIM "Sets arp octave span. 1 = original notes, 4 = 4 octaves." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "48 pile positions x 4 octaves = up to 192 steps per cycle." VT_RESET);
+      break;
+    case 5:  // Hold
+      _ui->drawFrameLine(VT_MAGENTA "HOLD toggle" VT_RESET "  " VT_DIM "--  ARPEG banks only" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "HOLD OFF: press=add to pile, release=remove. Arp stops when all fingers up." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "HOLD ON: press=add, double-tap=remove. Pile persists. Use Play/Stop for transport." VT_RESET);
+      break;
+    case 6:  // Play/Stop
+      _ui->drawFrameLine(VT_BRIGHT_RED "Play/Stop" VT_RESET "  " VT_DIM "--  ARPEG + HOLD ON only" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Toggles arp transport. Restarts sequence from beginning on Play." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "In HOLD OFF mode, this pad plays as a regular music pad." VT_RESET);
       break;
   }
 }
@@ -491,7 +529,7 @@ void ToolPadRoles::drawScreen() {
   _ui->drawFrameEmpty();
 
   // Pool section
-  _ui->drawSection("POOL -- " VT_BLUE "Bank" VT_RESET VT_BOLD " -- " VT_GREEN "Scale" VT_RESET VT_BOLD " -- " VT_YELLOW "Arp");
+  _ui->drawSection("POOL");
   drawPool();
   _ui->drawFrameEmpty();
 
@@ -703,13 +741,13 @@ void ToolPadRoles::run() {
     } else {
       // --- Pool navigation (edit mode) ---
       if (ev.type == NAV_UP) {
-        if (_poolLine == 0) _poolLine = 3;
+        if (_poolLine == 0) _poolLine = POOL_LINE_COUNT - 1;
         else _poolLine--;
         uint8_t sz = poolLineSize(_poolLine);
         if (sz > 0 && _poolIdx >= sz) _poolIdx = sz - 1;
         screenDirty = true;
       } else if (ev.type == NAV_DOWN) {
-        if (_poolLine == 3) _poolLine = 0;
+        if (_poolLine == POOL_LINE_COUNT - 1) _poolLine = 0;
         else _poolLine++;
         uint8_t sz = poolLineSize(_poolLine);
         if (sz > 0 && _poolIdx >= sz) _poolIdx = sz - 1;

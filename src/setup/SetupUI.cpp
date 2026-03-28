@@ -404,11 +404,14 @@ void SetupUI::drawCellGrid(
         } else {
           const char* color;
           switch (roleMap[key]) {
-            case 1:    color = VT_BLUE;   break;
-            case 2:    color = VT_GREEN;  break;
-            case 3:    color = VT_YELLOW; break;
-            case 0xFF: color = VT_RED;    break;
-            default:   color = VT_DIM;    break;
+            case 1:    color = VT_BLUE;       break;  // Bank
+            case 2:    color = VT_GREEN;      break;  // Root
+            case 3:    color = VT_CYAN;       break;  // Mode
+            case 4:    color = VT_YELLOW;     break;  // Octave
+            case 5:    color = VT_MAGENTA;    break;  // Hold
+            case 6:    color = VT_BRIGHT_RED; break;  // Play/Stop
+            case 0xFF: color = VT_RED;        break;  // Collision
+            default:   color = VT_DIM;        break;
           }
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
                           "%s%5s" VT_RESET, color, roleLabels[key]);
