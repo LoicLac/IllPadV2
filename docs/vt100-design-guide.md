@@ -273,6 +273,17 @@ All 6 tools + main menu follow the same frame layout:
 - Pool line shows available targets with color coding
 - CC sub-editor and steal confirmation sub-states
 
+### Tool 7 — LED Settings
+
+- 2 pages toggled with `t`: DISPLAY (15 params) and CONFIRM (15 params)
+- DISPLAY page: Normal bank fg/bg intensity, Arpeg pulse min/max (fg/bg, stopped/playing), tick flash intensities, absolute max cap, pulse period, tick flash duration
+- CONFIRM page: per-event blink count (1-3) + duration (ms) for bank switch, scale root/mode/chrom, hold on/off, play beats, stop fade, octave
+- Same drawParam/adjustParam pattern as Tool 5
+- NVS namespace `illpad_lset`, struct `LedSettingsStore` with magic/version
+- Save applies immediately via `LedController::loadLedSettings()`
+- Sine LUT: 256 entries (upgraded from 64) for smooth breathing
+- `setPixelAbsolute()` for tick flash and errors — ignores global brightness, capped by `absoluteMax`
+
 ## 2.3 Pad Role Categories and Colors
 
 Tool 3 uses 7 role categories, each with a distinct VT100 color:

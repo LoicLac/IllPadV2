@@ -249,6 +249,7 @@ VT100 terminal, serial input + button = ENTER.
 [4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
 [5] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
 [6] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
+[7] LED Settings           — intensity, timing, confirmation blinks (2 pages: DISPLAY/CONFIRM, toggle with 't')
 [0] Reboot
 ```
 
@@ -292,6 +293,7 @@ src/
 | `illpad_led` | LED brightness (global) |
 | `illpad_sens` | pad sensitivity (global) |
 | `illpad_pmap` | pot mapping (PotMappingStore: both NORMAL + ARPEG contexts, magic/version checked) |
+| `illpad_lset` | LED settings (LedSettingsStore: intensities, timings, confirmation blinks, magic/version checked) |
 
 NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never blocks on flash.
 
