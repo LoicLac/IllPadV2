@@ -89,6 +89,11 @@ private:
   // Helper: set pixel from RGB struct (applies _brightness scaling)
   void setPixel(uint8_t i, const RGB& color);
   void setPixelScaled(uint8_t i, const RGB& color, uint8_t scale);
+
+  // Absolute: ignores _brightness — for tempo events and errors that must always be visible
+  void setPixelAbsolute(uint8_t i, const RGB& color);
+  void setPixelAbsoluteScaled(uint8_t i, const RGB& color, uint8_t scale);
+
   void clearPixels();
 
   // Brightness

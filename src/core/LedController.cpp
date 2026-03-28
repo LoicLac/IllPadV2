@@ -90,6 +90,18 @@ void LedController::setPixelScaled(uint8_t i, const RGB& c, uint8_t scale) {
   ));
 }
 
+void LedController::setPixelAbsolute(uint8_t i, const RGB& c) {
+  _strip.setPixelColor(i, _strip.Color(c.r, c.g, c.b));
+}
+
+void LedController::setPixelAbsoluteScaled(uint8_t i, const RGB& c, uint8_t scale) {
+  _strip.setPixelColor(i, _strip.Color(
+    (uint8_t)((uint16_t)c.r * scale / 255),
+    (uint8_t)((uint16_t)c.g * scale / 255),
+    (uint8_t)((uint16_t)c.b * scale / 255)
+  ));
+}
+
 void LedController::clearPixels() {
   for (uint8_t i = 0; i < NUM_LEDS; i++) {
     _strip.setPixelColor(i, 0);
@@ -103,7 +115,7 @@ void LedController::clearPixels() {
 void LedController::haltI2CError() {
   while (true) {
     for (uint8_t flash = 0; flash < 3; flash++) {
-      for (uint8_t i = 0; i < NUM_LEDS; i++) setPixel(i, COL_ERROR);
+      for (uint8_t i = 0; i < NUM_LEDS; i++) setPixelAbsolute(i, COL_ERROR);
       _strip.show();
       delay(80);
       clearPixels();
@@ -171,7 +183,7 @@ void LedController::update() {
         if (i < _bootFailStep - 1) {
           setPixel(i, COL_BOOT);
         } else if (i == _bootFailStep - 1) {
-          if (fastBlink) setPixel(i, COL_BOOT_FAIL);
+          if (fastBlink) setPixelAbsolute(i, COL_BOOT_FAIL);  // Absolute: boot failure
           // else stays cleared (off)
         }
         // remaining LEDs stay cleared
@@ -248,8 +260,8 @@ void LedController::update() {
   if (_error) {
     clearPixels();
     if (_blinkState) {
-      setPixel(3, COL_ERROR);
-      setPixel(4, COL_ERROR);
+      setPixelAbsolute(3, COL_ERROR);  // Absolute: errors always visible
+      setPixelAbsolute(4, COL_ERROR);
     }
     _strip.show();
     return;
@@ -397,7 +409,7 @@ void LedController::update() {
           if (elapsed < LED_CONFIRM_UNIT_MS * 2) {
             bool on = (elapsed < LED_CONFIRM_UNIT_MS);
             clearPixels();
-            if (on) setPixel(_currentBank, COL_PLAY_ACK);
+            if (on) setPixelAbsolute(_currentBank, COL_PLAY_ACK);  // Absolute: play ack
             _strip.show();
             return;
           }
@@ -439,7 +451,7 @@ void LedController::update() {
           if (_fadeStartTime != 0 && (now - _fadeStartTime) < LED_TICK_FLASH_DURATION_MS) {
             uint8_t phase = (_playFlashPhase < 4) ? _playFlashPhase : 3;
             clearPixels();
-            setPixelScaled(_currentBank, COL_ARP_PLAY, playIntensity[phase]);
+            setPixelAbsoluteScaled(_currentBank, COL_ARP_PLAY, playIntensity[phase]);  // Absolute: beat flash
             _strip.show();
             return;
           }
@@ -502,7 +514,7 @@ void LedController::update() {
         clearPixels();
         if (on) {
           for (uint8_t i = 0; i < NUM_LEDS; i++) {
-            setPixel(i, COL_BOOT);  // White validation flash
+            setPixelAbsolute(i, COL_BOOT);  // Absolute: validation flash always visible
           }
         }
         _strip.show();
@@ -567,7 +579,7 @@ void LedController::update() {
           if (playing) {
             // Foreground ARPEG playing: blue sine pulse (30-80%) + white tick flash override
             if (flashing) {
-              setPixel(i, COL_WHITE);  // Full white flash on tick
+              setPixelAbsolute(i, COL_WHITE);  // Absolute: tick flash always visible
             } else {
               // Modulate B channel between LED_FG_ARP_PLAY_MIN and LED_FG_ARP_PLAY_MAX
               uint8_t bVal = LED_FG_ARP_PLAY_MIN + (uint8_t)((uint16_t)sineRaw *
@@ -587,7 +599,7 @@ void LedController::update() {
             // Background ARPEG playing: dimmed blue sine pulse (8-20%) + dimmed tick flash
             if (flashing) {
               RGB col = {0, 0, LED_BG_ARP_PLAY_FLASH};
-              setPixel(i, col);
+              setPixelAbsolute(i, col);  // Absolute: bg tick flash always visible
             } else {
               uint8_t bVal = LED_BG_ARP_PLAY_MIN + (uint8_t)((uint16_t)sineRaw *
                        (LED_BG_ARP_PLAY_MAX - LED_BG_ARP_PLAY_MIN) / 255);
