@@ -290,40 +290,8 @@ bool ToolPadRoles::saveAll() {
 
 void ToolPadRoles::drawGrid() {
   int selectedPad = _gridRow * 12 + _gridCol;
-
-  // Column headers
-  Serial.print(VT_DIM "|" VT_RESET "  " VT_DIM);
-  for (int col = 0; col < 12; col++) {
-    Serial.printf(" %02d  ", col + 1);
-  }
-  // Pad to frame edge
-  Serial.print(VT_RESET);
-  for (int i = 0; i < 55; i++) Serial.print(' ');
-  Serial.print(VT_DIM "|" VT_RESET VT_CL "\n");
-
-  for (int row = 0; row < 4; row++) {
-    Serial.print(VT_DIM "|" VT_RESET "  ");
-    for (int col = 0; col < 12; col++) {
-      int pad = row * 12 + col;
-
-      if (pad == selectedPad) {
-        Serial.printf(VT_CYAN VT_BOLD "[%s]" VT_RESET, _roleLabels[pad] + 1);
-      } else {
-        const char* color;
-        switch (_roleMap[pad]) {
-          case ROLE_BANK:      color = VT_BLUE;   break;
-          case ROLE_SCALE:     color = VT_GREEN;  break;
-          case ROLE_ARP:       color = VT_YELLOW; break;
-          case ROLE_COLLISION: color = VT_RED;    break;
-          default:             color = VT_DIM;    break;
-        }
-        Serial.printf("%s %s" VT_RESET, color, _roleLabels[pad]);
-      }
-    }
-    // Pad to frame edge
-    for (int i = 0; i < 55; i++) Serial.print(' ');
-    Serial.print(VT_DIM "|" VT_RESET VT_CL "\n");
-  }
+  _ui->drawCellGrid(GRID_ROLES, 0, nullptr, nullptr, nullptr, selectedPad,
+                     0, false, nullptr, _roleLabels, _roleMap);
 }
 
 // =================================================================
@@ -339,30 +307,24 @@ void ToolPadRoles::drawPool() {
   // "none" line (poolLine 0)
   {
     bool isSelectedLine = _editing && (_poolLine == 0);
-    Serial.print(VT_DIM "|" VT_RESET "  ");
     if (isSelectedLine) {
-      Serial.print(VT_CYAN VT_BOLD "> " VT_RESET);
-      Serial.print(VT_REVERSE " none " VT_RESET);
+      _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET VT_REVERSE " none " VT_RESET);
     } else {
-      Serial.print("  " VT_DIM "none" VT_RESET);
+      _ui->drawFrameLine("  " VT_DIM "none" VT_RESET);
     }
-    // Pad to frame width
-    uint8_t used = isSelectedLine ? 10 : 6;
-    for (int i = used; i < CONSOLE_W - 5; i++) Serial.print(' ');
-    Serial.print(" " VT_DIM "|" VT_RESET VT_CL "\n");
   }
 
-  // Helper to draw one pool line
   auto drawPoolLine = [&](uint8_t lineNum, const char* label,
                           const char* const* labels, uint8_t count,
                           const char* lineColor) {
     bool isSelectedLine = _editing && (_poolLine == lineNum);
+    char buf[256];
+    int pos = 0;
 
-    Serial.print(VT_DIM "|" VT_RESET "  ");
     if (isSelectedLine) {
-      Serial.printf(VT_CYAN VT_BOLD "> " VT_RESET VT_DIM "%-6s" VT_RESET " ", label);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, VT_CYAN VT_BOLD "> " VT_RESET VT_DIM "%-6s" VT_RESET " ", label);
     } else {
-      Serial.printf("  " VT_DIM "%-6s" VT_RESET " ", label);
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "  " VT_DIM "%-6s" VT_RESET " ", label);
     }
 
     for (uint8_t i = 0; i < count; i++) {
@@ -371,27 +333,23 @@ void ToolPadRoles::drawPool() {
       bool assignedElsewhere = (owner < NUM_KEYS && owner != (uint8_t)selectedPad);
 
       if (isCursor) {
-        // Edit mode cursor
-        Serial.printf(VT_REVERSE VT_BOLD " %s " VT_RESET " ", labels[i]);
+        pos += snprintf(buf + pos, sizeof(buf) - pos, VT_REVERSE VT_BOLD " %s " VT_RESET " ", labels[i]);
       } else if (_editing) {
-        // Edit mode: show availability
         if (assignedElsewhere) {
-          Serial.printf(VT_DIM "%s" VT_RESET " ", labels[i]);
+          pos += snprintf(buf + pos, sizeof(buf) - pos, VT_DIM "%s" VT_RESET " ", labels[i]);
         } else {
-          Serial.printf("%s%s" VT_RESET " ", lineColor, labels[i]);
+          pos += snprintf(buf + pos, sizeof(buf) - pos, "%s%s" VT_RESET " ", lineColor, labels[i]);
         }
       } else {
-        // --- BUG FIX: Grid-nav mode = STATIC inventory ---
-        // No bold, no reverse, no currentRole tracking.
-        // Just show assigned=dim, unassigned=line color (faint).
+        // BUG FIX preserved: grid-nav mode = STATIC inventory
         if (owner < NUM_KEYS) {
-          Serial.printf(VT_DIM "%s" VT_RESET " ", labels[i]);
+          pos += snprintf(buf + pos, sizeof(buf) - pos, VT_DIM "%s" VT_RESET " ", labels[i]);
         } else {
-          Serial.printf("%s%s" VT_RESET " ", lineColor, labels[i]);
+          pos += snprintf(buf + pos, sizeof(buf) - pos, "%s%s" VT_RESET " ", lineColor, labels[i]);
         }
       }
     }
-    Serial.print(VT_CL "\n");
+    _ui->drawFrameLine("%s", buf);
   };
 
   drawPoolLine(1, "Bank:", POOL_BANK_LABELS, POOL_BANK_COUNT, VT_BLUE);
@@ -554,6 +512,7 @@ void ToolPadRoles::drawScreen() {
 
 void ToolPadRoles::run() {
   if (!_keyboard || !_leds || !_ui) return;
+  Serial.print(ITERM_RESIZE);
 
   // Copy live values into working copies
   memcpy(_wkBankPads, _bankPads, NUM_BANKS);
