@@ -75,6 +75,9 @@ private:
   uint32_t _rawTickCount;
 
   void updatePLL(uint32_t intervalUs, uint8_t source);
+  void processIncomingTicks(uint32_t nowUs, uint8_t usbTicks, uint8_t bleTicks);
+  void resolveTimeouts(uint32_t nowUs);
+  void generateTicks(uint32_t nowUs);
 };
 
 #endif // CLOCK_MANAGER_H
