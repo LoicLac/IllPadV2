@@ -133,6 +133,7 @@ private:
   uint16_t _scaleChromDurationMs;
   uint8_t  _holdOnFlashMs;
   uint16_t _holdFadeMs;
+  uint16_t _stopFadeMs;
   uint8_t  _playBeatCount;
   uint8_t  _octaveBlinks;
   uint16_t _octaveDurationMs;

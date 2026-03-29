@@ -61,7 +61,7 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
       int val = (int)wk.doubleTapMs + dir * step;
       if (val < DOUBLE_TAP_MS_MIN) val = DOUBLE_TAP_MS_MIN;
       if (val > DOUBLE_TAP_MS_MAX) val = DOUBLE_TAP_MS_MAX;
-      wk.doubleTapMs = (uint16_t)val;
+      wk.doubleTapMs = (uint8_t)val;
       break;
     }
     case 5: {
@@ -173,7 +173,7 @@ void ToolSettings::run() {
                       DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
                       DEFAULT_CLOCK_MODE,
                       DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
-                      DEFAULT_PANIC_ON_RECONNECT, DEFAULT_BAT_ADC_AT_FULL};
+                      DEFAULT_PANIC_ON_RECONNECT, 0, DEFAULT_BAT_ADC_AT_FULL};
   {
     Preferences prefs;
     if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
@@ -183,6 +183,14 @@ void ToolSettings::run() {
         prefs.getBytes(SETTINGS_NVS_KEY, &tmp, sizeof(SettingsStore));
         if (tmp.magic == EEPROM_MAGIC && tmp.version == SETTINGS_VERSION) {
           wk = tmp;
+          // Validate individual fields against ranges
+          if (wk.baselineProfile >= NUM_BASELINE_PROFILES) wk.baselineProfile = DEFAULT_BASELINE_PROFILE;
+          if (wk.aftertouchRate < AT_RATE_MIN || wk.aftertouchRate > AT_RATE_MAX) wk.aftertouchRate = AT_RATE_DEFAULT;
+          if (wk.bleInterval >= NUM_BLE_INTERVALS) wk.bleInterval = DEFAULT_BLE_INTERVAL;
+          if (wk.clockMode >= NUM_CLOCK_MODES) wk.clockMode = DEFAULT_CLOCK_MODE;
+          if (wk.doubleTapMs < DOUBLE_TAP_MS_MIN || wk.doubleTapMs > DOUBLE_TAP_MS_MAX) wk.doubleTapMs = DOUBLE_TAP_MS_DEFAULT;
+          if (wk.potBarDurationMs < LED_BARGRAPH_DURATION_MIN || wk.potBarDurationMs > LED_BARGRAPH_DURATION_MAX) wk.potBarDurationMs = LED_BARGRAPH_DURATION_DEFAULT;
+          if (wk.panicOnReconnect > 1) wk.panicOnReconnect = DEFAULT_PANIC_ON_RECONNECT;
         }
       }
       prefs.end();
@@ -215,7 +223,7 @@ void ToolSettings::run() {
               DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
               DEFAULT_CLOCK_MODE,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
-              DEFAULT_PANIC_ON_RECONNECT, DEFAULT_BAT_ADC_AT_FULL};
+              DEFAULT_PANIC_ON_RECONNECT, 0, DEFAULT_BAT_ADC_AT_FULL};
         if (saveSettings(wk)) {
           original = wk;
           nvsSaved = true;

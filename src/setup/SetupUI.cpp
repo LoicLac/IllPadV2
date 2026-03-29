@@ -11,7 +11,7 @@
 // =================================================================
 
 SetupUI::SetupUI()
-  : _leds(nullptr) {}
+  : _leds(nullptr), _lastToolName(""), _lastNvsSaved(true) {}
 
 void SetupUI::begin(LedController* leds) {
   _leds = leds;
@@ -130,6 +130,8 @@ void SetupUI::drawFrameEmpty() {
 // =================================================================
 
 void SetupUI::drawConsoleHeader(const char* toolName, bool nvsSaved) {
+  _lastToolName = toolName;
+  _lastNvsSaved = nvsSaved;
   drawFrameTop();
 
   Serial.print(VT_DIM);
@@ -196,7 +198,20 @@ void SetupUI::drawConsoleHeaderFlash(bool flash) {
   } else {
     Serial.print(VT_REVERSE VT_BOLD " ILLPAD48 SETUP CONSOLE " VT_RESET);
   }
-  printRepeat(' ', CONSOLE_W - 2 - 2 - 24);
+  Serial.print("     ");
+  Serial.print(_lastToolName);
+
+  const char* badge = _lastNvsSaved
+    ? VT_REVERSE VT_GREEN " NVS:OK " VT_RESET
+    : VT_REVERSE VT_YELLOW " NVS:-- " VT_RESET;
+  uint16_t badgeVis = 8;
+  uint16_t titleVis = 24 + 5 + visibleLen(_lastToolName);
+  int16_t gap = (int16_t)(CONSOLE_W - 5) - (int16_t)titleVis - (int16_t)badgeVis;
+  if (gap > 0) {
+    for (int16_t i = 0; i < gap; i++) Serial.print(' ');
+  }
+  Serial.print(badge);
+  Serial.print(" ");
   Serial.print(VT_DIM);
   Serial.print(UNI_V);
   Serial.print(VT_RESET VT_CL);

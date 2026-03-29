@@ -561,11 +561,34 @@ void ToolPadRoles::run() {
   _wkPlayStopPad = *_playStopPad;
   if (_octavePads) memcpy(_wkOctavePads, _octavePads, 4);
 
-  // Check initial NVS status
+  // Load saved pad roles from NVS (setup mode may run before NvsManager::loadAll)
   {
     Preferences prefs;
     if (prefs.begin(BANKPAD_NVS_NAMESPACE, true)) {
-      _nvsSaved = (prefs.getBytesLength(BANKPAD_NVS_KEY) > 0);
+      size_t len = prefs.getBytesLength(BANKPAD_NVS_KEY);
+      _nvsSaved = (len > 0);
+      if (len == sizeof(BankPadStore)) {
+        BankPadStore bps;
+        prefs.getBytes(BANKPAD_NVS_KEY, &bps, sizeof(BankPadStore));
+        if (bps.magic == EEPROM_MAGIC && bps.version == BANKPAD_VERSION)
+          memcpy(_wkBankPads, bps.bankPads, NUM_BANKS);
+      }
+      prefs.end();
+    }
+    if (prefs.begin(SCALE_PAD_NVS_NAMESPACE, true)) {
+      size_t len;
+      len = prefs.getBytesLength(SCALE_PAD_ROOT_KEY);
+      if (len == 7) prefs.getBytes(SCALE_PAD_ROOT_KEY, _wkRootPads, 7);
+      len = prefs.getBytesLength(SCALE_PAD_MODE_KEY);
+      if (len == 7) prefs.getBytes(SCALE_PAD_MODE_KEY, _wkModePads, 7);
+      _wkChromPad = prefs.getUChar(SCALE_PAD_CHROM_KEY, _wkChromPad);
+      prefs.end();
+    }
+    if (prefs.begin(ARP_PAD_NVS_NAMESPACE, true)) {
+      _wkHoldPad     = prefs.getUChar(ARP_PAD_HOLD_KEY, _wkHoldPad);
+      _wkPlayStopPad = prefs.getUChar(ARP_PAD_PS_KEY, _wkPlayStopPad);
+      size_t octLen = prefs.getBytesLength(ARP_PAD_OCT_KEY);
+      if (octLen == 4) prefs.getBytes(ARP_PAD_OCT_KEY, _wkOctavePads, 4);
       prefs.end();
     }
   }

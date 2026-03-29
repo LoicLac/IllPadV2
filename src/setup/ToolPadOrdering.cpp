@@ -116,13 +116,51 @@ void ToolPadOrdering::run() {
 
         _ui->drawFrameEmpty();
         _ui->drawSection("INFO");
-        _ui->drawFrameLine(VT_BRIGHT_GREEN "Current pad ordering loaded from NVS." VT_RESET);
-        _ui->drawFrameLine(VT_DIM "Each number = rank position (1=lowest pitch, 48=highest)." VT_RESET);
-        _ui->drawFrameLine(VT_DIM "This defines which pad plays which note in the scale." VT_RESET);
+        if (confirmDefaults) {
+          _ui->drawFrameLine(VT_YELLOW "Reset to identity ordering? Pad 1=rank 1, Pad 2=rank 2, ... (y/n)" VT_RESET);
+          _ui->drawFrameEmpty();
+          _ui->drawFrameEmpty();
+        } else {
+          _ui->drawFrameLine(VT_BRIGHT_GREEN "Current pad ordering loaded from NVS." VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Each number = rank position (1=lowest pitch, 48=highest)." VT_RESET);
+          _ui->drawFrameLine(VT_DIM "This defines which pad plays which note in the scale." VT_RESET);
+        }
         _ui->drawFrameEmpty();
 
-        _ui->drawControlBar(VT_DIM "[RET] RE-ORDER FROM SCRATCH  [d] DFLT  [q] KEEP CURRENT" VT_RESET);
+        if (confirmDefaults) {
+          _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
+        } else {
+          _ui->drawControlBar(VT_DIM "[RET] RE-ORDER FROM SCRATCH  [d] DFLT  [q] KEEP CURRENT" VT_RESET);
+        }
         _ui->vtFrameEnd();
+      }
+
+      // --- Defaults confirmation ---
+      if (confirmDefaults) {
+        if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+          for (int i = 0; i < NUM_KEYS; i++) {
+            existingOrder[i] = (uint8_t)i;
+          }
+          NoteMapStore nms;
+          nms.magic = EEPROM_MAGIC;
+          nms.version = NOTEMAP_VERSION;
+          nms.reserved = 0;
+          memcpy(nms.noteMap, existingOrder, NUM_KEYS);
+          Preferences prefs;
+          if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
+            prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
+            prefs.end();
+          }
+          memcpy(_padOrder, existingOrder, NUM_KEYS);
+          nvsSaved = true;
+          _ui->flashSaved();
+          confirmDefaults = false;
+          screenDirty = true;
+        } else if (ev.type != NAV_NONE) {
+          confirmDefaults = false;
+          screenDirty = true;
+        }
+        break;
       }
 
       if (ev.type == NAV_ENTER) {
@@ -138,23 +176,7 @@ void ToolPadOrdering::run() {
         state = ORD_MEASUREMENT;
       }
       else if (ev.type == NAV_DEFAULTS) {
-        // Direct default
-        for (int i = 0; i < NUM_KEYS; i++) {
-          existingOrder[i] = (uint8_t)i;
-        }
-        NoteMapStore nms;
-        nms.magic = EEPROM_MAGIC;
-        nms.version = NOTEMAP_VERSION;
-        nms.reserved = 0;
-        memcpy(nms.noteMap, existingOrder, NUM_KEYS);
-        Preferences prefs;
-        if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
-          prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
-          prefs.end();
-        }
-        memcpy(_padOrder, existingOrder, NUM_KEYS);
-        nvsSaved = true;
-        _ui->flashSaved();
+        confirmDefaults = true;
         screenDirty = true;
       }
       else if (ev.type == NAV_QUIT) {

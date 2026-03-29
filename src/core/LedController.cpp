@@ -28,7 +28,7 @@ LedController::LedController()
     _scaleRootBlinks(2), _scaleRootDurationMs(200),
     _scaleModeBlinks(2), _scaleModeDurationMs(200),
     _scaleChromBlinks(2), _scaleChromDurationMs(200),
-    _holdOnFlashMs(150), _holdFadeMs(300),
+    _holdOnFlashMs(150), _holdFadeMs(300), _stopFadeMs(300),
     _playBeatCount(3),
     _octaveBlinks(3), _octaveDurationMs(300),
     _clock(nullptr),
@@ -355,7 +355,7 @@ void LedController::update() {
 
       case CONFIRM_SCALE_ROOT: {
         if (elapsed < _scaleRootDurationMs) {
-          uint8_t unitMs = _scaleRootDurationMs / (_scaleRootBlinks * 2);
+          uint16_t unitMs = _scaleRootDurationMs / (_scaleRootBlinks * 2);
           uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
           bool on = (phase % 2 == 0);
           clearPixels();
@@ -369,7 +369,7 @@ void LedController::update() {
 
       case CONFIRM_SCALE_MODE: {
         if (elapsed < _scaleModeDurationMs) {
-          uint8_t unitMs = _scaleModeDurationMs / (_scaleModeBlinks * 2);
+          uint16_t unitMs = _scaleModeDurationMs / (_scaleModeBlinks * 2);
           uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
           bool on = (phase % 2 == 0);
           clearPixels();
@@ -383,7 +383,7 @@ void LedController::update() {
 
       case CONFIRM_SCALE_CHROM: {
         if (elapsed < _scaleChromDurationMs) {
-          uint8_t unitMs = _scaleChromDurationMs / (_scaleChromBlinks * 2);
+          uint16_t unitMs = _scaleChromDurationMs / (_scaleChromBlinks * 2);
           uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
           bool on = (phase % 2 == 0);
           clearPixels();
@@ -423,13 +423,13 @@ void LedController::update() {
       }
 
       case CONFIRM_PLAY: {
-        // Phase 0 = immediate green ack flash
-        // Phases 1-N = beat-synced flashes (_playBeatCount beats)
+        // Phase 255 = immediate green ack flash (sentinel)
+        // Phase 0    = ack done, waiting for beat 1
+        // Phases 1-N = N beats fired (_playBeatCount beats total)
         uint8_t playSteps = _playBeatCount + 1;  // 1 ack + N beats
-        if (_playFlashPhase == 0) {
-          // Ack flash: show green for one unit
-          uint8_t ackUnitMs = _bankDurationMs / (_bankBlinks * 2);
-          if (ackUnitMs == 0) ackUnitMs = 1;
+        if (_playFlashPhase == 255) {
+          // Ack flash: show green for one unit (fixed, not coupled to bank switch params)
+          uint8_t ackUnitMs = LED_CONFIRM_UNIT_MS;
           if (elapsed < (uint16_t)ackUnitMs * 2) {
             bool on = (elapsed < ackUnitMs);
             clearPixels();
@@ -437,15 +437,15 @@ void LedController::update() {
             _strip.show();
             return;
           }
-          // Ack done, advance to beat-synced phases
-          _playFlashPhase = 1;
+          // Ack done, advance to beat-synced phases (0 = no beats fired yet)
+          _playFlashPhase = 0;
           if (_clock) {
             _playLastBeatTick = _clock->getCurrentTick();
           }
           // Fall through to normal display between beats
         }
 
-        if (_playFlashPhase >= 1 && _playFlashPhase < playSteps) {
+        if (_playFlashPhase < playSteps) {
           static const uint8_t playIntensity[] = {0, 128, 191, 255};
 
           // Check for beat boundary (24 ticks = 1 quarter note)
@@ -455,17 +455,18 @@ void LedController::update() {
               _playLastBeatTick = currentTick - (currentTick % 24);
               _fadeStartTime = now;  // Start flash hold timer
               _playFlashPhase++;
-              if (_playFlashPhase >= playSteps) {
+              if (_playFlashPhase >= _playBeatCount) {
                 _confirmType = CONFIRM_NONE;
               }
             }
           } else {
             // No clock: use time-based fallback (200ms per beat)
-            uint8_t beatPhase = (elapsed / 200);
+            // beatPhase > _playFlashPhase avoids collision at beat 1
+            uint8_t beatPhase = (uint8_t)(elapsed / 200);
             if (beatPhase >= playSteps) {
               _confirmType = CONFIRM_NONE;
               break;
-            } else if (beatPhase >= 1 && beatPhase != _playFlashPhase) {
+            } else if (beatPhase > _playFlashPhase) {
               _fadeStartTime = now;  // Start flash hold timer
               _playFlashPhase = beatPhase;
             }
@@ -485,9 +486,9 @@ void LedController::update() {
       }
 
       case CONFIRM_STOP: {
-        // Fade-out from blue-cyan over _holdFadeMs
-        if (elapsed < _holdFadeMs) {
-          uint8_t fadeScale = (uint8_t)((uint32_t)(_holdFadeMs - elapsed) * 255 / _holdFadeMs);
+        // Fade-out from blue-cyan over _stopFadeMs (independent from hold-off)
+        if (elapsed < _stopFadeMs) {
+          uint8_t fadeScale = (uint8_t)((uint32_t)(_stopFadeMs - elapsed) * 255 / _stopFadeMs);
           clearPixels();
           setPixelScaled(_currentBank, COL_ARP_PLAY, fadeScale);
           _strip.show();
@@ -501,7 +502,7 @@ void LedController::update() {
         // Triple blink 2 LEDs of selected group
         // param 1 -> LEDs 0-1, param 2 -> LEDs 2-3, param 3 -> LEDs 4-5, param 4 -> LEDs 6-7
         if (elapsed < _octaveDurationMs) {
-          uint8_t unitMs = _octaveDurationMs / (_octaveBlinks * 2);
+          uint16_t unitMs = _octaveDurationMs / (_octaveBlinks * 2);
           uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
           bool on = (phase % 2 == 0);
           clearPixels();
@@ -568,22 +569,6 @@ void LedController::update() {
         if (isFg) {
           // Foreground NORMAL: solid white (intensity from settings)
           setPixelScaled(i, COL_WHITE, _normalFgIntensity);
-
-          // Battery low override: 3-blink burst every BAT_LOW_BLINK_INTERVAL_MS
-          if (_batteryLow) {
-            unsigned long elapsed = now - _batLowLastBurstTime;
-            if (elapsed >= BAT_LOW_BLINK_INTERVAL_MS) {
-              _batLowLastBurstTime = now;
-              elapsed = 0;
-            }
-            uint32_t burstDuration = (uint32_t)BAT_LOW_BLINK_SPEED_MS * 6;
-            if (elapsed < burstDuration) {
-              uint8_t phase = elapsed / BAT_LOW_BLINK_SPEED_MS;
-              if (phase % 2 != 0) {
-                _strip.setPixelColor(i, 0);  // Off during blink
-              }
-            }
-          }
         } else {
           // Background NORMAL: dim white (intensity from settings)
           setPixelScaled(i, COL_WHITE, _normalBgIntensity);
@@ -639,6 +624,22 @@ void LedController::update() {
           }
         }
       }
+
+      // Battery low override: 3-blink burst on foreground bank (NORMAL or ARPEG)
+      if (isFg && _batteryLow) {
+        unsigned long elapsed = now - _batLowLastBurstTime;
+        if (elapsed >= BAT_LOW_BLINK_INTERVAL_MS) {
+          _batLowLastBurstTime = now;
+          elapsed = 0;
+        }
+        uint32_t burstDuration = (uint32_t)BAT_LOW_BLINK_SPEED_MS * 6;
+        if (elapsed < burstDuration) {
+          uint8_t phase = elapsed / BAT_LOW_BLINK_SPEED_MS;
+          if (phase % 2 != 0) {
+            _strip.setPixelColor(i, 0);  // Off during blink
+          }
+        }
+      }
     }
   } else {
     // Fallback: no slots pointer, simple single-bank display (pre-init)
@@ -651,7 +652,7 @@ void LedController::update() {
   if (_confirmType == CONFIRM_BANK_SWITCH) {
     unsigned long elapsed = now - _confirmStart;
     if (elapsed < _bankDurationMs) {
-      uint8_t unitMs = _bankDurationMs / (_bankBlinks * 2);
+      uint16_t unitMs = _bankDurationMs / (_bankBlinks * 2);
       uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
       bool on = (phase % 2 == 0);
       // Determine context color: white for NORMAL, blue for ARPEG
@@ -707,7 +708,7 @@ void LedController::triggerConfirm(ConfirmType type, uint8_t param) {
 
   // Special init for play confirmation
   if (type == CONFIRM_PLAY) {
-    _playFlashPhase = 0;
+    _playFlashPhase = 255;  // 255 = ack sentinel; 0 = waiting for beat 1
     _fadeStartTime = 0;  // Used as flash hold timer during beat-synced phases
     if (_clock) {
       _playLastBeatTick = _clock->getCurrentTick();
@@ -722,20 +723,21 @@ void LedController::setPotBarDuration(uint16_t ms) {
 void LedController::loadLedSettings(const LedSettingsStore& s) {
   _normalFgIntensity = s.normalFgIntensity;
   _normalBgIntensity = s.normalBgIntensity;
+  // Guard against inverted min/max from corrupted NVS (unsigned subtraction UB)
   _fgArpStopMin = s.fgArpStopMin;
-  _fgArpStopMax = s.fgArpStopMax;
+  _fgArpStopMax = (s.fgArpStopMax >= s.fgArpStopMin) ? s.fgArpStopMax : s.fgArpStopMin;
   _fgArpPlayMin = s.fgArpPlayMin;
-  _fgArpPlayMax = s.fgArpPlayMax;
+  _fgArpPlayMax = (s.fgArpPlayMax >= s.fgArpPlayMin) ? s.fgArpPlayMax : s.fgArpPlayMin;
   _fgTickFlash = s.fgTickFlash;
   _bgArpStopMin = s.bgArpStopMin;
-  _bgArpStopMax = s.bgArpStopMax;
+  _bgArpStopMax = (s.bgArpStopMax >= s.bgArpStopMin) ? s.bgArpStopMax : s.bgArpStopMin;
   _bgArpPlayMin = s.bgArpPlayMin;
-  _bgArpPlayMax = s.bgArpPlayMax;
+  _bgArpPlayMax = (s.bgArpPlayMax >= s.bgArpPlayMin) ? s.bgArpPlayMax : s.bgArpPlayMin;
   _bgTickFlash = s.bgTickFlash;
   _absoluteMax = s.absoluteMax;
   _pulsePeriodMs = s.pulsePeriodMs;
   _tickFlashDurationMs = s.tickFlashDurationMs;
-  _bankBlinks = s.bankBlinks;
+  _bankBlinks = (s.bankBlinks > 0) ? s.bankBlinks : 3;
   _bankDurationMs = s.bankDurationMs;
   _bankBrightnessPct = s.bankBrightnessPct;
   _scaleRootBlinks = s.scaleRootBlinks;
@@ -746,6 +748,7 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
   _scaleChromDurationMs = s.scaleChromDurationMs;
   _holdOnFlashMs = s.holdOnFlashMs;
   _holdFadeMs = s.holdFadeMs;
+  _stopFadeMs = s.stopFadeMs;
   _playBeatCount = s.playBeatCount;
   _octaveBlinks = s.octaveBlinks;
   _octaveDurationMs = s.octaveDurationMs;

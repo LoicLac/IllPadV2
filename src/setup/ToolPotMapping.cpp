@@ -191,7 +191,10 @@ void ToolPotMapping::assignCurrentTarget() {
 
   if (newTarget == TARGET_MIDI_PITCHBEND) {
     int8_t existing = findSlotWithTarget(TARGET_MIDI_PITCHBEND);
+    PotMapping savedSlot = map[slot];
+    PotMapping savedExisting = {TARGET_EMPTY, 0};
     if (existing >= 0 && existing != (int8_t)slot) {
+      savedExisting = map[existing];
       map[existing].target = TARGET_EMPTY;
       map[existing].ccNumber = 0;
     }
@@ -200,6 +203,11 @@ void ToolPotMapping::assignCurrentTarget() {
     if (saveMapping()) {
       _ui->flashSaved();
       _editing = false;
+    } else {
+      // Restore working copy on NVS failure
+      map[slot] = savedSlot;
+      if (existing >= 0 && existing != (int8_t)slot)
+        map[existing] = savedExisting;
     }
     return;
   }
@@ -631,7 +639,10 @@ void ToolPotMapping::run() {
         PotMapping* map = currentMap();
         uint8_t slot = cursorToSlot();
         int8_t dup = findSlotWithTarget(TARGET_MIDI_CC, _ccNumber);
+        PotMapping savedSlot = map[slot];
+        PotMapping savedDup = {TARGET_EMPTY, 0};
         if (dup >= 0 && dup != (int8_t)slot) {
+          savedDup = map[dup];
           map[dup].target = TARGET_EMPTY;
           map[dup].ccNumber = 0;
         }
@@ -641,15 +652,22 @@ void ToolPotMapping::run() {
           _ui->flashSaved();
           _ccEditing = false;
           _editing = false;
+        } else {
+          // Restore working copy on NVS failure
+          map[slot] = savedSlot;
+          if (dup >= 0 && dup != (int8_t)slot)
+            map[dup] = savedDup;
         }
         screenDirty = true;
       } else if (ev.type == NAV_QUIT) {
         _ccEditing = false;
+        uint8_t slot = cursorToSlot();
         if (_potRouter) {
           const PotMappingStore& live = _potRouter->getMapping();
           const PotMapping* liveMap = _contextNormal ? live.normalMap : live.arpegMap;
-          uint8_t slot = cursorToSlot();
           currentMap()[slot] = liveMap[slot];
+        } else {
+          currentMap()[slot] = {TARGET_EMPTY, 0};
         }
         screenDirty = true;
       }

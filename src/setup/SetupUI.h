@@ -173,6 +173,8 @@ public:
 
 private:
   LedController* _leds;
+  const char* _lastToolName;
+  bool _lastNvsSaved;
 
   // Helper: count visible chars in a string (skips ANSI escape sequences + UTF-8)
   static uint16_t visibleLen(const char* s);

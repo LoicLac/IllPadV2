@@ -128,10 +128,11 @@ void BankManager::switchToBank(uint8_t newBank) {
   _currentBank = newBank;
   _banks[_currentBank].isForeground = true;
 
-  // Switch MIDI channel to match new bank + restore pitch bend
+  // Switch MIDI channel to match new bank + restore pitch bend (NORMAL only)
   if (_engine) {
     _engine->setChannel(_currentBank);
-    _engine->sendPitchBend(_banks[_currentBank].pitchBendOffset);
+    if (_banks[_currentBank].type == BANK_NORMAL)
+      _engine->sendPitchBend(_banks[_currentBank].pitchBendOffset);
   }
 
   // Update LED + confirmation blink

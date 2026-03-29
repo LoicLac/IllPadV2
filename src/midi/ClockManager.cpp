@@ -154,6 +154,7 @@ void ClockManager::update() {
   if (_activeSource == SRC_LAST_KNOWN &&
       _lastKnownEntryUs > 0 && (nowUs - _lastKnownEntryUs) > LAST_KNOWN_TIMEOUT_US) {
     _activeSource = SRC_INTERNAL;
+    _lastTickTimeUs = nowUs;
     #if DEBUG_SERIAL
     Serial.println("[CLOCK] Source: internal (last known timed out)");
     #endif

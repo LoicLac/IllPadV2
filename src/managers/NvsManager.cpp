@@ -58,6 +58,7 @@ NvsManager::NvsManager()
   _ledSettings.scaleChromDurationMs = 200;
   _ledSettings.holdOnFlashMs = 150;
   _ledSettings.holdFadeMs = 300;
+  _ledSettings.stopFadeMs = 300;
   _ledSettings.playBeatCount = 3;
   _ledSettings.octaveBlinks = 3;
   _ledSettings.octaveDurationMs = 300;
@@ -225,12 +226,6 @@ void NvsManager::queueScaleWrite(uint8_t bankIdx, const ScaleConfig& cfg) {
   if (bankIdx >= NUM_BANKS) return;
   _pendingScale[bankIdx] = cfg;
   _scaleDirty[bankIdx] = true;
-  _anyDirty = true;
-}
-
-void NvsManager::queueBankTypesWrite(const BankType* types) {
-  for (uint8_t i = 0; i < NUM_BANKS; i++) _pendingTypes[i] = types[i];
-  _typesDirty = true;
   _anyDirty = true;
 }
 
@@ -505,6 +500,8 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       size_t len = prefs.getBytesLength(key);
       if (len == sizeof(ArpPotStore)) {
         prefs.getBytes(key, &_pendingArpPot[i], sizeof(ArpPotStore));
+        if (_pendingArpPot[i].division >= NUM_ARP_DIVISIONS) _pendingArpPot[i].division = 4;
+        if (_pendingArpPot[i].pattern  >= NUM_ARP_PATTERNS)  _pendingArpPot[i].pattern  = 0;
       }
     }
     prefs.end();
@@ -583,6 +580,9 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       prefs.getBytes(BANKPAD_NVS_KEY, &bps, sizeof(BankPadStore));
       if (bps.magic == EEPROM_MAGIC && bps.version == BANKPAD_VERSION) {
         memcpy(bankPads, bps.bankPads, NUM_BANKS);
+        for (uint8_t j = 0; j < NUM_BANKS; j++) {
+          if (bankPads[j] >= NUM_KEYS) bankPads[j] = j;
+        }
         #if DEBUG_SERIAL
         Serial.println("[NVS] Bank pads loaded.");
         #endif
@@ -600,6 +600,12 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     if (len == 7) prefs.getBytes(SCALE_PAD_MODE_KEY, modePads, 7);
     chromaticPad = prefs.getUChar(SCALE_PAD_CHROM_KEY, 22);
     prefs.end();
+    // Bounds validation — corrupt NVS must not index past NUM_KEYS
+    for (uint8_t i = 0; i < 7; i++) {
+      if (rootPads[i] >= NUM_KEYS) rootPads[i] = i;
+      if (modePads[i] >= NUM_KEYS) modePads[i] = 7 + i;
+    }
+    if (chromaticPad >= NUM_KEYS) chromaticPad = 14;
     #if DEBUG_SERIAL
     Serial.println("[NVS] Scale pads loaded.");
     #endif
@@ -612,6 +618,12 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     size_t octLen = prefs.getBytesLength(ARP_PAD_OCT_KEY);
     if (octLen == 4) prefs.getBytes(ARP_PAD_OCT_KEY, octavePads, 4);
     prefs.end();
+    // Bounds validation
+    if (holdPad >= NUM_KEYS) holdPad = 23;
+    if (playStopPad >= NUM_KEYS) playStopPad = 24;
+    for (uint8_t i = 0; i < 4; i++) {
+      if (octavePads[i] >= NUM_KEYS) octavePads[i] = 25 + i;
+    }
     #if DEBUG_SERIAL
     Serial.printf("[NVS] Arp pads: hold=%d ps=%d oct=%d,%d,%d,%d\n",
                   holdPad, playStopPad, octavePads[0], octavePads[1],
@@ -623,7 +635,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   settings = {EEPROM_MAGIC, SETTINGS_VERSION, DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT,
               DEFAULT_BLE_INTERVAL, DEFAULT_CLOCK_MODE,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT, DEFAULT_PANIC_ON_RECONNECT,
-              DEFAULT_BAT_ADC_AT_FULL};
+              0, DEFAULT_BAT_ADC_AT_FULL};
   if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
     size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
     if (len == sizeof(SettingsStore)) {

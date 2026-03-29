@@ -403,6 +403,9 @@ void PotRouter::resolveBindings(bool btnLeft, bool btnRear, BankType type) {
       if (_activeIdx[p] >= 0 && bestIdx >= 0) {
         _catch[_activeIdx[p]].caught = false;
       }
+      if (bestIdx >= 0) {
+        _catch[bestIdx].caught = false;
+      }
       _activeIdx[p] = bestIdx;
     }
   }
@@ -435,7 +438,7 @@ void PotRouter::applyBinding(uint8_t potIndex) {
     if (diff <= POT_CATCH_WINDOW) {
       cs.caught = true;
     } else {
-      _bargraphLevel = (uint8_t)((cs.storedValue * 8 + 2048) / 4096);
+      _bargraphLevel = (uint8_t)(cs.storedValue * 8.0f / 4095.0f);
       _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f);
       _bargraphCaught = false;
       _bargraphDirty = true;
@@ -504,7 +507,7 @@ void PotRouter::applyBinding(uint8_t potIndex) {
         if (_ccBindingIdx[s] == (uint8_t)idx) {
           // Hysteresis: only update when value changes by ≥2 to prevent ADC noise flood
           int8_t diff = (int8_t)val - (int8_t)_ccValue[s];
-          if (diff > 1 || diff < -1 || ((val == 0 || val == 127) && val != _ccValue[s])) {
+          if (diff > 1 || diff < -1 || (val == 0 && _ccValue[s] > 0) || (val == 127 && _ccValue[s] < 127)) {
             _ccValue[s] = val;
             _ccDirty[s] = true;
           }

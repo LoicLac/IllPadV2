@@ -68,12 +68,26 @@ void ToolBankConfig::run() {
     wkQuantize[i] = _nvs ? _nvs->getLoadedQuantizeMode(i) : DEFAULT_ARP_START_MODE;
   }
 
-  // NVS status
-  bool nvsSaved = true;
+  // Load saved bank config from NVS (setup mode may run before NvsManager::loadAll)
+  bool nvsSaved = false;
   {
     Preferences prefs;
     if (prefs.begin(BANKTYPE_NVS_NAMESPACE, true)) {
-      nvsSaved = (prefs.getBytesLength(BANKTYPE_NVS_KEY) == NUM_BANKS);
+      size_t len = prefs.getBytesLength(BANKTYPE_NVS_KEY);
+      nvsSaved = (len == NUM_BANKS);
+      if (nvsSaved) {
+        uint8_t rawTypes[NUM_BANKS];
+        prefs.getBytes(BANKTYPE_NVS_KEY, rawTypes, NUM_BANKS);
+        for (uint8_t i = 0; i < NUM_BANKS; i++)
+          wkTypes[i] = ((BankType)rawTypes[i] <= BANK_ARPEG) ? (BankType)rawTypes[i] : BANK_NORMAL;
+      }
+      size_t qlen = prefs.getBytesLength("qmode");
+      if (qlen == NUM_BANKS) {
+        uint8_t rawQ[NUM_BANKS];
+        prefs.getBytes("qmode", rawQ, NUM_BANKS);
+        for (uint8_t i = 0; i < NUM_BANKS; i++)
+          wkQuantize[i] = (rawQ[i] < NUM_ARP_START_MODES) ? rawQ[i] : DEFAULT_ARP_START_MODE;
+      }
       prefs.end();
     }
   }

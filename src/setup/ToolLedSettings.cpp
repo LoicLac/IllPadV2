@@ -66,6 +66,7 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (val < 10) val = 10;
         if (val > 255) val = 255;
         _wk.fgArpStopMin = (uint8_t)val;
+        if (_wk.fgArpStopMin > _wk.fgArpStopMax) _wk.fgArpStopMax = _wk.fgArpStopMin;
         break;
       }
       case 3: { // fgArpStopMax 10-255
@@ -74,6 +75,7 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (val < 10) val = 10;
         if (val > 255) val = 255;
         _wk.fgArpStopMax = (uint8_t)val;
+        if (_wk.fgArpStopMax < _wk.fgArpStopMin) _wk.fgArpStopMin = _wk.fgArpStopMax;
         break;
       }
       case 4: { // fgArpPlayMin 10-255
@@ -82,6 +84,7 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (val < 10) val = 10;
         if (val > 255) val = 255;
         _wk.fgArpPlayMin = (uint8_t)val;
+        if (_wk.fgArpPlayMin > _wk.fgArpPlayMax) _wk.fgArpPlayMax = _wk.fgArpPlayMin;
         break;
       }
       case 5: { // fgArpPlayMax 10-255
@@ -90,6 +93,7 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (val < 10) val = 10;
         if (val > 255) val = 255;
         _wk.fgArpPlayMax = (uint8_t)val;
+        if (_wk.fgArpPlayMax < _wk.fgArpPlayMin) _wk.fgArpPlayMin = _wk.fgArpPlayMax;
         break;
       }
       case 6: { // fgTickFlash 50-255
@@ -106,6 +110,7 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (val < 0) val = 0;
         if (val > 100) val = 100;
         _wk.bgArpStopMin = (uint8_t)val;
+        if (_wk.bgArpStopMin > _wk.bgArpStopMax) _wk.bgArpStopMax = _wk.bgArpStopMin;
         break;
       }
       case 8: { // bgArpStopMax 0-100
@@ -114,6 +119,7 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (val < 0) val = 0;
         if (val > 100) val = 100;
         _wk.bgArpStopMax = (uint8_t)val;
+        if (_wk.bgArpStopMax < _wk.bgArpStopMin) _wk.bgArpStopMin = _wk.bgArpStopMax;
         break;
       }
       case 9: { // bgArpPlayMin 0-100
@@ -122,6 +128,7 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (val < 0) val = 0;
         if (val > 100) val = 100;
         _wk.bgArpPlayMin = (uint8_t)val;
+        if (_wk.bgArpPlayMin > _wk.bgArpPlayMax) _wk.bgArpPlayMax = _wk.bgArpPlayMin;
         break;
       }
       case 10: { // bgArpPlayMax 0-100
@@ -130,6 +137,7 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (val < 0) val = 0;
         if (val > 100) val = 100;
         _wk.bgArpPlayMax = (uint8_t)val;
+        if (_wk.bgArpPlayMax < _wk.bgArpPlayMin) _wk.bgArpPlayMin = _wk.bgArpPlayMax;
         break;
       }
       case 11: { // bgTickFlash 10-100
@@ -244,12 +252,12 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         _wk.playBeatCount = (_wk.playBeatCount - 1 + 4 + dir) % 4 + 1;
         break;
       }
-      case 12: { // stop fade — shares holdFadeMs (same mechanism in LedController)
+      case 12: { // stopFadeMs 100-600 (independent from hold-off)
         int step = accel ? 100 : 50;
-        int val = (int)_wk.holdFadeMs + dir * step;
+        int val = (int)_wk.stopFadeMs + dir * step;
         if (val < 100) val = 100;
         if (val > 600) val = 600;
-        _wk.holdFadeMs = (uint16_t)val;
+        _wk.stopFadeMs = (uint16_t)val;
         break;
       }
       case 13: { // octaveBlinks 1-3 wrap
@@ -513,6 +521,7 @@ static LedSettingsStore s_defaults() {
   d.scaleChromDurationMs = 200;
   d.holdOnFlashMs      = LED_CONFIRM_HOLD_ON_MS;  // 150
   d.holdFadeMs         = LED_CONFIRM_FADE_MS;     // 300
+  d.stopFadeMs         = LED_CONFIRM_FADE_MS;     // 300
   d.playBeatCount      = 3;
   d.octaveBlinks       = 3;
   d.octaveDurationMs   = 300;
@@ -536,6 +545,11 @@ void ToolLedSettings::run() {
         prefs.getBytes(LED_SETTINGS_NVS_KEY, &tmp, sizeof(LedSettingsStore));
         if (tmp.magic == EEPROM_MAGIC && tmp.version == LED_SETTINGS_VERSION) {
           _wk = tmp;
+          // Sanitize min/max pairs: pre-fix firmware may have saved inverted pairs
+          if (_wk.fgArpStopMin > _wk.fgArpStopMax) _wk.fgArpStopMax = _wk.fgArpStopMin;
+          if (_wk.fgArpPlayMin > _wk.fgArpPlayMax) _wk.fgArpPlayMax = _wk.fgArpPlayMin;
+          if (_wk.bgArpStopMin > _wk.bgArpStopMax) _wk.bgArpStopMax = _wk.bgArpStopMin;
+          if (_wk.bgArpPlayMin > _wk.bgArpPlayMax) _wk.bgArpPlayMax = _wk.bgArpPlayMin;
         }
       }
       prefs.end();
@@ -757,7 +771,7 @@ void ToolLedSettings::run() {
         _ui->drawSection("PLAY / STOP");
         snprintf(buf, sizeof(buf), "%d", _wk.playBeatCount);
         drawParam(11, "Beat count:", buf);
-        snprintf(buf, sizeof(buf), "%d ms", _wk.holdFadeMs);
+        snprintf(buf, sizeof(buf), "%d ms", _wk.stopFadeMs);
         drawParam(12, "Stop fade duration:", buf);
         _ui->drawFrameEmpty();
 

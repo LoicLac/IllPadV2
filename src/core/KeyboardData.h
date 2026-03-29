@@ -75,6 +75,7 @@ struct SettingsStore {
   uint8_t  doubleTapMs;         // 100-250 (ms), double-tap window for ARPEG HOLD
   uint16_t potBarDurationMs;    // 1000-10000 (ms), bargraph display persistence
   uint8_t  panicOnReconnect;    // 0=No, 1=Yes — send CC123 on BLE reconnect
+  uint8_t  reserved2;           // explicit padding (alignment for batAdcAtFull)
   uint16_t batAdcAtFull;        // Raw ADC reading at full charge (0 = uncalibrated, use default)
 };
 
@@ -118,7 +119,7 @@ struct ArpPotStore {
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       1
+#define LED_SETTINGS_VERSION       2
 
 struct LedSettingsStore {
   uint16_t magic;
@@ -153,7 +154,8 @@ struct LedSettingsStore {
   uint8_t  scaleChromBlinks;      // default 2
   uint16_t scaleChromDurationMs;  // default 200
   uint8_t  holdOnFlashMs;         // default 150
-  uint16_t holdFadeMs;            // default 300
+  uint16_t holdFadeMs;            // default 300 (HOLD OFF fade-out)
+  uint16_t stopFadeMs;            // default 300 (STOP fade-out, independent)
   uint8_t  playBeatCount;         // 1-4, default 3
   uint8_t  octaveBlinks;          // default 3
   uint16_t octaveDurationMs;      // default 300

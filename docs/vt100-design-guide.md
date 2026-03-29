@@ -194,7 +194,7 @@ The Python serial terminal (`ItermCode/vt100_serial_terminal.py`) is the bridge 
 
 # Part 2 — ILLPAD48 Specific
 
-These rules are specific to the ILLPAD48 V2 and its 6 setup tools.
+These rules are specific to the ILLPAD48 V2 and its 7 setup tools.
 
 ## 2.1 Amber Phosphor CRT Palette
 
@@ -208,7 +208,7 @@ This gives a vintage Wyse/Hazeltine terminal look. All ANSI colors remain active
 
 ## 2.2 Tool Structure
 
-All 6 tools + main menu follow the same frame layout:
+All 7 tools + main menu follow the same frame layout:
 
 ```
 ╔══...══╗

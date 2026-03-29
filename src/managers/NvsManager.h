@@ -18,7 +18,6 @@ public:
   // --- Non-blocking queue calls (from loop, signals NVS task) ---
   void queueBankWrite(uint8_t bank);
   void queueScaleWrite(uint8_t bankIdx, const ScaleConfig& cfg);
-  void queueBankTypesWrite(const BankType* types);
   void queueVelocityWrite(uint8_t bankIdx, uint8_t baseVel, uint8_t variation);
   void queuePitchBendWrite(uint8_t bankIdx, uint16_t offset);
   void queueArpPotWrite(uint8_t bankIdx, float gate, float shuffleDepth,

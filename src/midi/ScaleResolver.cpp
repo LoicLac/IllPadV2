@@ -18,6 +18,7 @@ uint8_t ScaleResolver::resolve(uint8_t padIndex, const uint8_t* padOrder,
                                 const ScaleConfig& scale) {
   uint8_t order = padOrder[padIndex];
   if (order == 0xFF) return 0xFF;
+  if (scale.root >= 7 || scale.mode >= 7) return 0xFF;
 
   uint8_t rootBase = ROOT_MIDI_BASE[scale.root];
 

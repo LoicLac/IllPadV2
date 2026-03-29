@@ -104,7 +104,7 @@ static bool runStabilizationPhase(
       ui.vtFrameEnd();
     }
 
-    if (ev.type == NAV_ENTER) {
+    if (ev.type == NAV_ENTER && lastRefresh > 0) {
       // Capture reference baselines
       keyboard.pollAllSensorData();
       delay(50);
