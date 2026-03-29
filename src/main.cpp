@@ -444,141 +444,16 @@ void setup() {
 }
 
 // =================================================================
-// Arduino loop() — Core 1
+// Extracted helpers (called by loop(), same file — access globals directly)
 // =================================================================
-void loop() {
-  const SharedKeyboardState& state = s_buffers[s_active.load(std::memory_order_acquire)];
-  uint32_t now = millis();
 
-  // Boot settle — absorb state silently
-  if (now - s_bootTimestamp < BOOT_SETTLE_MS) {
-    for (int i = 0; i < NUM_KEYS; i++) {
-      s_lastKeys[i] = state.keyIsPressed[i];
-    }
-    vTaskDelay(1);
-    return;
-  }
+// --- Pad input: NORMAL noteOn/Off/AT + ARPEG add/remove + stuck-note cleanup ---
+static void handlePadInput(const SharedKeyboardState& state, uint32_t now) {
+  // Static locals (migrated from loop())
+  static bool s_lastHoldState[NUM_BANKS] = {};
+  static bool s_wasHolding = false;
 
-  // --- Poll USB MIDI (clock ticks arrive here) ---
-  s_transport.update();
-
-  // --- Read buttons (active LOW) ---
-  bool leftHeld = (digitalRead(BTN_LEFT_PIN) == LOW);
-  bool rearHeld = (digitalRead(BTN_REAR_PIN) == LOW);
-
-  // Snapshot hold state BEFORE ScaleManager may toggle it (for play/stop check below)
-  bool holdBeforeUpdate = false;
-  {
-    BankSlot& snap = s_bankManager.getCurrentSlot();
-    if (snap.type == BANK_ARPEG && snap.arpEngine)
-      holdBeforeUpdate = snap.arpEngine->isHoldOn();
-  }
-
-  // --- Managers (both use left button — single-layer control) ---
-  bool bankSwitched = s_bankManager.update(state.keyIsPressed, leftHeld);
-  s_scaleManager.update(state.keyIsPressed, leftHeld, s_bankManager.getCurrentSlot());
-
-  // On bank switch: reload per-bank pot values from the new bank, then reset catch.
-  // Without this, PotRouter getters return the PREVIOUS bank's values, which get
-  // pushed to the new bank every frame until the pot physically crosses catch.
-  if (bankSwitched) {
-    s_nvsManager.queueBankWrite(s_bankManager.getCurrentBank());
-    BankSlot& newSlot = s_bankManager.getCurrentSlot();
-
-    // Read per-bank values from new bank (BankSlot + ArpEngine)
-    float gate = 0.5f, shufDepth = 0.0f;
-    ArpDivision div = DIV_1_8;
-    ArpPattern pat = ARP_UP;
-    uint8_t shufTmpl = 0;
-    if (newSlot.type == BANK_ARPEG && newSlot.arpEngine) {
-      gate      = newSlot.arpEngine->getGateLength();
-      shufDepth = newSlot.arpEngine->getShuffleDepth();
-      div       = newSlot.arpEngine->getDivision();
-      pat       = newSlot.arpEngine->getPattern();
-      shufTmpl  = newSlot.arpEngine->getShuffleTemplate();
-    }
-
-    s_potRouter.loadStoredPerBank(
-      newSlot.baseVelocity, newSlot.velocityVariation, newSlot.pitchBendOffset,
-      gate, shufDepth, div, pat, shufTmpl
-    );
-    s_potRouter.seedCatchValues(true);  // Re-seed; keep global catch (only reset per-bank)
-    s_potRouter.resetPerBankCatch();
-  }
-
-  // Consume all ScaleManager change flags once (auto-clearing: can't read twice)
-  ScaleChangeType scaleChange = s_scaleManager.consumeScaleChange();
-  bool scaleChanged = (scaleChange != SCALE_CHANGE_NONE);
-  bool octaveChanged = s_scaleManager.hasOctaveChanged();
-  bool holdToggled   = s_scaleManager.hasHoldToggled();
-
-  // Queue NVS save on scale change + sync arp engine scale + LED confirmation
-  if (scaleChanged) {
-    uint8_t bank = s_bankManager.getCurrentBank();
-    BankSlot& scSlot = s_bankManager.getCurrentSlot();
-    s_nvsManager.queueScaleWrite(bank, scSlot.scale);
-    if (scSlot.type == BANK_ARPEG && scSlot.arpEngine) {
-      // No flush — pending events carry their own resolved MIDI notes
-      // and complete naturally via refcount. Next tick resolves with new scale.
-      scSlot.arpEngine->setScaleConfig(scSlot.scale);
-    }
-    switch (scaleChange) {
-      case SCALE_CHANGE_ROOT:      s_leds.triggerConfirm(CONFIRM_SCALE_ROOT); break;
-      case SCALE_CHANGE_MODE:      s_leds.triggerConfirm(CONFIRM_SCALE_MODE); break;
-      case SCALE_CHANGE_CHROMATIC: s_leds.triggerConfirm(CONFIRM_SCALE_CHROM); break;
-      default: break;
-    }
-  }
-
-  // Queue NVS save on octave change + LED confirmation
-  if (octaveChanged) {
-    uint8_t bank = s_bankManager.getCurrentBank();
-    uint8_t newOct = s_scaleManager.getNewOctaveRange();
-    s_nvsManager.queueArpOctaveWrite(bank, newOct);
-    s_leds.triggerConfirm(CONFIRM_OCTAVE, newOct);
-  }
-
-  // LED confirmation on hold toggle + reset double-tap timestamps
-  if (holdToggled) {
-    BankSlot& holdSlot = s_bankManager.getCurrentSlot();
-    bool holdIsOn = (holdSlot.type == BANK_ARPEG && holdSlot.arpEngine && holdSlot.arpEngine->isHoldOn());
-    s_leds.triggerConfirm(holdIsOn ? CONFIRM_HOLD_ON : CONFIRM_HOLD_OFF);
-    // Clear double-tap timestamps on OFF→ON to prevent false removals
-    if (holdIsOn) {
-      memset(s_lastPressTime, 0, sizeof(s_lastPressTime));
-    }
-  }
-
-  // --- Clock: process ticks (PLL + tick generation) ---
-  s_clockManager.update();
-
-  // --- Play/Stop pad (ARPEG + HOLD ON only — in HOLD OFF this pad plays a note) ---
-  {
-    BankSlot& psSlot = s_bankManager.getCurrentSlot();
-    // Use pre-toggle hold state when same bank (prevents same-frame hold+playStop loss).
-    // After bank switch, use live state (ScaleManager toggled hold on the new bank, not old).
-    bool holdForPS = bankSwitched
-        ? (psSlot.type == BANK_ARPEG && psSlot.arpEngine && psSlot.arpEngine->isHoldOn())
-        : holdBeforeUpdate;
-    if (s_playStopPad < NUM_KEYS && psSlot.type == BANK_ARPEG
-        && psSlot.arpEngine && holdForPS) {
-      bool psPressed = state.keyIsPressed[s_playStopPad];
-      if (psPressed && !s_lastPlayStopState) {
-        psSlot.arpEngine->playStop(s_transport);
-        if (psSlot.arpEngine->isPlaying()) {
-          s_leds.triggerConfirm(CONFIRM_PLAY);
-        } else {
-          s_leds.triggerConfirm(CONFIRM_STOP);
-        }
-      }
-      s_lastPlayStopState = psPressed;
-    } else {
-      // Not ARPEG or HOLD OFF: reset edge detection so it triggers correctly when switching
-      s_lastPlayStopState = (s_playStopPad < NUM_KEYS) ? state.keyIsPressed[s_playStopPad] : false;
-    }
-  }
-
-  // --- MIDI processing (skip when button held — single-layer control) ---
+  // MIDI processing (skip when button held — single-layer control)
   if (!s_bankManager.isHolding() && !s_scaleManager.isHolding()) {
     BankSlot& slot = s_bankManager.getCurrentSlot();
     const ScaleConfig& scale = slot.scale;
@@ -622,7 +497,6 @@ void loop() {
       // === ARPEG MODE ===
 
       // Detect HOLD toggle ON→OFF: sync pile with physical pad state
-      static bool s_lastHoldState[NUM_BANKS] = {};
       uint8_t curBank = s_bankManager.getCurrentBank();
       bool holdNow = slot.arpEngine->isHoldOn();
       if (s_lastHoldState[curBank] && !holdNow) {
@@ -636,7 +510,6 @@ void loop() {
       s_lastHoldState[curBank] = holdNow;
 
       for (int i = 0; i < NUM_KEYS; i++) {
-        // Skip hold pad (handled by ScaleManager) and play/stop pad when HOLD is ON
         if (i == s_holdPad) continue;
         if (i == s_playStopPad && slot.arpEngine->isHoldOn()) continue;
 
@@ -646,23 +519,20 @@ void loop() {
 
         if (pressed && !wasPressed) {
           if (slot.arpEngine->isHoldOn()) {
-            // HOLD ON: double-tap = remove, single tap = add
             if (s_lastPressTime[i] > 0 &&
                 (now - s_lastPressTime[i]) < (uint32_t)s_doubleTapMs) {
               slot.arpEngine->removePadPosition(pos);
-              s_lastPressTime[i] = 0;  // Reset so next tap always adds
+              s_lastPressTime[i] = 0;
             } else {
               slot.arpEngine->addPadPosition(pos);
               s_lastPressTime[i] = now;
             }
           } else {
-            // HOLD OFF: press = add
             slot.arpEngine->addPadPosition(pos);
           }
 
         } else if (!pressed && wasPressed) {
           if (!slot.arpEngine->isHoldOn()) {
-            // HOLD OFF: release = remove
             slot.arpEngine->removePadPosition(pos);
           }
         }
@@ -670,56 +540,142 @@ void loop() {
     }
   }
 
-  // Clean up stuck notes on left-button release edge (NORMAL mode only).
-  // While left is held, MIDI processing is skipped but s_lastKeys keeps tracking,
-  // so pad-release edges are consumed without generating noteOff.
-  {
-    static bool s_wasHolding = false;
-    bool holdingNow = s_bankManager.isHolding() || s_scaleManager.isHolding();
-    if (s_wasHolding && !holdingNow) {
-      BankSlot& relSlot = s_bankManager.getCurrentSlot();
-      if (relSlot.type == BANK_NORMAL) {
-        for (int i = 0; i < NUM_KEYS; i++) {
-          if (!state.keyIsPressed[i]) {
-            s_midiEngine.noteOff(i);  // no-op if pad has no active note
-          }
+  // Clean up stuck notes on left-button release edge
+  bool holdingNow = s_bankManager.isHolding() || s_scaleManager.isHolding();
+  if (s_wasHolding && !holdingNow) {
+    BankSlot& relSlot = s_bankManager.getCurrentSlot();
+    if (relSlot.type == BANK_NORMAL) {
+      for (int i = 0; i < NUM_KEYS; i++) {
+        if (!state.keyIsPressed[i]) {
+          s_midiEngine.noteOff(i);
         }
-      } else if (relSlot.type == BANK_ARPEG && relSlot.arpEngine
-                 && !relSlot.arpEngine->isHoldOn()) {
-        // HOLD OFF: remove positions released during left-hold.
-        // s_lastKeys consumed the release edges — removePadPosition never fired.
-        // Skip holdPad (owned by ScaleManager, never in the pile).
-        for (int i = 0; i < NUM_KEYS; i++) {
-          if (i == s_holdPad) continue;
-          if (!state.keyIsPressed[i]) {
-            relSlot.arpEngine->removePadPosition(s_padOrder[i]);  // idempotent
-          }
+      }
+    } else if (relSlot.type == BANK_ARPEG && relSlot.arpEngine
+               && !relSlot.arpEngine->isHoldOn()) {
+      for (int i = 0; i < NUM_KEYS; i++) {
+        if (i == s_holdPad) continue;
+        if (!state.keyIsPressed[i]) {
+          relSlot.arpEngine->removePadPosition(s_padOrder[i]);
         }
       }
     }
-    s_wasHolding = holdingNow;
+  }
+  s_wasHolding = holdingNow;
+}
+
+// --- Manager updates: bank/scale switch, flag consumption, clock ---
+static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld) {
+  // Managers (both use left button — single-layer control)
+  bool bankSwitched = s_bankManager.update(state.keyIsPressed, leftHeld);
+  s_scaleManager.update(state.keyIsPressed, leftHeld, s_bankManager.getCurrentSlot());
+
+  // On bank switch: reload per-bank pot values from the new bank, then reset catch.
+  if (bankSwitched) {
+    s_nvsManager.queueBankWrite(s_bankManager.getCurrentBank());
+    BankSlot& newSlot = s_bankManager.getCurrentSlot();
+
+    float gate = 0.5f, shufDepth = 0.0f;
+    ArpDivision div = DIV_1_8;
+    ArpPattern pat = ARP_UP;
+    uint8_t shufTmpl = 0;
+    if (newSlot.type == BANK_ARPEG && newSlot.arpEngine) {
+      gate      = newSlot.arpEngine->getGateLength();
+      shufDepth = newSlot.arpEngine->getShuffleDepth();
+      div       = newSlot.arpEngine->getDivision();
+      pat       = newSlot.arpEngine->getPattern();
+      shufTmpl  = newSlot.arpEngine->getShuffleTemplate();
+    }
+
+    s_potRouter.loadStoredPerBank(
+      newSlot.baseVelocity, newSlot.velocityVariation, newSlot.pitchBendOffset,
+      gate, shufDepth, div, pat, shufTmpl
+    );
+    s_potRouter.seedCatchValues(true);
+    s_potRouter.resetPerBankCatch();
   }
 
-  // Always sync edge state — prevents ghost notes when button releases
-  for (int i = 0; i < NUM_KEYS; i++) {
-    s_lastKeys[i] = state.keyIsPressed[i];
+  // Consume all ScaleManager change flags once (auto-clearing)
+  ScaleChangeType scaleChange = s_scaleManager.consumeScaleChange();
+  bool scaleChanged = (scaleChange != SCALE_CHANGE_NONE);
+  bool octaveChanged = s_scaleManager.hasOctaveChanged();
+  bool holdToggled   = s_scaleManager.hasHoldToggled();
+
+  // Queue NVS save on scale change + sync arp engine scale + LED confirmation
+  if (scaleChanged) {
+    uint8_t bank = s_bankManager.getCurrentBank();
+    BankSlot& scSlot = s_bankManager.getCurrentSlot();
+    s_nvsManager.queueScaleWrite(bank, scSlot.scale);
+    if (scSlot.type == BANK_ARPEG && scSlot.arpEngine) {
+      scSlot.arpEngine->setScaleConfig(scSlot.scale);
+    }
+    switch (scaleChange) {
+      case SCALE_CHANGE_ROOT:      s_leds.triggerConfirm(CONFIRM_SCALE_ROOT); break;
+      case SCALE_CHANGE_MODE:      s_leds.triggerConfirm(CONFIRM_SCALE_MODE); break;
+      case SCALE_CHANGE_CHROMATIC: s_leds.triggerConfirm(CONFIRM_SCALE_CHROM); break;
+      default: break;
+    }
   }
 
-  // --- ArpScheduler: dispatch clock ticks to all active arps ---
-  s_arpScheduler.tick();
-  s_arpScheduler.processEvents();  // Fire pending gate noteOff + shuffled noteOn
+  // Queue NVS save on octave change + LED confirmation
+  if (octaveChanged) {
+    uint8_t bank = s_bankManager.getCurrentBank();
+    uint8_t newOct = s_scaleManager.getNewOctaveRange();
+    s_nvsManager.queueArpOctaveWrite(bank, newOct);
+    s_leds.triggerConfirm(CONFIRM_OCTAVE, newOct);
+  }
 
-  // --- CRITICAL PATH END ---
-  s_midiEngine.flush();
+  // LED confirmation on hold toggle + reset double-tap timestamps
+  if (holdToggled) {
+    BankSlot& holdSlot = s_bankManager.getCurrentSlot();
+    bool holdIsOn = (holdSlot.type == BANK_ARPEG && holdSlot.arpEngine && holdSlot.arpEngine->isHoldOn());
+    s_leds.triggerConfirm(holdIsOn ? CONFIRM_HOLD_ON : CONFIRM_HOLD_OFF);
+    if (holdIsOn) {
+      memset(s_lastPressTime, 0, sizeof(s_lastPressTime));
+    }
+  }
 
-  // --- SECONDARY: Pots ---
+  // Clock: process ticks (PLL + tick generation)
+  s_clockManager.update();
+
+  return bankSwitched;
+}
+
+// --- Play/Stop pad edge detection (ARPEG + HOLD ON only) ---
+static void handlePlayStopPad(const SharedKeyboardState& state,
+                               bool holdBeforeUpdate, bool bankSwitched) {
+  BankSlot& psSlot = s_bankManager.getCurrentSlot();
+  // Use pre-toggle hold state when same bank (prevents same-frame hold+playStop loss).
+  // After bank switch, use live state (ScaleManager toggled hold on the new bank, not old).
+  bool holdForPS = bankSwitched
+      ? (psSlot.type == BANK_ARPEG && psSlot.arpEngine && psSlot.arpEngine->isHoldOn())
+      : holdBeforeUpdate;
+  if (s_playStopPad < NUM_KEYS && psSlot.type == BANK_ARPEG
+      && psSlot.arpEngine && holdForPS) {
+    bool psPressed = state.keyIsPressed[s_playStopPad];
+    if (psPressed && !s_lastPlayStopState) {
+      psSlot.arpEngine->playStop(s_transport);
+      if (psSlot.arpEngine->isPlaying()) {
+        s_leds.triggerConfirm(CONFIRM_PLAY);
+      } else {
+        s_leds.triggerConfirm(CONFIRM_STOP);
+      }
+    }
+    s_lastPlayStopState = psPressed;
+  } else {
+    // Not ARPEG or HOLD OFF: reset edge detection so it triggers correctly when switching
+    s_lastPlayStopState = (s_playStopPad < NUM_KEYS) ? state.keyIsPressed[s_playStopPad] : false;
+  }
+}
+
+// --- Pot pipeline: ADC read, param push, CC/PB, bargraph, battery, LEDs ---
+static void handlePotPipeline(bool leftHeld, bool rearHeld) {
   BankSlot& potSlot = s_bankManager.getCurrentSlot();
   s_potRouter.update(leftHeld, rearHeld, potSlot.type);
 
-  // Update internal tempo from pot (slow-changing, OK in secondary section)
+  // Update internal tempo from pot
   s_clockManager.setInternalBPM(s_potRouter.getTempoBPM());
 
-  // --- Musical params: push live to BankSlot ---
+  // Push live to BankSlot
   potSlot.baseVelocity      = s_potRouter.getBaseVelocity();
   potSlot.velocityVariation  = s_potRouter.getVelocityVariation();
   {
@@ -730,7 +686,7 @@ void loop() {
     }
   }
 
-  // --- Musical params: push live to ArpEngine (if ARPEG bank) ---
+  // Push live to ArpEngine (if ARPEG bank)
   if (potSlot.type == BANK_ARPEG && potSlot.arpEngine) {
     potSlot.arpEngine->setGateLength(s_potRouter.getGateLength());
     potSlot.arpEngine->setShuffleDepth(s_potRouter.getShuffleDepth());
@@ -741,15 +697,15 @@ void loop() {
     potSlot.arpEngine->setVelocityVariation(s_potRouter.getVelocityVariation());
   }
 
-  // --- Global params: Core 0 atomics ---
+  // Global params: Core 0 atomics
   s_responseShape.store(s_potRouter.getResponseShape(), std::memory_order_relaxed);
   s_slewRate.store(s_potRouter.getSlewRate(), std::memory_order_relaxed);
   s_padSensitivity.store(s_potRouter.getPadSensitivity(), std::memory_order_relaxed);
 
-  // --- Non-musical params ---
+  // Non-musical params
   s_leds.setBrightness(s_potRouter.getLedBrightness());
 
-  // --- MIDI CC/PB from user-assigned pot mappings (secondary priority) ---
+  // MIDI CC/PB from user-assigned pot mappings
   {
     uint8_t ccNum, ccVal;
     while (s_potRouter.consumeCC(ccNum, ccVal)) {
@@ -770,13 +726,16 @@ void loop() {
     );
   }
 
-  // Battery monitor (periodic check + rear button → gauge)
+  // Battery monitor + low battery LED flag
   s_batteryMonitor.update(rearHeld);
   s_leds.setBatteryLow(s_batteryMonitor.isLow());
 
   s_leds.update();
+}
 
-  // --- Panic: BLE reconnect detection ---
+// --- Panic: BLE reconnect + manual triple-click rear ---
+static void handlePanicChecks(uint32_t now, bool rearHeld) {
+  // BLE reconnect detection
   {
     bool bleNow = s_transport.isBleConnected();
     if (bleNow && !s_lastBleConnected && s_panicOnReconnect) {
@@ -785,7 +744,7 @@ void loop() {
     s_lastBleConnected = bleNow;
   }
 
-  // --- Panic: manual trigger (triple-click rear button within 600ms) ---
+  // Manual trigger: triple-click rear button within 600ms
   {
     static bool    s_lastRearState = false;
     static uint8_t s_rearClickCount = 0;
@@ -809,14 +768,10 @@ void loop() {
     }
     s_lastRearState = rearNow;
   }
+}
 
-  // --- NVS: pot debounce (10s after last change) + signal task ---
-  bool potDirty = s_potRouter.isDirty();
-  s_nvsManager.tickPotDebounce(now, potDirty, s_potRouter,
-                                s_bankManager.getCurrentBank(), potSlot.type);
-  if (potDirty) s_potRouter.clearDirty();
-
-  // --- Debug: print pot parameters on change ---
+// --- Debug output: pot parameter changes + hardware state ---
+static void debugOutput(bool leftHeld, bool rearHeld) {
   #if DEBUG_SERIAL
   {
     static float    s_dbgShape    = -1.0f;
@@ -874,15 +829,6 @@ void loop() {
   }
   #endif
 
-  // Check if any pad is pressed (NVS won't write during play)
-  bool anyPressed = false;
-  for (int i = 0; i < NUM_KEYS; i++) {
-    if (state.keyIsPressed[i]) { anyPressed = true; break; }
-  }
-  s_nvsManager.setAnyPadPressed(anyPressed);
-  s_nvsManager.notifyIfDirty();
-
-  // --- Hardware debug: log only on button/pot changes ---
   #if DEBUG_HARDWARE
   {
     static bool s_hwInit = false;
@@ -931,6 +877,78 @@ void loop() {
     }
   }
   #endif
+}
+
+// =================================================================
+// Arduino loop() — Core 1
+// =================================================================
+void loop() {
+  const SharedKeyboardState& state = s_buffers[s_active.load(std::memory_order_acquire)];
+  uint32_t now = millis();
+
+  // Boot settle — absorb state silently
+  if (now - s_bootTimestamp < BOOT_SETTLE_MS) {
+    for (int i = 0; i < NUM_KEYS; i++) {
+      s_lastKeys[i] = state.keyIsPressed[i];
+    }
+    vTaskDelay(1);
+    return;
+  }
+
+  // --- Poll USB MIDI (clock ticks arrive here) ---
+  s_transport.update();
+
+  // --- Read buttons (active LOW) ---
+  bool leftHeld = (digitalRead(BTN_LEFT_PIN) == LOW);
+  bool rearHeld = (digitalRead(BTN_REAR_PIN) == LOW);
+
+  // Snapshot hold state BEFORE ScaleManager may toggle it (for play/stop check below)
+  bool holdBeforeUpdate = false;
+  {
+    BankSlot& snap = s_bankManager.getCurrentSlot();
+    if (snap.type == BANK_ARPEG && snap.arpEngine)
+      holdBeforeUpdate = snap.arpEngine->isHoldOn();
+  }
+
+  // --- CRITICAL PATH ---
+  bool bankSwitched = handleManagerUpdates(state, leftHeld);
+
+  handlePlayStopPad(state, holdBeforeUpdate, bankSwitched);
+
+  handlePadInput(state, now);
+
+  // Always sync edge state — prevents ghost notes when button releases
+  for (int i = 0; i < NUM_KEYS; i++) {
+    s_lastKeys[i] = state.keyIsPressed[i];
+  }
+
+  // --- ArpScheduler: dispatch clock ticks to all active arps ---
+  s_arpScheduler.tick();
+  s_arpScheduler.processEvents();  // Fire pending gate noteOff + shuffled noteOn
+
+  // --- CRITICAL PATH END ---
+  s_midiEngine.flush();
+
+  // --- SECONDARY: Pots + params + CC/PB + bargraph + battery + LEDs ---
+  handlePotPipeline(leftHeld, rearHeld);
+
+  handlePanicChecks(now, rearHeld);
+
+  // --- NVS: pot debounce (10s after last change) + signal task ---
+  bool potDirty = s_potRouter.isDirty();
+  s_nvsManager.tickPotDebounce(now, potDirty, s_potRouter,
+                                s_bankManager.getCurrentBank(), s_bankManager.getCurrentSlot().type);
+  if (potDirty) s_potRouter.clearDirty();
+
+  // Check if any pad is pressed (NVS won't write during play)
+  bool anyPressed = false;
+  for (int i = 0; i < NUM_KEYS; i++) {
+    if (state.keyIsPressed[i]) { anyPressed = true; break; }
+  }
+  s_nvsManager.setAnyPadPressed(anyPressed);
+  s_nvsManager.notifyIfDirty();
+
+  debugOutput(leftHeld, rearHeld);
 
   vTaskDelay(1);
 }

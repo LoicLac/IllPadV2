@@ -73,21 +73,28 @@ Critical path first, secondary after. MIDI latency depends on this order.
 1. Read double buffer (instant)              ← CRITICAL PATH START
 2. USB MIDI transport update (clock polling)
 3. Read buttons (left + rear)
+── handleManagerUpdates(state, leftHeld) ──
 4. BankManager.update()                       ← left button
 5. ScaleManager.update()                      ← left button (same as bank)
 5b. Consume scale/octave/hold flags + LED confirmations
     (ARPEG scale change: flush noteOffs before re-resolve)
 6. ClockManager.update()                      ← PLL + tick generation
+── handlePlayStopPad(state, holdBeforeUpdate, bankSwitched) ──
 7. Play/Stop pad (ARPEG + HOLD ON only)
+── handlePadInput(state, now) ──
 8. processNormalMode() or processArpMode()
+8b. Stuck-note cleanup on left-release edge
 9. ArpScheduler.tick()                       ← all background arps
 9b. ArpScheduler.processEvents()             ← gate noteOff + shuffle noteOn
 10. MidiEngine.flush()                        ← CRITICAL PATH END
+── handlePotPipeline(leftHeld, rearHeld) ──
 11. PotRouter.update()                        ← SECONDARY (5 pots)
 11b. Send MIDI CC/PB if dirty                 ← from user-assigned pot mappings
 12. BatteryMonitor.update()
 13. LedController.update()                    ← multi-bank state + confirmations
+── handlePanicChecks(now, rearHeld) ──
 14. NvsManager.notifyIfDirty()                ← non-blocking signal to NVS task
+── debugOutput(leftHeld, rearHeld) ──
 15. vTaskDelay(1)
 ```
 
@@ -124,7 +131,7 @@ LedController drives a WS2812 RGB NeoPixel strip via `Adafruit_NeoPixel` (NEO_GR
 | Background ARPEG stopped | Blue dim | Sine pulse | 8%↔25% | ~1.5s period |
 | Background ARPEG playing | Blue dim | Sine pulse + tick flash | 8%↔20%, spike 25% on beat | Pulse ~1.5s, flash 30ms |
 
-**Sine pulse**: 64-entry precomputed LUT, index = `(millis() / (LED_PULSE_PERIOD_MS/64)) % 64`. Integer math only in `update()`.
+**Sine pulse**: 256-entry precomputed LUT, index = `(millis() / (pulsePeriodMs/256)) % 256`. Integer math only in `update()`.
 
 **Tick flash**: `ArpEngine::consumeTickFlash()` returns true once per arp step. LedController stores `_flashStartTime[i]` and holds the flash for `LED_TICK_FLASH_DURATION_MS`.
 
@@ -134,7 +141,7 @@ Each confirmation type has a distinct RGB color. 10 `ConfirmType` enum values:
 
 | Event | ConfirmType | Color | Pattern | Duration |
 |---|---|---|---|---|
-| Bank switch | `CONFIRM_BANK_SWITCH` | White | Triple blink destination LED | 300ms |
+| Bank switch | `CONFIRM_BANK_SWITCH` | White | Triple blink destination LED, brightness % configurable | 300ms |
 | Scale root | `CONFIRM_SCALE_ROOT` | Vivid yellow | Double blink current LED | 200ms |
 | Scale mode | `CONFIRM_SCALE_MODE` | Pale yellow | Double blink current LED | 200ms |
 | Scale chromatic | `CONFIRM_SCALE_CHROM` | Golden yellow | Double blink current LED | 200ms |
@@ -144,13 +151,13 @@ Each confirmation type has a distinct RGB color. 10 `ConfirmType` enum values:
 | Stop | `CONFIRM_STOP` | Blue-cyan | Fade-out | 300ms |
 | Octave | `CONFIRM_OCTAVE` | Blue-violet | Triple blink of a 2-LED group (octave 1→LEDs 0-1, 2→LEDs 2-3, 3→LEDs 4-5, 4→LEDs 6-7) | 300ms |
 
-Timing derived from `LED_CONFIRM_UNIT_MS` (50ms) × phase count. Play confirmation uses `ClockManager` for beat sync (fallback: 200ms/beat if no clock). Priority: below error/battery/bargraph, above normal display. New confirmation preempts active one.
+Play ack flash uses `LED_CONFIRM_UNIT_MS` (50ms) for fixed timing. Beat-synced flashes use `ClockManager` (fallback: 200ms/beat if no clock). Stop fade uses independent `stopFadeMs` (not aliased with hold-off). Priority: below error/battery/bargraph, above normal display. New confirmation preempts active one.
 
 ### Priority State Machine (in `update()`)
 
 ```
 1. Boot mode          (progressive white fill / red failure blink)
-2. Setup comet        (violet comet during Tools 1-6)
+2. Setup comet        (violet comet during Tools 1-7)
 3. Chase pattern      (calibration entry — white chase)
 4. Error              (LEDs 3-4 blink red 500ms — sensing task stall)
 5. Battery gauge      (8-LED red→green gradient bar, 3s)

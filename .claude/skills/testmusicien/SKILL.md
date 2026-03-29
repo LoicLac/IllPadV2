@@ -5,11 +5,18 @@ description: "Stress-test le firmware ILLPAD V2 avec 5 musiciens virtuels en par
 
 # /testmusicien — Stress-test par 5 musiciens virtuels
 
-Tu lances 5 agents en parallele qui se comportent comme des musiciens utilisant l'ILLPAD dans des contextes differents. Ils lisent le code, le CLAUDE.md, et cherchent des bugs qu'un musicien rencontrerait en jouant.
+Tu lances 5 agents en parallele qui se comportent comme des musiciens utilisant l'ILLPAD dans des contextes differents. Ils lisent le code et cherchent des bugs qu'un musicien rencontrerait en jouant.
 
 ## Pourquoi ce skill existe
 
 Le `/audit` existant verifie que le code correspond a la spec. Ce skill fait l'inverse : il part de l'usage musical et cherche ce que la spec n'a pas prevu. Les meilleurs bugs viennent de "je faisais X et Y en meme temps et ca a plante" — pas de "la spec dit A mais le code fait B".
+
+## Optimisation tokens
+
+Les agents sont lances en **Sonnet** (pas Opus) — suffisant pour du bug-hunting, ~5x moins cher.
+- **NE PAS relire `.claude/CLAUDE.md`** — les agents l'ont deja en system prompt automatiquement.
+- Lire uniquement `docs/architecture-briefing.md` comme contexte supplementaire (flows, invariants).
+- Quand l'utilisateur cible des fichiers modifies, passer `git diff --name-only` pour que les agents se concentrent sur le delta.
 
 ## Phase 1 — Dispatch des 5 musiciens
 
@@ -32,11 +39,9 @@ Utilise ce template exact, en remplissant les details du profil :
 ```
 You are a {PROFILE_NAME} stress-testing the ILLPAD48 V2 capacitive MIDI controller codebase. Your focus: **{FOCUS}**.
 
-Start by reading these two files IN ORDER:
-1. `docs/architecture-briefing.md` — runtime data flows, invariants, inter-core sync, dirty flags. This gives you the mental model of how things connect.
-2. `.claude/CLAUDE.md` — the full spec (hardware, architecture, NVS, setup tools, conventions).
-
-Then explore the source code to verify your workflows.
+IMPORTANT: You already have CLAUDE.md in your system prompt — do NOT re-read it.
+Start by reading `docs/architecture-briefing.md` for runtime data flows and invariants.
+Then go straight to the source files relevant to your profile.
 
 Your musician profile: {PROFILE_DESCRIPTION}
 
@@ -47,14 +52,12 @@ Test these workflows by reading the code and finding bugs/issues:
 
 For each issue found, report using this EXACT format (one per issue):
 
-```
 ### BUG: [short title]
 - **File**: path/to/file.cpp:LINE
 - **Severity**: CRITICAL | MEDIUM | LOW
 - **What**: Description of the bug (what the code does wrong)
 - **Trigger**: How a musician would trigger it (concrete scenario)
 - **Fix hint**: One-line suggestion for the fix approach
-```
 
 Important:
 - Only report REAL bugs you verified in the code. No speculation.
@@ -66,6 +69,7 @@ Important:
 
 ### Agent configuration
 
+- `model`: `"sonnet"` (suffisant pour du bug-hunting, economise ~5x en tokens)
 - `subagent_type`: `"general-purpose"` (ils ont besoin de lire beaucoup de fichiers)
 - `description`: `"Musician N: {profile_name}"`
 - Tous lances dans le meme message (parallele)

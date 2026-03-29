@@ -27,7 +27,7 @@ Left-button release safety (detect s_wasHolding → !holding edge):
                   ArpEngine::removePadPosition(s_padOrder[i])          [idempotent]
   — prevents stuck notes / stuck pile positions when pads released during hold
 ```
-Key files: `main.cpp:559-577`, `main.cpp:648-666` (left-release cleanup), `MidiEngine.cpp:47-57`, `ScaleResolver.cpp`, `MidiTransport.cpp:186-204`
+Key files: `main.cpp:handlePadInput()` (lines 451-564), `MidiEngine.cpp:47-57`, `ScaleResolver.cpp`, `MidiTransport.cpp:186-204`
 
 ### Arp Tick → MIDI NoteOn
 ```
@@ -56,14 +56,15 @@ Key files: `ClockManager.cpp:108-134`, `ArpScheduler.cpp:98-131`, `ArpEngine.cpp
 3. Drain aftertouch ring buffer               [MidiEngine.cpp:98-99]
 4. Update foreground flags                    [BankManager.cpp:126-129]
 5. setChannel(newBank)                        [BankManager.cpp:132]
-6. sendPitchBend(newBank.pitchBendOffset)     [BankManager.cpp:133]
+6. sendPitchBend(newBank.pitchBendOffset)     [BankManager.cpp:133-134]
+   — NORMAL banks only. ARPEG banks: no pitch bend sent (no aftertouch, spec)
 7. LED: setCurrentBank + triggerConfirm       [BankManager.cpp:137-140]
-8. loadStoredPerBank() into PotRouter         [main.cpp:483-487]
-9. seedCatchValues(keepGlobalCatch=true)      [main.cpp:488]
+8. loadStoredPerBank() into PotRouter         [handleManagerUpdates()]
+9. seedCatchValues(keepGlobalCatch=true)      [handleManagerUpdates()]
    — reseeds stored values; global targets keep catch state (tempo, shape…)
    — per-bank targets lose catch (will be uncaught by step 10)
-10. resetPerBankCatch() — uncatch per-bank only [main.cpp:489]
-11. queueBankWrite() to NVS                   [main.cpp:467]
+10. resetPerBankCatch() — uncatch per-bank only [handleManagerUpdates()]
+11. queueBankWrite() to NVS                   [handleManagerUpdates()]
 ```
 
 ### Scale Change
@@ -72,10 +73,10 @@ ScaleManager::processScalePads() detects root/mode/chromatic pad press
   → NORMAL: allNotesOff() immediately (prevents orphan notes)
   → ARPEG: NO flush — pending events carry resolved notes, next tick re-resolves
   → Set flag: _scaleChangeType = ROOT|MODE|CHROMATIC
-main.cpp consumes flag:
+handleManagerUpdates() consumes flag:
   → NVS queue + ArpEngine::setScaleConfig() + LED confirm
 ```
-Key files: `ScaleManager.cpp:123-227`, `main.cpp:492-506`
+Key files: `ScaleManager.cpp:123-227`, `main.cpp:handleManagerUpdates()` (lines 567-642)
 
 ### Pot → Parameter
 ```
@@ -86,10 +87,10 @@ applyBinding():
   if !caught: compare adc vs storedValue, show uncaught bargraph, WAIT
   if caught: convert ADC → parameter range, write output, show bargraph
   → Global targets: propagate storedValue across contexts
-main.cpp: read getters → write to BankSlot/ArpEngine/atomics
+handlePotPipeline(): read getters → write to BankSlot/ArpEngine/atomics
   → consumeCC/consumePitchBend → MidiTransport sends
 ```
-Key files: `PotRouter.cpp:329-552`, `main.cpp:662-716`
+Key files: `PotRouter.cpp:329-552`, `main.cpp:handlePotPipeline()` (lines 671-735)
 
 ---
 
@@ -130,7 +131,7 @@ All lock-free. No mutex anywhere in runtime code.
 
 | Pattern | Example | Where to look |
 |---------|---------|---------------|
-| Stale state after bank switch | Catch targets from old bank | `main.cpp` bank switch block, `PotRouter::resetPerBankCatch` |
+| Stale state after bank switch | Catch targets from old bank | `main.cpp` handleManagerUpdates(), `PotRouter::resetPerBankCatch` |
 | Orphan notes on mode change | noteOff uses wrong note number | `_lastResolvedNote` usage in `MidiEngine.cpp` |
 | MIDI flood from noisy ADC | CC toggling ±1 at boundary | `PotRouter.cpp` CC dirty check, hysteresis |
 | Timing burst after clock glitch | ArpScheduler fires many steps | `ArpScheduler.cpp` ticksElapsed guard (capped at 24 ticks = 1 quarter note) |
@@ -143,18 +144,18 @@ All lock-free. No mutex anywhere in runtime code.
 
 | Domain | Primary files | Also touches |
 |--------|--------------|-------------|
-| **Pad sensing** | `CapacitiveKeyboard.cpp/.h` (DO NOT MODIFY) | `main.cpp:95-117` (sensing task) |
-| **MIDI output** | `MidiEngine.cpp/.h`, `MidiTransport.cpp/.h` | `main.cpp:559-596` (note processing) |
+| **Pad sensing** | `CapacitiveKeyboard.cpp/.h` (DO NOT MODIFY) | `main.cpp` sensingTask() |
+| **MIDI output** | `MidiEngine.cpp/.h`, `MidiTransport.cpp/.h` | `main.cpp` handlePadInput() |
 | **Note resolution** | `ScaleResolver.cpp/.h` | `MidiEngine.cpp:51`, `ArpEngine.cpp:349` |
-| **Bank management** | `BankManager.cpp/.h` | `main.cpp:460-489` (post-switch) |
-| **Scale/hold/octave** | `ScaleManager.cpp/.h` | `main.cpp:491-532` (flag consumption) |
-| **Arpeggiator** | `ArpEngine.cpp/.h`, `ArpScheduler.cpp/.h` | `main.cpp:587-634` (pile management) |
+| **Bank management** | `BankManager.cpp/.h` | `main.cpp` handleManagerUpdates() (post-switch) |
+| **Scale/hold/octave** | `ScaleManager.cpp/.h` | `main.cpp` handleManagerUpdates() (flag consumption) |
+| **Arpeggiator** | `ArpEngine.cpp/.h`, `ArpScheduler.cpp/.h` | `main.cpp` handlePadInput() (pile management) |
 | **Clock/PLL** | `ClockManager.cpp/.h` | `MidiTransport.cpp:28-30,129` (tick callbacks) |
-| **Pots/catch** | `PotRouter.cpp/.h` | `main.cpp:662-716` (consume outputs) |
+| **Pots/catch** | `PotRouter.cpp/.h` | `main.cpp` handlePotPipeline() |
 | **LEDs** | `LedController.cpp/.h` | `HardwareConfig.h` (colors, timing constants) |
 | **NVS** | `NvsManager.cpp/.h` | `KeyboardData.h` (store structs, versions) |
 | **Battery** | `BatteryMonitor.cpp/.h` | `HardwareConfig.h` (ADC pin, thresholds), `LedController.cpp` (setBatteryLow) |
-| **Setup mode** | `SetupManager.cpp`, `Tool*.cpp` | `main.cpp:208-260` (entry detection) |
+| **Setup mode** | `SetupManager.cpp`, `Tool*.cpp` | `main.cpp` setup() (entry detection) |
 
 ---
 
