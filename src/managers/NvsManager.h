@@ -109,6 +109,10 @@ private:
   // Safety: no write while pads pressed
   std::atomic<bool> _anyPadPressed;
 
+  // Internal load helper — reads a struct blob, validates magic/version
+  bool loadValidatedBlob(const char* ns, const char* key,
+                          uint16_t expectedVersion, void* out, size_t size);
+
   // Internal save methods
   void saveBank();
   void saveBankTypes();

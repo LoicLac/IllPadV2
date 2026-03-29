@@ -393,6 +393,29 @@ void NvsManager::commitAll() {
 }
 
 // =================================================================
+// loadValidatedBlob — generic helper for Store structs with magic/version
+// =================================================================
+bool NvsManager::loadValidatedBlob(const char* ns, const char* key,
+                                    uint16_t expectedVersion, void* out, size_t size) {
+  if (size > 128) return false;  // safety — all Store structs are small
+  Preferences prefs;
+  if (!prefs.begin(ns, true)) return false;
+  bool ok = false;
+  size_t len = prefs.getBytesLength(key);
+  if (len == size) {
+    uint8_t tmp[128];
+    prefs.getBytes(key, tmp, size);
+    const uint16_t* header = reinterpret_cast<const uint16_t*>(tmp);
+    if (header[0] == EEPROM_MAGIC && header[1] == expectedVersion) {
+      memcpy(out, tmp, size);
+      ok = true;
+    }
+  }
+  prefs.end();
+  return ok;
+}
+
+// =================================================================
 // loadAll — blocking reads at boot
 // =================================================================
 void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
@@ -502,6 +525,9 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
         prefs.getBytes(key, &_pendingArpPot[i], sizeof(ArpPotStore));
         if (_pendingArpPot[i].division >= NUM_ARP_DIVISIONS) _pendingArpPot[i].division = 4;
         if (_pendingArpPot[i].pattern  >= NUM_ARP_PATTERNS)  _pendingArpPot[i].pattern  = 0;
+        if (_pendingArpPot[i].octaveRange < 1 || _pendingArpPot[i].octaveRange > 4)
+          _pendingArpPot[i].octaveRange = 1;
+        if (_pendingArpPot[i].shuffleTemplate >= 5) _pendingArpPot[i].shuffleTemplate = 0;
       }
     }
     prefs.end();
@@ -520,22 +546,18 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   }
 
   // --- Global pot params (shape, slew, deadzone) ---
-  if (prefs.begin(POT_PARAMS_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(POT_PARAMS_NVS_KEY);
-    if (len == sizeof(PotParamsStore)) {
-      PotParamsStore pps;
-      prefs.getBytes(POT_PARAMS_NVS_KEY, &pps, sizeof(PotParamsStore));
-      if (pps.magic == EEPROM_MAGIC && pps.version == POT_PARAMS_VERSION) {
-        _pendingResponseShape = (float)pps.responseShapeRaw / 4095.0f;
-        _pendingSlewRate = pps.slewRate;
-        _pendingAtDeadzone = pps.atDeadzone;
-        #if DEBUG_SERIAL
-        Serial.printf("[NVS] Pot params: shape=%.2f slew=%d dz=%d\n",
-                      _pendingResponseShape, _pendingSlewRate, _pendingAtDeadzone);
-        #endif
-      }
+  {
+    PotParamsStore pps;
+    if (loadValidatedBlob(POT_PARAMS_NVS_NAMESPACE, POT_PARAMS_NVS_KEY,
+                           POT_PARAMS_VERSION, &pps, sizeof(pps))) {
+      _pendingResponseShape = (float)pps.responseShapeRaw / 4095.0f;
+      _pendingSlewRate = pps.slewRate;
+      _pendingAtDeadzone = pps.atDeadzone;
+      #if DEBUG_SERIAL
+      Serial.printf("[NVS] Pot params: shape=%.2f slew=%d dz=%d\n",
+                    _pendingResponseShape, _pendingSlewRate, _pendingAtDeadzone);
+      #endif
     }
-    prefs.end();
   }
 
   // --- LED brightness ---
@@ -557,38 +579,30 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   }
 
   // --- Pad order ---
-  if (prefs.begin(NOTEMAP_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(NOTEMAP_NVS_KEY);
-    if (len == sizeof(NoteMapStore)) {
-      NoteMapStore nms;
-      prefs.getBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
-      if (nms.magic == EEPROM_MAGIC && nms.version == NOTEMAP_VERSION) {
-        memcpy(padOrder, nms.noteMap, NUM_KEYS);
-        #if DEBUG_SERIAL
-        Serial.println("[NVS] Pad order loaded.");
-        #endif
-      }
+  {
+    NoteMapStore nms;
+    if (loadValidatedBlob(NOTEMAP_NVS_NAMESPACE, NOTEMAP_NVS_KEY,
+                           NOTEMAP_VERSION, &nms, sizeof(nms))) {
+      memcpy(padOrder, nms.noteMap, NUM_KEYS);
+      #if DEBUG_SERIAL
+      Serial.println("[NVS] Pad order loaded.");
+      #endif
     }
-    prefs.end();
   }
 
   // --- Bank pads ---
-  if (prefs.begin(BANKPAD_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(BANKPAD_NVS_KEY);
-    if (len == sizeof(BankPadStore)) {
-      BankPadStore bps;
-      prefs.getBytes(BANKPAD_NVS_KEY, &bps, sizeof(BankPadStore));
-      if (bps.magic == EEPROM_MAGIC && bps.version == BANKPAD_VERSION) {
-        memcpy(bankPads, bps.bankPads, NUM_BANKS);
-        for (uint8_t j = 0; j < NUM_BANKS; j++) {
-          if (bankPads[j] >= NUM_KEYS) bankPads[j] = j;
-        }
-        #if DEBUG_SERIAL
-        Serial.println("[NVS] Bank pads loaded.");
-        #endif
+  {
+    BankPadStore bps;
+    if (loadValidatedBlob(BANKPAD_NVS_NAMESPACE, BANKPAD_NVS_KEY,
+                           BANKPAD_VERSION, &bps, sizeof(bps))) {
+      memcpy(bankPads, bps.bankPads, NUM_BANKS);
+      for (uint8_t j = 0; j < NUM_BANKS; j++) {
+        if (bankPads[j] >= NUM_KEYS) bankPads[j] = j;
       }
+      #if DEBUG_SERIAL
+      Serial.println("[NVS] Bank pads loaded.");
+      #endif
     }
-    prefs.end();
   }
 
   // --- Scale control pads ---
@@ -636,56 +650,31 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
               DEFAULT_BLE_INTERVAL, DEFAULT_CLOCK_MODE,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT, DEFAULT_PANIC_ON_RECONNECT,
               0, DEFAULT_BAT_ADC_AT_FULL};
-  if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
-    if (len == sizeof(SettingsStore)) {
-      SettingsStore tmp;
-      prefs.getBytes(SETTINGS_NVS_KEY, &tmp, sizeof(SettingsStore));
-      if (tmp.magic == EEPROM_MAGIC && tmp.version == SETTINGS_VERSION) {
-        settings = tmp;
-      }
-    }
-    prefs.end();
-    #if DEBUG_SERIAL
-    Serial.printf("[NVS] Settings: profile=%d, atRate=%d, bleInt=%d, clock=%d, dblTap=%d\n",
-                  settings.baselineProfile, settings.aftertouchRate, settings.bleInterval,
-                  settings.clockMode, settings.doubleTapMs);
-    #endif
-  }
+  loadValidatedBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY,
+                     SETTINGS_VERSION, &settings, sizeof(settings));
+  #if DEBUG_SERIAL
+  Serial.printf("[NVS] Settings: profile=%d, atRate=%d, bleInt=%d, clock=%d, dblTap=%d\n",
+                settings.baselineProfile, settings.aftertouchRate, settings.bleInterval,
+                settings.clockMode, settings.doubleTapMs);
+  #endif
 
   // --- LED settings (Tool 7) ---
-  {
-    Preferences lprefs;
-    if (lprefs.begin(LED_SETTINGS_NVS_NAMESPACE, true)) {
-      size_t len = lprefs.getBytesLength(LED_SETTINGS_NVS_KEY);
-      if (len == sizeof(LedSettingsStore)) {
-        LedSettingsStore tmp;
-        lprefs.getBytes(LED_SETTINGS_NVS_KEY, &tmp, sizeof(LedSettingsStore));
-        if (tmp.magic == EEPROM_MAGIC && tmp.version == LED_SETTINGS_VERSION) {
-          _ledSettings = tmp;
-          #if DEBUG_SERIAL
-          Serial.println("[NVS] LED settings loaded.");
-          #endif
-        }
-      }
-      lprefs.end();
-    }
-  }
+  loadValidatedBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
+                     LED_SETTINGS_VERSION, &_ledSettings, sizeof(_ledSettings));
+  #if DEBUG_SERIAL
+  Serial.println("[NVS] LED settings loaded.");
+  #endif
 
   // --- Pot mapping (user-configurable pot assignments) ---
-  if (prefs.begin(POTMAP_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(POTMAP_NVS_KEY);
-    if (len == sizeof(PotMappingStore)) {
-      PotMappingStore pms;
-      prefs.getBytes(POTMAP_NVS_KEY, &pms, sizeof(PotMappingStore));
-      if (pms.magic == EEPROM_MAGIC && pms.version == POTMAP_VERSION) {
-        potRouter.loadMapping(pms);
-        #if DEBUG_SERIAL
-        Serial.println("[NVS] Pot mapping loaded.");
-        #endif
-      }
+  {
+    PotMappingStore pms;
+    if (loadValidatedBlob(POTMAP_NVS_NAMESPACE, POTMAP_NVS_KEY,
+                           POTMAP_VERSION, &pms, sizeof(pms))) {
+      potRouter.loadMapping(pms);
+      #if DEBUG_SERIAL
+      Serial.println("[NVS] Pot mapping loaded.");
+      #endif
     }
-    prefs.end();
   }
 
   // --- Apply loaded values to PotRouter (BEFORE PotRouter::begin()) ---
