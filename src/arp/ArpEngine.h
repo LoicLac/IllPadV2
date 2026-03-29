@@ -7,6 +7,20 @@
 class MidiTransport;
 
 // =================================================================
+// ArpState — named states derived from boolean flags
+// =================================================================
+// Read-only classification of the 4 flags (_positionCount, _holdOn,
+// _playing, _waitingForQuantize). Does NOT replace the flags —
+// just names the current combination for clearer control flow.
+
+enum class ArpState {
+  IDLE,                // _positionCount == 0
+  WAITING_QUANTIZE,    // waiting for beat/bar boundary before first step
+  PLAYING,             // actively stepping (or HOLD OFF auto-play)
+  HELD_STOPPED         // _holdOn && !_playing — waiting for play/stop pad
+};
+
+// =================================================================
 // Event Queue — time-based noteOn/noteOff scheduling
 // =================================================================
 // Enables gate length (noteOff delayed), shuffle (noteOn delayed),
@@ -147,6 +161,12 @@ private:
   bool    _tickFlash;            // Set true on each tick(), consumed by LedController
   bool    _waitingForQuantize;  // True after play until quantize boundary reached
   uint8_t _quantizeMode;        // ArpStartMode (0=immediate, 1=beat, 2=bar)
+
+  // --- State classification ---
+  ArpState currentState() const;
+
+  // --- Step execution (core of tick) ---
+  void executeStep(MidiTransport& transport, uint32_t stepDurationUs);
 
   // --- Sequence building ---
   void rebuildSequence();

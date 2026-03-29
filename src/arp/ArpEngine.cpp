@@ -272,47 +272,71 @@ void ArpEngine::rebuildSequence() {
 }
 
 // =================================================================
+// State classification — read-only, observes flags
+// =================================================================
+
+ArpState ArpEngine::currentState() const {
+  if (_positionCount == 0)  return ArpState::IDLE;
+  if (_waitingForQuantize)  return ArpState::WAITING_QUANTIZE;
+  if (_playing)             return ArpState::PLAYING;
+  if (_holdOn)              return ArpState::HELD_STOPPED;
+  return ArpState::PLAYING;  // HOLD OFF + notes present = auto-play
+}
+
+// =================================================================
 // Tick — called by ArpScheduler when a rhythmic step fires
 // =================================================================
-// This is where notes are SCHEDULED, not sent immediately.
-// The actual MIDI messages are fired by processEvents() which
-// runs every loop iteration and checks timestamps.
-//
-// Flow:
-//   1. Resolve which MIDI note to play (from pile + scale + octave)
-//   2. Calculate shuffle offset for this step
-//   3. Schedule noteOn (immediate or delayed by shuffle)
-//   4. Schedule noteOff (at noteOnTime + gate duration)
-//   5. Advance step counter and shuffle counter
+// Classifies the current state, handles transitions, then delegates
+// to executeStep() for the actual note scheduling.
 
 void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
                      uint32_t currentTick, uint32_t globalTick) {
-  // --- Empty pile: flush everything and return ---
-  if (_positionCount == 0) {
-    flushPendingNoteOffs(transport);
-    if (!_holdOn) _playing = false;  // HOLD OFF: pile empty = arp stops naturally
-    return;
-  }
+  switch (currentState()) {
+    case ArpState::IDLE:
+      flushPendingNoteOffs(transport);
+      if (!_holdOn) _playing = false;  // HOLD OFF: pile empty = arp stops naturally
+      return;
 
-  // --- HOLD ON + stopped: do nothing (waiting for play/stop pad) ---
-  if (_holdOn && !_playing) return;
+    case ArpState::HELD_STOPPED:
+      return;
 
-  // --- Non-hold: always playing if notes exist ---
-  if (!_holdOn && _positionCount > 0) {
-    if (!_playing) {
-      _playing = true;
-      // HOLD OFF auto-play: respect quantize on first note (0→1 transition)
-      _waitingForQuantize = (_quantizeMode != ARP_START_IMMEDIATE);
+    case ArpState::WAITING_QUANTIZE: {
+      uint16_t boundary = (_quantizeMode == ARP_START_BAR) ? 96 : 24;
+      if (globalTick % boundary != 0) return;  // Not on boundary yet
+      _waitingForQuantize = false;               // Boundary reached, proceed
+      break;
     }
+
+    case ArpState::PLAYING:
+      // HOLD OFF auto-play: activate if not yet playing
+      if (!_playing) {
+        _playing = true;
+        _waitingForQuantize = (_quantizeMode != ARP_START_IMMEDIATE);
+        if (_waitingForQuantize) {
+          uint16_t boundary = (_quantizeMode == ARP_START_BAR) ? 96 : 24;
+          if (globalTick % boundary != 0) return;
+          _waitingForQuantize = false;
+        }
+      }
+      break;
   }
 
-  // --- Quantized start: wait for beat/bar boundary ---
-  if (_waitingForQuantize) {
-    uint16_t boundary = (_quantizeMode == ARP_START_BAR) ? 96 : 24;
-    if (globalTick % boundary != 0) return;  // Not on boundary yet
-    _waitingForQuantize = false;               // Boundary reached, proceed
-  }
+  executeStep(transport, stepDurationUs);
+}
 
+// =================================================================
+// executeStep — resolve note, calculate timing, schedule events
+// =================================================================
+// Called by tick() after state guards have passed.
+// Flow:
+//   1. Rebuild sequence if dirty
+//   2. Advance step index (re-shuffle on loop for RANDOM)
+//   3. Resolve padOrder position → MIDI note via ScaleResolver
+//   4. Calculate velocity with variation
+//   5. Calculate shuffle offset from groove template
+//   6. Schedule noteOn (immediate or delayed) + noteOff (gate duration)
+
+void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
   // --- Rebuild sequence if dirty ---
   if (_sequenceDirty) rebuildSequence();
   if (_sequenceLen == 0) return;
@@ -365,9 +389,6 @@ void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
   }
 
   // --- Calculate shuffle offset for this step ---
-  // The shuffle template provides a percentage delay per step position.
-  // The actual delay = template_value × depth × stepDuration / 100.
-  // At depth 0.0: no delay. At depth 1.0: full template effect.
   uint32_t shuffleOffsetUs = 0;
   if (_shuffleDepth > 0.001f) {
     int8_t pct = SHUFFLE_TEMPLATES[_shuffleTemplate][_shuffleStepCounter % SHUFFLE_TEMPLATE_LEN];
@@ -380,22 +401,17 @@ void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
   uint32_t nowUs = micros();
   uint32_t noteOnTime = nowUs + shuffleOffsetUs;
 
-  // Gate duration: how long the note rings after noteOn.
-  // gateLength 0.5 = half step, 1.0 = full step, >1.0 = overlap into next step.
+  // Gate duration: gateLength 0.5 = half step, 1.0 = full, >1.0 = overlap.
   // Minimum 1ms to prevent zero-length notes.
   uint32_t gateUs = (uint32_t)((float)stepDurationUs * _gateLength);
   if (gateUs < 1000) gateUs = 1000;
   uint32_t noteOffTime = noteOnTime + gateUs;
 
   // --- Schedule noteOff FIRST (reserve the slot) ---
-  // We schedule noteOff before noteOn to guarantee the pair is atomic:
-  // if the queue is nearly full, we'd rather drop both events than
-  // schedule a noteOn without its matching noteOff (= stuck note).
+  // Guarantees atomic noteOn/noteOff pair: if queue is nearly full,
+  // we drop both rather than schedule noteOn without matching noteOff.
   bool noteOffOk = scheduleEvent(noteOffTime, finalNote, 0);
-  if (!noteOffOk) {
-    // Queue full — skip this step entirely (no noteOn without noteOff)
-    return;
-  }
+  if (!noteOffOk) return;  // Queue full — skip this step entirely
 
   // --- Schedule noteOn ---
   if (shuffleOffsetUs == 0) {
@@ -404,8 +420,7 @@ void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
   } else {
     // Shuffle delay: queue noteOn for later
     if (!scheduleEvent(noteOnTime, finalNote, vel)) {
-      // noteOn couldn't be scheduled but noteOff was — cancel the noteOff.
-      // Find and deactivate it (it's the most recently added event).
+      // noteOn couldn't be scheduled — cancel the orphaned noteOff
       for (int8_t i = MAX_PENDING_EVENTS - 1; i >= 0; i--) {
         if (_events[i].active && _events[i].note == finalNote
             && _events[i].velocity == 0 && _events[i].fireTimeUs == noteOffTime) {

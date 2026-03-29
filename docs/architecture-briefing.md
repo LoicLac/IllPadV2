@@ -37,17 +37,22 @@ ClockManager::update() → _currentTick++
   → while (tickAccum >= divisor):
       synthTick = currentTick - tickAccum
       ArpEngine::tick(synthTick, globalTick=currentTick)
-        → quantize check uses globalTick (NOT synthTick)
-        → resolve position → MIDI note via ScaleResolver
-        → schedule noteOff FIRST (atomic pair)
-        → if shuffle: schedule noteOn (delayed)
-          else: refCountNoteOn() (immediate send)
+        → switch (currentState()):             [state dispatch]
+            IDLE: flush + stop, return
+            HELD_STOPPED: return
+            WAITING_QUANTIZE: check boundary, return or proceed
+            PLAYING: auto-play transition if HOLD OFF
+        → executeStep():                       [note scheduling]
+            → resolve position → MIDI note via ScaleResolver
+            → schedule noteOff FIRST (atomic pair)
+            → if shuffle: schedule noteOn (delayed)
+              else: refCountNoteOn() (immediate send)
 → ArpScheduler::processEvents()
   → for each pending event where time arrived:
       refCountNoteOn() or refCountNoteOff()
       → MIDI send only on refcount transitions (0→1, 1→0)
 ```
-Key files: `ClockManager.cpp:108-134`, `ArpScheduler.cpp:98-131`, `ArpEngine.cpp:288-423`, `ArpEngine.cpp:436-536`
+Key files: `ClockManager.cpp:181-203` (generateTicks), `ArpScheduler.cpp:98-131`, `ArpEngine.cpp:278-283` (currentState), `ArpEngine.cpp:292-325` (tick), `ArpEngine.cpp:339-434` (executeStep), `ArpEngine.cpp:452-467` (processEvents)
 
 ### Bank Switch (all side effects in order)
 ```
@@ -146,7 +151,7 @@ All lock-free. No mutex anywhere in runtime code.
 |--------|--------------|-------------|
 | **Pad sensing** | `CapacitiveKeyboard.cpp/.h` (DO NOT MODIFY) | `main.cpp` sensingTask() |
 | **MIDI output** | `MidiEngine.cpp/.h`, `MidiTransport.cpp/.h` | `main.cpp` handlePadInput() |
-| **Note resolution** | `ScaleResolver.cpp/.h` | `MidiEngine.cpp:51`, `ArpEngine.cpp:349` |
+| **Note resolution** | `ScaleResolver.cpp/.h` | `MidiEngine.cpp:51`, `ArpEngine.cpp:374` |
 | **Bank management** | `BankManager.cpp/.h` | `main.cpp` handleManagerUpdates() (post-switch) |
 | **Scale/hold/octave** | `ScaleManager.cpp/.h` | `main.cpp` handleManagerUpdates() (flag consumption) |
 | **Arpeggiator** | `ArpEngine.cpp/.h`, `ArpScheduler.cpp/.h` | `main.cpp` handlePadInput() (pile management) |
