@@ -196,363 +196,366 @@ void LedController::update() {
     _lastBlinkTime = now;
   }
 
-  // === Priority 1: Boot mode (progressive fill / failure blink) ===
-  if (_bootMode) {
-    clearPixels();
-    if (_bootFailStep > 0) {
-      bool fastBlink = ((now / 150) % 2) == 0;
-      for (uint8_t i = 0; i < NUM_LEDS; i++) {
-        if (i < _bootFailStep - 1) {
-          setPixel(i, COL_BOOT);
-        } else if (i == _bootFailStep - 1) {
-          if (fastBlink) setPixelAbsolute(i, COL_BOOT_FAIL);  // Absolute: boot failure
-          // else stays cleared (off)
-        }
-        // remaining LEDs stay cleared
+  if (_bootMode)                         { renderBoot(now); return; }
+  if (_setupComet && !_calibrationMode)  { renderComet(now); return; }
+  if (_chaseActive)                      { renderChase(now); return; }
+  if (_error)                            { renderError(now); return; }
+  if (renderBattery(now))                return;
+  if (renderBargraph(now))               return;
+  if (renderConfirmation(now)) {
+    if (_confirmType != CONFIRM_BANK_SWITCH) return;
+  }
+  if (_calibrationMode)                  { renderCalibration(now); return; }
+  renderNormalDisplay(now);
+}
+
+// =================================================================
+// Render helpers (priority order)
+// =================================================================
+
+void LedController::renderBoot(unsigned long now) {
+  clearPixels();
+  if (_bootFailStep > 0) {
+    bool fastBlink = ((now / 150) % 2) == 0;
+    for (uint8_t i = 0; i < NUM_LEDS; i++) {
+      if (i < _bootFailStep - 1) {
+        setPixel(i, COL_BOOT);
+      } else if (i == _bootFailStep - 1) {
+        if (fastBlink) setPixelAbsolute(i, COL_BOOT_FAIL);  // Absolute: boot failure
       }
-    } else {
-      for (uint8_t i = 0; i < NUM_LEDS; i++) {
-        if (i < _bootStep) {
-          setPixel(i, COL_BOOT);
-        }
+    }
+  } else {
+    for (uint8_t i = 0; i < NUM_LEDS; i++) {
+      if (i < _bootStep) {
+        setPixel(i, COL_BOOT);
       }
     }
-    _strip.show();
-    return;
+  }
+  _strip.show();
+}
+
+void LedController::renderComet(unsigned long now) {
+  if (now - _cometLastStep >= LED_SETUP_CHASE_SPEED_MS) {
+    _cometPos = (_cometPos + 1) % 14;  // 0-13 for ping-pong
+    _cometLastStep = now;
+  }
+  // Map ping-pong position to LED index:
+  // 0-7 = LEDs 0-7 forward, 8-13 = LEDs 6 down to 1 backward
+  uint8_t headLed;
+  if (_cometPos <= 7) {
+    headLed = _cometPos;
+  } else {
+    headLed = 14 - _cometPos;  // 8->6, 9->5, 10->4, 11->3, 12->2, 13->1
   }
 
-  // === Priority 2: Setup comet (ping-pong chase, skipped if in calibration) ===
-  if (_setupComet && !_calibrationMode) {
-    if (now - _cometLastStep >= LED_SETUP_CHASE_SPEED_MS) {
-      _cometPos = (_cometPos + 1) % 14;  // 0-13 for ping-pong
-      _cometLastStep = now;
-    }
-    // Map ping-pong position to LED index:
-    // 0-7 = LEDs 0-7 forward, 8-13 = LEDs 6 down to 1 backward
-    uint8_t headLed;
-    if (_cometPos <= 7) {
-      headLed = _cometPos;
-    } else {
-      headLed = 14 - _cometPos;  // 8->6, 9->5, 10->4, 11->3, 12->2, 13->1
-    }
-
-    clearPixels();
-    // Head at 100%
-    setPixel(headLed, COL_SETUP);
-    // Trail -1 at 40% (if valid)
-    uint8_t prevPos = (_cometPos == 0) ? 13 : (_cometPos - 1);
-    uint8_t trail1Led;
-    if (prevPos <= 7) {
-      trail1Led = prevPos;
-    } else {
-      trail1Led = 14 - prevPos;
-    }
-    if (trail1Led != headLed) {
-      setPixelScaled(trail1Led, COL_SETUP, 102);  // 40% of 255
-    }
-    // Trail -2 at 10%
-    uint8_t prevPos2 = (prevPos == 0) ? 13 : (prevPos - 1);
-    uint8_t trail2Led;
-    if (prevPos2 <= 7) {
-      trail2Led = prevPos2;
-    } else {
-      trail2Led = 14 - prevPos2;
-    }
-    if (trail2Led != headLed && trail2Led != trail1Led) {
-      setPixelScaled(trail2Led, COL_SETUP, 26);  // 10% of 255
-    }
-
-    _strip.show();
-    return;
+  clearPixels();
+  // Head at 100%
+  setPixel(headLed, COL_SETUP);
+  // Trail -1 at 40% (if valid)
+  uint8_t prevPos = (_cometPos == 0) ? 13 : (_cometPos - 1);
+  uint8_t trail1Led;
+  if (prevPos <= 7) {
+    trail1Led = prevPos;
+  } else {
+    trail1Led = 14 - prevPos;
+  }
+  if (trail1Led != headLed) {
+    setPixelScaled(trail1Led, COL_SETUP, 102);  // 40% of 255
+  }
+  // Trail -2 at 10%
+  uint8_t prevPos2 = (prevPos == 0) ? 13 : (prevPos - 1);
+  uint8_t trail2Led;
+  if (prevPos2 <= 7) {
+    trail2Led = prevPos2;
+  } else {
+    trail2Led = 14 - prevPos2;
+  }
+  if (trail2Led != headLed && trail2Led != trail1Led) {
+    setPixelScaled(trail2Led, COL_SETUP, 26);  // 10% of 255
   }
 
-  // === Priority 3: Chase pattern (calibration entry) ===
-  if (_chaseActive) {
-    if (now - _chaseLastStep >= CHASE_STEP_MS) {
-      _chasePos = (_chasePos + 1) % NUM_LEDS;
-      _chaseLastStep = now;
-    }
-    clearPixels();
-    setPixel(_chasePos, COL_SETUP);
-    _strip.show();
-    return;
-  }
+  _strip.show();
+}
 
-  // === Priority 4: Error (LEDs 3-4 blink red, 500ms) ===
-  if (_error) {
-    clearPixels();
-    if (_blinkState) {
-      setPixelAbsolute(3, COL_ERROR);  // Absolute: errors always visible
-      setPixelAbsolute(4, COL_ERROR);
-    }
-    _strip.show();
-    return;
+void LedController::renderChase(unsigned long now) {
+  if (now - _chaseLastStep >= CHASE_STEP_MS) {
+    _chasePos = (_chasePos + 1) % NUM_LEDS;
+    _chaseLastStep = now;
   }
+  clearPixels();
+  setPixel(_chasePos, COL_SETUP);
+  _strip.show();
+}
 
-  // === Priority 5: Battery gauge (solid gradient bar, 3s) ===
-  if (_showingBattery) {
-    if (now - _batteryDisplayStart < BAT_DISPLAY_DURATION_MS) {
-      clearPixels();
-      for (uint8_t i = 0; i < _batteryLeds && i < NUM_LEDS; i++) {
-        setPixel(i, COL_BATTERY[i]);
-      }
-      _strip.show();
-      return;
-    }
+void LedController::renderError(unsigned long now) {
+  (void)now;
+  clearPixels();
+  if (_blinkState) {
+    setPixelAbsolute(3, COL_ERROR);  // Absolute: errors always visible
+    setPixelAbsolute(4, COL_ERROR);
+  }
+  _strip.show();
+}
+
+bool LedController::renderBattery(unsigned long now) {
+  if (!_showingBattery) return false;
+  if (now - _batteryDisplayStart >= BAT_DISPLAY_DURATION_MS) {
     _showingBattery = false;
+    return false;
+  }
+  clearPixels();
+  for (uint8_t i = 0; i < _batteryLeds && i < NUM_LEDS; i++) {
+    setPixel(i, COL_BATTERY[i]);
+  }
+  _strip.show();
+  return true;
+}
+
+bool LedController::renderBargraph(unsigned long now) {
+  if (!_showingPotBar) return false;
+  if (now - _potBarStart >= _potBarDurationMs) {
+    _showingPotBar = false;
+    return false;
+  }
+  // Determine bar color based on foreground bank type
+  RGB barColor = COL_WHITE;
+  RGB barDim   = COL_WHITE_DIM;
+  if (_slots && _slots[_currentBank].type == BANK_ARPEG) {
+    barColor = COL_BLUE;
+    barDim   = COL_BLUE_DIM;
   }
 
-  // === Priority 6: Pot bargraph (solid/catch bar, configurable duration) ===
-  if (_showingPotBar) {
-    if (now - _potBarStart >= _potBarDurationMs) {
-      _showingPotBar = false;
-    } else {
-      // Determine bar color based on foreground bank type
-      RGB barColor = COL_WHITE;
-      RGB barDim   = COL_WHITE_DIM;
-      if (_slots && _slots[_currentBank].type == BANK_ARPEG) {
-        barColor = COL_BLUE;
-        barDim   = COL_BLUE_DIM;
-      }
+  clearPixels();
 
-      clearPixels();
-
-      if (_potBarCaught) {
-        // Caught: full-color solid bar (realLevel = 0-8, number of LEDs)
-        for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
-          setPixel(i, barColor);
-        }
-      } else {
-        // Not caught: dim bar for real level + bright cursor for pot position
-        for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
-          setPixel(i, barDim);
-        }
-        // Bright cursor at pot position (potLevel = 0-7, LED index)
-        if (_potBarPotLevel < NUM_LEDS) {
-          setPixel(_potBarPotLevel, barColor);
-        }
-      }
-
-      _strip.show();
-      return;
+  if (_potBarCaught) {
+    // Caught: full-color solid bar (realLevel = 0-8, number of LEDs)
+    for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
+      setPixel(i, barColor);
+    }
+  } else {
+    // Not caught: dim bar for real level + bright cursor for pot position
+    for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
+      setPixel(i, barDim);
+    }
+    // Bright cursor at pot position (potLevel = 0-7, LED index)
+    if (_potBarPotLevel < NUM_LEDS) {
+      setPixel(_potBarPotLevel, barColor);
     }
   }
 
-  // === Priority 7: Confirmation blinks (auto-expiring feedback) ===
-  if (_confirmType != CONFIRM_NONE) {
-    unsigned long elapsed = now - _confirmStart;
+  _strip.show();
+  return true;
+}
 
-    switch (_confirmType) {
-      case CONFIRM_BANK_SWITCH: {
-        // Render normal display first, then overlay destination LED with triple blink
-        // Fall through to normal display below, with overlay applied after
-        if (elapsed >= _bankDurationMs) {
-          _confirmType = CONFIRM_NONE;
-        }
-        // Don't return here -- fall through to normal display (handled there)
-        break;
-      }
+bool LedController::renderConfirmation(unsigned long now) {
+  if (_confirmType == CONFIRM_NONE) return false;
+  unsigned long elapsed = now - _confirmStart;
 
-      case CONFIRM_SCALE_ROOT: {
-        if (elapsed < _scaleRootDurationMs) {
-          uint16_t unitMs = _scaleRootDurationMs / (_scaleRootBlinks * 2);
-          uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
-          bool on = (phase % 2 == 0);
-          clearPixels();
-          if (on) setPixel(_currentBank, COL_SCALE_ROOT);
-          _strip.show();
-          return;
-        }
+  switch (_confirmType) {
+    case CONFIRM_BANK_SWITCH: {
+      if (elapsed >= _bankDurationMs) {
         _confirmType = CONFIRM_NONE;
-        break;
+        return false;
       }
-
-      case CONFIRM_SCALE_MODE: {
-        if (elapsed < _scaleModeDurationMs) {
-          uint16_t unitMs = _scaleModeDurationMs / (_scaleModeBlinks * 2);
-          uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
-          bool on = (phase % 2 == 0);
-          clearPixels();
-          if (on) setPixel(_currentBank, COL_SCALE_MODE);
-          _strip.show();
-          return;
-        }
-        _confirmType = CONFIRM_NONE;
-        break;
-      }
-
-      case CONFIRM_SCALE_CHROM: {
-        if (elapsed < _scaleChromDurationMs) {
-          uint16_t unitMs = _scaleChromDurationMs / (_scaleChromBlinks * 2);
-          uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
-          bool on = (phase % 2 == 0);
-          clearPixels();
-          if (on) setPixel(_currentBank, COL_SCALE_CHROM);
-          _strip.show();
-          return;
-        }
-        _confirmType = CONFIRM_NONE;
-        break;
-      }
-
-      case CONFIRM_HOLD_ON: {
-        // Sharp blink current LED in deep blue
-        if (elapsed < (uint16_t)_holdOnFlashMs + 100) {
-          clearPixels();
-          if (elapsed < _holdOnFlashMs) {
-            setPixel(_currentBank, COL_ARP_HOLD);
-          }
-          _strip.show();
-          return;
-        }
-        _confirmType = CONFIRM_NONE;
-        break;
-      }
-
-      case CONFIRM_HOLD_OFF: {
-        // Fade-out from deep blue over _holdFadeMs
-        if (elapsed < _holdFadeMs) {
-          uint8_t fadeScale = (uint8_t)((uint32_t)(_holdFadeMs - elapsed) * 255 / _holdFadeMs);
-          clearPixels();
-          setPixelScaled(_currentBank, COL_ARP_HOLD, fadeScale);
-          _strip.show();
-          return;
-        }
-        _confirmType = CONFIRM_NONE;
-        break;
-      }
-
-      case CONFIRM_PLAY: {
-        // Phase 255 = immediate green ack flash (sentinel)
-        // Phase 0    = ack done, waiting for beat 1
-        // Phases 1-N = N beats fired (_playBeatCount beats total)
-        uint8_t playSteps = _playBeatCount + 1;  // 1 ack + N beats
-        if (_playFlashPhase == 255) {
-          // Ack flash: show green for one unit (fixed, not coupled to bank switch params)
-          uint8_t ackUnitMs = LED_CONFIRM_UNIT_MS;
-          if (elapsed < (uint16_t)ackUnitMs * 2) {
-            bool on = (elapsed < ackUnitMs);
-            clearPixels();
-            if (on) setPixelAbsolute(_currentBank, COL_PLAY_ACK);  // Absolute: play ack
-            _strip.show();
-            return;
-          }
-          // Ack done, advance to beat-synced phases (0 = no beats fired yet)
-          _playFlashPhase = 0;
-          if (_clock) {
-            _playLastBeatTick = _clock->getCurrentTick();
-          }
-          // Fall through to normal display between beats
-        }
-
-        if (_playFlashPhase < playSteps) {
-          static const uint8_t playIntensity[] = {0, 128, 191, 255};
-
-          // Check for beat boundary (24 ticks = 1 quarter note)
-          if (_clock) {
-            uint32_t currentTick = _clock->getCurrentTick();
-            if (currentTick >= _playLastBeatTick + 24) {
-              _playLastBeatTick = currentTick - (currentTick % 24);
-              _fadeStartTime = now;  // Start flash hold timer
-              _playFlashPhase++;
-              if (_playFlashPhase >= _playBeatCount) {
-                _confirmType = CONFIRM_NONE;
-              }
-            }
-          } else {
-            // No clock: use time-based fallback (200ms per beat)
-            // beatPhase > _playFlashPhase avoids collision at beat 1
-            uint8_t beatPhase = (uint8_t)(elapsed / 200);
-            if (beatPhase >= playSteps) {
-              _confirmType = CONFIRM_NONE;
-              break;
-            } else if (beatPhase > _playFlashPhase) {
-              _fadeStartTime = now;  // Start flash hold timer
-              _playFlashPhase = beatPhase;
-            }
-          }
-
-          // Hold flash for _tickFlashDurationMs (same as tick flash)
-          if (_fadeStartTime != 0 && (now - _fadeStartTime) < _tickFlashDurationMs) {
-            uint8_t phase = (_playFlashPhase < 4) ? _playFlashPhase : 3;
-            clearPixels();
-            setPixelAbsoluteScaled(_currentBank, COL_ARP_PLAY, playIntensity[phase]);  // Absolute: beat flash
-            _strip.show();
-            return;
-          }
-          // Between beats: fall through to normal display
-        }
-        break;
-      }
-
-      case CONFIRM_STOP: {
-        // Fade-out from blue-cyan over _stopFadeMs (independent from hold-off)
-        if (elapsed < _stopFadeMs) {
-          uint8_t fadeScale = (uint8_t)((uint32_t)(_stopFadeMs - elapsed) * 255 / _stopFadeMs);
-          clearPixels();
-          setPixelScaled(_currentBank, COL_ARP_PLAY, fadeScale);
-          _strip.show();
-          return;
-        }
-        _confirmType = CONFIRM_NONE;
-        break;
-      }
-
-      case CONFIRM_OCTAVE: {
-        // Triple blink 2 LEDs of selected group
-        // param 1 -> LEDs 0-1, param 2 -> LEDs 2-3, param 3 -> LEDs 4-5, param 4 -> LEDs 6-7
-        if (elapsed < _octaveDurationMs) {
-          uint16_t unitMs = _octaveDurationMs / (_octaveBlinks * 2);
-          uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
-          bool on = (phase % 2 == 0);
-          clearPixels();
-          if (on && _confirmParam >= 1 && _confirmParam <= 4) {
-            uint8_t baseLed = (_confirmParam - 1) * 2;
-            setPixel(baseLed, COL_ARP_OCTAVE);
-            if (baseLed + 1 < NUM_LEDS) {
-              setPixel(baseLed + 1, COL_ARP_OCTAVE);
-            }
-          }
-          _strip.show();
-          return;
-        }
-        _confirmType = CONFIRM_NONE;
-        break;
-      }
-
-      default:
-        _confirmType = CONFIRM_NONE;
-        break;
+      return true;  // Active, but overlay handled by renderNormalDisplay
     }
-    // If confirmation was cleared, fall through to lower priorities
-  }
 
-  // === Priority 8: Calibration mode ===
-  if (_calibrationMode) {
-    if (_validationFlashing) {
-      unsigned long elapsed = now - _validationFlashStart;
-      if (elapsed >= 150) {
-        _validationFlashing = false;
-      } else {
-        uint8_t phase = elapsed / 25;
-        bool on = (phase < 6) && (phase % 2 == 0);
+    case CONFIRM_SCALE_ROOT: {
+      if (elapsed < _scaleRootDurationMs) {
+        uint16_t unitMs = _scaleRootDurationMs / (_scaleRootBlinks * 2);
+        uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
+        bool on = (phase % 2 == 0);
         clearPixels();
-        if (on) {
-          for (uint8_t i = 0; i < NUM_LEDS; i++) {
-            setPixelAbsolute(i, COL_BOOT);  // Absolute: validation flash always visible
+        if (on) setPixel(_currentBank, COL_SCALE_ROOT);
+        _strip.show();
+        return true;
+      }
+      _confirmType = CONFIRM_NONE;
+      return false;
+    }
+
+    case CONFIRM_SCALE_MODE: {
+      if (elapsed < _scaleModeDurationMs) {
+        uint16_t unitMs = _scaleModeDurationMs / (_scaleModeBlinks * 2);
+        uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
+        bool on = (phase % 2 == 0);
+        clearPixels();
+        if (on) setPixel(_currentBank, COL_SCALE_MODE);
+        _strip.show();
+        return true;
+      }
+      _confirmType = CONFIRM_NONE;
+      return false;
+    }
+
+    case CONFIRM_SCALE_CHROM: {
+      if (elapsed < _scaleChromDurationMs) {
+        uint16_t unitMs = _scaleChromDurationMs / (_scaleChromBlinks * 2);
+        uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
+        bool on = (phase % 2 == 0);
+        clearPixels();
+        if (on) setPixel(_currentBank, COL_SCALE_CHROM);
+        _strip.show();
+        return true;
+      }
+      _confirmType = CONFIRM_NONE;
+      return false;
+    }
+
+    case CONFIRM_HOLD_ON: {
+      // Sharp blink current LED in deep blue
+      if (elapsed < (uint16_t)_holdOnFlashMs + 100) {
+        clearPixels();
+        if (elapsed < _holdOnFlashMs) {
+          setPixel(_currentBank, COL_ARP_HOLD);
+        }
+        _strip.show();
+        return true;
+      }
+      _confirmType = CONFIRM_NONE;
+      return false;
+    }
+
+    case CONFIRM_HOLD_OFF: {
+      // Fade-out from deep blue over _holdFadeMs
+      if (elapsed < _holdFadeMs) {
+        uint8_t fadeScale = (uint8_t)((uint32_t)(_holdFadeMs - elapsed) * 255 / _holdFadeMs);
+        clearPixels();
+        setPixelScaled(_currentBank, COL_ARP_HOLD, fadeScale);
+        _strip.show();
+        return true;
+      }
+      _confirmType = CONFIRM_NONE;
+      return false;
+    }
+
+    case CONFIRM_PLAY: {
+      // Phase 255 = immediate green ack flash (sentinel)
+      // Phase 0    = ack done, waiting for beat 1
+      // Phases 1-N = N beats fired (_playBeatCount beats total)
+      uint8_t playSteps = _playBeatCount + 1;  // 1 ack + N beats
+      if (_playFlashPhase == 255) {
+        // Ack flash: show green for one unit (fixed, not coupled to bank switch params)
+        uint8_t ackUnitMs = LED_CONFIRM_UNIT_MS;
+        if (elapsed < (uint16_t)ackUnitMs * 2) {
+          bool on = (elapsed < ackUnitMs);
+          clearPixels();
+          if (on) setPixelAbsolute(_currentBank, COL_PLAY_ACK);  // Absolute: play ack
+          _strip.show();
+          return true;
+        }
+        // Ack done, advance to beat-synced phases (0 = no beats fired yet)
+        _playFlashPhase = 0;
+        if (_clock) {
+          _playLastBeatTick = _clock->getCurrentTick();
+        }
+        // Fall through to normal display between beats
+      }
+
+      if (_playFlashPhase < playSteps) {
+        static const uint8_t playIntensity[] = {0, 128, 191, 255};
+
+        // Check for beat boundary (24 ticks = 1 quarter note)
+        if (_clock) {
+          uint32_t currentTick = _clock->getCurrentTick();
+          if (currentTick >= _playLastBeatTick + 24) {
+            _playLastBeatTick = currentTick - (currentTick % 24);
+            _fadeStartTime = now;  // Start flash hold timer
+            _playFlashPhase++;
+            if (_playFlashPhase >= _playBeatCount) {
+              _confirmType = CONFIRM_NONE;
+            }
+          }
+        } else {
+          // No clock: use time-based fallback (200ms per beat)
+          // beatPhase > _playFlashPhase avoids collision at beat 1
+          uint8_t beatPhase = (uint8_t)(elapsed / 200);
+          if (beatPhase >= playSteps) {
+            _confirmType = CONFIRM_NONE;
+            return false;
+          } else if (beatPhase > _playFlashPhase) {
+            _fadeStartTime = now;  // Start flash hold timer
+            _playFlashPhase = beatPhase;
+          }
+        }
+
+        // Hold flash for _tickFlashDurationMs (same as tick flash)
+        if (_fadeStartTime != 0 && (now - _fadeStartTime) < _tickFlashDurationMs) {
+          uint8_t phase = (_playFlashPhase < 4) ? _playFlashPhase : 3;
+          clearPixels();
+          setPixelAbsoluteScaled(_currentBank, COL_ARP_PLAY, playIntensity[phase]);  // Absolute: beat flash
+          _strip.show();
+          return true;
+        }
+        // Between beats: fall through to normal display
+      }
+      return false;
+    }
+
+    case CONFIRM_STOP: {
+      // Fade-out from blue-cyan over _stopFadeMs (independent from hold-off)
+      if (elapsed < _stopFadeMs) {
+        uint8_t fadeScale = (uint8_t)((uint32_t)(_stopFadeMs - elapsed) * 255 / _stopFadeMs);
+        clearPixels();
+        setPixelScaled(_currentBank, COL_ARP_PLAY, fadeScale);
+        _strip.show();
+        return true;
+      }
+      _confirmType = CONFIRM_NONE;
+      return false;
+    }
+
+    case CONFIRM_OCTAVE: {
+      // Triple blink 2 LEDs of selected group
+      // param 1 -> LEDs 0-1, param 2 -> LEDs 2-3, param 3 -> LEDs 4-5, param 4 -> LEDs 6-7
+      if (elapsed < _octaveDurationMs) {
+        uint16_t unitMs = _octaveDurationMs / (_octaveBlinks * 2);
+        uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
+        bool on = (phase % 2 == 0);
+        clearPixels();
+        if (on && _confirmParam >= 1 && _confirmParam <= 4) {
+          uint8_t baseLed = (_confirmParam - 1) * 2;
+          setPixel(baseLed, COL_ARP_OCTAVE);
+          if (baseLed + 1 < NUM_LEDS) {
+            setPixel(baseLed + 1, COL_ARP_OCTAVE);
           }
         }
         _strip.show();
-        return;
+        return true;
       }
+      _confirmType = CONFIRM_NONE;
+      return false;
     }
-    clearPixels();
-    _strip.show();
-    return;
-  }
 
-  // === Priority 9: Normal bank display (multi-bank state) ===
-  // Label used by CONFIRM_BANK_SWITCH to render normal display then overlay
+    default:
+      _confirmType = CONFIRM_NONE;
+      return false;
+  }
+}
+
+void LedController::renderCalibration(unsigned long now) {
+  if (_validationFlashing) {
+    unsigned long elapsed = now - _validationFlashStart;
+    if (elapsed >= 150) {
+      _validationFlashing = false;
+    } else {
+      uint8_t phase = elapsed / 25;
+      bool on = (phase < 6) && (phase % 2 == 0);
+      clearPixels();
+      if (on) {
+        for (uint8_t i = 0; i < NUM_LEDS; i++) {
+          setPixelAbsolute(i, COL_BOOT);  // Absolute: validation flash always visible
+        }
+      }
+      _strip.show();
+      return;
+    }
+  }
+  clearPixels();
+  _strip.show();
+}
+
+void LedController::renderNormalDisplay(unsigned long now) {
   clearPixels();
 
   if (_slots) {
@@ -667,7 +670,7 @@ void LedController::update() {
         _strip.setPixelColor(_currentBank, 0);
       }
     }
-    // Note: CONFIRM_BANK_SWITCH expiry was already handled in the confirmation section above
+    // Note: CONFIRM_BANK_SWITCH expiry was already handled in renderConfirmation
   }
 
   _strip.show();

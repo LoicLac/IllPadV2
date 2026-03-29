@@ -100,6 +100,17 @@ private:
 
   void clearPixels();
 
+  // Render helpers (priority-based, called from update())
+  void renderBoot(unsigned long now);
+  void renderComet(unsigned long now);
+  void renderChase(unsigned long now);
+  void renderError(unsigned long now);
+  bool renderBattery(unsigned long now);
+  bool renderBargraph(unsigned long now);
+  bool renderConfirmation(unsigned long now);
+  void renderCalibration(unsigned long now);
+  void renderNormalDisplay(unsigned long now);
+
   // Brightness
   uint8_t _brightness;
 
