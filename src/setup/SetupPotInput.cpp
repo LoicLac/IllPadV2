@@ -25,9 +25,10 @@ void SetupPotInput::seed(uint8_t ch, int32_t currentValue, int32_t minVal, int32
   c.value    = currentValue;
   c.minVal   = minVal;
   c.maxVal   = maxVal;
-  c.enabled  = true;
-  c.active   = false;
-  c.anchored = false;
+  c.enabled    = true;
+  c.active     = false;
+  c.anchored   = false;
+  c.accumDelta = 0;
   // Read current ADC and seed smoothed + baseline
   int32_t raw = analogRead(c.pin);
   c.smoothed = raw << EMA_SHIFT;
@@ -63,23 +64,30 @@ bool SetupPotInput::update() {
         // Don't change value yet — first movement just activates
       }
     } else if (!c.anchored) {
-      // Phase 2: Differential mode — delta from baseline maps to delta value
+      // Phase 2: Differential mode — accumulate ADC delta, convert when enough
       int32_t adcDelta = adc - c.baseline;
       // Apply deadzone: ignore jitter
       if (adcDelta > -DEADZONE && adcDelta < DEADZONE) continue;
 
-      // Map ADC delta to value delta
+      // Accumulate delta (avoids integer truncation for small ranges)
+      c.accumDelta += adcDelta;
+      c.baseline = adc;  // consume this movement
+
+      // Convert accumulated ADC delta to value delta
       int32_t range = c.maxVal - c.minVal;
-      int32_t valueDelta = (int32_t)((int64_t)adcDelta * range / ADC_MAX);
+      int32_t valueDelta = (int32_t)((int64_t)c.accumDelta * range / ADC_MAX);
 
-      int32_t newVal = c.value + valueDelta;
-      if (newVal < c.minVal) newVal = c.minVal;
-      if (newVal > c.maxVal) newVal = c.maxVal;
+      if (valueDelta != 0) {
+        int32_t newVal = c.value + valueDelta;
+        if (newVal < c.minVal) newVal = c.minVal;
+        if (newVal > c.maxVal) newVal = c.maxVal;
 
-      if (newVal != c.value) {
-        c.value = newVal;
-        c.baseline = adc;  // consume the delta
-        changed = true;
+        if (newVal != c.value) {
+          c.value = newVal;
+          changed = true;
+        }
+        // Consume the portion of accumDelta that was used
+        c.accumDelta -= (int32_t)((int64_t)valueDelta * ADC_MAX / range);
       }
 
       // Check for re-anchor: does pot position match current value?
@@ -90,6 +98,7 @@ bool SetupPotInput::update() {
       if (anchorThreshold < 1) anchorThreshold = 1;
       if (mappedDiff <= anchorThreshold) {
         c.anchored = true;
+        c.accumDelta = 0;
       }
     } else {
       // Phase 3: Absolute mode — pot position = value directly

@@ -42,6 +42,7 @@ private:
     int32_t  minVal, maxVal;
     int32_t  smoothed;      // EMA-filtered ADC × 256 (fixed-point, 8 fractional bits)
     int32_t  baseline;      // smoothed ADC at seed time (for differential)
+    int32_t  accumDelta;    // accumulated fractional ADC delta (avoids integer truncation)
     bool     enabled;
     bool     active;        // past initial deadzone
     bool     anchored;      // absolute mode (pot position = value)
