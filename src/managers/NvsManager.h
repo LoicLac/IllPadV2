@@ -48,6 +48,9 @@ public:
   // Access loaded LED settings (for LedController init at boot, after loadAll)
   const LedSettingsStore& getLoadedLedSettings() const;
 
+  // Access loaded color slots (for LedController init at boot, after loadAll)
+  const ColorSlotStore& getLoadedColorSlots() const;
+
   // Update pad-pressed state (call from loop before notifyIfDirty)
   void setAnyPadPressed(bool pressed);
 
@@ -96,6 +99,7 @@ private:
 
   // LED settings (loaded at boot from NVS)
   LedSettingsStore _ledSettings;
+  ColorSlotStore _colorSlots;
 
   // Global pot params (shape, slew, deadzone) — stored as raw values
   float       _pendingResponseShape;

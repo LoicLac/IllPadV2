@@ -28,28 +28,27 @@ NvsManager::NvsManager()
   , _potPendingSave(false)
   , _anyPadPressed(false)
 {
-  // Default LED settings
+  // Default LED settings (0-100 perceptual %)
   _ledSettings.magic = EEPROM_MAGIC;
   _ledSettings.version = LED_SETTINGS_VERSION;
   _ledSettings.reserved = 0;
-  _ledSettings.normalFgIntensity = 255;
-  _ledSettings.normalBgIntensity = 40;
-  _ledSettings.fgArpStopMin = 77;
-  _ledSettings.fgArpStopMax = 255;
-  _ledSettings.fgArpPlayMin = 77;
-  _ledSettings.fgArpPlayMax = 204;
-  _ledSettings.fgTickFlash = 255;
-  _ledSettings.bgArpStopMin = 20;
-  _ledSettings.bgArpStopMax = 64;
-  _ledSettings.bgArpPlayMin = 20;
-  _ledSettings.bgArpPlayMax = 51;
-  _ledSettings.bgTickFlash = 64;
-  _ledSettings.absoluteMax = 255;
+  _ledSettings.normalFgIntensity = 85;
+  _ledSettings.normalBgIntensity = 10;
+  _ledSettings.fgArpStopMin = 30;
+  _ledSettings.fgArpStopMax = 100;
+  _ledSettings.fgArpPlayMin = 30;
+  _ledSettings.fgArpPlayMax = 80;
+  _ledSettings.bgArpStopMin = 8;
+  _ledSettings.bgArpStopMax = 25;
+  _ledSettings.bgArpPlayMin = 8;
+  _ledSettings.bgArpPlayMax = 20;
+  _ledSettings.tickFlashFg = 100;
+  _ledSettings.tickFlashBg = 25;
   _ledSettings.pulsePeriodMs = 1472;
   _ledSettings.tickFlashDurationMs = 30;
   _ledSettings.bankBlinks = 3;
   _ledSettings.bankDurationMs = 300;
-  _ledSettings.bankBrightnessPct = 50;
+  _ledSettings.bankBrightnessPct = 80;
   _ledSettings.scaleRootBlinks = 2;
   _ledSettings.scaleRootDurationMs = 200;
   _ledSettings.scaleModeBlinks = 2;
@@ -62,6 +61,18 @@ NvsManager::NvsManager()
   _ledSettings.playBeatCount = 3;
   _ledSettings.octaveBlinks = 3;
   _ledSettings.octaveDurationMs = 300;
+
+  // Default color slots
+  _colorSlots.magic = COLOR_SLOT_MAGIC;
+  _colorSlots.version = 1;
+  _colorSlots.reserved = 0;
+  static const uint8_t defaultPresets[COLOR_SLOT_COUNT] = {
+    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 11, 5, 9
+  };
+  for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
+    _colorSlots.slots[i].presetId = defaultPresets[i];
+    _colorSlots.slots[i].hueOffset = 0;
+  }
 
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     _scaleDirty[i] = false;
@@ -661,8 +672,10 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   // --- LED settings (Tool 7) ---
   loadValidatedBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
                      LED_SETTINGS_VERSION, &_ledSettings, sizeof(_ledSettings));
+  loadValidatedBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
+                     1, &_colorSlots, sizeof(_colorSlots));
   #if DEBUG_SERIAL
-  Serial.println("[NVS] LED settings loaded.");
+  Serial.println("[NVS] LED settings + color slots loaded.");
   #endif
 
   // --- Pot mapping (user-configurable pot assignments) ---
@@ -719,6 +732,10 @@ const ArpPotStore& NvsManager::getLoadedArpParams(uint8_t bankIdx) const {
 
 const LedSettingsStore& NvsManager::getLoadedLedSettings() const {
   return _ledSettings;
+}
+
+const ColorSlotStore& NvsManager::getLoadedColorSlots() const {
+  return _colorSlots;
 }
 
 // =================================================================
