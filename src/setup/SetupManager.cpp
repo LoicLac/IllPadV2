@@ -107,6 +107,7 @@ void SetupManager::run() {
 
       case '7':
         _toolLedSettings.run();
+        _leds->startSetupComet();  // Restart comet (stopped by previewBegin)
         _ui.vtClear();
         screenDirty = true;
         break;
