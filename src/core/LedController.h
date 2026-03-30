@@ -88,6 +88,13 @@ public:
   // All off
   void allOff();
 
+  // Preview API (for Tool 7 — direct LED control in setup mode)
+  void previewBegin();   // Enters preview mode, suppresses normal rendering
+  void previewEnd();     // Exits preview mode, clears LEDs
+  void previewSetPixel(uint8_t led, const RGBW& color, uint8_t intensityPct);
+  void previewClear();   // Clears all preview LEDs
+  void previewShow();    // Calls _strip.show()
+
 private:
   Adafruit_NeoPixel _strip;
 
@@ -208,6 +215,9 @@ private:
 
   // Battery low blink
   unsigned long _batLowLastBurstTime;
+
+  // Preview mode (Tool 7)
+  bool _previewMode;
 };
 
 #endif // LED_CONTROLLER_H

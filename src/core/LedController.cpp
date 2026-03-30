@@ -68,7 +68,8 @@ LedController::LedController()
     _showingBattery(false),
     _batteryLeds(0),
     _batteryDisplayStart(0),
-    _batLowLastBurstTime(0)
+    _batLowLastBurstTime(0),
+    _previewMode(false)
 {
   // Precompute sine LUT -- 256 entries covering one full period (0-255 output range)
   // Only runs once at boot, no float in update()
@@ -172,6 +173,8 @@ void LedController::stopSetupComet() {
 // =================================================================
 
 void LedController::update() {
+  if (_previewMode) return;  // Tool 7 owns the LEDs
+
   unsigned long now = millis();
 
   // Shared 500ms blink timer (used by error mode)
@@ -787,4 +790,34 @@ void LedController::allOff() {
   _showingBattery = false;
   _confirmType = CONFIRM_NONE;
   for (uint8_t i = 0; i < NUM_LEDS; i++) _flashStartTime[i] = 0;
+}
+
+// =================================================================
+// Preview API (Tool 7 — direct LED control in setup mode)
+// =================================================================
+
+void LedController::previewBegin() {
+  _previewMode = true;
+  if (_setupComet) stopSetupComet();
+  clearPixels();
+  _strip.show();
+}
+
+void LedController::previewEnd() {
+  _previewMode = false;
+  clearPixels();
+  _strip.show();
+}
+
+void LedController::previewSetPixel(uint8_t led, const RGBW& color, uint8_t intensityPct) {
+  if (led >= NUM_LEDS) return;
+  setPixel(led, color, intensityPct);
+}
+
+void LedController::previewClear() {
+  clearPixels();
+}
+
+void LedController::previewShow() {
+  _strip.show();
 }
