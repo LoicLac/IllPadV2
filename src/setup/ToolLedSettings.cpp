@@ -1213,10 +1213,9 @@ void ToolLedSettings::run() {
       }
     }
 
-    // --- Render (throttled + backpressure: skip if serial TX buffer is too full,
-    //     prevents watchdog timeout from blocking Serial.print calls) ---
-    if (screenDirty && (now - lastRenderMs) >= 80
-        && Serial.availableForWrite() > 256) {
+    // --- Render (throttled: 80ms min between frames for key repeat) ---
+    // yield() in drawFrameLine protects against watchdog timeout.
+    if (screenDirty && (now - lastRenderMs) >= 80) {
       screenDirty = false;
       lastRenderMs = now;
 
