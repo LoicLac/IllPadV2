@@ -20,6 +20,18 @@ NavEvent InputParser::update() {
 
   if (!Serial.available()) return ev;
 
+  // Drain stale bytes: if many key repeats queued, skip to the last one.
+  // This prevents the event queue from falling behind when the user holds
+  // an arrow key and the serial buffer fills faster than we can redraw.
+  // We keep at most the last complete escape sequence.
+  int avail = Serial.available();
+  if (avail > 6 && _escState == ESC_IDLE) {
+    // Drop all but the last 6 bytes (enough for 2 escape sequences)
+    while (Serial.available() > 6) {
+      Serial.read();
+    }
+  }
+
   char c = (char)Serial.read();
 
   // --- Escape sequence state machine ---

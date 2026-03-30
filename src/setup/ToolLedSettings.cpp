@@ -1094,8 +1094,9 @@ void ToolLedSettings::run() {
       }
     }
 
-    // --- Render (throttled to avoid serial buffer saturation on rapid input) ---
-    if (screenDirty && (now - lastRenderMs) >= 50) {
+    // --- Render (throttled: 100ms min between full VT100 frames to avoid
+    //     serial buffer saturation when holding arrow keys) ---
+    if (screenDirty && (now - lastRenderMs) >= 100) {
       screenDirty = false;
       lastRenderMs = now;
 
