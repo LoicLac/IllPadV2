@@ -97,15 +97,19 @@ void LedController::begin() {
 
 void LedController::setPixel(uint8_t i, const RGBW& c, uint8_t intensityPct) {
   // Combine slot intensity (0-100%) with master brightness (0-100%)
+  // Result is perceptual 0-100%, scaled to 0-255 linearly.
+  // GAMMA_LUT then converts this perceptual value to the non-linear
+  // LED drive level. No PERCEPTUAL_TO_LINEAR needed — the user's
+  // 0-100% IS the perceptual scale, gamma does the rest.
   uint16_t combinedPct = (uint16_t)intensityPct * _brightnessPct / 100;
-  // Convert perceptual % to linear 0-255
-  uint8_t linear = PERCEPTUAL_TO_LINEAR[combinedPct > 100 ? 100 : combinedPct];
-  // Scale each channel and apply gamma correction
+  // Scale to 0-255 (simple linear mapping of percentage)
+  uint8_t scaled = (uint8_t)(combinedPct * 255 / 100);
+  // Scale each channel by intensity, then apply gamma for LED
   _strip.setPixelColor(i,
-    GAMMA_LUT[(uint16_t)c.r * linear / 255],
-    GAMMA_LUT[(uint16_t)c.g * linear / 255],
-    GAMMA_LUT[(uint16_t)c.b * linear / 255],
-    GAMMA_LUT[(uint16_t)c.w * linear / 255]
+    GAMMA_LUT[(uint16_t)c.r * scaled / 255],
+    GAMMA_LUT[(uint16_t)c.g * scaled / 255],
+    GAMMA_LUT[(uint16_t)c.b * scaled / 255],
+    GAMMA_LUT[(uint16_t)c.w * scaled / 255]
   );
 }
 

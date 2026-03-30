@@ -948,14 +948,19 @@ void ToolLedSettings::run() {
 
   InputParser input;
   bool screenDirty = true;
+  unsigned long lastPreviewMs = 0;
+  unsigned long lastRenderMs = 0;
 
   _ui->vtClear();
 
   while (true) {
     unsigned long now = millis();
 
-    // Update LED preview every iteration
-    updatePreview(now);
+    // Throttle preview updates to ~30ms (avoids flooding _strip.show() which disables interrupts)
+    if ((now - lastPreviewMs) >= 30) {
+      lastPreviewMs = now;
+      updatePreview(now);
+    }
 
     NavEvent ev = input.update();
 
@@ -1089,9 +1094,10 @@ void ToolLedSettings::run() {
       }
     }
 
-    // --- Render ---
-    if (screenDirty) {
+    // --- Render (throttled to avoid serial buffer saturation on rapid input) ---
+    if (screenDirty && (now - lastRenderMs) >= 50) {
       screenDirty = false;
+      lastRenderMs = now;
 
       _ui->vtFrameStart();
 
