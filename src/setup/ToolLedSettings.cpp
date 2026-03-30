@@ -1094,9 +1094,10 @@ void ToolLedSettings::run() {
       }
     }
 
-    // --- Render (throttled: 100ms min between full VT100 frames to avoid
-    //     serial buffer saturation when holding arrow keys) ---
-    if (screenDirty && (now - lastRenderMs) >= 100) {
+    // --- Render (throttled + backpressure: skip if serial TX buffer is too full,
+    //     prevents watchdog timeout from blocking Serial.print calls) ---
+    if (screenDirty && (now - lastRenderMs) >= 80
+        && Serial.availableForWrite() > 256) {
       screenDirty = false;
       lastRenderMs = now;
 

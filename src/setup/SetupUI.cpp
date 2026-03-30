@@ -113,6 +113,7 @@ void SetupUI::drawFrameLine(const char* fmt, ...) {
   Serial.print(VT_DIM);
   Serial.print(UNI_V);
   Serial.print(VT_RESET VT_CL "\n");
+  yield();  // Feed RTOS watchdog — prevents timeout during large VT100 frames
 }
 
 void SetupUI::drawFrameEmpty() {
@@ -123,6 +124,7 @@ void SetupUI::drawFrameEmpty() {
   Serial.print(VT_DIM);
   Serial.print(UNI_V);
   Serial.print(VT_RESET VT_CL "\n");
+  yield();
 }
 
 // =================================================================
