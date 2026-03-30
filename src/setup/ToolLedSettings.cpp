@@ -1352,7 +1352,7 @@ void ToolLedSettings::run() {
           _ui->drawControlBar(VT_DIM "[</>] ADJUST  [RET] SAVE  [q] CANCEL" VT_RESET);
         }
       } else {
-        char ctrlBuf[128];
+        char ctrlBuf[256];
         snprintf(ctrlBuf, sizeof(ctrlBuf),
                  VT_DIM "[^v] NAV  [RET] SAVE  [b] PREVIEW  " VT_RESET
                  "%s" VT_DIM "%s"
