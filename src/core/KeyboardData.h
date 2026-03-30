@@ -115,38 +115,148 @@ struct ArpPotStore {
 };
 
 // =================================================================
-// LED Settings (Tool 7)
+// Color Preset Palette (const, in flash — not NVS)
+// =================================================================
+static constexpr uint8_t COLOR_PRESET_COUNT = 14;
+
+static constexpr RGBW COLOR_PRESETS[COLOR_PRESET_COUNT] = {
+  {  0,   0,   0, 255},  //  0: Pure White
+  { 40,  20,   0, 200},  //  1: Warm White
+  {  0,  10,  30, 220},  //  2: Cool White
+  {  0,  20, 180,  40},  //  3: Ice Blue
+  {  0,   0, 255,   0},  //  4: Deep Blue
+  {  0, 180, 200,  20},  //  5: Cyan
+  {200,  80,   0,  60},  //  6: Amber
+  {255, 140,   0,  30},  //  7: Gold
+  {255,  60,  30,  20},  //  8: Coral
+  {100,   0, 255,   0},  //  9: Violet
+  {200,   0, 180,  10},  // 10: Magenta
+  {  0, 255,   0,   0},  // 11: Green
+  {180,  60,  40,  80},  // 12: Soft Peach
+  { 60, 200,  60,  40},  // 13: Mint
+};
+
+static const char* const COLOR_PRESET_NAMES[COLOR_PRESET_COUNT] = {
+  "Pure White", "Warm White", "Cool White", "Ice Blue",
+  "Deep Blue", "Cyan", "Amber", "Gold", "Coral",
+  "Violet", "Magenta", "Green", "Soft Peach", "Mint"
+};
+
+// =================================================================
+// Color Slots (Tool 7 COLOR page)
+// =================================================================
+#define COLOR_SLOT_COUNT       13
+#define COLOR_SLOT_NVS_KEY     "ledcolors"
+#define COLOR_SLOT_MAGIC       0xC010
+
+enum ColorSlotId : uint8_t {
+  CSLOT_NORMAL_FG = 0,
+  CSLOT_NORMAL_BG,
+  CSLOT_ARPEG_FG,
+  CSLOT_ARPEG_BG,
+  CSLOT_TICK_FLASH,
+  CSLOT_BANK_SWITCH,
+  CSLOT_SCALE_ROOT,
+  CSLOT_SCALE_MODE,
+  CSLOT_SCALE_CHROM,
+  CSLOT_HOLD,
+  CSLOT_PLAY_ACK,
+  CSLOT_STOP,
+  CSLOT_OCTAVE
+};
+
+struct ColorSlot {
+  uint8_t presetId;   // 0..(COLOR_PRESET_COUNT-1)
+  int8_t  hueOffset;  // -128..+127 degrees
+};
+
+struct ColorSlotStore {
+  uint16_t  magic;     // COLOR_SLOT_MAGIC
+  uint8_t   version;   // 1
+  uint8_t   reserved;
+  ColorSlot slots[COLOR_SLOT_COUNT];
+};
+
+// =================================================================
+// Color Utility — Hue Shift Resolution
+// =================================================================
+// Resolves a ColorSlot to its final RGBW: look up preset, apply hue rotation.
+// W channel is unchanged by hue rotation (it's the "body" of the color).
+inline RGBW resolveColorSlot(const ColorSlot& slot) {
+  RGBW base = COLOR_PRESETS[slot.presetId < COLOR_PRESET_COUNT ? slot.presetId : 0];
+  if (slot.hueOffset == 0) return base;
+
+  // RGB -> HSV (H in 0-360, S/V in 0-255)
+  uint8_t maxC = base.r > base.g ? (base.r > base.b ? base.r : base.b)
+                                  : (base.g > base.b ? base.g : base.b);
+  uint8_t minC = base.r < base.g ? (base.r < base.b ? base.r : base.b)
+                                  : (base.g < base.b ? base.g : base.b);
+  uint8_t delta = maxC - minC;
+  uint8_t s = (maxC == 0) ? 0 : (uint8_t)((uint16_t)delta * 255 / maxC);
+  uint8_t v = maxC;
+  int16_t h = 0;
+
+  if (delta > 0) {
+    if (maxC == base.r)      h = 60 * (int16_t)(base.g - base.b) / delta;
+    else if (maxC == base.g) h = 120 + 60 * (int16_t)(base.b - base.r) / delta;
+    else                     h = 240 + 60 * (int16_t)(base.r - base.g) / delta;
+    if (h < 0) h += 360;
+  }
+
+  // Rotate hue
+  h = (h + (int16_t)slot.hueOffset + 360) % 360;
+
+  // HSV -> RGB
+  uint8_t hi = h / 60;
+  uint8_t f = (uint8_t)((uint32_t)(h % 60) * 255 / 60);
+  uint8_t p = (uint8_t)((uint16_t)v * (255 - s) / 255);
+  uint8_t q = (uint8_t)((uint16_t)v * (255 - (uint16_t)s * f / 255) / 255);
+  uint8_t t = (uint8_t)((uint16_t)v * (255 - (uint16_t)s * (255 - f) / 255) / 255);
+
+  RGBW result = {0, 0, 0, base.w};  // W unchanged
+  switch (hi) {
+    case 0: result.r = v; result.g = t; result.b = p; break;
+    case 1: result.r = q; result.g = v; result.b = p; break;
+    case 2: result.r = p; result.g = v; result.b = t; break;
+    case 3: result.r = p; result.g = q; result.b = v; break;
+    case 4: result.r = t; result.g = p; result.b = v; break;
+    default: result.r = v; result.g = p; result.b = q; break;
+  }
+  return result;
+}
+
+// =================================================================
+// LED Settings (Tool 7 DISPLAY + CONFIRM pages)
+// All intensities are 0-100 (perceptual %). Fresh v1 — no migration.
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       2
+#define LED_SETTINGS_VERSION       1
 
 struct LedSettingsStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  reserved;
-  // NORMAL banks
-  uint8_t  normalFgIntensity;     // default 255
-  uint8_t  normalBgIntensity;     // default 40
-  // ARPEG banks
-  uint8_t  fgArpStopMin;          // default 77
-  uint8_t  fgArpStopMax;          // default 255
-  uint8_t  fgArpPlayMin;          // default 77
-  uint8_t  fgArpPlayMax;          // default 204
-  uint8_t  fgTickFlash;           // default 255 (absolute)
-  uint8_t  bgArpStopMin;          // default 20
-  uint8_t  bgArpStopMax;          // default 64
-  uint8_t  bgArpPlayMin;          // default 20
-  uint8_t  bgArpPlayMax;          // default 51
-  uint8_t  bgTickFlash;           // default 64 (absolute)
-  uint8_t  absoluteMax;           // default 255
-  // TIMING
+  // --- Intensities (0-100, perceptual %) ---
+  uint8_t  normalFgIntensity;     // default 85
+  uint8_t  normalBgIntensity;     // default 10
+  uint8_t  fgArpStopMin;          // default 30
+  uint8_t  fgArpStopMax;          // default 100
+  uint8_t  fgArpPlayMin;          // default 30
+  uint8_t  fgArpPlayMax;          // default 80
+  uint8_t  bgArpStopMin;          // default 8
+  uint8_t  bgArpStopMax;          // default 25
+  uint8_t  bgArpPlayMin;          // default 8
+  uint8_t  bgArpPlayMax;          // default 20
+  uint8_t  tickFlashFg;           // default 100
+  uint8_t  tickFlashBg;           // default 25
+  // --- Timing ---
   uint16_t pulsePeriodMs;         // default 1472
   uint8_t  tickFlashDurationMs;   // default 30
-  // CONFIRMATIONS
+  // --- Confirmations ---
   uint8_t  bankBlinks;            // 1-3, default 3
   uint16_t bankDurationMs;        // default 300
-  uint8_t  bankBrightnessPct;     // default 50
+  uint8_t  bankBrightnessPct;     // default 80
   uint8_t  scaleRootBlinks;       // default 2
   uint16_t scaleRootDurationMs;   // default 200
   uint8_t  scaleModeBlinks;       // default 2
@@ -154,9 +264,9 @@ struct LedSettingsStore {
   uint8_t  scaleChromBlinks;      // default 2
   uint16_t scaleChromDurationMs;  // default 200
   uint8_t  holdOnFlashMs;         // default 150
-  uint16_t holdFadeMs;            // default 300 (HOLD OFF fade-out)
-  uint16_t stopFadeMs;            // default 300 (STOP fade-out, independent)
-  uint8_t  playBeatCount;         // 1-4, default 3
+  uint16_t holdFadeMs;            // default 300
+  uint8_t  playBeatCount;         // default 3
+  uint16_t stopFadeMs;            // default 300
   uint8_t  octaveBlinks;          // default 3
   uint16_t octaveDurationMs;      // default 300
 };
