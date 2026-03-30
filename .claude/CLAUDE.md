@@ -20,7 +20,7 @@
 - **USB**: Single USB-C on GPIO 19/20 (native USB, no UART bridge). ALL traffic on this one port: MIDI, CDC serial, upload, VT100 setup. Board has a 2nd USB-C (COM/UART bridge GPIO 43/44) but it is unused. JTAG builtin shares GPIO 19/20 — conflicts with TinyUSB.
 - **2 Buttons**: left (bank+scale+arp single-layer control), rear (battery/setup/modifier pot rear). GPIOs TBD.
 - **5 Pots**: 4 right (tempo, shape/gate, slew/pattern, velocity), 1 rear (LED brightness/sensitivity). GPIOs TBD.
-- **8 LEDs**: WS2812 RGB NeoPixel Stick, single data pin GPIO 4, Adafruit_NeoPixel driver (NEO_GRB)
+- **8 LEDs**: SK6812 RGBW NeoPixel Stick, single data pin GPIO 4, Adafruit_NeoPixel driver (NEO_GRBW)
 - **Battery**: LiPo 3.7V, BQ25185 charger, ADC voltage divider
 
 Pads measure **skin contact surface area**, not mechanical force. Aftertouch = yes. Velocity from pressure = unreliable.
@@ -120,7 +120,7 @@ Step 8: ●●●●●●●●  All systems go (200ms full bar)
 
 ### Normal Display (multi-bank state)
 
-LedController drives a WS2812 RGB NeoPixel strip via `Adafruit_NeoPixel` (NEO_GRB). Per-pixel RGB colors defined in HardwareConfig.h (`COL_WHITE`, `COL_BLUE`, `COL_SCALE_*`, `COL_ARP_*`, `COL_ERROR`, etc.). Brightness applied per-pixel via `setPixelScaled()` — never `setBrightness()`. Intensity ranges are compile-time constants (`LED_FG_*`, `LED_BG_*`).
+LedController drives a SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel` (NEO_GRBW). Colors come from 13 configurable color slots (preset + hue offset), resolved at load time via `resolveColorSlot()`. System colors (error, boot, battery) are hardcoded RGBW in HardwareConfig.h. A single `setPixel(led, rgbw, intensityPct)` method applies perceptual-to-linear conversion + gamma correction (LUT, gamma 2.8) per channel. Brightness pot acts as master perceptual fader (0-100%) via `POT_BRIGHTNESS_CURVE[]` (compile-time selectable: LOW_BIASED/LINEAR/SIGMOID). All intensities are 0-100% perceptual in `LedSettingsStore`.
 
 | State | Color | Pattern | Intensity | Rate |
 |---|---|---|---|---|
@@ -256,7 +256,7 @@ VT100 terminal, serial keyboard input only (no physical button in setup mode).
 [4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
 [5] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
 [6] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
-[7] LED Settings           — intensity, timing, confirmation blinks (2 pages: DISPLAY/CONFIRM, toggle with 't')
+[7] LED Settings           — color presets + hue + intensity + timing, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink)
 [0] Reboot
 ```
 
@@ -300,7 +300,7 @@ src/
 | `illpad_led` | LED brightness (global) |
 | `illpad_sens` | pad sensitivity (global) |
 | `illpad_pmap` | pot mapping (PotMappingStore: both NORMAL + ARPEG contexts, magic/version checked) |
-| `illpad_lset` | LED settings (LedSettingsStore: intensities, timings, confirmation blinks, magic/version checked) |
+| `illpad_lset` | LED settings (LedSettingsStore: intensities 0-100%, timings, confirmations) + color slots (ColorSlotStore: 13 preset+hue slots) |
 
 NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never blocks on flash.
 
