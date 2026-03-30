@@ -8,7 +8,7 @@
 
 // Page 0: DISPLAY — 15 params (0-14)
 // Page 1: CONFIRM — 15 params (0-14)
-static const uint8_t PAGE0_COUNT = 15;
+static const uint8_t PAGE0_COUNT = 14;  // absoluteMax removed
 static const uint8_t PAGE1_COUNT = 15;
 
 static const char* s_pageNames[] = {"DISPLAY", "CONFIRM"};
@@ -44,27 +44,27 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
   if (_page == 0) {
     // ---- PAGE 0: DISPLAY ----
     switch (_cursor) {
-      case 0: { // normalFgIntensity 10-255
-        int step = accel ? 25 : 5;
+      case 0: { // normalFgIntensity 0-100%
+        int step = accel ? 10 : 1;
         int val = (int)_wk.normalFgIntensity + dir * step;
-        if (val < 10) val = 10;
-        if (val > 255) val = 255;
+        if (val < 0) val = 0;
+        if (val > 100) val = 100;
         _wk.normalFgIntensity = (uint8_t)val;
         break;
       }
-      case 1: { // normalBgIntensity 5-100
-        int step = accel ? 25 : 5;
+      case 1: { // normalBgIntensity 0-100%
+        int step = accel ? 10 : 1;
         int val = (int)_wk.normalBgIntensity + dir * step;
-        if (val < 5) val = 5;
+        if (val < 0) val = 0;
         if (val > 100) val = 100;
         _wk.normalBgIntensity = (uint8_t)val;
         break;
       }
-      case 2: { // fgArpStopMin 10-255
-        int step = accel ? 25 : 5;
+      case 2: { // fgArpStopMin 0-100%
+        int step = accel ? 10 : 1;
         int val = (int)_wk.fgArpStopMin + dir * step;
-        if (val < 10) val = 10;
-        if (val > 255) val = 255;
+        if (val < 0) val = 0;
+        if (val > 100) val = 100;
         _wk.fgArpStopMin = (uint8_t)val;
         if (_wk.fgArpStopMin > _wk.fgArpStopMax) _wk.fgArpStopMax = _wk.fgArpStopMin;
         break;
@@ -96,12 +96,12 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (_wk.fgArpPlayMax < _wk.fgArpPlayMin) _wk.fgArpPlayMin = _wk.fgArpPlayMax;
         break;
       }
-      case 6: { // fgTickFlash 50-255
-        int step = accel ? 25 : 5;
-        int val = (int)_wk.fgTickFlash + dir * step;
-        if (val < 50) val = 50;
-        if (val > 255) val = 255;
-        _wk.fgTickFlash = (uint8_t)val;
+      case 6: { // tickFlashFg 0-100
+        int step = accel ? 10 : 1;
+        int val = (int)_wk.tickFlashFg + dir * step;
+        if (val < 0) val = 0;
+        if (val > 100) val = 100;
+        _wk.tickFlashFg = (uint8_t)val;
         break;
       }
       case 7: { // bgArpStopMin 0-100
@@ -140,22 +140,16 @@ void ToolLedSettings::adjustParam(int8_t dir, bool accel) {
         if (_wk.bgArpPlayMax < _wk.bgArpPlayMin) _wk.bgArpPlayMin = _wk.bgArpPlayMax;
         break;
       }
-      case 11: { // bgTickFlash 10-100
-        int step = accel ? 25 : 5;
-        int val = (int)_wk.bgTickFlash + dir * step;
-        if (val < 10) val = 10;
+      case 11: { // tickFlashBg 0-100
+        int step = accel ? 10 : 1;
+        int val = (int)_wk.tickFlashBg + dir * step;
+        if (val < 0) val = 0;
         if (val > 100) val = 100;
-        _wk.bgTickFlash = (uint8_t)val;
+        _wk.tickFlashBg = (uint8_t)val;
         break;
       }
-      case 12: { // absoluteMax 50-255
-        int step = accel ? 25 : 5;
-        int val = (int)_wk.absoluteMax + dir * step;
-        if (val < 50) val = 50;
-        if (val > 255) val = 255;
-        _wk.absoluteMax = (uint8_t)val;
-        break;
-      }
+      // case 12 (absoluteMax) removed — unified pipeline
+      // Shift remaining timing params down
       case 13: { // pulsePeriodMs 500-4000
         int step = accel ? 250 : 50;
         int val = (int)_wk.pulsePeriodMs + dir * step;
@@ -491,37 +485,35 @@ static LedSettingsStore s_defaults() {
   d.magic   = EEPROM_MAGIC;
   d.version = LED_SETTINGS_VERSION;
   d.reserved = 0;
-  // NORMAL banks
-  d.normalFgIntensity = 255;
-  d.normalBgIntensity = 40;
-  // ARPEG banks
-  d.fgArpStopMin      = LED_FG_ARP_STOP_MIN;   // 77
-  d.fgArpStopMax      = LED_FG_ARP_STOP_MAX;   // 255
-  d.fgArpPlayMin      = LED_FG_ARP_PLAY_MIN;   // 77
-  d.fgArpPlayMax      = LED_FG_ARP_PLAY_MAX;   // 204
-  d.fgTickFlash        = 255;
-  d.bgArpStopMin      = LED_BG_ARP_STOP_MIN;   // 20
-  d.bgArpStopMax      = LED_BG_ARP_STOP_MAX;   // 64
-  d.bgArpPlayMin      = LED_BG_ARP_PLAY_MIN;   // 20
-  d.bgArpPlayMax      = LED_BG_ARP_PLAY_MAX;   // 51
-  d.bgTickFlash        = LED_BG_ARP_PLAY_FLASH; // 64
-  d.absoluteMax        = LED_ABSOLUTE_MAX;       // 255
+  // Intensities (0-100 perceptual %)
+  d.normalFgIntensity  = 85;
+  d.normalBgIntensity  = 10;
+  d.fgArpStopMin       = 30;
+  d.fgArpStopMax       = 100;
+  d.fgArpPlayMin       = 30;
+  d.fgArpPlayMax       = 80;
+  d.bgArpStopMin       = 8;
+  d.bgArpStopMax       = 25;
+  d.bgArpPlayMin       = 8;
+  d.bgArpPlayMax       = 20;
+  d.tickFlashFg        = 100;
+  d.tickFlashBg        = 25;
   // Timing
-  d.pulsePeriodMs      = LED_PULSE_PERIOD_MS;   // 1472
-  d.tickFlashDurationMs = LED_TICK_FLASH_DURATION_MS; // 30
+  d.pulsePeriodMs      = 1472;
+  d.tickFlashDurationMs = 30;
   // Confirmations
   d.bankBlinks         = 3;
   d.bankDurationMs     = 300;
-  d.bankBrightnessPct  = LED_CONFIRM_BRIGHTNESS_PCT; // 50
+  d.bankBrightnessPct  = 80;
   d.scaleRootBlinks    = 2;
   d.scaleRootDurationMs = 200;
   d.scaleModeBlinks    = 2;
   d.scaleModeDurationMs = 200;
   d.scaleChromBlinks   = 2;
   d.scaleChromDurationMs = 200;
-  d.holdOnFlashMs      = LED_CONFIRM_HOLD_ON_MS;  // 150
-  d.holdFadeMs         = LED_CONFIRM_FADE_MS;     // 300
-  d.stopFadeMs         = LED_CONFIRM_FADE_MS;     // 300
+  d.holdOnFlashMs      = 150;
+  d.holdFadeMs         = 300;
+  d.stopFadeMs         = 300;
   d.playBeatCount      = 3;
   d.octaveBlinks       = 3;
   d.octaveDurationMs   = 300;
@@ -699,20 +691,18 @@ void ToolLedSettings::run() {
         drawParam(4, "FG pulse min (playing):", buf);
         snprintf(buf, sizeof(buf), "%d", _wk.fgArpPlayMax);
         drawParam(5, "FG pulse max (playing):", buf);
-        snprintf(buf, sizeof(buf), "%d", _wk.fgTickFlash);
-        drawParam(6, "FG tick flash:", buf);
-        snprintf(buf, sizeof(buf), "%d", _wk.bgArpStopMin);
+        snprintf(buf, sizeof(buf), "%d%%", _wk.tickFlashFg);
+        drawParam(6, "Tick flash FG:", buf);
+        snprintf(buf, sizeof(buf), "%d%%", _wk.bgArpStopMin);
         drawParam(7, "BG pulse min (stopped):", buf);
-        snprintf(buf, sizeof(buf), "%d", _wk.bgArpStopMax);
+        snprintf(buf, sizeof(buf), "%d%%", _wk.bgArpStopMax);
         drawParam(8, "BG pulse max (stopped):", buf);
-        snprintf(buf, sizeof(buf), "%d", _wk.bgArpPlayMin);
+        snprintf(buf, sizeof(buf), "%d%%", _wk.bgArpPlayMin);
         drawParam(9, "BG pulse min (playing):", buf);
-        snprintf(buf, sizeof(buf), "%d", _wk.bgArpPlayMax);
+        snprintf(buf, sizeof(buf), "%d%%", _wk.bgArpPlayMax);
         drawParam(10, "BG pulse max (playing):", buf);
-        snprintf(buf, sizeof(buf), "%d", _wk.bgTickFlash);
-        drawParam(11, "BG tick flash:", buf);
-        snprintf(buf, sizeof(buf), "%d", _wk.absoluteMax);
-        drawParam(12, "Absolute max cap:", buf);
+        snprintf(buf, sizeof(buf), "%d%%", _wk.tickFlashBg);
+        drawParam(11, "Tick flash BG:", buf);
         _ui->drawFrameEmpty();
 
         // --- TIMING ---
