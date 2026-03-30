@@ -30,44 +30,131 @@ const int NUM_SENSORS = 4;
 const int CHANNELS_PER_SENSOR = 12;
 const int NUM_KEYS = NUM_SENSORS * CHANNELS_PER_SENSOR;  // 48
 
-// --- LEDs — 8x WS2812 RGB NeoPixel Stick (GRB wire order) ---
+// --- LEDs — 8x SK6812 RGBW NeoPixel Stick (GRBW wire order) ---
 const uint8_t LED_DATA_PIN = 4;  // Single GPIO for NeoPixel data line
 const int NUM_LEDS = 8;
 
-// --- RGB Color Type ---
-struct RGB {
-  uint8_t r, g, b;
+// --- RGBW Color Type ---
+struct RGBW {
+  uint8_t r, g, b, w;
 };
 
-// --- Color Palette ---
-// Base colors
-const RGB COL_WHITE       = {255, 255, 255};  // NORMAL foreground
-const RGB COL_WHITE_DIM   = { 40,  40,  40};  // NORMAL background
-const RGB COL_BLUE        = {  0,   0, 255};  // ARPEG foreground
-const RGB COL_BLUE_DIM    = {  0,   0,  40};  // ARPEG background
+// --- System Colors (hardcoded, not editable via Tool 7) ---
+static constexpr RGBW COL_ERROR     = {255,   0,   0,   0};  // Error — red
+static constexpr RGBW COL_BOOT      = {  0,   0,   0, 255};  // Boot — clean W white
+static constexpr RGBW COL_BOOT_FAIL = {255,   0,   0,   0};  // Boot fail — red
+static constexpr RGBW COL_SETUP     = {128,   0, 255,   0};  // Setup comet — violet
 
-// Scale confirmations (yellow, 3 saturations)
-const RGB COL_SCALE_ROOT  = {255, 200,   0};  // Root — vivid yellow
-const RGB COL_SCALE_MODE  = {220, 180,  40};  // Mode — pale yellow (was RGBW warm)
-const RGB COL_SCALE_CHROM = {255, 140,   0};  // Chromatic — golden yellow
-
-// Arp confirmations (blue, 3 variations)
-const RGB COL_ARP_HOLD    = {  0,   0, 255};  // Hold — deep blue
-const RGB COL_ARP_PLAY    = {  0,  80, 255};  // Play/Stop — blue-cyan
-const RGB COL_PLAY_ACK    = {  0, 255,   0};  // Play ack — green "go"
-const RGB COL_ARP_OCTAVE  = { 80,   0, 255};  // Octave — blue-violet
-
-// System
-const RGB COL_ERROR       = {255,   0,   0};  // Error — red
-const RGB COL_BOOT        = {255, 255, 255};  // Boot — white
-const RGB COL_BOOT_FAIL   = {255,   0,   0};  // Boot fail — red
-const RGB COL_SETUP       = {128,   0, 255};  // Setup comet — violet
-
-// Battery gauge gradient (LED 0 = red, LED 7 = green)
-const RGB COL_BATTERY[NUM_LEDS] = {
-  {255,   0, 0}, {255,  36, 0}, {255,  73, 0}, {255, 145, 0},
-  {200, 200, 0}, {145, 255, 0}, { 73, 255, 0}, {  0, 255, 0}
+// Battery gauge gradient (LED 0 = red, LED 7 = green) — no W channel
+static constexpr RGBW COL_BATTERY[NUM_LEDS] = {
+  {255,   0, 0, 0}, {255,  36, 0, 0}, {255,  73, 0, 0}, {255, 145, 0, 0},
+  {200, 200, 0, 0}, {145, 255, 0, 0}, { 73, 255, 0, 0}, {  0, 255, 0, 0}
 };
+
+// --- Gamma Correction LUT (256 entries, gamma 2.8) ---
+// Applied per-channel (R,G,B,W) at final output stage in setPixel().
+// Generated: round(255 * pow(i / 255.0, 2.8)) for i in 0..255
+static const uint8_t GAMMA_LUT[256] = {
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   1,   1,   1,   1,
+      1,   1,   1,   1,   1,   1,   1,   1,   1,   2,   2,   2,   2,   2,   2,   2,
+      2,   3,   3,   3,   3,   3,   3,   3,   4,   4,   4,   4,   4,   5,   5,   5,
+      5,   6,   6,   6,   6,   7,   7,   7,   7,   8,   8,   8,   9,   9,   9,  10,
+     10,  10,  11,  11,  11,  12,  12,  13,  13,  13,  14,  14,  15,  15,  16,  16,
+     17,  17,  18,  18,  19,  19,  20,  20,  21,  21,  22,  22,  23,  24,  24,  25,
+     25,  26,  27,  27,  28,  29,  29,  30,  31,  32,  32,  33,  34,  35,  35,  36,
+     37,  38,  39,  39,  40,  41,  42,  43,  44,  45,  46,  47,  48,  49,  50,  50,
+     51,  52,  54,  55,  56,  57,  58,  59,  60,  61,  62,  63,  64,  66,  67,  68,
+     69,  70,  72,  73,  74,  75,  77,  78,  79,  81,  82,  83,  85,  86,  87,  89,
+     90,  92,  93,  95,  96,  98,  99, 101, 102, 104, 105, 107, 109, 110, 112, 114,
+    115, 117, 119, 120, 122, 124, 126, 127, 129, 131, 133, 135, 137, 138, 140, 142,
+    144, 146, 148, 150, 152, 154, 156, 158, 160, 162, 164, 167, 169, 171, 173, 175,
+    177, 180, 182, 184, 186, 189, 191, 193, 196, 198, 200, 203, 205, 208, 210, 213,
+    215, 218, 220, 223, 225, 228, 231, 233, 236, 239, 241, 244, 247, 249, 252, 255
+};
+
+// --- Perceptual-to-Linear LUT (101 entries, 0-100% -> 0-255) ---
+// Inverse gamma 2.8: round(255 * pow(i / 100.0, 1.0 / 2.8)) for i in 0..100
+static const uint8_t PERCEPTUAL_TO_LINEAR[101] = {
+      0,  49,  63,  73,  81,  87,  93,  99, 103, 108, 112, 116, 120, 123, 126, 130,
+    133, 135, 138, 141, 144, 146, 148, 151, 153, 155, 158, 160, 162, 164, 166, 168,
+    170, 172, 173, 175, 177, 179, 180, 182, 184, 185, 187, 189, 190, 192, 193, 195,
+    196, 198, 199, 200, 202, 203, 205, 206, 207, 209, 210, 211, 212, 214, 215, 216,
+    217, 219, 220, 221, 222, 223, 225, 226, 227, 228, 229, 230, 231, 232, 233, 234,
+    235, 237, 238, 239, 240, 241, 242, 243, 244, 245, 246, 247, 248, 248, 249, 250,
+    251, 252, 253, 254, 255
+};
+
+// --- Brightness Pot Response Curve ---
+#define POT_CURVE_LOW_BIASED  0
+#define POT_CURVE_LINEAR      1
+#define POT_CURVE_SIGMOID     2
+
+// Select curve (change to switch behavior):
+//   LOW_BIASED  — bottom half covers 0-25% perceived, ideal for dark stages
+//   LINEAR      — uniform perceptual steps
+//   SIGMOID     — precision at both extremes
+#define BRIGHTNESS_POT_CURVE  POT_CURVE_LOW_BIASED
+
+// 256-entry LUT: ADC value (0-255) -> perceived brightness (0-100)
+#if BRIGHTNESS_POT_CURVE == POT_CURVE_LOW_BIASED
+static const uint8_t POT_BRIGHTNESS_CURVE[256] = {
+      0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,   0,
+      0,   0,   0,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+      2,   2,   2,   2,   2,   2,   2,   2,   2,   3,   3,   3,   3,   3,   3,   3,
+      4,   4,   4,   4,   4,   4,   4,   5,   5,   5,   5,   5,   6,   6,   6,   6,
+      6,   6,   7,   7,   7,   7,   8,   8,   8,   8,   8,   9,   9,   9,   9,  10,
+     10,  10,  10,  11,  11,  11,  11,  12,  12,  12,  12,  13,  13,  13,  14,  14,
+     14,  14,  15,  15,  15,  16,  16,  16,  17,  17,  17,  18,  18,  18,  19,  19,
+     19,  20,  20,  20,  21,  21,  21,  22,  22,  23,  23,  23,  24,  24,  24,  25,
+     25,  26,  26,  26,  27,  27,  28,  28,  28,  29,  29,  30,  30,  31,  31,  31,
+     32,  32,  33,  33,  34,  34,  35,  35,  36,  36,  36,  37,  37,  38,  38,  39,
+     39,  40,  40,  41,  41,  42,  42,  43,  43,  44,  44,  45,  45,  46,  47,  47,
+     48,  48,  49,  49,  50,  50,  51,  52,  52,  53,  53,  54,  54,  55,  56,  56,
+     57,  57,  58,  58,  59,  60,  60,  61,  62,  62,  63,  63,  64,  65,  65,  66,
+     67,  67,  68,  68,  69,  70,  70,  71,  72,  72,  73,  74,  74,  75,  76,  76,
+     77,  78,  79,  79,  80,  81,  81,  82,  83,  83,  84,  85,  86,  86,  87,  88,
+     89,  89,  90,  91,  92,  92,  93,  94,  95,  95,  96,  97,  98,  98,  99, 100
+};
+#elif BRIGHTNESS_POT_CURVE == POT_CURVE_LINEAR
+static const uint8_t POT_BRIGHTNESS_CURVE[256] = {
+      0,   0,   1,   1,   2,   2,   2,   3,   3,   4,   4,   4,   5,   5,   5,   6,
+      6,   7,   7,   7,   8,   8,   9,   9,   9,  10,  10,  11,  11,  11,  12,  12,
+     13,  13,  13,  14,  14,  15,  15,  15,  16,  16,  16,  17,  17,  18,  18,  18,
+     19,  19,  20,  20,  20,  21,  21,  22,  22,  22,  23,  23,  24,  24,  24,  25,
+     25,  25,  26,  26,  27,  27,  27,  28,  28,  29,  29,  29,  30,  30,  31,  31,
+     31,  32,  32,  33,  33,  33,  34,  34,  35,  35,  35,  36,  36,  36,  37,  37,
+     38,  38,  38,  39,  39,  40,  40,  40,  41,  41,  42,  42,  42,  43,  43,  44,
+     44,  44,  45,  45,  45,  46,  46,  47,  47,  47,  48,  48,  49,  49,  49,  50,
+     50,  51,  51,  51,  52,  52,  53,  53,  53,  54,  54,  55,  55,  55,  56,  56,
+     56,  57,  57,  58,  58,  58,  59,  59,  60,  60,  60,  61,  61,  62,  62,  62,
+     63,  63,  64,  64,  64,  65,  65,  65,  66,  66,  67,  67,  67,  68,  68,  69,
+     69,  69,  70,  70,  71,  71,  71,  72,  72,  73,  73,  73,  74,  74,  75,  75,
+     75,  76,  76,  76,  77,  77,  78,  78,  78,  79,  79,  80,  80,  80,  81,  81,
+     82,  82,  82,  83,  83,  84,  84,  84,  85,  85,  85,  86,  86,  87,  87,  87,
+     88,  88,  89,  89,  89,  90,  90,  91,  91,  91,  92,  92,  93,  93,  93,  94,
+     94,  95,  95,  95,  96,  96,  96,  97,  97,  98,  98,  98,  99,  99, 100, 100
+};
+#elif BRIGHTNESS_POT_CURVE == POT_CURVE_SIGMOID
+static const uint8_t POT_BRIGHTNESS_CURVE[256] = {
+      0,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
+      1,   1,   1,   1,   1,   2,   2,   2,   2,   2,   2,   2,   2,   2,   2,   2,
+      2,   2,   2,   3,   3,   3,   3,   3,   3,   3,   3,   4,   4,   4,   4,   4,
+      4,   4,   5,   5,   5,   5,   5,   6,   6,   6,   6,   6,   7,   7,   7,   7,
+      8,   8,   8,   9,   9,   9,   9,  10,  10,  11,  11,  11,  12,  12,  13,  13,
+     13,  14,  14,  15,  15,  16,  16,  17,  18,  18,  19,  19,  20,  21,  21,  22,
+     23,  23,  24,  25,  25,  26,  27,  28,  28,  29,  30,  31,  32,  33,  33,  34,
+     35,  36,  37,  38,  39,  40,  41,  42,  43,  44,  45,  46,  47,  48,  49,  50,
+     50,  51,  52,  53,  54,  55,  56,  57,  58,  59,  60,  61,  62,  63,  64,  65,
+     66,  67,  67,  68,  69,  70,  71,  72,  72,  73,  74,  75,  75,  76,  77,  77,
+     78,  79,  79,  80,  81,  81,  82,  82,  83,  84,  84,  85,  85,  86,  86,  87,
+     87,  87,  88,  88,  89,  89,  89,  90,  90,  91,  91,  91,  91,  92,  92,  92,
+     93,  93,  93,  93,  94,  94,  94,  94,  94,  95,  95,  95,  95,  95,  96,  96,
+     96,  96,  96,  96,  96,  97,  97,  97,  97,  97,  97,  97,  97,  98,  98,  98,
+     98,  98,  98,  98,  98,  98,  98,  98,  98,  98,  98,  99,  99,  99,  99,  99,
+     99,  99,  99,  99,  99,  99,  99,  99,  99,  99,  99,  99,  99,  99,  99, 100
+};
+#endif
 
 // --- Buttons (V2: 2 buttons, all active LOW with internal pull-up) ---
 const uint8_t BTN_LEFT_PIN  = 2;   // GPIO2 — Left side, bank+scale+arp single-layer (hold + pad), modifier for right pots
@@ -215,51 +302,19 @@ const uint8_t DOUBLE_TAP_MS_MAX     = 250;
 const uint8_t DOUBLE_TAP_MS_DEFAULT = 150;
 
 // =================================================================
-// 5. LED DISPLAY — RGB Sine Ranges & Timing
+// 5. LED DISPLAY — Setup-mode timing (not user-configurable)
 // =================================================================
-// Sine range values define the min/max of the modulated blue channel.
-// All other channels in the pixel stay at 0 during sine modulation.
-
-// --- Foreground ARPEG (modulate B channel) ---
-const uint8_t LED_FG_ARP_STOP_MIN          = 77;   // Stopped: sine 30%
-const uint8_t LED_FG_ARP_STOP_MAX          = 255;  // Stopped: sine 100%
-const uint8_t LED_FG_ARP_PLAY_MIN          = 77;   // Playing: sine 30%
-const uint8_t LED_FG_ARP_PLAY_MAX          = 204;  // Playing: sine 80%
-
-// --- Background ARPEG (modulate B channel, dimmed) ---
-const uint8_t LED_BG_ARP_STOP_MIN          = 20;   // Stopped: sine 8%
-const uint8_t LED_BG_ARP_STOP_MAX          = 64;   // Stopped: sine 25%
-const uint8_t LED_BG_ARP_PLAY_MIN          = 20;   // Playing: sine 8%
-const uint8_t LED_BG_ARP_PLAY_MAX          = 51;   // Playing: sine 20%
-const uint8_t LED_BG_ARP_PLAY_FLASH        = 64;   // Playing: tick flash spike 25%
-
-// --- Pulse & Flash Timing ---
-const uint16_t LED_PULSE_PERIOD_MS         = 1472; // Sine pulse period (~1.5s)
-const uint8_t  LED_TICK_FLASH_DURATION_MS  = 30;   // Tick flash spike duration
-
-// --- Confirmation Blinks ---
-const uint8_t  LED_CONFIRM_UNIT_MS         = 50;   // Base phase unit
-const uint8_t  LED_CONFIRM_BANK_PHASES     = 6;    // Bank switch: triple blink = 300ms
-const uint8_t  LED_CONFIRM_SCALE_PHASES    = 4;    // Scale change: double blink = 200ms
-const uint8_t  LED_CONFIRM_HOLD_ON_MS      = 150;  // Hold ON: blink on phase
-const uint8_t  LED_CONFIRM_HOLD_TOTAL_MS   = 250;  // Hold ON: total duration
-const uint16_t LED_CONFIRM_FADE_MS         = 300;  // Hold OFF + Stop: fade-out duration
-const uint8_t  LED_CONFIRM_PLAY_STEPS      = 4;    // Play: total flashes (1 ack + 3 beat-synced)
-const uint8_t  LED_CONFIRM_OCTAVE_PHASES   = 6;    // Octave: triple blink = 300ms
-const uint8_t  LED_CONFIRM_BRIGHTNESS_PCT  = 50;   // Bank switch blink brightness (% of global)
-
-// --- Absolute Brightness Cap ---
-// Maximum brightness for events that bypass global brightness (tick flash, errors, etc.)
-// 255 = full power (default). Lower to tame absolute events on bright LED strips.
-const uint8_t  LED_ABSOLUTE_MAX             = 255;
 
 // --- Setup Comet Chase ---
-const uint8_t  LED_SETUP_CHASE_SPEED_MS    = 180;  // Time per step (~2.5s round trip)
+const uint8_t  LED_SETUP_CHASE_SPEED_MS     = 180;  // Time per step (~2.5s round trip)
 
 // --- Bargraph Duration (configurable via Tool 5) ---
 const uint16_t LED_BARGRAPH_DURATION_MIN     = 1000;
 const uint16_t LED_BARGRAPH_DURATION_MAX     = 10000;
 const uint16_t LED_BARGRAPH_DURATION_DEFAULT = 3000;
+
+// --- Play Ack Timing (fixed, not in LedSettingsStore) ---
+const uint8_t  LED_CONFIRM_UNIT_MS           = 50;   // Base phase unit for play ack
 
 // =================================================================
 // 6. MIDI
