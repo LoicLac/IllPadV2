@@ -33,8 +33,8 @@ public:
   void begin();
   void update();
 
-  // Brightness (0-255)
-  void setBrightness(uint8_t brightness);
+  // Brightness (raw pot ADC 0-255, mapped via POT_BRIGHTNESS_CURVE)
+  void setBrightness(uint8_t potValue);
 
   // Bank display
   void setCurrentBank(uint8_t bank);
@@ -54,6 +54,7 @@ public:
 
   // LED settings (from NVS)
   void loadLedSettings(const LedSettingsStore& store);
+  void loadColorSlots(const ColorSlotStore& store);
 
   // Boot
   void showBootProgress(uint8_t step);
@@ -90,14 +91,9 @@ public:
 private:
   Adafruit_NeoPixel _strip;
 
-  // Helper: set pixel from RGB struct (applies _brightness scaling)
-  void setPixel(uint8_t i, const RGB& color);
-  void setPixelScaled(uint8_t i, const RGB& color, uint8_t scale);
-
-  // Absolute: ignores _brightness — for tempo events and errors that must always be visible
-  void setPixelAbsolute(uint8_t i, const RGB& color);
-  void setPixelAbsoluteScaled(uint8_t i, const RGB& color, uint8_t scale);
-
+  // Unified pixel setter: takes perceptual intensity (0-100%),
+  // combines with master brightness, converts to linear, applies gamma
+  void setPixel(uint8_t i, const RGBW& color, uint8_t intensityPct);
   void clearPixels();
 
   // Render helpers (priority-based, called from update())
@@ -111,8 +107,8 @@ private:
   void renderCalibration(unsigned long now);
   void renderNormalDisplay(unsigned long now);
 
-  // Brightness
-  uint8_t _brightness;
+  // Master brightness (0-100 perceptual, from pot via POT_BRIGHTNESS_CURVE)
+  uint8_t _brightnessPct;
 
   // Bank display
   uint8_t _currentBank;
@@ -121,16 +117,21 @@ private:
   // Multi-bank state
   const BankSlot* _slots;
 
-  // LED settings (loaded from NVS, defaults from HardwareConfig.h)
+  // Resolved colors (from ColorSlotStore, resolved at load time)
+  RGBW _colNormalFg, _colNormalBg;
+  RGBW _colArpFg, _colArpBg;
+  RGBW _colTickFlash;
+  RGBW _colBankSwitch, _colScaleRoot, _colScaleMode, _colScaleChrom;
+  RGBW _colHold, _colPlayAck, _colStop, _colOctave;
+
+  // LED settings (0-100 perceptual %)
   uint8_t  _normalFgIntensity;
   uint8_t  _normalBgIntensity;
   uint8_t  _fgArpStopMin, _fgArpStopMax;
   uint8_t  _fgArpPlayMin, _fgArpPlayMax;
-  uint8_t  _fgTickFlash;
   uint8_t  _bgArpStopMin, _bgArpStopMax;
   uint8_t  _bgArpPlayMin, _bgArpPlayMax;
-  uint8_t  _bgTickFlash;
-  uint8_t  _absoluteMax;
+  uint8_t  _tickFlashFg, _tickFlashBg;
   uint16_t _pulsePeriodMs;
   uint8_t  _tickFlashDurationMs;
   uint8_t  _bankBlinks;
