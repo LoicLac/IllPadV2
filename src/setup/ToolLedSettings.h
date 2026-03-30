@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "../core/KeyboardData.h"
 #include "InputParser.h"
+#include "SetupPotInput.h"
 
 class LedController;
 class NvsManager;
@@ -65,6 +66,11 @@ private:
   void renderContinuousPreview(unsigned long now);
   void renderEventPreview(unsigned long now);
   uint8_t mapCursorToPreviewRow() const;
+
+  // Pot input
+  SetupPotInput _pots;
+  void seedPotsForCursor();
+  bool applyPotValues();
 };
 
 #endif // TOOL_LED_SETTINGS_H

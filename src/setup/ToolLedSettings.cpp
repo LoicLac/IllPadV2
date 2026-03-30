@@ -658,6 +658,108 @@ void ToolLedSettings::drawDescription() {
 // =================================================================
 // Preview — map cursor to preview row
 // =================================================================
+// =================================================================
+// Pot input — seed channels for current cursor position
+// =================================================================
+void ToolLedSettings::seedPotsForCursor() {
+  if (_page == 0 && _cursor < 16) {
+    // COLOR rows: pot 1 = hue (-128..127), pot 2 = intensity (0-100)
+    uint8_t slotId = COLOR_ROWS[_cursor].slotId;
+    _pots.seed(0, _cwk.slots[slotId].hueOffset, -128, 127);
+    if (rowHasEditableIntensity(_cursor)) {
+      _pots.seed(1, getRowIntensity(_cursor), 0, 100);
+    } else {
+      _pots.disable(1);
+    }
+  } else if (_page == 0 && _cursor == 16) {
+    // Pulse period
+    _pots.seed(0, _wk.pulsePeriodMs, 500, 4000);
+    _pots.disable(1);
+  } else if (_page == 0 && _cursor == 17) {
+    // Tick flash duration
+    _pots.seed(0, _wk.tickFlashDurationMs, 10, 100);
+    _pots.disable(1);
+  } else if (_page == 1) {
+    // CONFIRM page: pot 1 = value of current param
+    switch (_cursor) {
+      case 0: _pots.seed(0, _wk.bankBlinks, 1, 3); break;
+      case 1: _pots.seed(0, _wk.bankDurationMs, 100, 500); break;
+      case 2: _pots.seed(0, _wk.scaleRootBlinks, 1, 3); break;
+      case 3: _pots.seed(0, _wk.scaleRootDurationMs, 100, 500); break;
+      case 4: _pots.seed(0, _wk.scaleModeBlinks, 1, 3); break;
+      case 5: _pots.seed(0, _wk.scaleModeDurationMs, 100, 500); break;
+      case 6: _pots.seed(0, _wk.scaleChromBlinks, 1, 3); break;
+      case 7: _pots.seed(0, _wk.scaleChromDurationMs, 100, 500); break;
+      case 8: _pots.seed(0, _wk.holdOnFlashMs, 50, 250); break;
+      case 9: _pots.seed(0, _wk.holdFadeMs, 100, 600); break;
+      case 10: _pots.seed(0, _wk.playBeatCount, 1, 4); break;
+      case 11: _pots.seed(0, _wk.stopFadeMs, 100, 600); break;
+      case 12: _pots.seed(0, _wk.octaveBlinks, 1, 3); break;
+      case 13: _pots.seed(0, _wk.octaveDurationMs, 100, 500); break;
+      default: _pots.disable(0); break;
+    }
+    _pots.disable(1);
+  }
+}
+
+bool ToolLedSettings::applyPotValues() {
+  bool changed = false;
+  if (_page == 0 && _cursor < 16) {
+    // Pot 0 → hue
+    if (_pots.isActive(0)) {
+      uint8_t slotId = COLOR_ROWS[_cursor].slotId;
+      int8_t newHue = (int8_t)_pots.getValue(0);
+      if (_cwk.slots[slotId].hueOffset != newHue) {
+        _cwk.slots[slotId].hueOffset = newHue;
+        changed = true;
+      }
+    }
+    // Pot 1 → intensity
+    if (_pots.isActive(1) && rowHasEditableIntensity(_cursor)) {
+      uint8_t newInt = (uint8_t)_pots.getValue(1);
+      if (getRowIntensity(_cursor) != newInt) {
+        setRowIntensity(_cursor, newInt);
+        changed = true;
+      }
+    }
+  } else if (_page == 0 && _cursor == 16) {
+    if (_pots.isActive(0)) {
+      uint16_t v = (uint16_t)_pots.getValue(0);
+      if (_wk.pulsePeriodMs != v) { _wk.pulsePeriodMs = v; changed = true; }
+    }
+  } else if (_page == 0 && _cursor == 17) {
+    if (_pots.isActive(0)) {
+      uint8_t v = (uint8_t)_pots.getValue(0);
+      if (_wk.tickFlashDurationMs != v) { _wk.tickFlashDurationMs = v; changed = true; }
+    }
+  } else if (_page == 1) {
+    if (_pots.isActive(0)) {
+      int32_t v = _pots.getValue(0);
+      switch (_cursor) {
+        case 0: if (_wk.bankBlinks != v) { _wk.bankBlinks = v; changed = true; } break;
+        case 1: if (_wk.bankDurationMs != v) { _wk.bankDurationMs = v; changed = true; } break;
+        case 2: if (_wk.scaleRootBlinks != v) { _wk.scaleRootBlinks = v; changed = true; } break;
+        case 3: if (_wk.scaleRootDurationMs != v) { _wk.scaleRootDurationMs = v; changed = true; } break;
+        case 4: if (_wk.scaleModeBlinks != v) { _wk.scaleModeBlinks = v; changed = true; } break;
+        case 5: if (_wk.scaleModeDurationMs != v) { _wk.scaleModeDurationMs = v; changed = true; } break;
+        case 6: if (_wk.scaleChromBlinks != v) { _wk.scaleChromBlinks = v; changed = true; } break;
+        case 7: if (_wk.scaleChromDurationMs != v) { _wk.scaleChromDurationMs = v; changed = true; } break;
+        case 8: if (_wk.holdOnFlashMs != v) { _wk.holdOnFlashMs = v; changed = true; } break;
+        case 9: if (_wk.holdFadeMs != v) { _wk.holdFadeMs = v; changed = true; } break;
+        case 10: if (_wk.playBeatCount != v) { _wk.playBeatCount = v; changed = true; } break;
+        case 11: if (_wk.stopFadeMs != v) { _wk.stopFadeMs = v; changed = true; } break;
+        case 12: if (_wk.octaveBlinks != v) { _wk.octaveBlinks = v; changed = true; } break;
+        case 13: if (_wk.octaveDurationMs != v) { _wk.octaveDurationMs = v; changed = true; } break;
+        default: break;
+      }
+    }
+  }
+  return changed;
+}
+
+// =================================================================
+// Preview — map cursor to preview row
+// =================================================================
 uint8_t ToolLedSettings::mapCursorToPreviewRow() const {
   if (_page == 0) {
     if (_cursor < 16) return _cursor;
@@ -950,16 +1052,29 @@ void ToolLedSettings::run() {
   bool screenDirty = true;
   unsigned long lastPreviewMs = 0;
   unsigned long lastRenderMs = 0;
+  unsigned long lastPotMs = 0;
+
+  seedPotsForCursor();
 
   _ui->vtClear();
 
   while (true) {
     unsigned long now = millis();
 
-    // Throttle preview updates to ~30ms (avoids flooding _strip.show() which disables interrupts)
+    // Throttle preview updates to ~30ms
     if ((now - lastPreviewMs) >= 30) {
       lastPreviewMs = now;
       updatePreview(now);
+    }
+
+    // Pot input: read ADCs, apply to params (~30ms)
+    if ((now - lastPotMs) >= 30) {
+      lastPotMs = now;
+      if (_pots.update()) {
+        if (applyPotValues()) {
+          screenDirty = true;
+        }
+      }
     }
 
     NavEvent ev = input.update();
@@ -1016,6 +1131,7 @@ void ToolLedSettings::run() {
       _page = 1 - _page;
       _cursor = 0;
       _colorField = 0;
+      seedPotsForCursor();
       screenDirty = true;
     }
 
@@ -1027,11 +1143,13 @@ void ToolLedSettings::run() {
         if (_cursor > 0) _cursor--;
         else _cursor = count - 1;
         _colorField = 0;
+        seedPotsForCursor();
         screenDirty = true;
       } else if (ev.type == NAV_DOWN) {
         if (_cursor < count - 1) _cursor++;
         else _cursor = 0;
         _colorField = 0;
+        seedPotsForCursor();
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         _editing = true;
@@ -1236,7 +1354,11 @@ void ToolLedSettings::run() {
       } else {
         char ctrlBuf[128];
         snprintf(ctrlBuf, sizeof(ctrlBuf),
-                 VT_DIM "[^v] NAV  [RET] EDIT  [b] PREVIEW  [t] " VT_RESET VT_BRIGHT_WHITE "%s" VT_RESET VT_DIM "  [d] DFLT  [q] EXIT" VT_RESET,
+                 VT_DIM "[^v] NAV  [RET] SAVE  [b] PREVIEW  " VT_RESET
+                 "%s" VT_DIM "%s"
+                 "  [t] " VT_RESET VT_BRIGHT_WHITE "%s" VT_RESET VT_DIM "  [d] DFLT  [q] EXIT" VT_RESET,
+                 _pots.isEnabled(0) ? (_pots.isActive(0) ? VT_BRIGHT_WHITE "[P1]" VT_RESET " " : VT_DIM "[P1] ") : "",
+                 _pots.isEnabled(1) ? (_pots.isActive(1) ? VT_BRIGHT_WHITE "[P2]" VT_RESET " " : VT_DIM "[P2] ") : "",
                  s_pageNames[1 - _page]);
         _ui->drawControlBar(ctrlBuf);
       }
