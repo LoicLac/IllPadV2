@@ -393,12 +393,13 @@ void ToolLedSettings::drawColorRow(uint8_t row, bool selected, bool editing) {
   uint8_t intensity = getRowIntensity(row);
   bool hasInt = rowHasEditableIntensity(row);
 
-  char line[160];
+  char line[256];
   char cursor[4] = "  ";
   if (selected) { cursor[0] = '>'; cursor[1] = ' '; }
 
   // Build the line with field highlighting
-  char presetBuf[40], hueBuf[16], intBuf[16];
+  // Buffers sized for VT escapes: \033[36m\033[1m[content]\033[0m = ~25 bytes overhead
+  char presetBuf[48], hueBuf[32], intBuf[32];
 
   // Preset field
   if (editing && _colorField == 0) {
