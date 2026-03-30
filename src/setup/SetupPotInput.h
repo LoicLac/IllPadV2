@@ -13,24 +13,20 @@ public:
 
   SetupPotInput();
 
-  // Configure a channel for a parameter range. Resets catch state.
+  // Bind a channel to a target variable. The pot directly modifies *target.
   // ch: 0 = pot right 1, 1 = pot right 2
-  void seed(uint8_t ch, int32_t currentValue, int32_t minVal, int32_t maxVal);
+  // target: pointer to the value (uint8_t, int8_t, uint16_t — cast to int32_t*)
+  // On seed: reads ADC, records baseline. Pot must move past initial deadzone to activate.
+  void seed(uint8_t ch, int32_t* target, int32_t minVal, int32_t maxVal);
 
-  // Disable a channel (param not pot-controllable)
+  // Disable a channel
   void disable(uint8_t ch);
 
-  // Read ADCs, apply smoothing, compute deltas. Returns true if any value changed.
+  // Read ADCs, apply differential + re-anchor. Returns true if any target changed.
   bool update();
 
-  // Current value for channel (clamped to seeded range)
-  int32_t getValue(uint8_t ch) const;
-
-  // Is the pot actively controlling the value? (past initial deadzone)
+  // Is the pot actively controlling the value?
   bool isActive(uint8_t ch) const;
-
-  // Is the pot in absolute (anchored) mode?
-  bool isAnchored(uint8_t ch) const;
 
   // Is the channel enabled?
   bool isEnabled(uint8_t ch) const;
@@ -38,29 +34,24 @@ public:
 private:
   struct Channel {
     uint8_t  pin;
-    int32_t  value;
+    int32_t* target;        // pointer to the value being controlled
     int32_t  minVal, maxVal;
-    int32_t  smoothed;      // EMA-filtered ADC × 256 (fixed-point, 8 fractional bits)
-    int32_t  baseline;      // smoothed ADC at seed time (for differential)
-    int32_t  accumDelta;    // accumulated fractional ADC delta (avoids integer truncation)
+    int32_t  lastRaw;       // last raw ADC (no smoothing — direct, responsive)
+    int32_t  baseline;      // raw ADC at seed time
+    int32_t  accumDelta;    // accumulated fractional ADC
     bool     enabled;
     bool     active;        // past initial deadzone
-    bool     anchored;      // absolute mode (pot position = value)
+    bool     anchored;      // absolute mode
   };
 
   Channel _ch[NUM_CHANNELS];
 
-  // Map ADC value (0-4095) to param range
   int32_t adcToValue(uint8_t ch, int32_t adc) const;
-  // Map param value to ADC range (for anchor detection)
-  int32_t valueToAdc(uint8_t ch, int32_t val) const;
 
-  static const int32_t EMA_SHIFT     = 8;     // fixed-point fractional bits
-  static const int32_t EMA_ALPHA     = 20;    // ~0.08 in fixed-point (20/256)
-  static const int32_t DEADZONE      = 8;     // ADC units, jitter filter
-  static const int32_t INITIAL_DZ    = 100;   // ADC units, first activation threshold
-  static const int32_t ANCHOR_WINDOW = 60;    // ADC units, snap to absolute mode
-  static const int32_t ADC_MAX       = 4095;
+  static const int32_t MOVE_THRESHOLD = 30;   // raw ADC units to activate (~0.7% of range)
+  static const int32_t JITTER_DZ      = 6;    // raw ADC jitter filter
+  static const int32_t ANCHOR_WINDOW  = 60;   // raw ADC snap to absolute
+  static const int32_t ADC_MAX        = 4095;
 };
 
 #endif // SETUP_POT_INPUT_H

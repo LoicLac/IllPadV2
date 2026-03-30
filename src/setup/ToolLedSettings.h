@@ -67,8 +67,10 @@ private:
   void renderEventPreview(unsigned long now);
   uint8_t mapCursorToPreviewRow() const;
 
-  // Pot input
+  // Pot input — generic: _potVal[] is the intermediary the pot modifies,
+  // seedPotsForCursor loads from field, applyPotValues copies back.
   SetupPotInput _pots;
+  int32_t _potVal[2];
   void seedPotsForCursor();
   bool applyPotValues();
 };
