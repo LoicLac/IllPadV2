@@ -27,7 +27,7 @@ Left-button release safety (detect s_wasHolding → !holding edge):
                   ArpEngine::removePadPosition(s_padOrder[i])          [idempotent]
   — prevents stuck notes / stuck pile positions when pads released during hold
 ```
-Key files: `main.cpp:handlePadInput()` (lines 451-564), `MidiEngine.cpp:47-57`, `ScaleResolver.cpp`, `MidiTransport.cpp:186-204`
+Key files: `main.cpp:handlePadInput()` (line 559, dispatches to `processNormalMode()` line 454 and `processArpMode()` line 489), `handleLeftReleaseCleanup()` (line 535), `MidiEngine.cpp:47-57`, `ScaleResolver.cpp`, `MidiTransport.cpp:186-204`
 
 ### Arp Tick → MIDI NoteOn
 ```
@@ -64,13 +64,14 @@ Key files: `ClockManager.cpp:181-203` (generateTicks), `ArpScheduler.cpp:98-131`
 6. sendPitchBend(newBank.pitchBendOffset)     [BankManager.cpp:134-135]
    — NORMAL banks only. ARPEG banks: no pitch bend sent (no aftertouch, spec)
 7. LED: setCurrentBank + triggerConfirm       [BankManager.cpp:139-141]
-— back in handleManagerUpdates() [main.cpp:573-594] —
-8. queueBankWrite() to NVS                   [main.cpp:574]
-9. loadStoredPerBank() into PotRouter         [main.cpp:589-591]
-10. seedCatchValues(keepGlobalCatch=true)      [main.cpp:593]
+— back in handleManagerUpdates() [main.cpp:599] —
+8. queueBankWrite() to NVS                   [main.cpp:603]
+9. reloadPerBankParams(newSlot)               [main.cpp:604]
+   → loadStoredPerBank() into PotRouter       [reloadPerBankParams:586-596]
+10. seedCatchValues(keepGlobalCatch=true)      [reloadPerBankParams:592]
     — reseeds stored values; global targets keep catch state (tempo, shape…)
     — per-bank targets lose catch (will be uncaught by step 11)
-11. resetPerBankCatch() — uncatch per-bank only [main.cpp:594]
+11. resetPerBankCatch() — uncatch per-bank only [reloadPerBankParams:593]
 ```
 
 ### Scale Change
@@ -82,7 +83,7 @@ ScaleManager::processScalePads() detects root/mode/chromatic pad press
 handleManagerUpdates() consumes flag:
   → NVS queue + ArpEngine::setScaleConfig() + LED confirm
 ```
-Key files: `ScaleManager.cpp:123-227`, `main.cpp:handleManagerUpdates()` (lines 567-641)
+Key files: `ScaleManager.cpp:123-227`, `main.cpp:handleManagerUpdates()` (line 599), `reloadPerBankParams()` (line 577)
 
 ### Pot → Parameter
 ```
@@ -96,7 +97,7 @@ applyBinding():
 handlePotPipeline(): read getters → write to BankSlot/ArpEngine/atomics
   → consumeCC/consumePitchBend → MidiTransport sends
 ```
-Key files: `PotRouter.cpp:331-340` (update), `345-360` (readAndSmooth), `365-412` (resolveBindings), `417-560` (applyBinding), `main.cpp:handlePotPipeline()` (lines 671-734)
+Key files: `PotRouter.cpp:331-340` (update), `345-360` (readAndSmooth), `365-412` (resolveBindings), `417-560` (applyBinding), `main.cpp:handlePotPipeline()` (line 697), `pushParamsToEngine()` (line 684)
 
 ---
 
@@ -153,6 +154,7 @@ All lock-free. No mutex anywhere in runtime code.
 | **Pad sensing** | `CapacitiveKeyboard.cpp/.h` (DO NOT MODIFY) | `main.cpp` sensingTask() |
 | **MIDI output** | `MidiEngine.cpp/.h`, `MidiTransport.cpp/.h` | `main.cpp` handlePadInput() |
 | **Note resolution** | `ScaleResolver.cpp/.h` | `MidiEngine.cpp:51`, `ArpEngine.cpp:374` |
+| **Groove templates** | `midi/GrooveTemplates.h` | `ArpEngine.cpp` (shared, future LoopEngine) |
 | **Bank management** | `BankManager.cpp/.h` | `main.cpp` handleManagerUpdates() (post-switch) |
 | **Scale/hold/octave** | `ScaleManager.cpp/.h` | `main.cpp` handleManagerUpdates() (flag consumption) |
 | **Arpeggiator** | `ArpEngine.cpp/.h`, `ArpScheduler.cpp/.h` | `main.cpp` handlePadInput() (pile management) |
