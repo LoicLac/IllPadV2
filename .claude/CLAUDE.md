@@ -120,7 +120,7 @@ Step 8: ●●●●●●●●  All systems go (200ms full bar)
 
 ### Normal Display (multi-bank state)
 
-LedController drives a SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel` (NEO_GRBW). Colors come from 13 configurable color slots (preset + hue offset), resolved at load time via `resolveColorSlot()`. System colors (error, boot, battery) are hardcoded RGBW in HardwareConfig.h. A single `setPixel(led, rgbw, intensityPct)` method applies perceptual-to-linear conversion + gamma correction (LUT, gamma 2.8) per channel. Brightness pot acts as master perceptual fader (0-100%) via `POT_BRIGHTNESS_CURVE[]` (compile-time selectable: LOW_BIASED/LINEAR/SIGMOID). All intensities are 0-100% perceptual in `LedSettingsStore`.
+LedController drives a SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel` (NEO_GRBW). Colors come from 13 configurable color slots (preset + hue offset), resolved at load time via `resolveColorSlot()`. System colors (error, boot, battery) are hardcoded RGBW in HardwareConfig.h. A single `setPixel(led, rgbw, intensityPct)` method combines intensity × master brightness × 255 in one 32-bit multiply (no truncation at low values), then applies gamma correction via runtime LUT (`_gammaLut[256]`, rebuilt at boot from configurable `gammaTenths` in LedSettingsStore, default gamma 2.0, range 1.0-3.0). Brightness pot acts as master perceptual fader (0-100%) via `POT_BRIGHTNESS_CURVE[]` (compile-time selectable: LOW_BIASED/LINEAR/SIGMOID). All intensities are 0-100% perceptual in `LedSettingsStore`.
 
 | State | Color | Pattern | Intensity | Rate |
 |---|---|---|---|---|
@@ -131,7 +131,7 @@ LedController drives a SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel` (NEO_G
 | Background ARPEG stopped | Blue dim | Sine pulse | 8%↔25% | ~1.5s period |
 | Background ARPEG playing | Blue dim | Sine pulse + tick flash | 8%↔20%, spike 25% on beat | Pulse ~1.5s, flash 30ms |
 
-**Sine pulse**: 256-entry precomputed LUT, index = `(millis() / (pulsePeriodMs/256)) % 256`. Integer math only in `update()`.
+**Sine pulse**: 256-entry precomputed LUT with 16-bit phase + linear interpolation. Phase = `(now * 65536 / pulsePeriodMs) % 65536`, top 8 bits select LUT entry, bottom 8 bits interpolate between adjacent entries. Smooth sub-millisecond stepping, no staircase artifacts.
 
 **Tick flash**: `ArpEngine::consumeTickFlash()` returns true once per arp step. LedController stores `_flashStartTime[i]` and holds the flash for `LED_TICK_FLASH_DURATION_MS`.
 
@@ -256,7 +256,7 @@ VT100 terminal, serial keyboard input only (no physical button in setup mode).
 [4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
 [5] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
 [6] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
-[7] LED Settings           — color presets + hue + intensity + timing, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink)
+[7] LED Settings           — color presets + hue + intensity + timing + gamma, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink). COLOR page split into STOPPED/PLAYING/EVENTS sections (20 color rows + 3 timing rows = 23 params). CONFIRM page: 14 params.
 [0] Reboot
 ```
 
@@ -271,10 +271,11 @@ src/
 ├── main.cpp, HardwareConfig.h
 ├── core/       CapacitiveKeyboard†, MidiTransport, LedController, KeyboardData.h
 ├── managers/   BankManager, ScaleManager, PotRouter, BatteryMonitor, NvsManager
-├── midi/       MidiEngine, ScaleResolver, ClockManager
+├── midi/       MidiEngine, ScaleResolver, ClockManager, GrooveTemplates.h
 ├── arp/        ArpEngine, ArpScheduler
 └── setup/      SetupManager, ToolCalibration, ToolPadOrdering, ToolPadRoles,
-                ToolBankConfig, ToolSettings, ToolPotMapping, SetupUI
+                ToolBankConfig, ToolSettings, ToolPotMapping, ToolLedSettings,
+                SetupUI, SetupPotInput
 ```
 
 † = DO NOT MODIFY (ported from V1, musically calibrated)
@@ -300,7 +301,7 @@ src/
 | `illpad_led` | LED brightness (global) |
 | `illpad_sens` | pad sensitivity (global) |
 | `illpad_pmap` | pot mapping (PotMappingStore: both NORMAL + ARPEG contexts, magic/version checked) |
-| `illpad_lset` | LED settings (LedSettingsStore: intensities 0-100%, timings, confirmations) + color slots (ColorSlotStore: 13 preset+hue slots) |
+| `illpad_lset` | LED settings (LedSettingsStore v2: intensities 0-100%, timings, confirmations, gammaTenths) + color slots (ColorSlotStore: 13 preset+hue slots, magic 0xC010) |
 
 NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never blocks on flash.
 
@@ -334,4 +335,4 @@ NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never bl
 | Core 0 | ~92% | Sensing — unchanged, this is the bottleneck |
 | Core 1 | ~16% | Plenty of headroom |
 | BLE MIDI | 30-50% worst case | noteOn/Off bypass queue. Aftertouch overflow tolerated. |
-| SRAM | ~5% | ~16KB / 320KB |
+| SRAM | ~16% | ~51KB / 320KB |
