@@ -93,26 +93,21 @@ Every GPIO pin used in this project, and what connects to it.
 
 | GPIO | Direction | Connects to | Notes |
 |------|-----------|-------------|-------|
-| **1** | Input (analog) | Pot Rear wiper | ADC — LED brightness / Pad sensitivity |
-| **2** | Input (digital) | Left button → GND | Active LOW, internal pull-up enabled |
-| **4** | Output | LED 1 → 220Ω → GND | Bank 1 indicator |
-| **5** | Output | LED 2 → 220Ω → GND | Bank 2 indicator |
-| **6** | Output | LED 3 → 220Ω → GND | Bank 3 indicator |
-| **7** | Output | LED 4 → 220Ω → GND | Bank 4 indicator |
+| **1** | Input (analog) | Pot Rear wiper | ADC1_CH0 — LED brightness / Pad sensitivity |
+| **4** | Input (analog) | Pot Right 1 wiper | ADC1_CH3 — Tempo / Division |
+| **5** | Input (analog) | Pot Right 2 wiper | ADC1_CH4 — Shape/Gate, Deadzone/Swing |
+| **6** | Input (analog) | Pot Right 3 wiper | ADC1_CH5 — Slew/Pattern, PitchBend/Octave |
+| **7** | Input (analog) | Pot Right 4 wiper | ADC1_CH6 — Base velocity / Velocity variation |
 | **8** | Bidirectional | I2C SDA line (to 4× MPR121) | Needs 4.7kΩ pull-up to 3.3V |
 | **9** | Output | I2C SCL line (to 4× MPR121) | Needs 4.7kΩ pull-up to 3.3V |
 | **10** | Input (analog) | Battery voltage divider output | ADC1_CH9 — reads battery voltage |
-| **11** | Input (analog) | Pot Right 1 wiper | ADC — Tempo / Division |
-| **12** | Input (analog) | Pot Right 2 wiper | ADC — Shape/Gate, Deadzone/Swing |
-| **13** | Input (analog) | Pot Right 3 wiper | ADC — Slew/Pattern, PitchBend/Octave |
-| **14** | Input (analog) | Pot Right 4 wiper | ADC — Base velocity / Velocity variation |
-| **15** | Output | LED 5 → 220Ω → GND | Bank 5 indicator |
-| **16** | Output | LED 6 → 220Ω → GND | Bank 6 indicator |
-| **17** | Output | LED 7 → 220Ω → GND | Bank 7 indicator |
-| **18** | Output | LED 8 → 220Ω → GND | Bank 8 indicator |
+| **12** | Input (digital) | Left button → GND | Active LOW, internal pull-up enabled |
+| **13** | Output | NeoPixel data (SK6812 RGBW ×8) | Single data pin, GRBW wire order |
 | **19** | Bidirectional | USB D− (White wire) | Native USB — do not use for anything else |
 | **20** | Bidirectional | USB D+ (BLUE wire) | Native USB — do not use for anything else |
-| **3** | Input (digital) | Rear button → GND | Active LOW, internal pull-up enabled |
+| **21** | Input (digital) | Rear button → GND | Active LOW, internal pull-up enabled |
+
+All analog inputs use **ADC1 (GPIO 1–10)** for reliable operation with BLE active. ADC2 (GPIO 11–20) is blocked by the BLE radio driver.
 
 Power pins (not GPIO):
 
@@ -129,13 +124,19 @@ These pins are taken by hardware on the dev board. Do not connect anything to th
 | GPIO | Why |
 |------|-----|
 | 0 | BOOT button (strapping pin — used during flashing) |
-| 35, 36, 37 | Connected to PSRAM chip (PSRAM is enabled in this project) |
+| 19, 20 | Native USB (TinyUSB MIDI + CDC serial + upload) |
+| 26–32 | Connected to internal flash (QIO) |
+| 33–37 | Connected to PSRAM chip (OPI, enabled in this project) |
+| 43, 44 | UART bridge hardware (COM port, unused but reserved) |
+| 45, 46 | Strapping pins (VDD_SPI / boot mode) |
 
 ### GPIOs Available But Unused
 
 | GPIO | Notes |
 |------|-------|
-| 43, 44 | UART0 TX/RX — free because Serial uses native USB, not UART |
+| 2, 3 | Free (formerly buttons, now reassigned) |
+| 11, 14–18 | Free digital GPIO |
+| 38–42, 47, 48 | Free digital GPIO |
 
 ---
 
@@ -176,31 +177,21 @@ I2C bus speed: 400 kHz.
 
 ---
 
-### 2. LEDs (×8)
+### 2. LEDs — SK6812 RGBW NeoPixel Stick (×8)
 
-Each LED is wired the same way. The ESP32 GPIO pin drives the LED directly (3.3V output when on, 0V when off). The 8 LEDs are arranged in a circle on the enclosure.
+A single Adafruit SK6812 RGBW NeoPixel Stick (8 LEDs). Only one data wire from the ESP32.
 
-**Wiring path for each LED:**
+**Wiring:**
 
 ```
-ESP32 GPIO pin ──► LED long leg (+) ── LED ── LED short leg (-) ──► 220Ω resistor ──► GND
+ESP32 GPIO13 ──► NeoPixel DIN (data in)
+ESP32 3V3    ──► NeoPixel VCC (or 5V from charger if available)
+         GND ──► NeoPixel GND
 ```
 
-- The **long leg** of the LED is the + side (anode) — it goes toward the GPIO pin
-- The **short leg** of the LED is the - side (cathode) — it goes toward the resistor
-- Use 220Ω to 330Ω resistors (220Ω = brighter, 330Ω = dimmer, both are safe)
-- Any standard 3mm or 5mm LED works (any color you like)
-
-| LED # | GPIO | Position |
-|-------|------|----------|
-| 1 | 4 | Circle position 1 |
-| 2 | 5 | Circle position 2 |
-| 3 | 6 | Circle position 3 |
-| 4 | 7 | Circle position 4 |
-| 5 | 15 | Circle position 5 |
-| 6 | 16 | Circle position 6 |
-| 7 | 17 | Circle position 7 |
-| 8 | 18 | Circle position 8 |
+- Wire order: NEO_GRBW (set in software)
+- No resistors needed between GPIO and DIN (short wire)
+- All 8 LEDs are on the stick, no per-LED GPIO assignment
 
 #### What the LEDs Display
 
@@ -232,12 +223,12 @@ All 8 LEDs become a heartbeat-pulsing bar graph showing battery level. Lasts 3 s
 
 ---
 
-### 3. Left Button (GPIO 2)
+### 3. Left Button (GPIO 12)
 
 A simple momentary push button. One leg goes to the GPIO, the other leg goes to GND. Nothing else needed — the ESP32 enables an internal pull-up resistor in software.
 
 ```
-ESP32 GPIO 2 ──► button leg 1 ── [BUTTON] ── button leg 2 ──► GND
+ESP32 GPIO 12 ──► button leg 1 ── [BUTTON] ── button leg 2 ──► GND
 ```
 
 Functions:
@@ -246,12 +237,12 @@ Functions:
 
 ---
 
-### 4. Rear Button (GPIO 3)
+### 4. Rear Button (GPIO 21)
 
 Same wiring as the left button, on a different GPIO.
 
 ```
-ESP32 GPIO 3 ──► button leg 1 ── [BUTTON] ── button leg 2 ──► GND
+ESP32 GPIO 21 ──► button leg 1 ── [BUTTON] ── button leg 2 ──► GND
 ```
 
 Functions:
@@ -273,13 +264,13 @@ ESP32 3V3 pin ──► pot outer leg 1
 
 Turning a pot sweeps its GPIO from 0V to 3.3V. The software reads 12-bit ADC values (0–4095).
 
-| Pot | GPIO | Physical position | Function |
-|-----|------|-------------------|----------|
-| Right 1 | 11 | Right side, top | Tempo (alone) / Division (hold left, ARPEG) |
-| Right 2 | 12 | Right side | Shape or Gate (alone) / Deadzone or Swing (hold left) |
-| Right 3 | 13 | Right side | Slew or Pattern (alone) / Pitch bend or Octave (hold left) |
-| Right 4 | 14 | Right side, bottom | Base velocity (alone) / Velocity variation (hold left) |
-| Rear | 1 | Rear | LED brightness (alone) / Pad sensitivity (hold rear) |
+| Pot | GPIO | ADC | Physical position | Function |
+|-----|------|-----|-------------------|----------|
+| Right 1 | 4 | ADC1_CH3 | Right side, top | Tempo (alone) / Division (hold left, ARPEG) |
+| Right 2 | 5 | ADC1_CH4 | Right side | Shape or Gate (alone) / Deadzone or Swing (hold left) |
+| Right 3 | 6 | ADC1_CH5 | Right side | Slew or Pattern (alone) / Pitch bend or Octave (hold left) |
+| Right 4 | 7 | ADC1_CH6 | Right side, bottom | Base velocity (alone) / Velocity variation (hold left) |
+| Rear | 1 | ADC1_CH0 | Rear | LED brightness (alone) / Pad sensitivity (hold rear) |
 
 The PotRouter software handles:
 - **Catch system**: pot must pass through the stored value before taking effect (prevents value jumps on bank switch)
@@ -361,23 +352,16 @@ The charger's 5V output supports up to 1A — well within budget.
         │      │             │     │  │  │  │  │ GPIO9 (SCL) ─┼──┼─► MPR121 ×4
         │      ├─ 100kΩ ─┬───┼─────┼──┼──┼──┼─►│ GPIO10 (ADC)│  │
         │      │       100kΩ │     │  │  │  │  │              │  │
-        │      │         │   │     │  │  │  │  │ GPIO4  ──────┼──┼─► LED 1
-        │      │        GND  │     │  │  │  │  │ GPIO5  ──────┼──┼─► LED 2
-        │      │             │     │  │  │  │  │ GPIO6  ──────┼──┼─► LED 3
-        │      │             │     │  │  │  │  │ GPIO7  ──────┼──┼─► LED 4
-        │      │             │     │  │  │  │  │ GPIO15 ──────┼──┼─► LED 5
-        │      │             │     │  │  │  │  │ GPIO16 ──────┼──┼─► LED 6
-        │      │             │     │  │  │  │  │ GPIO17 ──────┼──┼─► LED 7
-        │      │             │     │  │  │  │  │ GPIO18 ──────┼──┼─► LED 8
+        │      │         │   │     │  │  │  │  │ GPIO13 ──────┼──┼─► NeoPixel DIN (8× SK6812)
+        │      │        GND  │     │  │  │  │  │              │  │
+        │      │             │     │  │  │  │  │ GPIO12   ◄───┼──┼─ Left button ─► GND
+        │      │             │     │  │  │  │  │ GPIO21   ◄───┼──┼─ Rear button ─► GND
         │      │             │     │  │  │  │  │              │  │
-        │      │             │     │  │  │  │  │ GPIO 2   ◄───┼──┼─ Left button ─► GND
-        │      │             │     │  │  │  │  │ GPIO 3   ◄───┼──┼─ Rear button ─► GND
-        │      │             │     │  │  │  │  │              │  │
-        │      │             │     │  │  │  │  │ GPIO 11  ◄───┼──┼─ Pot Right 1 wiper
-        │      │             │     │  │  │  │  │ GPIO 12  ◄───┼──┼─ Pot Right 2 wiper
-        │      │             │     │  │  │  │  │ GPIO 13  ◄───┼──┼─ Pot Right 3 wiper
-        │      │             │     │  │  │  │  │ GPIO 14  ◄───┼──┼─ Pot Right 4 wiper
-        │      │             │     │  │  │  │  │ GPIO 1   ◄───┼──┼─ Pot Rear wiper
+        │      │             │     │  │  │  │  │ GPIO 4   ◄───┼──┼─ Pot Right 1 (ADC1)
+        │      │             │     │  │  │  │  │ GPIO 5   ◄───┼──┼─ Pot Right 2 (ADC1)
+        │      │             │     │  │  │  │  │ GPIO 6   ◄───┼──┼─ Pot Right 3 (ADC1)
+        │      │             │     │  │  │  │  │ GPIO 7   ◄───┼──┼─ Pot Right 4 (ADC1)
+        │      │             │     │  │  │  │  │ GPIO 1   ◄───┼──┼─ Pot Rear (ADC1)
         │      │             │     │  │  │  │  │              │  │
         │      │             │     │  │  │  │  └──────────────┘  │
         │      │             │     │  │  │  │                    │

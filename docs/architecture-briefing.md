@@ -52,24 +52,25 @@ ClockManager::update() → _currentTick++
       refCountNoteOn() or refCountNoteOff()
       → MIDI send only on refcount transitions (0→1, 1→0)
 ```
-Key files: `ClockManager.cpp:181-203` (generateTicks), `ArpScheduler.cpp:98-131`, `ArpEngine.cpp:278-283` (currentState), `ArpEngine.cpp:292-325` (tick), `ArpEngine.cpp:339-434` (executeStep), `ArpEngine.cpp:452-467` (processEvents)
+Key files: `ClockManager.cpp:181-203` (generateTicks), `ArpScheduler.cpp:98-131` (tick), `ArpScheduler.cpp:140-146` (processEvents), `ArpEngine.cpp:278-284` (currentState), `ArpEngine.cpp:292-325` (tick), `ArpEngine.cpp:339-439` (executeStep), `ArpEngine.cpp:452-467` (processEvents)
 
 ### Bank Switch (all side effects in order)
 ```
-1. sendPitchBend(8192) on OLD channel         [BankManager.cpp:121]
-2. allNotesOff() on OLD channel               [BankManager.cpp:122]
+1. sendPitchBend(8192) on OLD channel         [BankManager.cpp:122]
+2. allNotesOff() on OLD channel               [BankManager.cpp:123]
 3. Drain aftertouch ring buffer               [MidiEngine.cpp:98-99]
-4. Update foreground flags                    [BankManager.cpp:126-129]
-5. setChannel(newBank)                        [BankManager.cpp:132]
-6. sendPitchBend(newBank.pitchBendOffset)     [BankManager.cpp:133-134]
+4. Update foreground flags                    [BankManager.cpp:127-129]
+5. setChannel(newBank)                        [BankManager.cpp:133]
+6. sendPitchBend(newBank.pitchBendOffset)     [BankManager.cpp:134-135]
    — NORMAL banks only. ARPEG banks: no pitch bend sent (no aftertouch, spec)
-7. LED: setCurrentBank + triggerConfirm       [BankManager.cpp:137-140]
-8. loadStoredPerBank() into PotRouter         [handleManagerUpdates()]
-9. seedCatchValues(keepGlobalCatch=true)      [handleManagerUpdates()]
-   — reseeds stored values; global targets keep catch state (tempo, shape…)
-   — per-bank targets lose catch (will be uncaught by step 10)
-10. resetPerBankCatch() — uncatch per-bank only [handleManagerUpdates()]
-11. queueBankWrite() to NVS                   [handleManagerUpdates()]
+7. LED: setCurrentBank + triggerConfirm       [BankManager.cpp:139-141]
+— back in handleManagerUpdates() [main.cpp:573-594] —
+8. queueBankWrite() to NVS                   [main.cpp:574]
+9. loadStoredPerBank() into PotRouter         [main.cpp:589-591]
+10. seedCatchValues(keepGlobalCatch=true)      [main.cpp:593]
+    — reseeds stored values; global targets keep catch state (tempo, shape…)
+    — per-bank targets lose catch (will be uncaught by step 11)
+11. resetPerBankCatch() — uncatch per-bank only [main.cpp:594]
 ```
 
 ### Scale Change
@@ -81,11 +82,11 @@ ScaleManager::processScalePads() detects root/mode/chromatic pad press
 handleManagerUpdates() consumes flag:
   → NVS queue + ArpEngine::setScaleConfig() + LED confirm
 ```
-Key files: `ScaleManager.cpp:123-227`, `main.cpp:handleManagerUpdates()` (lines 567-642)
+Key files: `ScaleManager.cpp:123-227`, `main.cpp:handleManagerUpdates()` (lines 567-641)
 
 ### Pot → Parameter
 ```
-readAndSmooth(): analogRead → EMA (α=0.1) → deadband gate (±40 ADC)
+readAndSmooth(): analogRead → EMA (α=0.02) → deadband gate (±15 ADC)
 resolveBindings(): button state + bank type → find best binding
 applyBinding():
   if TARGET_LED_BRIGHTNESS: bypass catch, apply immediately
@@ -95,7 +96,7 @@ applyBinding():
 handlePotPipeline(): read getters → write to BankSlot/ArpEngine/atomics
   → consumeCC/consumePitchBend → MidiTransport sends
 ```
-Key files: `PotRouter.cpp:329-552`, `main.cpp:handlePotPipeline()` (lines 671-735)
+Key files: `PotRouter.cpp:331-340` (update), `345-360` (readAndSmooth), `365-412` (resolveBindings), `417-560` (applyBinding), `main.cpp:handlePotPipeline()` (lines 671-734)
 
 ---
 
@@ -111,8 +112,8 @@ All lock-free. No mutex anywhere in runtime code.
 | Pad sensitivity | `atomic<uint8_t>` | Core 1 | Core 0 | relaxed |
 | USB tick count | `atomic<uint8_t>` `_pendingUsbTicks` | USB callback | Core 1 | release/acquire |
 | BLE tick count | `atomic<uint8_t>` `_pendingBleTicks` | NimBLE task | Core 1 | release/acquire |
-| Last USB tick time | `atomic<uint32_t>` `_lastUsbTickUs` | USB callback | Core 1 | relaxed |
-| Last BLE tick time | `atomic<uint32_t>` `_lastBleTickUs` | NimBLE task | Core 1 | relaxed |
+| Last USB tick time | `atomic<uint32_t>` `_lastUsbTickUs` | USB callback | Core 1 | release/acquire (hot), relaxed (timeout) |
+| Last BLE tick time | `atomic<uint32_t>` `_lastBleTickUs` | NimBLE task | Core 1 | release/acquire (hot), relaxed (timeout) |
 
 ---
 
@@ -183,5 +184,5 @@ All lock-free. No mutex anywhere in runtime code.
 | Queue | Size | Producer | Consumer | Overflow behavior |
 |-------|------|----------|----------|-------------------|
 | Aftertouch ring | 64 entries | `updateAftertouch()` | `flush()` (16/frame max) | Silent drop |
-| Arp events | 36 per engine | `tick()` (noteOn/Off pairs) | `processEvents()` every frame | Skip entire step |
+| Arp events | 36 per engine | `tick()` (noteOn/Off pairs) | `processEvents()` every frame | noteOff fail → skip entire step (safe); noteOn fail → cancel orphaned noteOff (safe) |
 | NVS writes | per-field dirty flags | Main loop | Background FreeRTOS task | Coalesced (latest wins) |

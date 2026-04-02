@@ -31,7 +31,7 @@ const int CHANNELS_PER_SENSOR = 12;
 const int NUM_KEYS = NUM_SENSORS * CHANNELS_PER_SENSOR;  // 48
 
 // --- LEDs — 8x SK6812 RGBW NeoPixel Stick (GRBW wire order) ---
-const uint8_t LED_DATA_PIN = 4;  // Single GPIO for NeoPixel data line
+const uint8_t LED_DATA_PIN = 13;  // GPIO13 — Single GPIO for NeoPixel data line
 const int NUM_LEDS = 8;
 
 // --- RGBW Color Type ---
@@ -151,8 +151,8 @@ static const uint8_t POT_BRIGHTNESS_CURVE[256] = {
 #endif
 
 // --- Buttons (V2: 2 buttons, all active LOW with internal pull-up) ---
-const uint8_t BTN_LEFT_PIN  = 2;   // GPIO2 — Left side, bank+scale+arp single-layer (hold + pad), modifier for right pots
-const uint8_t BTN_REAR_PIN  = 3;   // GPIO3 — Rear, battery gauge + setup mode entry + modifier for rear pot
+const uint8_t BTN_LEFT_PIN  = 12;  // GPIO12 — Left side, bank+scale+arp single-layer (hold + pad), modifier for right pots
+const uint8_t BTN_REAR_PIN  = 21;  // GPIO21 — Rear, battery gauge + setup mode entry + modifier for rear pot
 
 const uint16_t CAL_WAIT_WINDOW_MS = 3000;   // Time after boot to press button
 const uint16_t CAL_HOLD_DURATION_MS = 3000; // Hold 3s after press to enter calibration
@@ -160,11 +160,12 @@ const uint16_t CAL_AUTOCONFIG_COUNTDOWN_MS = 1000;
 const uint8_t  CHASE_STEP_MS = 80;          // Speed of chase pattern (ms per LED step)
 
 // --- Analog Pots (V2: 5 potentiometers — 4 right + 1 rear) ---
-const uint8_t POT_RIGHT1_PIN = 11;  // GPIO11 — Right side pot 1 (tempo / division)
-const uint8_t POT_RIGHT2_PIN = 12;  // GPIO12 — Right side pot 2 (shape-gate / deadzone-shuffle)
-const uint8_t POT_RIGHT3_PIN = 13;  // GPIO13 — Right side pot 3 (slew-pattern / pitchbend-shuffletemplate)
-const uint8_t POT_RIGHT4_PIN = 14;  // GPIO14 — Right side pot 4 (base velocity / velocity variation)
-const uint8_t POT_REAR_PIN   = 1;   // GPIO1 — Rear (LED brightness / pad sensitivity)
+// ALL pots on ADC1 (GPIO 1–10) for reliable reads with BLE active.
+const uint8_t POT_RIGHT1_PIN = 4;   // GPIO4  — ADC1_CH3 — Right side pot 1 (tempo / division)
+const uint8_t POT_RIGHT2_PIN = 5;   // GPIO5  — ADC1_CH4 — Right side pot 2 (shape-gate / deadzone-shuffle)
+const uint8_t POT_RIGHT3_PIN = 6;   // GPIO6  — ADC1_CH5 — Right side pot 3 (slew-pattern / pitchbend-shuffletemplate)
+const uint8_t POT_RIGHT4_PIN = 7;   // GPIO7  — ADC1_CH6 — Right side pot 4 (base velocity / velocity variation)
+const uint8_t POT_REAR_PIN   = 1;   // GPIO1  — ADC1_CH0 — Rear (LED brightness / pad sensitivity)
 const uint8_t NUM_POTS = 5;
 
 const int   POT_DEADZONE        = 50;    // ADC change threshold for debug display

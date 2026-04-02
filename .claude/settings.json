@@ -7,10 +7,14 @@
       "Bash(wc:*)",
       "Bash(mv:*)",
       "Read(//Users/loic/**)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(grep -r \"CONFIG_FREERTOS_HZ\\\\|TICK_RATE_HZ\" /Users/loic/Code/PROJECTS/ILLPAD_V2/sdkconfig*)",
+      "Bash(grep -n \"task OK\" /Users/loic/Code/PROJECTS/ILLPAD_V2/src/setup/*.cpp)",
+      "Bash(grep -rn \"ok\\\\|OK\" /Users/loic/Code/PROJECTS/ILLPAD_V2/src/setup/*.cpp)"
     ],
     "additionalDirectories": [
-      "/Users/loic/Code/PROJECTS/ILLPAD_V2/.claude"
+      "/Users/loic/Code/PROJECTS/ILLPAD_V2/.claude",
+      "/Users/loic/Code/PROJECTS/ILLPAD_V2/docs/superpowers"
     ]
   }
 }

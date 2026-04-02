@@ -1,9 +1,11 @@
-# ILLPAD48 — WiFi Status Page (Spec V2)
+# ILLPAD48 — WiFi Live Page (Spec)
 
-> Spec pour le codeur. Design, protocole WebSocket, architecture polling.
-> V1 = page status (header, banks, colonnes, pots). V1.5 = vue SVG des pads (overlay sur button hold).
-> Priorité : P3 (après phases 1-4).
-> Dernière mise à jour : 21 mars 2026.
+> Page Live : status temps reel + controle bidirectionnel.
+> V1 = status read-only. V1.5 = vue SVG pads. V2 = controle bidirectionnel.
+> Depend de `wifi-common.md` pour l'infra WiFi/WS/CommandHandler.
+> Depend de `wifi-setup-page.md` pour le Setup (page separee).
+> Priorite : P3 (apres phases 1-4).
+> Derniere mise a jour : 30 mars 2026.
 
 ---
 
@@ -1203,3 +1205,85 @@ Vue SVG overlay sur hold bouton gauche. **Tous les 29 rôles visibles simultané
 4. **Sécurité** : WPA2 avec mot de passe par défaut. Suffisant pour un AP local sans accès internet ? Faut-il permettre le changement de mot de passe ?
 
 5. **Environnement PlatformIO** : pour un build sans WiFi à zéro overhead (pas même les libs compilées), créer un `[env:esp32-s3-no-wifi]` séparé sans les `lib_deps` WiFi.
+
+---
+
+## 13. V2 — Controle Bidirectionnel
+
+> Ajout 30 mars 2026. Infra commune (WiFi AP, WS, CommandHandler, NVS) dans `wifi-common.md`.
+
+### Regles de Souverainete
+
+| Action | Bank active (foreground) | Banks background |
+|---|---|---|
+| Switch bank (foreground) | ILLPAD only | — |
+| Tempo | ILLPAD only | — |
+| Pots (gate, shuffle, division, pattern, velocity, PB) | ILLPAD only | WebUI oui |
+| Scale (root, mode, chrom) | WebUI oui | WebUI oui |
+| Arp start/stop | WebUI oui | WebUI oui |
+| Arp hold toggle | WebUI oui | WebUI oui |
+| Arp octave range | WebUI oui | WebUI oui |
+
+Mnemonique : **les pots physiques de la bank active restent physiques**. Tout le reste est controlable depuis le web.
+
+### Controles UI Interactifs
+
+Les elements visuels V1 deviennent cliquables :
+
+| Element | Action |
+|---|---|
+| Cellule bank (barre de banks) | Tap = affiche detail de cette bank dans les 3 colonnes (ne change PAS le foreground sur l'ILLPAD) |
+| Badge Play/Stop (colonne gauche, ARPEG) | Tap = start/stop arp de cette bank |
+| Badge HOLD on/off | Tap = toggle hold de cette bank |
+| Root (colonne droite) | Tap = cycle root (A-G) sur cette bank |
+| Mode (colonne droite) | Tap = cycle mode (Ion-Loc) sur cette bank |
+| Badge Chromatic | Tap = toggle chromatic sur cette bank |
+| Chips octave (colonne centre, ARPEG) | Tap = cycle octaves (1-4) |
+| Cellule pot (banks background) | Slider/tap = ajuster la valeur |
+
+**Distinction importante** : taper une bank dans la barre NE switch PAS le foreground sur l'ILLPAD. Ca change juste quelle bank est affichee en detail sur la tablette. Le foreground reste celui choisi physiquement.
+
+**Mode follow** : un toggle dans la WebUI permet de faire suivre automatiquement la bank foreground de l'ILLPAD (mais ne lock pas dessus — l'utilisateur peut naviguer manuellement puis re-activer le follow).
+
+### Pot Controles (Banks Background)
+
+Pour les banks background, les cellules pot de la grille deviennent interactives :
+- Tap sur la cellule → slider horizontal ou vertical pour ajuster
+- La valeur est envoyee par commande WS
+- Le retour visuel vient du flux d'etat (la cellule se met a jour quand l'ESP32 confirme)
+
+Pour la bank active, les cellules pot sont **read-only** (affichent la valeur du pot physique, non modifiables).
+
+### Commandes Live (Client → ESP32)
+
+```json
+// Scale (toutes banks)
+{ "cmd": "scale_root", "bank": 0, "root": 3 }
+{ "cmd": "scale_mode", "bank": 0, "mode": 2 }
+{ "cmd": "scale_chrom", "bank": 0, "on": true }
+
+// Arp control (toutes banks ARPEG)
+{ "cmd": "arp_start", "bank": 2 }
+{ "cmd": "arp_stop", "bank": 2 }
+{ "cmd": "arp_hold", "bank": 2, "on": true }
+{ "cmd": "arp_octave", "bank": 2, "octave": 3 }
+
+// Params pot (banks background uniquement — rejetees sur bank active)
+{ "cmd": "arp_gate", "bank": 2, "value": 75 }
+{ "cmd": "arp_shuffle_depth", "bank": 2, "value": 40 }
+{ "cmd": "arp_shuffle_template", "bank": 2, "value": 2 }
+{ "cmd": "arp_division", "bank": 2, "value": 5 }
+{ "cmd": "arp_pattern", "bank": 2, "pattern": 1 }
+{ "cmd": "velocity_base", "bank": 0, "value": 100 }
+{ "cmd": "velocity_var", "bank": 0, "value": 25 }
+{ "cmd": "pitch_bend", "bank": 0, "value": 12 }
+```
+
+### Persistance
+
+Les changements web suivent le meme chemin que les pots physiques : auto-persist avec delai via NvsManager. Voir `wifi-common.md` Section 6.
+
+### Roadmap V2
+
+- Phase 1 : Page Live read-only (V1, ce document Sections 1-12)
+- Phase 2 : CommandHandler + controles interactifs + regles de souverainete (cette section)

@@ -16,8 +16,8 @@ A reusable, type-agnostic pot input system for **all** setup tools. Two physical
 
 ## Hardware
 
-- **Pot 1**: GPIO 11 (`POT_RIGHT1_PIN`) — primary value
-- **Pot 2**: GPIO 12 (`POT_RIGHT2_PIN`) — secondary value (when applicable)
+- **Pot 1**: GPIO 4 (`POT_RIGHT1_PIN`) — primary value (ADC1_CH3)
+- **Pot 2**: GPIO 5 (`POT_RIGHT2_PIN`) — secondary value (when applicable, ADC1_CH4)
 - ADC: 12-bit (0-4095), `analogRead()` direct (PotRouter is not running in setup mode)
 
 ---

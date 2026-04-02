@@ -18,9 +18,9 @@
 - **Sensors**: 4× MPR121 capacitive touch (I2C 0x5A–0x5D) → 48 aluminium pads, circular/radial layout
 - **MIDI**: USB MIDI (TinyUSB composite) + BLE MIDI (ESP32-BLE-MIDI), simultaneous
 - **USB**: Single USB-C on GPIO 19/20 (native USB, no UART bridge). ALL traffic on this one port: MIDI, CDC serial, upload, VT100 setup. Board has a 2nd USB-C (COM/UART bridge GPIO 43/44) but it is unused. JTAG builtin shares GPIO 19/20 — conflicts with TinyUSB.
-- **2 Buttons**: left (bank+scale+arp single-layer control), rear (battery/setup/modifier pot rear). GPIOs TBD.
-- **5 Pots**: 4 right (tempo, shape/gate, slew/pattern, velocity), 1 rear (LED brightness/sensitivity). GPIOs TBD.
-- **8 LEDs**: SK6812 RGBW NeoPixel Stick, single data pin GPIO 4, Adafruit_NeoPixel driver (NEO_GRBW)
+- **2 Buttons**: left GPIO 12 (bank+scale+arp single-layer control), rear GPIO 21 (battery/setup/modifier pot rear). Active LOW, internal pull-up.
+- **5 Pots**: 4 right GPIO 4/5/6/7 (tempo, shape/gate, slew/pattern, velocity), 1 rear GPIO 1 (LED brightness/sensitivity). All on ADC1 for BLE compatibility.
+- **8 LEDs**: SK6812 RGBW NeoPixel Stick, single data pin GPIO 13, Adafruit_NeoPixel driver (NEO_GRBW)
 - **Battery**: LiPo 3.7V, BQ25185 charger, ADC voltage divider
 
 Pads measure **skin contact surface area**, not mechanical force. Aftertouch = yes. Velocity from pressure = unreliable.
