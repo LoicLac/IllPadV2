@@ -39,9 +39,9 @@ const PotMappingStore PotRouter::DEFAULT_MAPPING = {
     {TARGET_TEMPO_BPM,          0},  // R1 alone
     {TARGET_DIVISION,           0},  // R1+hold
     {TARGET_GATE_LENGTH,        0},  // R2 alone
-    {TARGET_SHUFFLE_DEPTH,      0},  // R2+hold
-    {TARGET_PATTERN,            0},  // R3 alone
-    {TARGET_SHUFFLE_TEMPLATE,   0},  // R3+hold
+    {TARGET_SHUFFLE_TEMPLATE,   0},  // R2+hold
+    {TARGET_SHUFFLE_DEPTH,      0},  // R3 alone
+    {TARGET_PATTERN,            0},  // R3+hold
     {TARGET_BASE_VELOCITY,      0},  // R4 alone
     {TARGET_VELOCITY_VARIATION, 0},  // R4+hold
   }
