@@ -96,14 +96,10 @@ void LedController::begin() {
 // =================================================================
 
 void LedController::setPixel(uint8_t i, const RGBW& c, uint8_t intensityPct) {
-  // Combine slot intensity (0-100%) with master brightness (0-100%)
-  // Result is perceptual 0-100%, scaled to 0-255 linearly.
-  // GAMMA_LUT then converts this perceptual value to the non-linear
-  // LED drive level. No PERCEPTUAL_TO_LINEAR needed — the user's
-  // 0-100% IS the perceptual scale, gamma does the rest.
-  uint16_t combinedPct = (uint16_t)intensityPct * _brightnessPct / 100;
-  // Scale to 0-255 (simple linear mapping of percentage)
-  uint8_t scaled = (uint8_t)(combinedPct * 255 / 100);
+  // Combine intensity (0-100%) × brightness (0-100%) → scale to 0-255.
+  // Multiply before dividing to preserve resolution at low values:
+  // e.g. 8% × 10% × 255 / 10000 = 2 instead of (8×10/100)×255/100 = 0
+  uint8_t scaled = (uint8_t)((uint32_t)intensityPct * _brightnessPct * 255 / 10000);
   // Scale each channel by intensity, then apply gamma for LED
   _strip.setPixelColor(i,
     GAMMA_LUT[(uint16_t)c.r * scaled / 255],
@@ -529,10 +525,15 @@ void LedController::renderNormalDisplay(unsigned long now) {
   clearPixels();
 
   if (_slots) {
-    // Sine LUT index: divide period into 256 steps
-    const uint8_t lutStep = _pulsePeriodMs / 256;
-    uint8_t sineIdx = (uint8_t)((now / (lutStep > 0 ? lutStep : 1)) % 256);
-    uint8_t sineRaw = _sineTable[sineIdx];
+    // 16-bit phase + linear interpolation for smooth sine pulse.
+    // phase: 0..65535 maps to one full sine period.
+    // idx: top 8 bits select LUT entry, frac: bottom 8 bits interpolate.
+    uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
+    uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
+    uint8_t  idx   = phase >> 8;
+    uint8_t  frac  = phase & 0xFF;
+    uint16_t sine16 = (uint16_t)_sineTable[idx] * (256 - frac)
+                    + (uint16_t)_sineTable[(idx + 1) & 0xFF] * frac;  // 0..65280
 
     for (uint8_t i = 0; i < NUM_LEDS; i++) {
       const BankSlot& slot = _slots[i];
@@ -567,8 +568,8 @@ void LedController::renderNormalDisplay(unsigned long now) {
           // Tick flash overrides pulse — use tick flash color + intensity
           setPixel(i, _colTickFlash, isFg ? _tickFlashFg : _tickFlashBg);
         } else {
-          // Sine-modulated intensity between min and max (perceptual %)
-          uint8_t intensity = pMin + (uint8_t)((uint16_t)sineRaw * (pMax - pMin) / 255);
+          // Interpolated sine → intensity (full precision before setPixel gamma)
+          uint8_t intensity = pMin + (uint8_t)((uint32_t)sine16 * (pMax - pMin) / 65280);
           setPixel(i, col, intensity);
         }
       }
