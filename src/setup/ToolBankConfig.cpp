@@ -92,6 +92,12 @@ void ToolBankConfig::run() {
     }
   }
 
+  // Snapshot NVS-loaded values for cancel-edit restore
+  BankType savedTypes[NUM_BANKS];
+  uint8_t  savedQuantize[NUM_BANKS];
+  memcpy(savedTypes, wkTypes, sizeof(savedTypes));
+  memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
+
   Serial.print(ITERM_RESIZE);
 
   InputParser input;
@@ -123,6 +129,8 @@ void ToolBankConfig::run() {
           wkQuantize[i] = ARP_START_IMMEDIATE;
         }
         if (saveConfig(wkTypes, wkQuantize)) {
+          memcpy(savedTypes, wkTypes, sizeof(savedTypes));
+          memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
           nvsSaved = true;
           _ui->flashSaved();
         }
@@ -140,8 +148,8 @@ void ToolBankConfig::run() {
     // --- Main navigation ---
     if (ev.type == NAV_QUIT) {
       if (editing) {
-        wkTypes[cursor] = _banks[cursor].type;
-        if (_nvs) wkQuantize[cursor] = _nvs->getLoadedQuantizeMode(cursor);
+        wkTypes[cursor] = savedTypes[cursor];
+        wkQuantize[cursor] = savedQuantize[cursor];
         editing = false;
         editField = 0;
         screenDirty = true;
@@ -196,6 +204,8 @@ void ToolBankConfig::run() {
           screenDirty = true;
         } else if (ev.type == NAV_ENTER) {
           if (saveConfig(wkTypes, wkQuantize)) {
+            memcpy(savedTypes, wkTypes, sizeof(savedTypes));
+            memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
             editing = false;
             nvsSaved = true;
             _ui->flashSaved();
@@ -215,6 +225,8 @@ void ToolBankConfig::run() {
           screenDirty = true;
         } else if (ev.type == NAV_ENTER) {
           if (saveConfig(wkTypes, wkQuantize)) {
+            memcpy(savedTypes, wkTypes, sizeof(savedTypes));
+            memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
             editing = false;
             nvsSaved = true;
             _ui->flashSaved();

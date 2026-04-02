@@ -566,12 +566,14 @@ void ToolPadRoles::run() {
     Preferences prefs;
     if (prefs.begin(BANKPAD_NVS_NAMESPACE, true)) {
       size_t len = prefs.getBytesLength(BANKPAD_NVS_KEY);
-      _nvsSaved = (len > 0);
+      _nvsSaved = false;
       if (len == sizeof(BankPadStore)) {
         BankPadStore bps;
         prefs.getBytes(BANKPAD_NVS_KEY, &bps, sizeof(BankPadStore));
-        if (bps.magic == EEPROM_MAGIC && bps.version == BANKPAD_VERSION)
+        if (bps.magic == EEPROM_MAGIC && bps.version == BANKPAD_VERSION) {
           memcpy(_wkBankPads, bps.bankPads, NUM_BANKS);
+          _nvsSaved = true;
+        }
       }
       prefs.end();
     }

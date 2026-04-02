@@ -544,7 +544,15 @@ void ToolPotMapping::run() {
   _confirmSteal = false;
   _stealSourceSlot = -1;
   _stealTarget = TARGET_EMPTY;
-  _nvsSaved = true;  // Loaded from NVS
+  // Check if NVS actually has saved data (not just defaults)
+  {
+    Preferences prefs;
+    _nvsSaved = false;
+    if (prefs.begin(POTMAP_NVS_NAMESPACE, true)) {
+      _nvsSaved = (prefs.getBytesLength(POTMAP_NVS_KEY) == sizeof(PotMappingStore));
+      prefs.end();
+    }
+  }
 
   Serial.print(ITERM_RESIZE);
 

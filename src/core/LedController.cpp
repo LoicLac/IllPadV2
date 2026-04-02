@@ -449,27 +449,28 @@ bool LedController::renderConfirmation(unsigned long now) {
             _playLastBeatTick = currentTick - (currentTick % 24);
             _fadeStartTime = now;
             _playFlashPhase++;
-            if (_playFlashPhase >= _playBeatCount) {
-              _confirmType = CONFIRM_NONE;
-            }
           }
         } else {
           uint8_t beatPhase = (uint8_t)(elapsed / 200);
-          if (beatPhase >= playSteps) {
-            _confirmType = CONFIRM_NONE;
-            return false;
-          } else if (beatPhase > _playFlashPhase) {
+          if (beatPhase > _playFlashPhase) {
             _fadeStartTime = now;
             _playFlashPhase = beatPhase;
           }
         }
 
+        // Show flash while timer active
         if (_fadeStartTime != 0 && (now - _fadeStartTime) < _tickFlashDurationMs) {
           uint8_t phase = (_playFlashPhase < 4) ? _playFlashPhase : 3;
           clearPixels();
           setPixel(_currentBank, _colStop, playIntensity[phase]);
           _strip.show();
           return true;
+        }
+
+        // End confirmation only after last beat's flash has fully expired
+        if (_playFlashPhase >= _playBeatCount) {
+          _confirmType = CONFIRM_NONE;
+          return false;
         }
       }
       return false;

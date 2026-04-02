@@ -11,7 +11,7 @@
 // =================================================================
 
 SetupUI::SetupUI()
-  : _leds(nullptr), _lastToolName(""), _lastNvsSaved(true) {}
+  : _leds(nullptr), _lastNvsSaved(true) { _lastToolName[0] = '\0'; }
 
 void SetupUI::begin(LedController* leds) {
   _leds = leds;
@@ -132,7 +132,8 @@ void SetupUI::drawFrameEmpty() {
 // =================================================================
 
 void SetupUI::drawConsoleHeader(const char* toolName, bool nvsSaved) {
-  _lastToolName = toolName;
+  strncpy(_lastToolName, toolName, sizeof(_lastToolName) - 1);
+  _lastToolName[sizeof(_lastToolName) - 1] = '\0';
   _lastNvsSaved = nvsSaved;
   drawFrameTop();
 

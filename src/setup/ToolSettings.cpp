@@ -174,6 +174,7 @@ void ToolSettings::run() {
                       DEFAULT_CLOCK_MODE,
                       DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
                       DEFAULT_PANIC_ON_RECONNECT, 0, DEFAULT_BAT_ADC_AT_FULL};
+  bool loadedFromNvs = false;
   {
     Preferences prefs;
     if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
@@ -183,6 +184,7 @@ void ToolSettings::run() {
         prefs.getBytes(SETTINGS_NVS_KEY, &tmp, sizeof(SettingsStore));
         if (tmp.magic == EEPROM_MAGIC && tmp.version == SETTINGS_VERSION) {
           wk = tmp;
+          loadedFromNvs = true;
           // Validate individual fields against ranges
           if (wk.baselineProfile >= NUM_BASELINE_PROFILES) wk.baselineProfile = DEFAULT_BASELINE_PROFILE;
           if (wk.aftertouchRate < AT_RATE_MIN || wk.aftertouchRate > AT_RATE_MAX) wk.aftertouchRate = AT_RATE_DEFAULT;
@@ -201,7 +203,7 @@ void ToolSettings::run() {
 
   SettingsStore original = wk;
   bool needsReboot = false;
-  bool nvsSaved = true;  // Assume saved on entry (loaded from NVS)
+  bool nvsSaved = loadedFromNvs;
 
   InputParser input;
   uint8_t cursor = 0;
