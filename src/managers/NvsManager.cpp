@@ -1,5 +1,6 @@
 #include "NvsManager.h"
 #include "PotRouter.h"
+#include "../midi/GrooveTemplates.h"
 #include <Preferences.h>
 #include <Arduino.h>
 #include <string.h>
@@ -539,7 +540,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
         if (_pendingArpPot[i].pattern  >= NUM_ARP_PATTERNS)  _pendingArpPot[i].pattern  = 0;
         if (_pendingArpPot[i].octaveRange < 1 || _pendingArpPot[i].octaveRange > 4)
           _pendingArpPot[i].octaveRange = 1;
-        if (_pendingArpPot[i].shuffleTemplate >= 5) _pendingArpPot[i].shuffleTemplate = 0;
+        if (_pendingArpPot[i].shuffleTemplate >= NUM_SHUFFLE_TEMPLATES) _pendingArpPot[i].shuffleTemplate = 0;
       }
     }
     prefs.end();

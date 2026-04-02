@@ -26,10 +26,10 @@ enum class ArpState {
 // =================================================================
 // Enables gate length (noteOff delayed), shuffle (noteOn delayed),
 // and note overlap (multiple notes ringing simultaneously).
-// Max 36 pending events per engine allows extreme overlap scenarios
-// (e.g. long gate at fast divisions = many notes ringing at once).
+// Max 64 pending events per engine allows extreme overlap scenarios
+// (e.g. gate > 1.0 at fast divisions = many notes ringing at once).
 
-static const uint8_t MAX_PENDING_EVENTS = 36;
+static const uint8_t MAX_PENDING_EVENTS = 64;
 
 struct PendingEvent {
   uint32_t fireTimeUs;   // micros() timestamp when this event should fire

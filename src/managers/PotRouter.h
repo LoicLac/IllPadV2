@@ -224,6 +224,7 @@ private:
   // Helpers
   uint16_t adcToRange(float adc, uint16_t lo, uint16_t hi) const;
   float    adcToFloat(float adc) const;
+  float    adcToGate(float adc) const;
   bool     isPerBankTarget(PotTarget t) const;
 };
 

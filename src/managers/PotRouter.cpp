@@ -1,4 +1,5 @@
 #include "PotRouter.h"
+#include "../midi/GrooveTemplates.h"
 #include <Arduino.h>
 #include <string.h>
 
@@ -155,7 +156,7 @@ void PotRouter::getRangeForTarget(PotTarget t, uint16_t& lo, uint16_t& hi) {
     case TARGET_SHUFFLE_DEPTH:      lo = 0; hi = 4095; break;
     case TARGET_DIVISION:           lo = 0; hi = 8; break;
     case TARGET_PATTERN:            lo = 0; hi = 4; break;
-    case TARGET_SHUFFLE_TEMPLATE:   lo = 0; hi = 4; break;
+    case TARGET_SHUFFLE_TEMPLATE:   lo = 0; hi = NUM_SHUFFLE_TEMPLATES - 1; break;
     case TARGET_BASE_VELOCITY:      lo = 1; hi = 127; break;
     case TARGET_VELOCITY_VARIATION: lo = 0; hi = 100; break;
     case TARGET_LED_BRIGHTNESS:     lo = 0; hi = 255; break;
@@ -263,7 +264,11 @@ void PotRouter::seedCatchValues(bool keepGlobalCatch) {
         norm = (float)_pitchBend / 16383.0f;
         break;
       case TARGET_GATE_LENGTH:
-        norm = _gateLength;
+        // Inverse of piecewise: gate 0.05-1.0 → 0-75%, gate 1.0-3.0 → 75-100%
+        if (_gateLength <= 1.0f)
+          norm = (_gateLength - 0.05f) / 0.95f * 0.75f;
+        else
+          norm = 0.75f + (_gateLength - 1.0f) / 2.0f * 0.25f;
         break;
       case TARGET_SHUFFLE_DEPTH:
         norm = _shuffleDepth;
@@ -275,7 +280,7 @@ void PotRouter::seedCatchValues(bool keepGlobalCatch) {
         norm = (float)_pattern / 4.0f;
         break;
       case TARGET_SHUFFLE_TEMPLATE:
-        norm = (float)_shuffleTemplate / 4.0f;
+        norm = (float)_shuffleTemplate / (float)(NUM_SHUFFLE_TEMPLATES - 1);
         break;
       case TARGET_BASE_VELOCITY:
         norm = (float)(_baseVelocity - 1) / 126.0f;
@@ -462,7 +467,7 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       _pitchBend = adcToRange(adc, bind.rangeMin, bind.rangeMax);
       break;
     case TARGET_GATE_LENGTH:
-      _gateLength = adcToFloat(adc);
+      _gateLength = adcToGate(adc);
       break;
     case TARGET_SHUFFLE_DEPTH:
       _shuffleDepth = adcToFloat(adc);
@@ -480,8 +485,8 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       break;
     }
     case TARGET_SHUFFLE_TEMPLATE: {
-      uint8_t tmpl = (uint8_t)adcToRange(adc, 0, 4);
-      if (tmpl > 4) tmpl = 4;
+      uint8_t tmpl = (uint8_t)adcToRange(adc, 0, NUM_SHUFFLE_TEMPLATES - 1);
+      if (tmpl >= NUM_SHUFFLE_TEMPLATES) tmpl = NUM_SHUFFLE_TEMPLATES - 1;
       _shuffleTemplate = tmpl;
       break;
     }
@@ -588,6 +593,17 @@ float PotRouter::adcToFloat(float adc) const {
   if (v < 0.0f) return 0.0f;
   if (v > 1.0f) return 1.0f;
   return v;
+}
+
+// Piecewise gate mapping: 0-75% pot = 0.05-1.0, 75-100% pot = 1.0-3.0
+float PotRouter::adcToGate(float adc) const {
+  float norm = adc / 4095.0f;
+  if (norm < 0.0f) norm = 0.0f;
+  if (norm > 1.0f) norm = 1.0f;
+  if (norm <= 0.75f) {
+    return 0.05f + norm * (0.95f / 0.75f);  // 0.05 → 1.0
+  }
+  return 1.0f + (norm - 0.75f) * (2.0f / 0.25f);  // 1.0 → 3.0
 }
 
 bool PotRouter::isPerBankTarget(PotTarget t) const {

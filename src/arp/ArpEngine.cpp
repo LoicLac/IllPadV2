@@ -366,24 +366,29 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
     vel = (uint8_t)constrain(result, 1, 127);
   }
 
-  // --- Calculate shuffle offset for this step ---
-  uint32_t shuffleOffsetUs = 0;
+  // --- Calculate shuffle offset for this step (bipolar: positive = drag, negative = rush) ---
+  int32_t shuffleOffsetUs = 0;
   if (_shuffleDepth > 0.001f) {
     int8_t pct = SHUFFLE_TEMPLATES[_shuffleTemplate][_shuffleStepCounter % SHUFFLE_TEMPLATE_LEN];
-    if (pct > 0) {
-      shuffleOffsetUs = (uint32_t)((float)pct * _shuffleDepth * (float)stepDurationUs / 100.0f);
+    if (pct != 0) {
+      shuffleOffsetUs = (int32_t)((float)pct * _shuffleDepth * (float)stepDurationUs / 100.0f);
     }
   }
 
   // --- Calculate timing ---
   uint32_t nowUs = micros();
-  uint32_t noteOnTime = nowUs + shuffleOffsetUs;
+  uint32_t noteOnTime = nowUs + (uint32_t)shuffleOffsetUs;  // unsigned wrap handles negative offsets
 
   // Gate duration: gateLength 0.5 = half step, 1.0 = full, >1.0 = overlap.
   // Minimum 1ms to prevent zero-length notes.
   uint32_t gateUs = (uint32_t)((float)stepDurationUs * _gateLength);
   if (gateUs < 1000) gateUs = 1000;
   uint32_t noteOffTime = noteOnTime + gateUs;
+
+  // Guard: if negative shuffle pushed noteOff into the past, clamp to now + 1ms
+  if (shuffleOffsetUs < 0 && (int32_t)(noteOffTime - nowUs) < 1000) {
+    noteOffTime = nowUs + 1000;
+  }
 
   // --- Schedule noteOff FIRST (reserve the slot) ---
   // Guarantees atomic noteOn/noteOff pair: if queue is nearly full,
@@ -392,8 +397,8 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
   if (!noteOffOk) return;  // Queue full — skip this step entirely
 
   // --- Schedule noteOn ---
-  if (shuffleOffsetUs == 0) {
-    // No shuffle delay: fire noteOn immediately (saves a queue slot)
+  if (shuffleOffsetUs <= 0) {
+    // No delay or negative offset (rush): fire noteOn immediately (saves a queue slot)
     refCountNoteOn(transport, finalNote, vel);
   } else {
     // Shuffle delay: queue noteOn for later
@@ -472,7 +477,7 @@ void ArpEngine::flushPendingNoteOffs(MidiTransport& transport) {
 // =================================================================
 // scheduleEvent — queue a noteOn or noteOff for future firing
 // =================================================================
-// Returns false if the queue is full (all 36 slots occupied).
+// Returns false if the queue is full (all 64 slots occupied).
 // This can happen with extreme gate + fast division.
 // The caller (tick) ensures noteOn/noteOff pairs are atomic:
 // noteOff is reserved first, and if noteOn fails, noteOff is cancelled.

@@ -106,12 +106,12 @@ struct PotParamsStore {
 // =================================================================
 
 struct ArpPotStore {
-  uint16_t gateRaw;       // 0-4095 (maps to 0.0-1.0)
+  uint16_t gateRaw;       // 0-4095 (maps to 0.05-3.0 via piecewise)
   uint16_t shuffleDepthRaw;  // 0-4095 (maps to 0.0-1.0)
   uint8_t  division;      // ArpDivision enum (0-8)
   uint8_t  pattern;       // ArpPattern enum (0-4)
   uint8_t  octaveRange;      // 1-4
-  uint8_t  shuffleTemplate;  // 0-4 (index into groove templates)
+  uint8_t  shuffleTemplate;  // 0-9 (index into groove templates)
 };
 
 // =================================================================
