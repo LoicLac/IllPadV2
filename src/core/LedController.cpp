@@ -535,6 +535,41 @@ void LedController::renderCalibration(unsigned long now) {
   _strip.show();
 }
 
+// --- Per-type bank render (extracted for LOOP extensibility) ---
+
+void LedController::renderBankNormal(uint8_t led, bool isFg) {
+  setPixel(led, isFg ? _colNormalFg : _colNormalBg,
+           isFg ? _normalFgIntensity : _normalBgIntensity);
+}
+
+void LedController::renderBankArpeg(uint8_t led, bool isFg, uint16_t sine16, unsigned long now) {
+  const BankSlot& slot = _slots[led];
+  bool playing = slot.arpEngine && slot.arpEngine->isPlaying() && slot.arpEngine->hasNotes();
+
+  if (slot.arpEngine && slot.arpEngine->consumeTickFlash()) {
+    _flashStartTime[led] = now;
+  }
+  bool flashing = (_flashStartTime[led] != 0) &&
+                   ((now - _flashStartTime[led]) < _tickFlashDurationMs);
+
+  uint8_t pMin, pMax;
+  const RGBW& col = isFg ? _colArpFg : _colArpBg;
+  if (isFg) {
+    pMin = playing ? _fgArpPlayMin : _fgArpStopMin;
+    pMax = playing ? _fgArpPlayMax : _fgArpStopMax;
+  } else {
+    pMin = playing ? _bgArpPlayMin : _bgArpStopMin;
+    pMax = playing ? _bgArpPlayMax : _bgArpStopMax;
+  }
+
+  if (flashing) {
+    setPixel(led, _colTickFlash, isFg ? _tickFlashFg : _tickFlashBg);
+  } else {
+    uint8_t intensity = pMin + (uint8_t)((uint32_t)sine16 * (pMax - pMin) / 65280);
+    setPixel(led, col, intensity);
+  }
+}
+
 void LedController::renderNormalDisplay(unsigned long now) {
   clearPixels();
 
@@ -550,42 +585,10 @@ void LedController::renderNormalDisplay(unsigned long now) {
                     + (uint16_t)_sineTable[(idx + 1) & 0xFF] * frac;  // 0..65280
 
     for (uint8_t i = 0; i < NUM_LEDS; i++) {
-      const BankSlot& slot = _slots[i];
       bool isFg = (i == _currentBank);
-
-      if (slot.type == BANK_NORMAL) {
-        // NORMAL: solid color at configured intensity
-        setPixel(i, isFg ? _colNormalFg : _colNormalBg,
-                 isFg ? _normalFgIntensity : _normalBgIntensity);
-      } else {
-        // ARPEG: sine pulse + optional tick flash
-        bool playing = slot.arpEngine && slot.arpEngine->isPlaying() && slot.arpEngine->hasNotes();
-
-        if (slot.arpEngine && slot.arpEngine->consumeTickFlash()) {
-          _flashStartTime[i] = now;
-        }
-        bool flashing = (_flashStartTime[i] != 0) &&
-                         ((now - _flashStartTime[i]) < _tickFlashDurationMs);
-
-        // Pick min/max and color based on fg/bg and play state
-        uint8_t pMin, pMax;
-        const RGBW& col = isFg ? _colArpFg : _colArpBg;
-        if (isFg) {
-          pMin = playing ? _fgArpPlayMin : _fgArpStopMin;
-          pMax = playing ? _fgArpPlayMax : _fgArpStopMax;
-        } else {
-          pMin = playing ? _bgArpPlayMin : _bgArpStopMin;
-          pMax = playing ? _bgArpPlayMax : _bgArpStopMax;
-        }
-
-        if (flashing) {
-          // Tick flash overrides pulse — use tick flash color + intensity
-          setPixel(i, _colTickFlash, isFg ? _tickFlashFg : _tickFlashBg);
-        } else {
-          // Interpolated sine → intensity (full precision before setPixel gamma)
-          uint8_t intensity = pMin + (uint8_t)((uint32_t)sine16 * (pMax - pMin) / 65280);
-          setPixel(i, col, intensity);
-        }
+      switch (_slots[i].type) {
+        case BANK_NORMAL: renderBankNormal(i, isFg); break;
+        case BANK_ARPEG:  renderBankArpeg(i, isFg, sine16, now); break;
       }
 
       // Battery low override: 3-blink burst on foreground bank

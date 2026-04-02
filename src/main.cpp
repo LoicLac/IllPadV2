@@ -449,99 +449,91 @@ void setup() {
 // =================================================================
 
 // --- Pad input: NORMAL noteOn/Off/AT + ARPEG add/remove + stuck-note cleanup ---
-static void handlePadInput(const SharedKeyboardState& state, uint32_t now) {
-  // Static locals (migrated from loop())
-  static bool s_lastHoldState[NUM_BANKS] = {};
-  static bool s_wasHolding = false;
+// --- Per-type pad processing (extracted for LOOP extensibility) ---
 
-  // MIDI processing (skip when button held — single-layer control)
-  if (!s_bankManager.isHolding() && !s_scaleManager.isHolding()) {
-    BankSlot& slot = s_bankManager.getCurrentSlot();
-    const ScaleConfig& scale = slot.scale;
+static void processNormalMode(const SharedKeyboardState& state, BankSlot& slot) {
+  const ScaleConfig& scale = slot.scale;
+  for (int i = 0; i < NUM_KEYS; i++) {
+    bool pressed    = state.keyIsPressed[i];
+    bool wasPressed = s_lastKeys[i];
 
-    if (slot.type == BANK_NORMAL) {
-      // === NORMAL MODE ===
-      for (int i = 0; i < NUM_KEYS; i++) {
-        bool pressed    = state.keyIsPressed[i];
-        bool wasPressed = s_lastKeys[i];
-
-        if (pressed && !wasPressed) {
-          uint8_t vel = slot.baseVelocity;
-          if (slot.velocityVariation > 0) {
-            int16_t range = (int16_t)slot.velocityVariation * 127 / 200;
-            int16_t offset = (int16_t)(random(-range, range + 1));
-            int16_t result = (int16_t)vel + offset;
-            vel = (uint8_t)constrain(result, 1, 127);
-          }
-          s_midiEngine.noteOn(i, vel, s_padOrder, scale);
-        } else if (!pressed && wasPressed) {
-          s_midiEngine.noteOff(i);
-        }
-
-        if (pressed) {
-          uint8_t p = state.pressure[i];
-          uint8_t dz = (uint8_t)s_potRouter.getAtDeadzone();
-          if (p > dz) {
-            uint8_t range = 255 - dz;
-            uint8_t scaled = (range > 0)
-              ? (uint8_t)((uint16_t)(p - dz) * 127 / range)
-              : p;
-            s_midiEngine.updateAftertouch(i, scaled);
-          } else {
-            s_midiEngine.updateAftertouch(i, 0);
-          }
-        }
-
+    if (pressed && !wasPressed) {
+      uint8_t vel = slot.baseVelocity;
+      if (slot.velocityVariation > 0) {
+        int16_t range = (int16_t)slot.velocityVariation * 127 / 200;
+        int16_t offset = (int16_t)(random(-range, range + 1));
+        int16_t result = (int16_t)vel + offset;
+        vel = (uint8_t)constrain(result, 1, 127);
       }
+      s_midiEngine.noteOn(i, vel, s_padOrder, scale);
+    } else if (!pressed && wasPressed) {
+      s_midiEngine.noteOff(i);
+    }
 
-    } else if (slot.type == BANK_ARPEG && slot.arpEngine) {
-      // === ARPEG MODE ===
-
-      // Detect HOLD toggle ON→OFF: sync pile with physical pad state
-      uint8_t curBank = s_bankManager.getCurrentBank();
-      bool holdNow = slot.arpEngine->isHoldOn();
-      if (s_lastHoldState[curBank] && !holdNow) {
-        for (int j = 0; j < NUM_KEYS; j++) {
-          if (j == s_holdPad || j == s_playStopPad) continue;
-          if (!state.keyIsPressed[j]) {
-            slot.arpEngine->removePadPosition(s_padOrder[j]);
-          }
-        }
-      }
-      s_lastHoldState[curBank] = holdNow;
-
-      for (int i = 0; i < NUM_KEYS; i++) {
-        if (i == s_holdPad) continue;
-        if (i == s_playStopPad && slot.arpEngine->isHoldOn()) continue;
-
-        bool pressed    = state.keyIsPressed[i];
-        bool wasPressed = s_lastKeys[i];
-        uint8_t pos = s_padOrder[i];
-
-        if (pressed && !wasPressed) {
-          if (slot.arpEngine->isHoldOn()) {
-            if (s_lastPressTime[i] > 0 &&
-                (now - s_lastPressTime[i]) < (uint32_t)s_doubleTapMs) {
-              slot.arpEngine->removePadPosition(pos);
-              s_lastPressTime[i] = 0;
-            } else {
-              slot.arpEngine->addPadPosition(pos);
-              s_lastPressTime[i] = now;
-            }
-          } else {
-            slot.arpEngine->addPadPosition(pos);
-          }
-
-        } else if (!pressed && wasPressed) {
-          if (!slot.arpEngine->isHoldOn()) {
-            slot.arpEngine->removePadPosition(pos);
-          }
-        }
+    if (pressed) {
+      uint8_t p = state.pressure[i];
+      uint8_t dz = (uint8_t)s_potRouter.getAtDeadzone();
+      if (p > dz) {
+        uint8_t range = 255 - dz;
+        uint8_t scaled = (range > 0)
+          ? (uint8_t)((uint16_t)(p - dz) * 127 / range)
+          : p;
+        s_midiEngine.updateAftertouch(i, scaled);
+      } else {
+        s_midiEngine.updateAftertouch(i, 0);
       }
     }
   }
+}
 
-  // Clean up stuck notes on left-button release edge
+static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uint32_t now) {
+  static bool s_lastHoldState[NUM_BANKS] = {};
+
+  // Detect HOLD toggle ON→OFF: sync pile with physical pad state
+  uint8_t curBank = s_bankManager.getCurrentBank();
+  bool holdNow = slot.arpEngine->isHoldOn();
+  if (s_lastHoldState[curBank] && !holdNow) {
+    for (int j = 0; j < NUM_KEYS; j++) {
+      if (j == s_holdPad || j == s_playStopPad) continue;
+      if (!state.keyIsPressed[j]) {
+        slot.arpEngine->removePadPosition(s_padOrder[j]);
+      }
+    }
+  }
+  s_lastHoldState[curBank] = holdNow;
+
+  for (int i = 0; i < NUM_KEYS; i++) {
+    if (i == s_holdPad) continue;
+    if (i == s_playStopPad && slot.arpEngine->isHoldOn()) continue;
+
+    bool pressed    = state.keyIsPressed[i];
+    bool wasPressed = s_lastKeys[i];
+    uint8_t pos = s_padOrder[i];
+
+    if (pressed && !wasPressed) {
+      if (slot.arpEngine->isHoldOn()) {
+        if (s_lastPressTime[i] > 0 &&
+            (now - s_lastPressTime[i]) < (uint32_t)s_doubleTapMs) {
+          slot.arpEngine->removePadPosition(pos);
+          s_lastPressTime[i] = 0;
+        } else {
+          slot.arpEngine->addPadPosition(pos);
+          s_lastPressTime[i] = now;
+        }
+      } else {
+        slot.arpEngine->addPadPosition(pos);
+      }
+
+    } else if (!pressed && wasPressed) {
+      if (!slot.arpEngine->isHoldOn()) {
+        slot.arpEngine->removePadPosition(pos);
+      }
+    }
+  }
+}
+
+static void handleLeftReleaseCleanup(const SharedKeyboardState& state) {
+  static bool s_wasHolding = false;
   bool holdingNow = s_bankManager.isHolding() || s_scaleManager.isHolding();
   if (s_wasHolding && !holdingNow) {
     BankSlot& relSlot = s_bankManager.getCurrentSlot();
@@ -562,6 +554,23 @@ static void handlePadInput(const SharedKeyboardState& state, uint32_t now) {
     }
   }
   s_wasHolding = holdingNow;
+}
+
+static void handlePadInput(const SharedKeyboardState& state, uint32_t now) {
+  // MIDI processing (skip when button held — single-layer control)
+  if (!s_bankManager.isHolding() && !s_scaleManager.isHolding()) {
+    BankSlot& slot = s_bankManager.getCurrentSlot();
+    switch (slot.type) {
+      case BANK_NORMAL:
+        processNormalMode(state, slot);
+        break;
+      case BANK_ARPEG:
+        if (slot.arpEngine) processArpMode(state, slot, now);
+        break;
+    }
+  }
+
+  handleLeftReleaseCleanup(state);
 }
 
 // --- Manager updates: bank/scale switch, flag consumption, clock ---
@@ -668,6 +677,19 @@ static void handlePlayStopPad(const SharedKeyboardState& state,
   }
 }
 
+// --- Push live pot params to engine (extracted for LOOP extensibility) ---
+static void pushParamsToEngine(BankSlot& slot) {
+  if (slot.type == BANK_ARPEG && slot.arpEngine) {
+    slot.arpEngine->setGateLength(s_potRouter.getGateLength());
+    slot.arpEngine->setShuffleDepth(s_potRouter.getShuffleDepth());
+    slot.arpEngine->setDivision(s_potRouter.getDivision());
+    slot.arpEngine->setPattern(s_potRouter.getPattern());
+    slot.arpEngine->setShuffleTemplate(s_potRouter.getShuffleTemplate());
+    slot.arpEngine->setBaseVelocity(s_potRouter.getBaseVelocity());
+    slot.arpEngine->setVelocityVariation(s_potRouter.getVelocityVariation());
+  }
+}
+
 // --- Pot pipeline: ADC read, param push, CC/PB, bargraph, battery, LEDs ---
 static void handlePotPipeline(bool leftHeld, bool rearHeld) {
   BankSlot& potSlot = s_bankManager.getCurrentSlot();
@@ -687,16 +709,8 @@ static void handlePotPipeline(bool leftHeld, bool rearHeld) {
     }
   }
 
-  // Push live to ArpEngine (if ARPEG bank)
-  if (potSlot.type == BANK_ARPEG && potSlot.arpEngine) {
-    potSlot.arpEngine->setGateLength(s_potRouter.getGateLength());
-    potSlot.arpEngine->setShuffleDepth(s_potRouter.getShuffleDepth());
-    potSlot.arpEngine->setDivision(s_potRouter.getDivision());
-    potSlot.arpEngine->setPattern(s_potRouter.getPattern());
-    potSlot.arpEngine->setShuffleTemplate(s_potRouter.getShuffleTemplate());
-    potSlot.arpEngine->setBaseVelocity(s_potRouter.getBaseVelocity());
-    potSlot.arpEngine->setVelocityVariation(s_potRouter.getVelocityVariation());
-  }
+  // Push live params to engine (per bank type)
+  pushParamsToEngine(potSlot);
 
   // Global params: Core 0 atomics
   s_responseShape.store(s_potRouter.getResponseShape(), std::memory_order_relaxed);

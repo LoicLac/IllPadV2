@@ -114,6 +114,8 @@ private:
   bool renderConfirmation(unsigned long now);
   void renderCalibration(unsigned long now);
   void renderNormalDisplay(unsigned long now);
+  void renderBankNormal(uint8_t led, bool isFg);
+  void renderBankArpeg(uint8_t led, bool isFg, uint16_t sine16, unsigned long now);
 
   // Master brightness (0-100 perceptual, from pot via POT_BRIGHTNESS_CURVE)
   uint8_t _brightnessPct;
