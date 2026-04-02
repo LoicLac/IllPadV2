@@ -115,7 +115,8 @@ private:
 
   // Internal load helper — reads a struct blob, validates magic/version
   bool loadValidatedBlob(const char* ns, const char* key,
-                          uint16_t expectedVersion, void* out, size_t size);
+                          uint16_t expectedMagic, uint16_t expectedVersion,
+                          void* out, size_t size);
 
   // Internal save methods
   void saveBank();

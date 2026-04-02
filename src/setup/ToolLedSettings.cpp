@@ -10,9 +10,9 @@
 // Page definitions
 // =================================================================
 // Page 0: COLOR (16 rows) + TIMING (2 rows) = 18
-// Page 1: CONFIRM — 15 params
+// Page 1: CONFIRM — 14 params
 static const uint8_t PAGE0_COUNT = 18;
-static const uint8_t PAGE1_COUNT = 15;
+static const uint8_t PAGE1_COUNT = 14;
 
 static const char* s_pageNames[] = {"COLOR", "CONFIRM"};
 
@@ -1001,6 +1001,7 @@ void ToolLedSettings::run() {
   // Load working copies from NVS or defaults
   _wk = s_ledDefaults();
   _cwk = s_colorDefaults();
+  bool loadedFromNvs = false;
   {
     Preferences prefs;
     if (prefs.begin(LED_SETTINGS_NVS_NAMESPACE, true)) {
@@ -1014,6 +1015,7 @@ void ToolLedSettings::run() {
           if (_wk.fgArpPlayMin > _wk.fgArpPlayMax) _wk.fgArpPlayMax = _wk.fgArpPlayMin;
           if (_wk.bgArpStopMin > _wk.bgArpStopMax) _wk.bgArpStopMax = _wk.bgArpStopMin;
           if (_wk.bgArpPlayMin > _wk.bgArpPlayMax) _wk.bgArpPlayMax = _wk.bgArpPlayMin;
+          loadedFromNvs = true;
         }
       }
       len = prefs.getBytesLength(COLOR_SLOT_NVS_KEY);
@@ -1032,7 +1034,7 @@ void ToolLedSettings::run() {
 
   LedSettingsStore originalWk = _wk;
   ColorSlotStore   originalCwk = _cwk;
-  _nvsSaved = true;
+  _nvsSaved = loadedFromNvs;
   _page = 0;
   _cursor = 0;
   _colorField = 0;
@@ -1067,6 +1069,7 @@ void ToolLedSettings::run() {
       lastPotMs = now;
       if (_pots.update()) {
         if (applyPotValues()) {
+          _nvsSaved = false;
           screenDirty = true;
         }
       }
@@ -1079,11 +1082,9 @@ void ToolLedSettings::run() {
       if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
         _wk = s_ledDefaults();
         _cwk = s_colorDefaults();
-        saveLedSettings();
-        saveColorSlots();
+        _nvsSaved = saveLedSettings() & saveColorSlots();
         originalWk = _wk;
         originalCwk = _cwk;
-        _nvsSaved = true;
         _ui->flashSaved();
         _confirmDefaults = false;
         screenDirty = true;
@@ -1101,6 +1102,7 @@ void ToolLedSettings::run() {
         _wk = originalWk;
         _cwk = originalCwk;
         _editing = false;
+        seedPotsForCursor();
         screenDirty = true;
       } else {
         if (_leds) _leds->previewEnd();
@@ -1167,10 +1169,9 @@ void ToolLedSettings::run() {
           screenDirty = true;
         }
         if (ev.type == NAV_ENTER) {
-          saveLedSettings();
-          saveColorSlots();
+          bool ok = saveLedSettings() & saveColorSlots();
           _editing = false;
-          _nvsSaved = true;
+          _nvsSaved = ok;
           _ui->flashSaved();
           originalWk = _wk;
           originalCwk = _cwk;
@@ -1183,9 +1184,8 @@ void ToolLedSettings::run() {
           screenDirty = true;
         }
         if (ev.type == NAV_ENTER) {
-          saveLedSettings();
+          _nvsSaved = saveLedSettings();
           _editing = false;
-          _nvsSaved = true;
           _ui->flashSaved();
           originalWk = _wk;
           screenDirty = true;
@@ -1197,9 +1197,8 @@ void ToolLedSettings::run() {
           screenDirty = true;
         }
         if (ev.type == NAV_ENTER) {
-          saveLedSettings();
+          _nvsSaved = saveLedSettings();
           _editing = false;
-          _nvsSaved = true;
           _ui->flashSaved();
           originalWk = _wk;
           screenDirty = true;

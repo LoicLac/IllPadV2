@@ -407,7 +407,8 @@ void NvsManager::commitAll() {
 // loadValidatedBlob — generic helper for Store structs with magic/version
 // =================================================================
 bool NvsManager::loadValidatedBlob(const char* ns, const char* key,
-                                    uint16_t expectedVersion, void* out, size_t size) {
+                                    uint16_t expectedMagic, uint16_t expectedVersion,
+                                    void* out, size_t size) {
   if (size > 128) return false;  // safety — all Store structs are small
   Preferences prefs;
   if (!prefs.begin(ns, true)) return false;
@@ -417,7 +418,7 @@ bool NvsManager::loadValidatedBlob(const char* ns, const char* key,
     uint8_t tmp[128];
     prefs.getBytes(key, tmp, size);
     const uint16_t* header = reinterpret_cast<const uint16_t*>(tmp);
-    if (header[0] == EEPROM_MAGIC && header[1] == expectedVersion) {
+    if (header[0] == expectedMagic && header[1] == expectedVersion) {
       memcpy(out, tmp, size);
       ok = true;
     }
@@ -560,7 +561,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   {
     PotParamsStore pps;
     if (loadValidatedBlob(POT_PARAMS_NVS_NAMESPACE, POT_PARAMS_NVS_KEY,
-                           POT_PARAMS_VERSION, &pps, sizeof(pps))) {
+                           EEPROM_MAGIC, POT_PARAMS_VERSION, &pps, sizeof(pps))) {
       _pendingResponseShape = (float)pps.responseShapeRaw / 4095.0f;
       _pendingSlewRate = pps.slewRate;
       _pendingAtDeadzone = pps.atDeadzone;
@@ -593,7 +594,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   {
     NoteMapStore nms;
     if (loadValidatedBlob(NOTEMAP_NVS_NAMESPACE, NOTEMAP_NVS_KEY,
-                           NOTEMAP_VERSION, &nms, sizeof(nms))) {
+                           EEPROM_MAGIC, NOTEMAP_VERSION, &nms, sizeof(nms))) {
       memcpy(padOrder, nms.noteMap, NUM_KEYS);
       #if DEBUG_SERIAL
       Serial.println("[NVS] Pad order loaded.");
@@ -605,7 +606,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   {
     BankPadStore bps;
     if (loadValidatedBlob(BANKPAD_NVS_NAMESPACE, BANKPAD_NVS_KEY,
-                           BANKPAD_VERSION, &bps, sizeof(bps))) {
+                           EEPROM_MAGIC, BANKPAD_VERSION, &bps, sizeof(bps))) {
       memcpy(bankPads, bps.bankPads, NUM_BANKS);
       for (uint8_t j = 0; j < NUM_BANKS; j++) {
         if (bankPads[j] >= NUM_KEYS) bankPads[j] = j;
@@ -662,7 +663,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT, DEFAULT_PANIC_ON_RECONNECT,
               0, DEFAULT_BAT_ADC_AT_FULL};
   loadValidatedBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY,
-                     SETTINGS_VERSION, &settings, sizeof(settings));
+                     EEPROM_MAGIC, SETTINGS_VERSION, &settings, sizeof(settings));
   #if DEBUG_SERIAL
   Serial.printf("[NVS] Settings: profile=%d, atRate=%d, bleInt=%d, clock=%d, dblTap=%d\n",
                 settings.baselineProfile, settings.aftertouchRate, settings.bleInterval,
@@ -671,9 +672,9 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
 
   // --- LED settings (Tool 7) ---
   loadValidatedBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
-                     LED_SETTINGS_VERSION, &_ledSettings, sizeof(_ledSettings));
+                     EEPROM_MAGIC, LED_SETTINGS_VERSION, &_ledSettings, sizeof(_ledSettings));
   loadValidatedBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
-                     1, &_colorSlots, sizeof(_colorSlots));
+                     COLOR_SLOT_MAGIC, 1, &_colorSlots, sizeof(_colorSlots));
   #if DEBUG_SERIAL
   Serial.println("[NVS] LED settings + color slots loaded.");
   #endif
@@ -682,7 +683,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   {
     PotMappingStore pms;
     if (loadValidatedBlob(POTMAP_NVS_NAMESPACE, POTMAP_NVS_KEY,
-                           POTMAP_VERSION, &pms, sizeof(pms))) {
+                           EEPROM_MAGIC, POTMAP_VERSION, &pms, sizeof(pms))) {
       potRouter.loadMapping(pms);
       #if DEBUG_SERIAL
       Serial.println("[NVS] Pot mapping loaded.");

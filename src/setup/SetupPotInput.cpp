@@ -123,7 +123,9 @@ bool SetupPotInput::isEnabled(uint8_t ch) const {
 
 int32_t SetupPotInput::adcToValue(uint8_t ch, int32_t adc) const {
   const Channel& c = _ch[ch];
-  int32_t val = c.minVal + (int32_t)((int64_t)adc * (c.maxVal - c.minVal) / ADC_MAX);
+  // Bresenham-style: evenly distribute discrete values across ADC range
+  int32_t range = c.maxVal - c.minVal;
+  int32_t val = c.minVal + (int32_t)((int64_t)(adc + 1) * range / (ADC_MAX + 1));
   if (val < c.minVal) val = c.minVal;
   if (val > c.maxVal) val = c.maxVal;
   return val;
