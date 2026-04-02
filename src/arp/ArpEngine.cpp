@@ -3,29 +3,7 @@
 #include "../midi/ScaleResolver.h"
 #include <Arduino.h>
 
-// =================================================================
-// Shuffle Groove Templates
-// =================================================================
-// 5 templates × 16 steps. Each value is a percentage (0-100) that
-// determines how much a step is delayed relative to stepDuration.
-//   offset = template[step % 16] × depth × stepDuration / 100
-//
-// At depth 0.0 → no shuffle (all offsets are 0).
-// At depth 1.0 → full template effect.
-// Template is selected via setShuffleTemplate(0-4).
-
-static const int8_t SHUFFLE_TEMPLATES[NUM_SHUFFLE_TEMPLATES][SHUFFLE_TEMPLATE_LEN] = {
-  // 0: Classic swing — every other step pushed back
-  {0, 50, 0, 50, 0, 50, 0, 50, 0, 50, 0, 50, 0, 50, 0, 50},
-  // 1: Light/heavy alternating — subtler groove
-  {0, 33, 0, 66, 0, 33, 0, 66, 0, 33, 0, 66, 0, 33, 0, 66},
-  // 2: Backbeat push — every 3rd step delayed
-  {0, 0, 50, 0, 0, 0, 50, 0, 0, 0, 50, 0, 0, 0, 50, 0},
-  // 3: Ramp — progressive delay within each group of 4
-  {0, 25, 50, 75, 0, 25, 50, 75, 0, 25, 50, 75, 0, 25, 50, 75},
-  // 4: Triplet feel — 2/3 + 1/3 grouping
-  {0, 66, 33, 66, 0, 66, 33, 66, 0, 66, 33, 66, 0, 66, 33, 66},
-};
+// Shuffle templates now in midi/GrooveTemplates.h (shared with LoopEngine)
 
 // =================================================================
 // Constructor

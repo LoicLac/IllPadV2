@@ -573,6 +573,28 @@ static void handlePadInput(const SharedKeyboardState& state, uint32_t now) {
   handleLeftReleaseCleanup(state);
 }
 
+// --- Reload per-bank pot params after bank switch (extracted for LOOP extensibility) ---
+static void reloadPerBankParams(BankSlot& newSlot) {
+  float gate = 0.5f, shufDepth = 0.0f;
+  ArpDivision div = DIV_1_8;
+  ArpPattern pat = ARP_UP;
+  uint8_t shufTmpl = 0;
+  if (newSlot.type == BANK_ARPEG && newSlot.arpEngine) {
+    gate      = newSlot.arpEngine->getGateLength();
+    shufDepth = newSlot.arpEngine->getShuffleDepth();
+    div       = newSlot.arpEngine->getDivision();
+    pat       = newSlot.arpEngine->getPattern();
+    shufTmpl  = newSlot.arpEngine->getShuffleTemplate();
+  }
+
+  s_potRouter.loadStoredPerBank(
+    newSlot.baseVelocity, newSlot.velocityVariation, newSlot.pitchBendOffset,
+    gate, shufDepth, div, pat, shufTmpl
+  );
+  s_potRouter.seedCatchValues(true);
+  s_potRouter.resetPerBankCatch();
+}
+
 // --- Manager updates: bank/scale switch, flag consumption, clock ---
 static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld) {
   // Managers (both use left button — single-layer control)
@@ -582,26 +604,7 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
   // On bank switch: reload per-bank pot values from the new bank, then reset catch.
   if (bankSwitched) {
     s_nvsManager.queueBankWrite(s_bankManager.getCurrentBank());
-    BankSlot& newSlot = s_bankManager.getCurrentSlot();
-
-    float gate = 0.5f, shufDepth = 0.0f;
-    ArpDivision div = DIV_1_8;
-    ArpPattern pat = ARP_UP;
-    uint8_t shufTmpl = 0;
-    if (newSlot.type == BANK_ARPEG && newSlot.arpEngine) {
-      gate      = newSlot.arpEngine->getGateLength();
-      shufDepth = newSlot.arpEngine->getShuffleDepth();
-      div       = newSlot.arpEngine->getDivision();
-      pat       = newSlot.arpEngine->getPattern();
-      shufTmpl  = newSlot.arpEngine->getShuffleTemplate();
-    }
-
-    s_potRouter.loadStoredPerBank(
-      newSlot.baseVelocity, newSlot.velocityVariation, newSlot.pitchBendOffset,
-      gate, shufDepth, div, pat, shufTmpl
-    );
-    s_potRouter.seedCatchValues(true);
-    s_potRouter.resetPerBankCatch();
+    reloadPerBankParams(s_bankManager.getCurrentSlot());
   }
 
   // Consume all ScaleManager change flags once (auto-clearing)

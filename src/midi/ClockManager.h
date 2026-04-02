@@ -25,6 +25,7 @@ public:
   // Output — smoothed clock
   uint32_t getCurrentTick() const;
   uint16_t getSmoothedBPM() const;
+  float    getSmoothedBPMFloat() const;
   bool     isExternalSync() const;
 
 private:

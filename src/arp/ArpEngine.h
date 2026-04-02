@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "../core/KeyboardData.h"
+#include "../midi/GrooveTemplates.h"
 
 class MidiTransport;
 
@@ -29,8 +30,6 @@ enum class ArpState {
 // (e.g. long gate at fast divisions = many notes ringing at once).
 
 static const uint8_t MAX_PENDING_EVENTS = 36;
-static const uint8_t NUM_SHUFFLE_TEMPLATES = 5;
-static const uint8_t SHUFFLE_TEMPLATE_LEN = 16;
 
 struct PendingEvent {
   uint32_t fireTimeUs;   // micros() timestamp when this event should fire
