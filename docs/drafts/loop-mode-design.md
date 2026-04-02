@@ -10,25 +10,27 @@
 
 Refactorings to apply BEFORE implementing LoopEngine. The LOOP mode adds a 3rd bank type — every `if (NORMAL) / else (ARPEG)` pattern in the codebase becomes a 3-branch switch. Extracting these now keeps each branch isolated and reviewable. Without this, the LOOP integration creates 3+ monolithic functions with deeply nested type/state/fg/bg combinations.
 
-### Must (blocking)
+### Must (blocking) — DONE (commit `0f31838`)
+
+| What | Where | Status |
+|---|---|---|
+| Extract `SHUFFLE_TEMPLATES[5][16]` to shared header | `ArpEngine.cpp` → `midi/GrooveTemplates.h` | **DONE** — `GrooveTemplates.h` created, `ArpEngine.h` includes it, local constants removed. |
+
+### Should (prevents monoliths) — DONE (commits `ed1788e` + `0f31838`)
+
+| What | Where | Status |
+|---|---|---|
+| Extract `renderBankNormal()` / `renderBankArpeg()` from `renderNormalDisplay()` | `LedController.cpp` | **DONE** — `renderNormalDisplay()` dispatches via `switch(slot.type)`. Each type is a separate method. Adding LOOP = new `renderBankLoop()` beside existing functions. |
+| Extract `processNormalMode()` / `processArpMode()` from `handlePadInput()` | `main.cpp` | **DONE** — `handlePadInput()` dispatches via `switch(slot.type)`. Static locals (`s_lastHoldState`, `s_wasHolding`) migrated to their respective functions. `handleLeftReleaseCleanup()` also extracted. |
+| Extract bank-switch param loading into a function | `main.cpp` | **DONE** — `reloadPerBankParams(BankSlot&)` extracted from `handleManagerUpdates()`. LOOP will add its own params beside the existing arp block. |
+| Extract `pushParamsToEngine()` from `handlePotPipeline()` | `main.cpp` | **DONE** — arp param push isolated. LOOP will add `pushParamsToLoop()` beside it. |
+| Add `ClockManager::getSmoothedBPMFloat()` | `ClockManager.h/.cpp` | **DONE** — returns `_pllBPM` as float. LoopEngine needs float BPM for proportional position scaling. |
+
+### Nice (coherence) — not yet done
 
 | What | Where | Why |
 |---|---|---|
-| Extract `SHUFFLE_TEMPLATES[5][16]` to shared header | `ArpEngine.cpp:17` → new `midi/GrooveTemplates.h` | LoopEngine reuses the same 5 groove templates for shuffle. Currently `static const` inside ArpEngine.cpp — invisible to other translation units. |
-
-### Should (prevents monoliths)
-
-| What | Where | Why |
-|---|---|---|
-| Extract `renderBankNormal()` / `renderBankArpeg()` from `renderNormalDisplay()` | `LedController.cpp:558-677` | Current inline `if/else` is 50 lines for ARPEG alone (4 branches: fg/bg x playing/stopped x flashing). LOOP adds 5 states (EMPTY/REC/PLAY/OVERDUB/STOP) x fg/bg x flash — another 80+ lines. Extracting per-type render methods keeps each one readable. |
-| Extract `processNormalMode()` / `processArpMode()` from `handlePadInput()` | `main.cpp:461-540` | Same pattern — LOOP adds a 3rd block with its own recording/live-play logic. The common edge-detection loop and control-pad skipping are duplicated between NORMAL and ARPEG. |
-| Extract bank-switch param loading into a function | `main.cpp:573-595` | The block that loads per-bank params into PotRouter on bank switch is ARPEG-specific. LOOP adds its own set (chaos, velPattern, velPatternDepth). A `loadPerBankParams(BankSlot&)` function keeps `handleManagerUpdates()` clean. |
-
-### Nice (coherence)
-
-| What | Where | Why |
-|---|---|---|
-| Share `PendingEvent` struct | `ArpEngine.h:35-40` → `KeyboardData.h` | LoopEngine defines `PendingNoteOn` with identical fields (fireTimeUs, note, velocity, active). One struct, two consumers. |
+| Share `PendingEvent` struct | `ArpEngine.h:35-40` → `KeyboardData.h` | LoopEngine defines `PendingNoteOn` with identical fields (fireTimeUs, note, velocity, active). One struct, two consumers. Can be done at implementation time. |
 
 ---
 
