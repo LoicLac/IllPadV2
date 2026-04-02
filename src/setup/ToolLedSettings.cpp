@@ -9,9 +9,9 @@
 // =================================================================
 // Page definitions
 // =================================================================
-// Page 0: COLOR (16 rows) + TIMING (2 rows) = 18
+// Page 0: COLOR (20 rows) + TIMING (2 rows) = 22
 // Page 1: CONFIRM — 14 params
-static const uint8_t PAGE0_COUNT = 18;
+static const uint8_t PAGE0_COUNT = 22;
 static const uint8_t PAGE1_COUNT = 14;
 
 static const char* s_pageNames[] = {"COLOR", "CONFIRM"};
@@ -25,23 +25,27 @@ struct ColorRowDef {
   const char* label;
 };
 
-static const ColorRowDef COLOR_ROWS[16] = {
+static const ColorRowDef COLOR_ROWS[20] = {
   { CSLOT_NORMAL_FG,   0xFF, "NORMAL fg"       },  // 0
   { CSLOT_NORMAL_BG,   0xFF, "NORMAL bg"       },  // 1
-  { CSLOT_ARPEG_FG,       3, "ARPEG fg min"    },  // 2
-  { CSLOT_ARPEG_FG,       2, "ARPEG fg max"    },  // 3
-  { CSLOT_ARPEG_BG,       5, "ARPEG bg min"    },  // 4
-  { CSLOT_ARPEG_BG,       4, "ARPEG bg max"    },  // 5
-  { CSLOT_TICK_FLASH,     7, "Tick flash fg"   },  // 6
-  { CSLOT_TICK_FLASH,     6, "Tick flash bg"   },  // 7
-  { CSLOT_BANK_SWITCH, 0xFF, "Bank switch"     },  // 8
-  { CSLOT_SCALE_ROOT,  0xFF, "Scale root"      },  // 9
-  { CSLOT_SCALE_MODE,  0xFF, "Scale mode"      },  // 10
-  { CSLOT_SCALE_CHROM, 0xFF, "Scale chromatic" },  // 11
-  { CSLOT_HOLD,        0xFF, "Hold"            },  // 12
-  { CSLOT_PLAY_ACK,    0xFF, "Play ack"        },  // 13
-  { CSLOT_STOP,        0xFF, "Stop"            },  // 14
-  { CSLOT_OCTAVE,      0xFF, "Octave"          },  // 15
+  { CSLOT_ARPEG_FG,       3, "ARPfg stop min"  },  // 2
+  { CSLOT_ARPEG_FG,       2, "ARPfg stop max"  },  // 3
+  { CSLOT_ARPEG_BG,       5, "ARPbg stop min"  },  // 4
+  { CSLOT_ARPEG_BG,       4, "ARPbg stop max"  },  // 5
+  { CSLOT_ARPEG_FG,       7, "ARPfg play min"  },  // 6  ← NEW
+  { CSLOT_ARPEG_FG,       6, "ARPfg play max"  },  // 7  ← NEW
+  { CSLOT_ARPEG_BG,       9, "ARPbg play min"  },  // 8  ← NEW
+  { CSLOT_ARPEG_BG,       8, "ARPbg play max"  },  // 9  ← NEW
+  { CSLOT_TICK_FLASH,    11, "Tick flash fg"   },  // 10
+  { CSLOT_TICK_FLASH,    10, "Tick flash bg"   },  // 11
+  { CSLOT_BANK_SWITCH, 0xFF, "Bank switch"     },  // 12
+  { CSLOT_SCALE_ROOT,  0xFF, "Scale root"      },  // 13
+  { CSLOT_SCALE_MODE,  0xFF, "Scale mode"      },  // 14
+  { CSLOT_SCALE_CHROM, 0xFF, "Scale chromatic" },  // 15
+  { CSLOT_HOLD,        0xFF, "Hold"            },  // 16
+  { CSLOT_PLAY_ACK,    0xFF, "Play ack"        },  // 17
+  { CSLOT_STOP,        0xFF, "Stop"            },  // 18
+  { CSLOT_OCTAVE,      0xFF, "Octave"          },  // 19
 };
 
 // =================================================================
@@ -158,10 +162,14 @@ uint8_t ToolLedSettings::getRowIntensity(uint8_t row) const {
     case 3:  return _wk.fgArpStopMax;
     case 4:  return _wk.bgArpStopMin;
     case 5:  return _wk.bgArpStopMax;
-    case 6:  return _wk.tickFlashFg;
-    case 7:  return _wk.tickFlashBg;
-    case 8:  return _wk.bankBrightnessPct;
-    default: return 100;  // rows 9-15: fixed 100%
+    case 6:  return _wk.fgArpPlayMin;
+    case 7:  return _wk.fgArpPlayMax;
+    case 8:  return _wk.bgArpPlayMin;
+    case 9:  return _wk.bgArpPlayMax;
+    case 10: return _wk.tickFlashFg;
+    case 11: return _wk.tickFlashBg;
+    case 12: return _wk.bankBrightnessPct;
+    default: return 100;  // rows 13-19: fixed 100%
   }
 }
 
@@ -181,22 +189,34 @@ void ToolLedSettings::setRowIntensity(uint8_t row, uint8_t val) {
     case 5: _wk.bgArpStopMax = val;
             if (_wk.bgArpStopMax < _wk.bgArpStopMin) _wk.bgArpStopMin = val;
             break;
-    case 6: _wk.tickFlashFg = val; break;
-    case 7: _wk.tickFlashBg = val; break;
-    case 8: _wk.bankBrightnessPct = val; break;
-    default: break;  // rows 9-15: not editable
+    case 6: _wk.fgArpPlayMin = val;
+            if (_wk.fgArpPlayMin > _wk.fgArpPlayMax) _wk.fgArpPlayMax = val;
+            break;
+    case 7: _wk.fgArpPlayMax = val;
+            if (_wk.fgArpPlayMax < _wk.fgArpPlayMin) _wk.fgArpPlayMin = val;
+            break;
+    case 8: _wk.bgArpPlayMin = val;
+            if (_wk.bgArpPlayMin > _wk.bgArpPlayMax) _wk.bgArpPlayMax = val;
+            break;
+    case 9: _wk.bgArpPlayMax = val;
+            if (_wk.bgArpPlayMax < _wk.bgArpPlayMin) _wk.bgArpPlayMin = val;
+            break;
+    case 10: _wk.tickFlashFg = val; break;
+    case 11: _wk.tickFlashBg = val; break;
+    case 12: _wk.bankBrightnessPct = val; break;
+    default: break;  // rows 13-19: not editable
   }
 }
 
 bool ToolLedSettings::rowHasEditableIntensity(uint8_t row) const {
-  return (row <= 8);
+  return (row <= 12);
 }
 
 // =================================================================
 // adjustColorField — preset / hue / intensity
 // =================================================================
 void ToolLedSettings::adjustColorField(int8_t dir, bool accel) {
-  if (_cursor >= 16) return;  // timing rows handled elsewhere
+  if (_cursor >= 20) return;  // timing rows handled elsewhere
   uint8_t slotId = COLOR_ROWS[_cursor].slotId;
   ColorSlot& slot = _cwk.slots[slotId];
 
@@ -231,7 +251,7 @@ void ToolLedSettings::adjustColorField(int8_t dir, bool accel) {
 // adjustTimingParam — pulse period / tick flash duration
 // =================================================================
 void ToolLedSettings::adjustTimingParam(int8_t dir, bool accel) {
-  uint8_t timingIdx = _cursor - 16;  // 0 or 1
+  uint8_t timingIdx = _cursor - 20;  // 0 or 1
   if (timingIdx == 0) {  // pulsePeriodMs 500-4000
     int step = accel ? 250 : 50;
     int val = (int)_wk.pulsePeriodMs + dir * step;
@@ -379,7 +399,7 @@ bool ToolLedSettings::saveColorSlots() {
 // drawColorRow — single row with ANSI 24-bit swatch
 // =================================================================
 void ToolLedSettings::drawColorRow(uint8_t row, bool selected, bool editing) {
-  if (row >= 16) return;
+  if (row >= 20) return;
   const ColorRowDef& def = COLOR_ROWS[row];
   const ColorSlot& slot = _cwk.slots[def.slotId];
   RGBW resolved = resolveColorSlot(slot);
@@ -445,7 +465,7 @@ void ToolLedSettings::drawColorRow(uint8_t row, bool selected, bool editing) {
 // =================================================================
 void ToolLedSettings::drawDescription() {
   if (_page == 0) {
-    if (_cursor < 16) {
+    if (_cursor < 20) {
       // COLOR rows
       switch (_cursor) {
         case 0:
@@ -461,84 +481,108 @@ void ToolLedSettings::drawDescription() {
           _ui->drawFrameLine(VT_DIM "preset (e.g. Warm White) to distinguish from foreground." VT_RESET);
           break;
         case 2:
-          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Foreground \xe2\x80\x94 Pulse Low" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Lowest point of the breathing pulse on the active arpeggiator." VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Set low (3-8%%) for a subtle breath that barely glows," VT_RESET);
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Stopped FG \xe2\x80\x94 Pulse Low" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Lowest point of the breathing pulse on the active arp" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "when STOPPED. Set low (3-8%%) for a subtle breath," VT_RESET);
           _ui->drawFrameLine(VT_DIM "higher (20-30%%) for an always-visible pulse." VT_RESET);
           break;
         case 3:
-          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Foreground \xe2\x80\x94 Pulse High" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Peak of the breathing pulse. The difference between min and" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "max defines the depth of the breathing effect. Wider gap =" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "deeper breath. Narrow gap = subtle shimmer." VT_RESET);
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Stopped FG \xe2\x80\x94 Pulse High" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Peak of the stopped-arp breathing pulse. Wider gap" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "between min and max = deeper breath." VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Narrow gap = subtle shimmer." VT_RESET);
           break;
         case 4:
-          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Background \xe2\x80\x94 Pulse Low" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Lowest point of the breathing pulse on background arp banks." VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Set to 0 for complete darkness at the bottom of each breath." VT_RESET);
-          _ui->drawFrameLine(VT_DIM "These LEDs show background arps that keep playing." VT_RESET);
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Stopped BG \xe2\x80\x94 Pulse Low" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Lowest point of the breathing pulse on background stopped" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "arps. Set to 0 for complete darkness at the bottom." VT_RESET);
+          _ui->drawFrameLine(VT_DIM "These LEDs show background arps that keep pulsing." VT_RESET);
           break;
         case 5:
-          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Background \xe2\x80\x94 Pulse High" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Peak of the background arp pulse. Keep well below foreground" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "values to maintain clear hierarchy between active and" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "background arps." VT_RESET);
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Stopped BG \xe2\x80\x94 Pulse High" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Peak of the background stopped-arp pulse. Keep well below" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "foreground values to maintain clear hierarchy." VT_RESET);
+          _ui->drawFrameEmpty();
           break;
         case 6:
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Playing FG \xe2\x80\x94 Pulse Low" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Lowest point of the breathing pulse on the active arp" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "while PLAYING. Usually brighter than stopped to show" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "the arp is actively generating notes." VT_RESET);
+          break;
+        case 7:
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Playing FG \xe2\x80\x94 Pulse High" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Peak of the playing-arp breathing pulse. The tick flash" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "overlays on top, so keep max below 100%% to let the" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "flash pop visually." VT_RESET);
+          break;
+        case 8:
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Playing BG \xe2\x80\x94 Pulse Low" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Lowest point of the breathing pulse on background playing" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "arps. These arps are generating notes in the background." VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Keep dimmer than foreground playing values." VT_RESET);
+          break;
+        case 9:
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Arpeg Playing BG \xe2\x80\x94 Pulse High" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Peak of the background playing-arp pulse. A subtle pulse" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "lets you see background arps without stealing focus from" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "the active bank." VT_RESET);
+          break;
+        case 10:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Tick Flash \xe2\x80\x94 Foreground" VT_RESET);
           _ui->drawFrameLine(VT_DIM "Brief spike on each arpeggiator step on the active bank." VT_RESET);
           _ui->drawFrameLine(VT_DIM "Punctuates the rhythm visually. Try Amber or Coral for" VT_RESET);
           _ui->drawFrameLine(VT_DIM "a warmer rhythmic feel. Press [b] to preview." VT_RESET);
           break;
-        case 7:
+        case 11:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Tick Flash \xe2\x80\x94 Background" VT_RESET);
           _ui->drawFrameLine(VT_DIM "Flash on background arp LEDs at each step. Dimmer than" VT_RESET);
           _ui->drawFrameLine(VT_DIM "foreground flash. Lets you see the rhythm of background" VT_RESET);
           _ui->drawFrameLine(VT_DIM "arps without overpowering the active bank." VT_RESET);
           break;
-        case 8:
+        case 12:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Bank Switch" VT_RESET);
           _ui->drawFrameLine(VT_DIM "The blink when you switch banks. This color flashes on the" VT_RESET);
           _ui->drawFrameLine(VT_DIM "destination LED to confirm the switch. Blink count and" VT_RESET);
           _ui->drawFrameLine(VT_DIM "duration are on the CONFIRM page. Press [b] to preview." VT_RESET);
           break;
-        case 9:
+        case 13:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Scale Root" VT_RESET);
           _ui->drawFrameLine(VT_DIM "Flash when you change the scale root note (hold left +" VT_RESET);
           _ui->drawFrameLine(VT_DIM "root pad). A vivid color helps distinguish root changes" VT_RESET);
           _ui->drawFrameLine(VT_DIM "from mode changes. Press [b] to preview." VT_RESET);
           break;
-        case 10:
+        case 14:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Scale Mode" VT_RESET);
           _ui->drawFrameLine(VT_DIM "Flash when you change the scale mode (Ionian, Dorian, etc.)." VT_RESET);
           _ui->drawFrameLine(VT_DIM "Use a slightly different shade from root to tell them apart" VT_RESET);
           _ui->drawFrameLine(VT_DIM "at a glance. Press [b] to preview." VT_RESET);
           break;
-        case 11:
+        case 15:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Scale Chromatic" VT_RESET);
           _ui->drawFrameLine(VT_DIM "Flash when toggling chromatic mode on/off. A distinct color" VT_RESET);
           _ui->drawFrameLine(VT_DIM "confirms you've left scale mode and entered free chromatic" VT_RESET);
           _ui->drawFrameLine(VT_DIM "play. Press [b] to preview." VT_RESET);
           break;
-        case 12:
+        case 16:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Hold" VT_RESET);
           _ui->drawFrameLine(VT_DIM "Flash when toggling HOLD mode on an arpeggiator bank." VT_RESET);
           _ui->drawFrameLine(VT_DIM "A clear visual cue that your held notes are locked in." VT_RESET);
           _ui->drawFrameLine(VT_DIM "Choose a color that pops against your arp pulse." VT_RESET);
           break;
-        case 13:
+        case 17:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Play Ack" VT_RESET);
           _ui->drawFrameLine(VT_DIM "The green flash when an arpeggiator starts playing." VT_RESET);
           _ui->drawFrameLine(VT_DIM "Followed by beat-synced flashes. A quick 'go' signal." VT_RESET);
           _ui->drawFrameLine(VT_DIM "Press [b] to preview the full play sequence." VT_RESET);
           break;
-        case 14:
+        case 18:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Stop" VT_RESET);
           _ui->drawFrameLine(VT_DIM "The fade-out when an arpeggiator stops. This color" VT_RESET);
           _ui->drawFrameLine(VT_DIM "smoothly fades to zero over the stop duration." VT_RESET);
           _ui->drawFrameLine(VT_DIM "Press [b] to preview." VT_RESET);
           break;
-        case 15:
+        case 19:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Octave" VT_RESET);
           _ui->drawFrameLine(VT_DIM "Flash when changing arp octave range (1-4). Blinks on a" VT_RESET);
           _ui->drawFrameLine(VT_DIM "pair of LEDs matching the selected octave group." VT_RESET);
@@ -546,8 +590,8 @@ void ToolLedSettings::drawDescription() {
           break;
       }
     } else {
-      // TIMING rows (16-17)
-      if (_cursor == 16) {
+      // TIMING rows (20-21)
+      if (_cursor == 20) {
         _ui->drawFrameLine(VT_BRIGHT_WHITE "Pulse Period" VT_RESET);
         _ui->drawFrameLine(VT_DIM "Duration of one full sine breathing cycle in milliseconds." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Affects all ARPEG banks (foreground + background)." VT_RESET);
@@ -666,7 +710,7 @@ void ToolLedSettings::seedPotsForCursor() {
   _pots.disable(0);
   _pots.disable(1);
 
-  if (_page == 0 && _cursor < 16) {
+  if (_page == 0 && _cursor < 20) {
     // COLOR rows: pot 1 = hue, pot 2 = intensity
     uint8_t slotId = COLOR_ROWS[_cursor].slotId;
     _potVal[0] = _cwk.slots[slotId].hueOffset;
@@ -675,10 +719,10 @@ void ToolLedSettings::seedPotsForCursor() {
       _potVal[1] = getRowIntensity(_cursor);
       _pots.seed(1, &_potVal[1], 0, 100);
     }
-  } else if (_page == 0 && _cursor == 16) {
+  } else if (_page == 0 && _cursor == 20) {
     _potVal[0] = _wk.pulsePeriodMs;
     _pots.seed(0, &_potVal[0], 500, 4000);
-  } else if (_page == 0 && _cursor == 17) {
+  } else if (_page == 0 && _cursor == 21) {
     _potVal[0] = _wk.tickFlashDurationMs;
     _pots.seed(0, &_potVal[0], 10, 100);
   } else if (_page == 1) {
@@ -710,7 +754,7 @@ void ToolLedSettings::seedPotsForCursor() {
 bool ToolLedSettings::applyPotValues() {
   bool changed = false;
 
-  if (_page == 0 && _cursor < 16) {
+  if (_page == 0 && _cursor < 20) {
     uint8_t slotId = COLOR_ROWS[_cursor].slotId;
     if (_pots.isActive(0) && (int8_t)_potVal[0] != _cwk.slots[slotId].hueOffset) {
       _cwk.slots[slotId].hueOffset = (int8_t)_potVal[0];
@@ -721,11 +765,11 @@ bool ToolLedSettings::applyPotValues() {
       setRowIntensity(_cursor, (uint8_t)_potVal[1]);
       changed = true;
     }
-  } else if (_page == 0 && _cursor == 16) {
+  } else if (_page == 0 && _cursor == 20) {
     if (_pots.isActive(0) && (uint16_t)_potVal[0] != _wk.pulsePeriodMs) {
       _wk.pulsePeriodMs = (uint16_t)_potVal[0]; changed = true;
     }
-  } else if (_page == 0 && _cursor == 17) {
+  } else if (_page == 0 && _cursor == 21) {
     if (_pots.isActive(0) && (uint8_t)_potVal[0] != _wk.tickFlashDurationMs) {
       _wk.tickFlashDurationMs = (uint8_t)_potVal[0]; changed = true;
     }
@@ -757,20 +801,20 @@ bool ToolLedSettings::applyPotValues() {
 // =================================================================
 uint8_t ToolLedSettings::mapCursorToPreviewRow() const {
   if (_page == 0) {
-    if (_cursor < 16) return _cursor;
-    if (_cursor == 16) return 2;   // pulse period → arpeg preview
-    if (_cursor == 17) return 6;   // tick flash duration → tick flash preview
+    if (_cursor < 20) return _cursor;
+    if (_cursor == 20) return 2;   // pulse period → arpeg preview
+    if (_cursor == 21) return 10;  // tick flash duration → tick flash preview
   } else {
     // CONFIRM page: map cursor to relevant color row
     switch (_cursor) {
-      case 0: case 1: return 8;     // bank switch
-      case 2: case 3: return 9;     // scale root
-      case 4: case 5: return 10;    // scale mode
-      case 6: case 7: return 11;    // scale chromatic
-      case 8: case 9: return 12;    // hold
-      case 10: return 13;           // play
-      case 11: return 14;           // stop
-      case 12: case 13: return 15;  // octave
+      case 0: case 1: return 12;    // bank switch
+      case 2: case 3: return 13;    // scale root
+      case 4: case 5: return 14;    // scale mode
+      case 6: case 7: return 15;    // scale chromatic
+      case 8: case 9: return 16;    // hold
+      case 10: return 17;           // play
+      case 11: return 18;           // stop
+      case 12: case 13: return 19;  // octave
     }
   }
   return 0xFF;
@@ -791,6 +835,8 @@ void ToolLedSettings::renderContinuousPreview(unsigned long now) {
     _leds->previewSetPixel(4, fgCol, getRowIntensity(0));
   } else {
     // ARPEG: sine pulse on LEDs 3-4
+    // Rows 2-5 = stopped intensities, rows 6-9 = playing intensities
+    // Show whichever group the cursor is on (play or stop)
     RGBW fgCol = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_FG]);
     RGBW bgCol = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_BG]);
     uint16_t period = _wk.pulsePeriodMs;
@@ -798,8 +844,11 @@ void ToolLedSettings::renderContinuousPreview(unsigned long now) {
     uint8_t sineIdx = (uint8_t)((now / (lutStep > 0 ? lutStep : 1)) % 256);
     uint8_t sineRaw = SINE_LUT[sineIdx];
 
-    uint8_t fgMin = getRowIntensity(2), fgMax = getRowIntensity(3);
-    uint8_t bgMin = getRowIntensity(4), bgMax = getRowIntensity(5);
+    bool playing = (_cursor >= 6);
+    uint8_t fgMin = getRowIntensity(playing ? 6 : 2);
+    uint8_t fgMax = getRowIntensity(playing ? 7 : 3);
+    uint8_t bgMin = getRowIntensity(playing ? 8 : 4);
+    uint8_t bgMax = getRowIntensity(playing ? 9 : 5);
     uint8_t fgI = fgMin + (uint8_t)((uint16_t)sineRaw * (fgMax - fgMin) / 255);
     uint8_t bgI = bgMin + (uint8_t)((uint16_t)sineRaw * (bgMax - bgMin) / 255);
     _leds->previewSetPixel(3, bgCol, bgI);
@@ -813,7 +862,7 @@ void ToolLedSettings::renderContinuousPreview(unsigned long now) {
 // =================================================================
 void ToolLedSettings::startEventPreview(uint8_t row) {
   if (row == 0xFF) return;
-  if (row <= 5) return;  // continuous rows, ignore b
+  if (row <= 9) return;  // continuous rows, ignore b
   _prevState = PREV_EVENT;
   _prevStart = millis();
   _prevEventRow = row;
@@ -825,7 +874,7 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
   _leds->previewClear();
 
   switch (_prevEventRow) {
-    case 6: case 7: {
+    case 10: case 11: {
       // Tick flash: pulse background + flash spike
       RGBW fgCol = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_FG]);
       RGBW bgCol = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_BG]);
@@ -835,19 +884,19 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
       uint8_t sineIdx = (uint8_t)((now / (lutStep > 0 ? lutStep : 1)) % 256);
       uint8_t sineRaw = SINE_LUT[sineIdx];
 
-      uint8_t fgI = getRowIntensity(2) + (uint8_t)((uint16_t)sineRaw *
-                     (getRowIntensity(3) - getRowIntensity(2)) / 255);
-      uint8_t bgI = getRowIntensity(4) + (uint8_t)((uint16_t)sineRaw *
-                     (getRowIntensity(5) - getRowIntensity(4)) / 255);
+      uint8_t fgI = getRowIntensity(6) + (uint8_t)((uint16_t)sineRaw *
+                     (getRowIntensity(7) - getRowIntensity(6)) / 255);
+      uint8_t bgI = getRowIntensity(8) + (uint8_t)((uint16_t)sineRaw *
+                     (getRowIntensity(9) - getRowIntensity(8)) / 255);
 
       // Flash every 500ms for the first 1.5s
       uint16_t flashMs = _wk.tickFlashDurationMs;
       bool flashing = ((elapsed % 500) < flashMs) && (elapsed < 1500);
 
-      if (flashing && _prevEventRow == 6) {
+      if (flashing && _prevEventRow == 10) {
         _leds->previewSetPixel(3, bgCol, bgI);
         _leds->previewSetPixel(4, flashCol, _wk.tickFlashFg);
-      } else if (flashing && _prevEventRow == 7) {
+      } else if (flashing && _prevEventRow == 11) {
         _leds->previewSetPixel(3, flashCol, _wk.tickFlashBg);
         _leds->previewSetPixel(4, fgCol, fgI);
       } else {
@@ -857,7 +906,7 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
       if (elapsed >= 1500) _prevState = PREV_IDLE;
       break;
     }
-    case 8: {
+    case 12: {
       // Bank switch: LED 3 fade, LED 4 blink
       RGBW col = resolveColorSlot(_cwk.slots[CSLOT_BANK_SWITCH]);
       RGBW bgCol = resolveColorSlot(_cwk.slots[CSLOT_NORMAL_BG]);
@@ -872,14 +921,14 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
       if (on) _leds->previewSetPixel(4, col, _wk.bankBrightnessPct);
       break;
     }
-    case 9: case 10: case 11: {
+    case 13: case 14: case 15: {
       // Scale: blink on solid NORMAL fg
       RGBW fgCol = resolveColorSlot(_cwk.slots[CSLOT_NORMAL_FG]);
       uint8_t slotId = COLOR_ROWS[_prevEventRow].slotId;
       RGBW blinkCol = resolveColorSlot(_cwk.slots[slotId]);
       uint8_t blinks; uint16_t dur;
-      if (_prevEventRow == 9) { blinks = _wk.scaleRootBlinks; dur = _wk.scaleRootDurationMs; }
-      else if (_prevEventRow == 10) { blinks = _wk.scaleModeBlinks; dur = _wk.scaleModeDurationMs; }
+      if (_prevEventRow == 13) { blinks = _wk.scaleRootBlinks; dur = _wk.scaleRootDurationMs; }
+      else if (_prevEventRow == 14) { blinks = _wk.scaleModeBlinks; dur = _wk.scaleModeDurationMs; }
       else { blinks = _wk.scaleChromBlinks; dur = _wk.scaleChromDurationMs; }
       if (elapsed >= dur) { _prevState = PREV_IDLE; break; }
       _leds->previewSetPixel(4, fgCol, getRowIntensity(0));  // solid context
@@ -888,7 +937,7 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
       if (on) _leds->previewSetPixel(4, blinkCol, 100);
       break;
     }
-    case 12: {
+    case 16: {
       // Hold: flash + fade on pulse background
       RGBW holdCol = resolveColorSlot(_cwk.slots[CSLOT_HOLD]);
       RGBW arpCol = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_FG]);
@@ -911,7 +960,7 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
       }
       break;
     }
-    case 13: {
+    case 17: {
       // Play: ack + beat flashes (time-based, 200ms/beat)
       RGBW ackCol = resolveColorSlot(_cwk.slots[CSLOT_PLAY_ACK]);
       RGBW beatCol = resolveColorSlot(_cwk.slots[CSLOT_STOP]);
@@ -937,7 +986,7 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
       }
       break;
     }
-    case 14: {
+    case 18: {
       // Stop: fade on pulse background
       RGBW stopCol = resolveColorSlot(_cwk.slots[CSLOT_STOP]);
       RGBW arpBg = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_BG]);
@@ -951,7 +1000,7 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
       _leds->previewSetPixel(4, stopCol, fadePct);
       break;
     }
-    case 15: {
+    case 19: {
       // Octave: both LEDs blink
       RGBW octCol = resolveColorSlot(_cwk.slots[CSLOT_OCTAVE]);
       uint16_t dur = _wk.octaveDurationMs;
@@ -982,8 +1031,8 @@ void ToolLedSettings::updatePreview(unsigned long now) {
     return;
   }
 
-  // Continuous preview: only on page 0, rows 0-5
-  if (_page == 0 && _cursor <= 5) {
+  // Continuous preview: only on page 0, rows 0-9 (normal + arp stop/play)
+  if (_page == 0 && _cursor <= 9) {
     renderContinuousPreview(now);
   } else {
     // No continuous preview — clear LEDs
@@ -1155,7 +1204,7 @@ void ToolLedSettings::run() {
       }
     } else {
       // --- Editing ---
-      if (_page == 0 && _cursor < 16) {
+      if (_page == 0 && _cursor < 20) {
         // COLOR row editing: TAB cycles fields, ◄► adjusts
         if (ev.type == NAV_CHAR && ev.ch == '\t') {
           if (rowHasEditableIntensity(_cursor))
@@ -1177,7 +1226,7 @@ void ToolLedSettings::run() {
           originalCwk = _cwk;
           screenDirty = true;
         }
-      } else if (_page == 0 && _cursor >= 16) {
+      } else if (_page == 0 && _cursor >= 20) {
         // Timing rows: standard ◄► adjust
         if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
           adjustTimingParam(ev.type == NAV_RIGHT ? +1 : -1, ev.accelerated);
@@ -1222,8 +1271,20 @@ void ToolLedSettings::run() {
       if (_page == 0) {
         // ============ PAGE 0: COLOR + TIMING ============
 
-        _ui->drawSection("DISPLAY");
-        for (uint8_t r = 0; r < 16; r++) {
+        _ui->drawSection("DISPLAY \xe2\x80\x94 STOPPED");
+        for (uint8_t r = 0; r < 6; r++) {
+          bool sel = (_cursor == r);
+          bool edt = sel && _editing;
+          drawColorRow(r, sel, edt);
+        }
+        _ui->drawSection("DISPLAY \xe2\x80\x94 PLAYING");
+        for (uint8_t r = 6; r < 10; r++) {
+          bool sel = (_cursor == r);
+          bool edt = sel && _editing;
+          drawColorRow(r, sel, edt);
+        }
+        _ui->drawSection("EVENTS");
+        for (uint8_t r = 10; r < 20; r++) {
           bool sel = (_cursor == r);
           bool edt = sel && _editing;
           drawColorRow(r, sel, edt);
@@ -1235,7 +1296,7 @@ void ToolLedSettings::run() {
 
         // Pulse period
         {
-          bool sel = (_cursor == 16);
+          bool sel = (_cursor == 20);
           bool edt = sel && _editing;
           snprintf(buf, sizeof(buf), "%d ms", _wk.pulsePeriodMs);
           if (edt) {
@@ -1249,7 +1310,7 @@ void ToolLedSettings::run() {
 
         // Tick flash duration
         {
-          bool sel = (_cursor == 17);
+          bool sel = (_cursor == 21);
           bool edt = sel && _editing;
           snprintf(buf, sizeof(buf), "%d ms", _wk.tickFlashDurationMs);
           if (edt) {
@@ -1339,7 +1400,7 @@ void ToolLedSettings::run() {
       if (_confirmDefaults) {
         _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
       } else if (_editing) {
-        if (_page == 0 && _cursor < 16) {
+        if (_page == 0 && _cursor < 20) {
           _ui->drawControlBar(VT_DIM "[</>] ADJUST  [TAB] FIELD  [RET] SAVE  [q] CANCEL" VT_RESET);
         } else {
           _ui->drawControlBar(VT_DIM "[</>] ADJUST  [RET] SAVE  [q] CANCEL" VT_RESET);
