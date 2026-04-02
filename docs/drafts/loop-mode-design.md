@@ -1,7 +1,8 @@
 # LOOP Mode — Design Document
 
-**Status**: VALIDATED DRAFT — audited against codebase 2026-03-25
+**Status**: VALIDATED DRAFT — audited against codebase 2026-03-25, updated 2026-04-02
 **Predecessor**: `loop-mode-design-draft.md` (7 critical issues found and resolved)
+**2026-04-02**: Replaced overloaded play/stop pad with 3 dedicated LOOP control pads (REC, PLAY/STOP, CLEAR). CLEAR protected by long press + LED ramp. Eliminates double-tap/long-press ambiguity.
 
 ---
 
@@ -351,41 +352,109 @@ Requires pointer to global `padOrder[48]`, same pattern as ArpEngine.
 
 ## State Machine
 
+3 dedicated LOOP control pads (assigned in Tool 3, active only on LOOP banks):
+
 ```
-                [long press]
-     +-------- EMPTY <--------------+
-     |           |                   |
-     |        [tap]                  |
-     |           v                   |
-     |      RECORDING               |
-     |           |                   |
-     |        [tap] (snap to bar)    |
-     |           v                   |
-+--> PLAYING <--------+             |
-|       |             |             |
-|    [tap]         [tap]            |
-|       v             |             |
-|   OVERDUBBING ------+             |
-|                                   |
-|    [double-tap from PLAYING       |
-|     or OVERDUBBING]               |
-|       v                           |
-+-- STOPPED -------------------------+
-       [tap] -> PLAYING
-       [long press] -> EMPTY
+     REC pad            PLAY/STOP pad         CLEAR pad
+     ───────            ─────────────         ─────────
+       │                      │                   │
+       ▼                      ▼                   ▼
+     EMPTY ──[REC]──► RECORDING               [long press]
+                          │                    + LED ramp
+                       [REC]                      │
+                          ▼                       ▼
+     ┌──► PLAYING ──[REC]──► OVERDUBBING       EMPTY
+     │       │                   │
+     │    [REC]◄─────[REC]──────┘
+     │       │
+     │   [P/S]
+     │       ▼
+     └── STOPPED
+              │
+           [P/S]
+              ▼
+           PLAYING
 ```
 
-### Play/Stop pad transitions
+REC and PLAY/STOP = single tap = one action. CLEAR = long press (500ms) with LED ramp feedback.
 
-| State | Tap | Double-tap | Long press |
+### Control pad actions
+
+| Pad | State | Gesture | Result |
 |---|---|---|---|
-| EMPTY | RECORDING | -- | -- |
-| RECORDING | PLAYING (bar-snap) | -- | -- |
-| PLAYING | OVERDUBBING | STOPPED | -- |
-| OVERDUBBING | PLAYING (merge) | STOPPED | -- |
-| STOPPED | PLAYING | -- | EMPTY (clear) |
+| **REC** | EMPTY | tap | → RECORDING |
+| **REC** | RECORDING | tap | → PLAYING (bar-snap, flush held pads) |
+| **REC** | PLAYING | tap | → OVERDUBBING |
+| **REC** | OVERDUBBING | tap | → PLAYING (merge, flush held pads) |
+| **REC** | STOPPED | tap | (ignored) |
+| **PLAY/STOP** | PLAYING | tap | → STOPPED |
+| **PLAY/STOP** | OVERDUBBING | tap | → STOPPED (abort overdub, discard) |
+| **PLAY/STOP** | STOPPED | tap | → PLAYING (quantized start) |
+| **PLAY/STOP** | EMPTY/RECORDING | tap | (ignored) |
+| **CLEAR** | any except EMPTY | long press (500ms) | → EMPTY (flush all notes, clear buffer) |
+| **CLEAR** | EMPTY | any | (ignored) |
 
-Reuses configurable `doubleTapMs` from settings (100-250ms, default 150ms).
+### CLEAR pad safety: long press + LED ramp
+
+Clearing a loop is destructive (ephemeral data, no undo). A single tap must NOT clear.
+The CLEAR pad requires a 500ms hold. During the hold, the current bank LED shows a
+red ramp-up (0% → 100% over 500ms). If the user releases early, nothing happens and
+the LED returns to normal. At 500ms the clear fires and the LED flashes white (confirmation).
+
+```cpp
+// In handleLoopControls(), CLEAR pad:
+bool clearPressed = state.keyIsPressed[s_clearPad];
+if (clearPressed && !s_lastClearState) {
+    _clearPressStart = now;  // start timing
+}
+if (clearPressed) {
+    uint32_t held = now - _clearPressStart;
+    if (held < CLEAR_LONG_PRESS_MS) {
+        // Ramp: red intensity proportional to hold duration
+        uint8_t ramp = (uint8_t)((uint32_t)held * 100 / CLEAR_LONG_PRESS_MS);
+        s_leds.showClearRamp(ramp);  // red ramp on current bank LED
+    } else if (!_clearFired) {
+        eng->clear(s_transport);
+        s_leds.triggerConfirm(CONFIRM_STOP);
+        _clearFired = true;
+    }
+} else {
+    if (s_lastClearState) {
+        // Released — cancel ramp if clear didn't fire
+        _clearFired = false;
+    }
+}
+s_lastClearState = clearPressed;
+```
+
+### Why 3 pads instead of 1 overloaded play/stop
+
+The original draft crammed 5 transitions (rec, stop rec, overdub, stop overdub, clear)
+onto the existing play/stop pad using double-tap and long-press. Problems:
+- Long-press on capacitive pads is ambiguous (no mechanical click, finger surface varies)
+- Double-tap conflicts with the arp hold system (same gesture, different meaning)
+- The state machine required timing windows, making it fragile on stage
+
+With 3 dedicated pads:
+- REC and PLAY/STOP = single tap edge detect. Same code pattern as bank switch.
+- CLEAR = protected long press with visual feedback. The only timed gesture, and it's safe.
+- Both hands free for drumming — no hold modifier needed (critical for percussion)
+- `handlePlayStopPad()` for arp is UNCHANGED — zero regression risk
+- The pads only consume pad slots on LOOP banks. On NORMAL/ARPEG they're regular music pads.
+
+### Pad assignment in Tool 3
+
+Tool 3 (Pad Roles) gains a 4th category:
+
+```
+Current:  BANK(8) + SCALE(15) + ARP(6: hold + play/stop + 4 octave) = 29 pads
+New:      BANK(8) + SCALE(15) + ARP(6) + LOOP(3: rec + play/stop + clear) = 32 pads
+```
+
+16 pads remain for music. A drum kit rarely exceeds 16 sounds — this is generous.
+The 3 LOOP pads should be physically grouped for ergonomics (adjacent on the circular layout).
+
+NVS storage: new namespace `illpad_lpad` with 3 pad indices (recPad, playStopPad, clearPad).
 
 ### Bank switch denied during RECORDING/OVERDUBBING
 
@@ -864,9 +933,16 @@ static const PotTarget LOOP_PARAMS[] = {
 |---|---|
 | Scale pads (15) | Free as music pads |
 | Octave pads (4) | Free as music pads |
-| Hold pad | Unused (no function in LOOP mode) |
-| Play/stop pad | Rec/play/overdub/stop/clear |
+| Hold pad | Free as music pad (no function in LOOP mode) |
+| Arp play/stop pad | Free as music pad (LOOP has its own play/stop) |
 | Bank pads (8) | Unchanged |
+| **LOOP rec pad** | Toggle REC/OVERDUB (LOOP only) |
+| **LOOP play/stop pad** | Toggle PLAY/STOP (LOOP only) |
+| **LOOP clear pad** | Long press → EMPTY (LOOP only) |
+
+On NORMAL/ARPEG banks, the 3 LOOP pads behave as regular music pads.
+On LOOP banks, the arp hold pad, arp play/stop pad, scale pads, and octave pads
+are freed as music pads (their functions are meaningless for percussion loops).
 
 ### ScaleManager impact
 
@@ -1046,7 +1122,8 @@ for (uint8_t i = 0; i < NUM_BANKS && loopIdx < 2; i++) {
 No ArpScheduler rename. LoopEngine tick/processEvents called directly:
 
 ```
- 8.  Play/Stop pad — ARPEG (existing) + LOOP (NEW, same block)
+ 8.  handlePlayStopPad()                   // ARPEG only — UNCHANGED
+ 8b. handleLoopControls()                  // NEW — 3 dedicated LOOP pads
  9.  processNormalMode() or processArpMode() or processLoopMode()
 10.  ArpScheduler.tick()                    // unchanged
 10b. ArpScheduler.processEvents()           // unchanged
@@ -1055,96 +1132,105 @@ No ArpScheduler rename. LoopEngine tick/processEvents called directly:
 11.  MidiEngine.flush()
 ```
 
-**Critical**: LOOP play/stop/rec handling is at step 8, **outside** the `isHolding()` guard
-(main.cpp:557-576), parallel to the existing arp play/stop block. This ensures the user can
-start/stop recording while holding the left button (e.g., after a bank switch).
+**Critical**: `handleLoopControls()` is a separate function from `handlePlayStopPad()`.
+The arp play/stop code is UNTOUCHED — zero regression risk. LOOP controls run at the
+same priority level, outside the `isHolding()` guard, so drumming with both hands works.
 
 New statics needed in main.cpp:
 ```cpp
-static uint32_t _playStopPressTime = 0;    // millis() when play/stop was pressed
-static uint8_t  _playStopPressBank = 0xFF; // bank index where the press started (0xFF = none)
-static const uint32_t LONG_PRESS_MS = 500; // hold duration to clear a STOPPED loop
+static uint8_t  s_recPad       = 0xFF;    // pad index for LOOP REC (from Tool 3 / NVS)
+static uint8_t  s_loopPlayPad  = 0xFF;    // pad index for LOOP PLAY/STOP
+static uint8_t  s_clearPad     = 0xFF;    // pad index for LOOP CLEAR
+static bool     s_lastRecState = false;
+static bool     s_lastLoopPlayState = false;
+static bool     s_lastClearState = false;
+static uint32_t s_clearPressStart = 0;
+static bool     s_clearFired = false;
+static const uint32_t CLEAR_LONG_PRESS_MS = 500;
 ```
 
 ```cpp
-  // --- Play/Stop pad (main.cpp:557) — ARPEG + LOOP ---
-  {
-    BankSlot& psSlot = s_bankManager.getCurrentSlot();
-
-    // ARPEG: existing code (lines 560-571, unchanged)
-    if (s_playStopPad < NUM_KEYS && psSlot.type == BANK_ARPEG
-        && psSlot.arpEngine && psSlot.arpEngine->isHoldOn()) {
-      // ... existing arp play/stop ...
-
-    // LOOP: state machine transitions (NEW — same block, same priority)
-    } else if (s_playStopPad < NUM_KEYS && psSlot.type == BANK_LOOP
-               && psSlot.loopEngine) {
-      bool psPressed = state.keyIsPressed[s_playStopPad];
-      if (psPressed && !s_lastPlayStopState) {
-        handleLoopPlayStop(psSlot);
-        _playStopPressTime = millis();
-        _playStopPressBank = s_bankManager.getCurrentBank();  // tag which bank owns this press
-      }
-      // Long press detection: only fire if release is on the SAME bank as the press.
-      // Without this guard, pressing play/stop on ARPEG bank, switching to LOOP STOPPED
-      // while still holding, then releasing would clear the wrong loop.
-      if (!psPressed && s_lastPlayStopState
-          && _playStopPressBank == s_bankManager.getCurrentBank()) {
-        if ((millis() - _playStopPressTime) >= LONG_PRESS_MS
-            && psSlot.loopEngine->getState() == LoopEngine::STOPPED) {
-          psSlot.loopEngine->clear();
-          s_leds.triggerConfirm(CONFIRM_STOP);  // visual feedback for clear
-        }
-      }
-      s_lastPlayStopState = psPressed;
-
-    } else {
-      // Not ARPEG-HOLD or LOOP: reset edge detection
-      s_lastPlayStopState = ...;
+static void handleLoopControls(const SharedKeyboardState& state, uint32_t now) {
+    BankSlot& slot = s_bankManager.getCurrentSlot();
+    if (slot.type != BANK_LOOP || !slot.loopEngine) {
+      // Not a LOOP bank — reset edge states, pads act as music
+      s_lastRecState = (s_recPad < NUM_KEYS) ? state.keyIsPressed[s_recPad] : false;
+      s_lastLoopPlayState = (s_loopPlayPad < NUM_KEYS) ? state.keyIsPressed[s_loopPlayPad] : false;
+      s_lastClearState = (s_clearPad < NUM_KEYS) ? state.keyIsPressed[s_clearPad] : false;
+      return;
     }
-  }
-```
 
-`handleLoopPlayStop()` dispatches based on current state:
-```cpp
-void handleLoopPlayStop(BankSlot& slot) {
     LoopEngine* eng = slot.loopEngine;
     LoopEngine::State ls = eng->getState();
 
-    switch (ls) {
-      case LoopEngine::EMPTY:
-        eng->startRecording();
-        s_leds.triggerConfirm(CONFIRM_LOOP_REC);
-        break;
-      case LoopEngine::RECORDING:
-        eng->stopRecording(state.keyIsPressed, s_padOrder,
-                           s_clockManager.getSmoothedBPMFloat());  // flush held + bar-snap → PLAYING
-        s_leds.triggerConfirm(CONFIRM_PLAY);
-        break;
-      case LoopEngine::PLAYING:
-        // Tap = OVERDUBBING, double-tap = STOPPED (checked via doubleTapMs)
-        if (isDoubleTap()) {
-          eng->stop(s_transport);
-          s_leds.triggerConfirm(CONFIRM_STOP);
-        } else {
-          eng->startOverdub();
-          s_leds.triggerConfirm(CONFIRM_LOOP_REC);
+    // --- REC pad: simple tap edge ---
+    if (s_recPad < NUM_KEYS) {
+      bool pressed = state.keyIsPressed[s_recPad];
+      if (pressed && !s_lastRecState) {
+        switch (ls) {
+          case LoopEngine::EMPTY:
+            eng->startRecording();
+            s_leds.triggerConfirm(CONFIRM_LOOP_REC);
+            break;
+          case LoopEngine::RECORDING:
+            eng->stopRecording(state.keyIsPressed, s_padOrder,
+                               s_clockManager.getSmoothedBPMFloat());
+            s_leds.triggerConfirm(CONFIRM_PLAY);
+            break;
+          case LoopEngine::PLAYING:
+            eng->startOverdub();
+            s_leds.triggerConfirm(CONFIRM_LOOP_REC);
+            break;
+          case LoopEngine::OVERDUBBING:
+            eng->stopOverdub(state.keyIsPressed, s_padOrder,
+                             s_clockManager.getSmoothedBPMFloat());
+            s_leds.triggerConfirm(CONFIRM_PLAY);
+            break;
+          default: break;  // STOPPED: REC ignored
         }
-        break;
-      case LoopEngine::OVERDUBBING:
-        if (isDoubleTap()) {
-          eng->stop(s_transport);
-          s_leds.triggerConfirm(CONFIRM_STOP);
-        } else {
-          eng->stopOverdub(state.keyIsPressed, s_padOrder,
-                           s_clockManager.getSmoothedBPMFloat());  // flush held + merge → PLAYING
-          s_leds.triggerConfirm(CONFIRM_PLAY);
+      }
+      s_lastRecState = pressed;
+    }
+
+    // --- PLAY/STOP pad: simple tap edge ---
+    if (s_loopPlayPad < NUM_KEYS) {
+      bool pressed = state.keyIsPressed[s_loopPlayPad];
+      if (pressed && !s_lastLoopPlayState) {
+        switch (ls) {
+          case LoopEngine::PLAYING:
+          case LoopEngine::OVERDUBBING:
+            eng->stop(s_transport);
+            s_leds.triggerConfirm(CONFIRM_STOP);
+            break;
+          case LoopEngine::STOPPED:
+            eng->play(s_clockManager, s_clockManager.getSmoothedBPMFloat());
+            s_leds.triggerConfirm(CONFIRM_PLAY);
+            break;
+          default: break;  // EMPTY, RECORDING: ignored
         }
-        break;
-      case LoopEngine::STOPPED:
-        eng->play(s_clockManager, s_clockManager.getSmoothedBPMFloat());
-        s_leds.triggerConfirm(CONFIRM_PLAY);
-        break;
+      }
+      s_lastLoopPlayState = pressed;
+    }
+
+    // --- CLEAR pad: long press (500ms) + LED ramp ---
+    if (s_clearPad < NUM_KEYS && ls != LoopEngine::EMPTY) {
+      bool pressed = state.keyIsPressed[s_clearPad];
+      if (pressed && !s_lastClearState) {
+        s_clearPressStart = now;
+        s_clearFired = false;
+      }
+      if (pressed && !s_clearFired) {
+        uint32_t held = now - s_clearPressStart;
+        if (held < CLEAR_LONG_PRESS_MS) {
+          uint8_t ramp = (uint8_t)((uint32_t)held * 100 / CLEAR_LONG_PRESS_MS);
+          s_leds.showClearRamp(ramp);
+        } else {
+          eng->clear(s_transport);
+          s_leds.triggerConfirm(CONFIRM_STOP);
+          s_clearFired = true;
+        }
+      }
+      s_lastClearState = pressed;
     }
 }
 ```
@@ -1166,7 +1252,7 @@ overlap cases. See `flushHeldPadsToOverdub()` for the held-pad edge case.
 if (slot.type == BANK_LOOP && slot.loopEngine) {
     LoopEngine* eng = slot.loopEngine;
     for (uint8_t p = 0; p < NUM_KEYS; p++) {
-        if (isControlPad(p)) continue;
+        if (p == s_recPad || p == s_loopPlayPad || p == s_clearPad) continue;
         bool pressed = keyIsPressed[p];
         bool wasPressed = lastKeys[p];
         if (pressed && !wasPressed) {
@@ -1294,13 +1380,6 @@ values in HardwareConfig.h. A future **Tool 7 (LED Config)** should expose these
 runtime-configurable parameters, allowing users to adjust foreground/background brightness
 per bank type. This applies to NORMAL and ARPEG intensities too.
 
-### Long-press-to-clear discoverability
-Clearing a STOPPED loop requires long-pressing play/stop (≥500ms). Nothing hints at this
-gesture. **Proposed feedback**: after 3 seconds in STOPPED state with no user input, the
-LED starts a slow fade-out pulse (period ~2s, between 5% and current stopped brightness).
-This "breathing down" pattern subtly suggests "hold to dismiss." Stops as soon as the user
-presses any pad or button.
-
 ### Tempo pot in slave mode
 When synced to external clock (USB/BLE), the tempo pot still shows a bargraph on turn but
 has no musical effect (internal BPM is overridden by PLL). **TODO**: suppress bargraph
@@ -1323,7 +1402,8 @@ read-only indicator.
 | `managers/NvsManager` | BankType value 2, PotMappingStore v2 migration, quantize for LOOP banks (already in `illpad_btype` qmode array) | Small |
 | `setup/ToolBankConfig` | 3-way type cycle, max 2 LOOP constraint | Medium |
 | `setup/ToolPotMapping` | `_contextIdx` replaces `_contextNormal`, LOOP pool | Medium |
-| `main.cpp` | Static LoopEngine[2], processLoopMode(), tick/processEvents | Medium |
+| `setup/ToolPadRoles` | 4th category LOOP (3 pads: rec, play/stop, clear), color grid update | Medium |
+| `main.cpp` | Static LoopEngine[2], `handleLoopControls()`, processLoopMode(), tick/processEvents | Medium |
 | `core/LedController.h` | 2 new ConfirmType values, forward-declare LoopEngine | Small |
 | `core/LedController.cpp` | LOOP RGB display states, bargraph/blink colors | Medium |
 | `managers/BankManager.cpp` | Recording lock + `flushLiveNotes()` in `switchToBank()` (line 117), needs `_transport` pointer, debug print ternary → 3-way (line 146) | Small |
@@ -1333,6 +1413,7 @@ read-only indicator.
 | File | Why |
 |---|---|
 | `arp/ArpScheduler` | No rename. Loop has own tick/processEvents |
+| `handlePlayStopPad()` | ARPEG play/stop is untouched. LOOP uses separate `handleLoopControls()` with 3 dedicated pads |
 | `arp/ArpEngine.h` | Only .cpp changes (shuffle LUT extraction) |
 | `core/CapacitiveKeyboard` | DO NOT MODIFY |
 | `midi/ClockManager` | Add `float getSmoothedBPMFloat()` — Loop needs float precision for proportional scaling. Existing `uint16_t getSmoothedBPM()` truncates PLL float (e.g., 120.7 → 120). Arp can keep using the uint16_t version. | Small |
