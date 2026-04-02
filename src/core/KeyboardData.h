@@ -231,7 +231,7 @@ inline RGBW resolveColorSlot(const ColorSlot& slot) {
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       1
+#define LED_SETTINGS_VERSION       2
 
 struct LedSettingsStore {
   uint16_t magic;
@@ -253,6 +253,7 @@ struct LedSettingsStore {
   // --- Timing ---
   uint16_t pulsePeriodMs;         // default 1472
   uint8_t  tickFlashDurationMs;   // default 30
+  uint8_t  gammaTenths;           // 10-30 → gamma 1.0-3.0, default 20 (2.0). Reboot-only.
   // --- Confirmations ---
   uint8_t  bankBlinks;            // 1-3, default 3
   uint16_t bankDurationMs;        // default 300

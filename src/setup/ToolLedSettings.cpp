@@ -9,9 +9,9 @@
 // =================================================================
 // Page definitions
 // =================================================================
-// Page 0: COLOR (20 rows) + TIMING (2 rows) = 22
+// Page 0: COLOR (20 rows) + TIMING (3 rows) = 23
 // Page 1: CONFIRM — 14 params
-static const uint8_t PAGE0_COUNT = 22;
+static const uint8_t PAGE0_COUNT = 23;
 static const uint8_t PAGE1_COUNT = 14;
 
 static const char* s_pageNames[] = {"COLOR", "CONFIRM"};
@@ -92,6 +92,7 @@ static LedSettingsStore s_ledDefaults() {
   d.tickFlashBg        = 25;
   d.pulsePeriodMs      = 1472;
   d.tickFlashDurationMs = 30;
+  d.gammaTenths        = 20;
   d.bankBlinks         = 3;
   d.bankDurationMs     = 300;
   d.bankBrightnessPct  = 80;
@@ -258,12 +259,17 @@ void ToolLedSettings::adjustTimingParam(int8_t dir, bool accel) {
     if (val < 500) val = 500;
     if (val > 4000) val = 4000;
     _wk.pulsePeriodMs = (uint16_t)val;
-  } else {  // tickFlashDurationMs 10-100
+  } else if (timingIdx == 1) {  // tickFlashDurationMs 10-100
     int step = accel ? 25 : 5;
     int val = (int)_wk.tickFlashDurationMs + dir * step;
     if (val < 10) val = 10;
     if (val > 100) val = 100;
     _wk.tickFlashDurationMs = (uint8_t)val;
+  } else {  // gammaTenths 10-30 (gamma 1.0-3.0)
+    int val = (int)_wk.gammaTenths + dir;
+    if (val < 10) val = 10;
+    if (val > 30) val = 30;
+    _wk.gammaTenths = (uint8_t)val;
   }
 }
 
@@ -590,17 +596,22 @@ void ToolLedSettings::drawDescription() {
           break;
       }
     } else {
-      // TIMING rows (20-21)
+      // TIMING rows (20-22)
       if (_cursor == 20) {
         _ui->drawFrameLine(VT_BRIGHT_WHITE "Pulse Period" VT_RESET);
         _ui->drawFrameLine(VT_DIM "Duration of one full sine breathing cycle in milliseconds." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Affects all ARPEG banks (foreground + background)." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Lower = faster breath. Default 1472ms (~1.5s)." VT_RESET);
-      } else {
+      } else if (_cursor == 21) {
         _ui->drawFrameLine(VT_BRIGHT_WHITE "Tick Flash Duration" VT_RESET);
         _ui->drawFrameLine(VT_DIM "How long each arp step flash stays visible in milliseconds." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Shorter = snappier visual beat. Longer = more visible at" VT_RESET);
         _ui->drawFrameLine(VT_DIM "fast tempos. Default 30ms." VT_RESET);
+      } else {
+        _ui->drawFrameLine(VT_BRIGHT_WHITE "Gamma Curve" VT_RESET);
+        _ui->drawFrameLine(VT_DIM "Controls low-light LED response. Lower = more levels at" VT_RESET);
+        _ui->drawFrameLine(VT_DIM "low brightness (smoother pulse on dark stages). Higher =" VT_RESET);
+        _ui->drawFrameLine(VT_DIM "deeper blacks. Range 1.0-3.0, default 2.0." VT_RESET);
       }
     }
   } else {
@@ -725,6 +736,9 @@ void ToolLedSettings::seedPotsForCursor() {
   } else if (_page == 0 && _cursor == 21) {
     _potVal[0] = _wk.tickFlashDurationMs;
     _pots.seed(0, &_potVal[0], 10, 100);
+  } else if (_page == 0 && _cursor == 22) {
+    _potVal[0] = _wk.gammaTenths;
+    _pots.seed(0, &_potVal[0], 10, 30);
   } else if (_page == 1) {
     // CONFIRM page: pot 1 = current param value
     _potVal[0] = 0;
@@ -772,6 +786,10 @@ bool ToolLedSettings::applyPotValues() {
   } else if (_page == 0 && _cursor == 21) {
     if (_pots.isActive(0) && (uint8_t)_potVal[0] != _wk.tickFlashDurationMs) {
       _wk.tickFlashDurationMs = (uint8_t)_potVal[0]; changed = true;
+    }
+  } else if (_page == 0 && _cursor == 22) {
+    if (_pots.isActive(0) && (uint8_t)_potVal[0] != _wk.gammaTenths) {
+      _wk.gammaTenths = (uint8_t)_potVal[0]; changed = true;
     }
   } else if (_page == 1 && _pots.isActive(0)) {
     int32_t v = _potVal[0];
@@ -1319,6 +1337,20 @@ void ToolLedSettings::run() {
             _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET "%-32s" VT_BRIGHT_WHITE "%s" VT_RESET, "Tick flash duration:", buf);
           } else {
             _ui->drawFrameLine("  %-32s%s", "Tick flash duration:", buf);
+          }
+        }
+
+        // Gamma curve (reboot-only)
+        {
+          bool sel = (_cursor == 22);
+          bool edt = sel && _editing;
+          snprintf(buf, sizeof(buf), "%.1f", (float)_wk.gammaTenths / 10.0f);
+          if (edt) {
+            _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET "%-32s" VT_CYAN "[%.1f]" VT_RESET, "Gamma curve:", (float)_wk.gammaTenths / 10.0f);
+          } else if (sel) {
+            _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET "%-32s" VT_BRIGHT_WHITE "%s" VT_RESET, "Gamma curve:", buf);
+          } else {
+            _ui->drawFrameLine("  %-32s%s", "Gamma curve:", buf);
           }
         }
 

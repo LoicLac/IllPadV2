@@ -87,6 +87,7 @@ LedController::LedController()
 // =================================================================
 
 void LedController::begin() {
+  rebuildGammaLut(20);  // default gamma 2.0 until NVS loads
   _strip.begin();
   _strip.show();  // All pixels off
 }
@@ -102,11 +103,24 @@ void LedController::setPixel(uint8_t i, const RGBW& c, uint8_t intensityPct) {
   uint8_t scaled = (uint8_t)((uint32_t)intensityPct * _brightnessPct * 255 / 10000);
   // Scale each channel by intensity, then apply gamma for LED
   _strip.setPixelColor(i,
-    GAMMA_LUT[(uint16_t)c.r * scaled / 255],
-    GAMMA_LUT[(uint16_t)c.g * scaled / 255],
-    GAMMA_LUT[(uint16_t)c.b * scaled / 255],
-    GAMMA_LUT[(uint16_t)c.w * scaled / 255]
+    _gammaLut[(uint16_t)c.r * scaled / 255],
+    _gammaLut[(uint16_t)c.g * scaled / 255],
+    _gammaLut[(uint16_t)c.b * scaled / 255],
+    _gammaLut[(uint16_t)c.w * scaled / 255]
   );
+}
+
+void LedController::rebuildGammaLut(uint8_t gammaTenths) {
+  float gamma = (float)gammaTenths / 10.0f;
+  if (gamma < 1.0f) gamma = 1.0f;
+  if (gamma > 3.0f) gamma = 3.0f;
+  _gammaLut[0] = 0;
+  for (uint16_t i = 1; i < 256; i++) {
+    float v = powf((float)i / 255.0f, gamma) * 255.0f + 0.5f;
+    uint8_t out = (uint8_t)v;
+    if (out < 1) out = 1;  // floor=1: any non-zero input produces light
+    _gammaLut[i] = out;
+  }
 }
 
 void LedController::clearPixels() {
@@ -691,6 +705,7 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
   _playBeatCount = s.playBeatCount;
   _octaveBlinks = s.octaveBlinks;
   _octaveDurationMs = s.octaveDurationMs;
+  rebuildGammaLut(s.gammaTenths > 0 ? s.gammaTenths : 20);
 }
 
 void LedController::loadColorSlots(const ColorSlotStore& store) {

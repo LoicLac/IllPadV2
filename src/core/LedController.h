@@ -55,6 +55,7 @@ public:
   // LED settings (from NVS)
   void loadLedSettings(const LedSettingsStore& store);
   void loadColorSlots(const ColorSlotStore& store);
+  void rebuildGammaLut(uint8_t gammaTenths);
 
   // Boot
   void showBootProgress(uint8_t step);
@@ -158,6 +159,7 @@ private:
   uint16_t _octaveDurationMs;
 
   uint8_t _sineTable[256];
+  uint8_t _gammaLut[256];
   unsigned long _flashStartTime[NUM_LEDS];
 
   // Clock manager (for play beat detection)

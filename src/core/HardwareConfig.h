@@ -51,33 +51,9 @@ static constexpr RGBW COL_BATTERY[NUM_LEDS] = {
   {200, 200, 0, 0}, {145, 255, 0, 0}, { 73, 255, 0, 0}, {  0, 255, 0, 0}
 };
 
-// --- Gamma Correction LUT (256 entries, gamma 2.0, floor=1 for i>=1) ---
-// Applied per-channel (R,G,B,W) at final output stage in setPixel().
-// Gamma 2.0 gives good low-intensity resolution on SK6812 RGBW LEDs.
-// Floor=1 ensures any non-zero input produces at least minimal light.
-// Generated: max(1, round(255 * pow(i/255, 2.0))) for i>=1, [0]=0
-static const uint8_t GAMMA_LUT[256] = {
-      0,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,   1,
-      1,   1,   1,   1,   2,   2,   2,   2,   2,   2,   3,   3,   3,   3,   4,   4,
-      4,   4,   5,   5,   5,   5,   6,   6,   6,   7,   7,   7,   8,   8,   8,   9,
-      9,   9,  10,  10,  11,  11,  11,  12,  12,  13,  13,  14,  14,  15,  15,  16,
-     16,  17,  17,  18,  18,  19,  19,  20,  20,  21,  21,  22,  23,  23,  24,  24,
-     25,  26,  26,  27,  28,  28,  29,  30,  30,  31,  32,  32,  33,  34,  35,  35,
-     36,  37,  38,  38,  39,  40,  41,  42,  42,  43,  44,  45,  46,  47,  47,  48,
-     49,  50,  51,  52,  53,  54,  55,  56,  56,  57,  58,  59,  60,  61,  62,  63,
-     64,  65,  66,  67,  68,  69,  70,  71,  73,  74,  75,  76,  77,  78,  79,  80,
-     81,  82,  84,  85,  86,  87,  88,  89,  91,  92,  93,  94,  95,  97,  98,  99,
-    100, 102, 103, 104, 105, 107, 108, 109, 111, 112, 113, 115, 116, 117, 119, 120,
-    121, 123, 124, 126, 127, 128, 130, 131, 133, 134, 136, 137, 139, 140, 142, 143,
-    145, 146, 148, 149, 151, 152, 154, 155, 157, 158, 160, 162, 163, 165, 166, 168,
-    170, 171, 173, 175, 176, 178, 180, 181, 183, 185, 186, 188, 190, 192, 193, 195,
-    197, 199, 200, 202, 204, 206, 207, 209, 211, 213, 215, 217, 218, 220, 222, 224,
-    226, 228, 230, 232, 233, 235, 237, 239, 241, 243, 245, 247, 249, 251, 253, 255
-};
-
-// Note: PERCEPTUAL_TO_LINEAR removed — the gamma LUT handles perceptual→LED
-// conversion directly. The 0-100% user values are scaled to 0-255 linearly,
-// then gamma LUT does the rest. No inverse-gamma step needed.
+// Gamma LUT is now runtime-generated in LedController::rebuildGammaLut().
+// Configurable via gammaTenths in LedSettingsStore (Tool 7, reboot-only).
+// Default gamma 2.0. Range 1.0-3.0 (stored as 10-30).
 
 // --- Brightness Pot Response Curve ---
 #define POT_CURVE_LOW_BIASED  0
