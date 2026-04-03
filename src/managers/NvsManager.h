@@ -51,6 +51,16 @@ public:
   // Access loaded color slots (for LedController init at boot, after loadAll)
   const ColorSlotStore& getLoadedColorSlots() const;
 
+  // --- Static NVS helpers (usable without instance, for setup Tools + menu) ---
+  static bool loadBlob(const char* ns, const char* key,
+                       uint16_t expectedMagic, uint8_t expectedVersion,
+                       void* out, size_t expectedSize);
+  static bool saveBlob(const char* ns, const char* key,
+                       const void* data, size_t size);
+  static bool checkBlob(const char* ns, const char* key,
+                        uint16_t expectedMagic, uint8_t expectedVersion,
+                        size_t expectedSize);
+
   // Update pad-pressed state (call from loop before notifyIfDirty)
   void setAnyPadPressed(bool pressed);
 
@@ -113,14 +123,8 @@ private:
   // Safety: no write while pads pressed
   std::atomic<bool> _anyPadPressed;
 
-  // Internal load helper — reads a struct blob, validates magic/version
-  bool loadValidatedBlob(const char* ns, const char* key,
-                          uint16_t expectedMagic, uint16_t expectedVersion,
-                          void* out, size_t size);
-
   // Internal save methods
   void saveBank();
-  void saveBankTypes();
   void savePotParams();
   void saveTempo();
   void saveLedBrightness();

@@ -2,6 +2,7 @@
 #define KEYBOARD_DATA_H
 
 #include <stdint.h>
+#include <stddef.h>
 #include "HardwareConfig.h"
 
 // =================================================================
@@ -349,6 +350,224 @@ enum ArpDivision : uint8_t {
 #define ARP_PAD_PS_KEY          "ps_pad"
 #define ARP_PAD_OCT_KEY         "oct_pads"  // uint8_t[4], octave pads 1-4
 
+// =================================================================
+// NVS blob size limit — all Store structs must fit in a stack buffer
+// =================================================================
+static constexpr size_t NVS_BLOB_MAX_SIZE = 128;
+
+// --- V2 Store structs for previously-raw NVS data ---
+
+#define SCALEPAD_NVS_KEY    "pads"
+#define SCALEPAD_VERSION    1
+
+struct ScalePadStore {
+  uint16_t magic;        // EEPROM_MAGIC
+  uint8_t  version;      // SCALEPAD_VERSION
+  uint8_t  reserved;
+  uint8_t  rootPads[7];
+  uint8_t  modePads[7];
+  uint8_t  chromaticPad;
+  uint8_t  _pad;         // alignment to 20 bytes
+};
+static_assert(sizeof(ScalePadStore) <= NVS_BLOB_MAX_SIZE, "ScalePadStore exceeds NVS blob max");
+
+#define ARPPAD_NVS_KEY      "pads"
+#define ARPPAD_VERSION      1
+
+struct ArpPadStore {
+  uint16_t magic;
+  uint8_t  version;
+  uint8_t  reserved;
+  uint8_t  holdPad;
+  uint8_t  playStopPad;
+  uint8_t  octavePads[4];
+  uint8_t  _pad[2];      // alignment to 12 bytes
+};
+static_assert(sizeof(ArpPadStore) <= NVS_BLOB_MAX_SIZE, "ArpPadStore exceeds NVS blob max");
+
+#define BANKTYPE_NVS_KEY_V2  "config"
+#define BANKTYPE_VERSION     1
+
+struct BankTypeStore {
+  uint16_t magic;
+  uint8_t  version;
+  uint8_t  reserved;
+  uint8_t  types[NUM_BANKS];     // BankType enum cast
+  uint8_t  quantize[NUM_BANKS];  // ArpStartMode enum
+};
+static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds NVS blob max");
+
+#define COLOR_SLOT_VERSION  1
+
+// =================================================================
+// PotTarget — all possible pot-controlled parameters
+// =================================================================
+enum PotTarget : uint8_t {
+  // NORMAL global
+  TARGET_RESPONSE_SHAPE,
+  TARGET_SLEW_RATE,
+  TARGET_AT_DEADZONE,
+  // NORMAL per-bank
+  TARGET_PITCH_BEND,
+  // ARPEG per-bank
+  TARGET_GATE_LENGTH,
+  TARGET_SHUFFLE_DEPTH,
+  TARGET_DIVISION,
+  TARGET_PATTERN,
+  TARGET_SHUFFLE_TEMPLATE,
+  // Shared per-bank (NORMAL + ARPEG)
+  TARGET_BASE_VELOCITY,
+  TARGET_VELOCITY_VARIATION,
+  // Global
+  TARGET_TEMPO_BPM,
+  TARGET_LED_BRIGHTNESS,
+  TARGET_PAD_SENSITIVITY,
+  // MIDI output (user-assignable via Tool 6)
+  TARGET_MIDI_CC,
+  TARGET_MIDI_PITCHBEND,
+  // Empty slot (explicit "no parameter here")
+  TARGET_EMPTY,
+  // Sentinel (used internally, not assignable)
+  TARGET_NONE,
+  // Count (for iteration)
+  TARGET_COUNT = TARGET_NONE
+};
+
+// =================================================================
+// PotMapping — user-configurable slot assignment
+// One entry per slot (8 slots = 4 pots × 2 layers: alone + hold-left)
+// =================================================================
+struct PotMapping {
+  PotTarget target;     // What this slot controls
+  uint8_t   ccNumber;   // CC# when target == TARGET_MIDI_CC (0-127)
+};
+
+// 8 slots per context: [0]=R1 alone, [1]=R1+hold, [2]=R2 alone, ...
+// [6]=R4 alone, [7]=R4+hold
+static const uint8_t POT_MAPPING_SLOTS = 8;
+
+// =================================================================
+// PotMappingStore — NVS-serializable pot mapping (both contexts)
+// =================================================================
+#define POTMAP_VERSION 1
+
+struct PotMappingStore {
+  uint16_t   magic;    // Must match EEPROM_MAGIC
+  uint8_t    version;  // POTMAP_VERSION
+  uint8_t    reserved;
+  PotMapping normalMap[POT_MAPPING_SLOTS];
+  PotMapping arpegMap[POT_MAPPING_SLOTS];
+};
+
+// --- Defensive static_asserts for all Store structs ---
+static_assert(sizeof(CalDataStore) <= NVS_BLOB_MAX_SIZE, "CalDataStore exceeds NVS blob max");
+static_assert(sizeof(NoteMapStore) <= NVS_BLOB_MAX_SIZE, "NoteMapStore exceeds NVS blob max");
+static_assert(sizeof(BankPadStore) <= NVS_BLOB_MAX_SIZE, "BankPadStore exceeds NVS blob max");
+static_assert(sizeof(SettingsStore) <= NVS_BLOB_MAX_SIZE, "SettingsStore exceeds NVS blob max");
+static_assert(sizeof(PotMappingStore) <= NVS_BLOB_MAX_SIZE, "PotMappingStore exceeds NVS blob max");
+static_assert(sizeof(LedSettingsStore) <= NVS_BLOB_MAX_SIZE, "LedSettingsStore exceeds NVS blob max");
+static_assert(sizeof(ColorSlotStore) <= NVS_BLOB_MAX_SIZE, "ColorSlotStore exceeds NVS blob max");
+
+// SettingsStore byte 3 is baselineProfile, NOT reserved — defend against generic zeroing
+static_assert(offsetof(SettingsStore, baselineProfile) == 3,
+              "SettingsStore layout changed — byte 3 must be baselineProfile (not reserved)");
+
+// =================================================================
+// V2 — Arp Constants
+// =================================================================
+
+const uint8_t MAX_ARP_BANKS    = 4;
+const uint8_t MAX_ARP_NOTES    = 48;
+const uint8_t MAX_ARP_SEQUENCE = 192;  // 48 notes × 4 octaves
+const uint8_t MAX_ARP_OCTAVES  = 4;
+
+// =================================================================
+// Validation functions — shared by Tools, loadAll, WiFi handler
+// Single source of truth for all field bounds. Called after every
+// loadBlob and before every saveBlob from external input (WiFi JSON).
+// =================================================================
+
+inline void validateSettingsStore(SettingsStore& s) {
+  if (s.baselineProfile >= NUM_BASELINE_PROFILES) s.baselineProfile = DEFAULT_BASELINE_PROFILE;
+  if (s.aftertouchRate < AT_RATE_MIN || s.aftertouchRate > AT_RATE_MAX) s.aftertouchRate = AT_RATE_DEFAULT;
+  if (s.bleInterval >= NUM_BLE_INTERVALS) s.bleInterval = DEFAULT_BLE_INTERVAL;
+  if (s.clockMode >= NUM_CLOCK_MODES) s.clockMode = DEFAULT_CLOCK_MODE;
+  if (s.doubleTapMs < DOUBLE_TAP_MS_MIN || s.doubleTapMs > DOUBLE_TAP_MS_MAX) s.doubleTapMs = DOUBLE_TAP_MS_DEFAULT;
+  if (s.potBarDurationMs < LED_BARGRAPH_DURATION_MIN || s.potBarDurationMs > LED_BARGRAPH_DURATION_MAX)
+    s.potBarDurationMs = LED_BARGRAPH_DURATION_DEFAULT;
+  if (s.panicOnReconnect > 1) s.panicOnReconnect = DEFAULT_PANIC_ON_RECONNECT;
+  if (s.batAdcAtFull > 4095) s.batAdcAtFull = 4095;  // ADC 12-bit max
+}
+
+inline void validateBankTypeStore(BankTypeStore& s) {
+  uint8_t arpCount = 0;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (s.types[i] > BANK_ARPEG) s.types[i] = BANK_NORMAL;
+    if (s.types[i] == BANK_ARPEG) arpCount++;
+    if (arpCount > MAX_ARP_BANKS) s.types[i] = BANK_NORMAL;
+    if (s.quantize[i] >= NUM_ARP_START_MODES) s.quantize[i] = DEFAULT_ARP_START_MODE;
+  }
+}
+
+inline void validateScalePadStore(ScalePadStore& s) {
+  for (uint8_t i = 0; i < 7; i++) {
+    if (s.rootPads[i] >= NUM_KEYS) s.rootPads[i] = 8 + i;
+    if (s.modePads[i] >= NUM_KEYS) s.modePads[i] = 15 + i;
+  }
+  if (s.chromaticPad >= NUM_KEYS) s.chromaticPad = 22;
+}
+
+inline void validateArpPadStore(ArpPadStore& s) {
+  if (s.holdPad >= NUM_KEYS) s.holdPad = 23;
+  if (s.playStopPad >= NUM_KEYS) s.playStopPad = 24;
+  for (uint8_t i = 0; i < 4; i++) {
+    if (s.octavePads[i] >= NUM_KEYS) s.octavePads[i] = 25 + i;
+  }
+}
+
+inline void validateBankPadStore(BankPadStore& s) {
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (s.bankPads[i] >= NUM_KEYS) s.bankPads[i] = i;
+  }
+}
+
+inline void validateNoteMapStore(NoteMapStore& s) {
+  for (uint8_t i = 0; i < NUM_KEYS; i++) {
+    if (s.noteMap[i] >= NUM_KEYS) s.noteMap[i] = i;
+  }
+}
+
+inline void validateLedSettingsStore(LedSettingsStore& s) {
+  // Intensity cross-validation (min <= max for all pulse ranges)
+  if (s.fgArpStopMin > s.fgArpStopMax) s.fgArpStopMax = s.fgArpStopMin;
+  if (s.fgArpPlayMin > s.fgArpPlayMax) s.fgArpPlayMax = s.fgArpPlayMin;
+  if (s.bgArpStopMin > s.bgArpStopMax) s.bgArpStopMax = s.bgArpStopMin;
+  if (s.bgArpPlayMin > s.bgArpPlayMax) s.bgArpPlayMax = s.bgArpPlayMin;
+  // Timing ranges
+  if (s.pulsePeriodMs < 500)  s.pulsePeriodMs = 500;
+  if (s.pulsePeriodMs > 4000) s.pulsePeriodMs = 4000;
+  if (s.tickFlashDurationMs < 10)  s.tickFlashDurationMs = 10;
+  if (s.tickFlashDurationMs > 100) s.tickFlashDurationMs = 100;
+  if (s.gammaTenths < 10) s.gammaTenths = 10;
+  if (s.gammaTenths > 30) s.gammaTenths = 30;
+  // Confirmation blink counts and durations (from ToolLedSettings adjustConfirmParam)
+  if (s.bankBlinks < 1 || s.bankBlinks > 3) s.bankBlinks = 3;
+  if (s.bankDurationMs < 100 || s.bankDurationMs > 500) s.bankDurationMs = 300;
+  if (s.bankBrightnessPct > 100) s.bankBrightnessPct = 80;
+  if (s.scaleRootBlinks < 1 || s.scaleRootBlinks > 3) s.scaleRootBlinks = 2;
+  if (s.scaleRootDurationMs < 100 || s.scaleRootDurationMs > 500) s.scaleRootDurationMs = 200;
+  if (s.scaleModeBlinks < 1 || s.scaleModeBlinks > 3) s.scaleModeBlinks = 2;
+  if (s.scaleModeDurationMs < 100 || s.scaleModeDurationMs > 500) s.scaleModeDurationMs = 200;
+  if (s.scaleChromBlinks < 1 || s.scaleChromBlinks > 3) s.scaleChromBlinks = 2;
+  if (s.scaleChromDurationMs < 100 || s.scaleChromDurationMs > 500) s.scaleChromDurationMs = 200;
+  if (s.holdOnFlashMs < 50 || s.holdOnFlashMs > 250) s.holdOnFlashMs = 150;
+  if (s.holdFadeMs < 100 || s.holdFadeMs > 600) s.holdFadeMs = 300;
+  if (s.playBeatCount < 1 || s.playBeatCount > 4) s.playBeatCount = 3;
+  if (s.stopFadeMs < 100 || s.stopFadeMs > 600) s.stopFadeMs = 300;
+  if (s.octaveBlinks < 1 || s.octaveBlinks > 3) s.octaveBlinks = 3;
+  if (s.octaveDurationMs < 100 || s.octaveDurationMs > 500) s.octaveDurationMs = 300;
+}
+
 // --- V2 New NVS Namespaces ---
 #define VELOCITY_NVS_NAMESPACE  "illpad_bvel"   // baseVelocity[8] + velocityVariation[8]
 #define PITCHBEND_NVS_NAMESPACE "illpad_pbnd"   // pitchBendOffset[8]
@@ -375,12 +594,37 @@ struct SharedKeyboardState {
 };
 
 // =================================================================
-// V2 — Arp Constants
+// NVS Descriptor Table — unified status checks for all Store blobs
 // =================================================================
 
-const uint8_t MAX_ARP_BANKS    = 4;
-const uint8_t MAX_ARP_NOTES    = 48;
-const uint8_t MAX_ARP_SEQUENCE = 192;  // 48 notes × 4 octaves
-const uint8_t MAX_ARP_OCTAVES  = 4;
+struct NvsDescriptor {
+  const char* ns;
+  const char* key;
+  uint16_t    magic;
+  uint8_t     version;
+  uint16_t    size;       // uint16_t, not uint8_t — room for future growth
+};
+
+// NOTE: This table is static constexpr in a header, so each TU gets its own copy
+// (~300 bytes). Acceptable for ESP32-S3 with 8MB flash. If flash becomes tight,
+// move to extern const in a .cpp file.
+static constexpr NvsDescriptor NVS_DESCRIPTORS[] = {
+  { CAL_PREFERENCES_NAMESPACE, CAL_PREFERENCES_KEY,    EEPROM_MAGIC,    EEPROM_VERSION,       (uint16_t)sizeof(CalDataStore)      },  // 0: T1
+  { NOTEMAP_NVS_NAMESPACE,     NOTEMAP_NVS_KEY,        EEPROM_MAGIC,    NOTEMAP_VERSION,      (uint16_t)sizeof(NoteMapStore)      },  // 1: T2
+  { BANKPAD_NVS_NAMESPACE,     BANKPAD_NVS_KEY,        EEPROM_MAGIC,    BANKPAD_VERSION,      (uint16_t)sizeof(BankPadStore)      },  // 2: T3a
+  { SCALE_PAD_NVS_NAMESPACE,   SCALEPAD_NVS_KEY,       EEPROM_MAGIC,    SCALEPAD_VERSION,     (uint16_t)sizeof(ScalePadStore)     },  // 3: T3b
+  { ARP_PAD_NVS_NAMESPACE,     ARPPAD_NVS_KEY,         EEPROM_MAGIC,    ARPPAD_VERSION,       (uint16_t)sizeof(ArpPadStore)       },  // 4: T3c
+  { BANKTYPE_NVS_NAMESPACE,    BANKTYPE_NVS_KEY_V2,    EEPROM_MAGIC,    BANKTYPE_VERSION,     (uint16_t)sizeof(BankTypeStore)     },  // 5: T4
+  { SETTINGS_NVS_NAMESPACE,    SETTINGS_NVS_KEY,       EEPROM_MAGIC,    SETTINGS_VERSION,     (uint16_t)sizeof(SettingsStore)     },  // 6: T5
+  { POTMAP_NVS_NAMESPACE,      POTMAP_NVS_KEY,         EEPROM_MAGIC,    POTMAP_VERSION,       (uint16_t)sizeof(PotMappingStore)   },  // 7: T6
+  { LED_SETTINGS_NVS_NAMESPACE,LED_SETTINGS_NVS_KEY,   EEPROM_MAGIC,    LED_SETTINGS_VERSION, (uint16_t)sizeof(LedSettingsStore)  },  // 8: T7a
+  { LED_SETTINGS_NVS_NAMESPACE,COLOR_SLOT_NVS_KEY,     COLOR_SLOT_MAGIC,COLOR_SLOT_VERSION,   (uint16_t)sizeof(ColorSlotStore)    },  // 9: T7b
+};
+static constexpr uint8_t NVS_DESCRIPTOR_COUNT = sizeof(NVS_DESCRIPTORS) / sizeof(NVS_DESCRIPTORS[0]);
+
+// Tool-to-descriptor mapping: each tool checks descriptors in range [first, last] inclusive
+// T3 spans 3 descriptors (bankpad + scalepad + arppad), T7 spans 2 (ledsettings + colorslots)
+static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 5, 6, 7, 8 };  // T1..T7
+static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 7, 9 };  // T1..T7
 
 #endif // KEYBOARD_DATA_H

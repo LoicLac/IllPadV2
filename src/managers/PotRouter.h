@@ -5,65 +5,7 @@
 #include "../core/KeyboardData.h"
 #include "../core/HardwareConfig.h"
 
-// =================================================================
-// PotTarget — all possible pot-controlled parameters
-// =================================================================
-enum PotTarget : uint8_t {
-  // NORMAL global
-  TARGET_RESPONSE_SHAPE,
-  TARGET_SLEW_RATE,
-  TARGET_AT_DEADZONE,
-  // NORMAL per-bank
-  TARGET_PITCH_BEND,
-  // ARPEG per-bank
-  TARGET_GATE_LENGTH,
-  TARGET_SHUFFLE_DEPTH,
-  TARGET_DIVISION,
-  TARGET_PATTERN,
-  TARGET_SHUFFLE_TEMPLATE,
-  // Shared per-bank (NORMAL + ARPEG)
-  TARGET_BASE_VELOCITY,
-  TARGET_VELOCITY_VARIATION,
-  // Global
-  TARGET_TEMPO_BPM,
-  TARGET_LED_BRIGHTNESS,
-  TARGET_PAD_SENSITIVITY,
-  // MIDI output (user-assignable via Tool 6)
-  TARGET_MIDI_CC,
-  TARGET_MIDI_PITCHBEND,
-  // Empty slot (explicit "no parameter here")
-  TARGET_EMPTY,
-  // Sentinel (used internally, not assignable)
-  TARGET_NONE,
-  // Count (for iteration)
-  TARGET_COUNT = TARGET_NONE
-};
-
-// =================================================================
-// PotMapping — user-configurable slot assignment
-// One entry per slot (8 slots = 4 pots × 2 layers: alone + hold-left)
-// =================================================================
-struct PotMapping {
-  PotTarget target;     // What this slot controls
-  uint8_t   ccNumber;   // CC# when target == TARGET_MIDI_CC (0-127)
-};
-
-// 8 slots per context: [0]=R1 alone, [1]=R1+hold, [2]=R2 alone, ...
-// [6]=R4 alone, [7]=R4+hold
-static const uint8_t POT_MAPPING_SLOTS = 8;
-
-// =================================================================
-// PotMappingStore — NVS-serializable pot mapping (both contexts)
-// =================================================================
-#define POTMAP_VERSION 1
-
-struct PotMappingStore {
-  uint16_t   magic;    // Must match EEPROM_MAGIC
-  uint8_t    version;  // POTMAP_VERSION
-  uint8_t    reserved;
-  PotMapping normalMap[POT_MAPPING_SLOTS];
-  PotMapping arpegMap[POT_MAPPING_SLOTS];
-};
+// PotTarget, PotMapping, PotMappingStore are defined in KeyboardData.h
 
 // =================================================================
 // PotBinding — declarative: pot + button combo + bank type → target

@@ -396,7 +396,16 @@ void NvsManager::commitAll() {
     }
   }
 
-  if (_typesDirty)       { saveBankTypes();     _typesDirty = false; }
+  if (_typesDirty) {
+    Preferences prefs;
+    if (prefs.begin(BANKTYPE_NVS_NAMESPACE, false)) {
+      uint8_t types[NUM_BANKS];
+      for (uint8_t i = 0; i < NUM_BANKS; i++) types[i] = (uint8_t)_pendingTypes[i];
+      prefs.putBytes(BANKTYPE_NVS_KEY, types, NUM_BANKS);
+      prefs.end();
+    }
+    _typesDirty = false;
+  }
   if (_potDirty)         { savePotParams();     _potDirty = false; }
   if (_tempoDirty)       { saveTempo();         _tempoDirty = false; }
   if (_ledBrightDirty)   { saveLedBrightness(); _ledBrightDirty = false; }
@@ -405,27 +414,95 @@ void NvsManager::commitAll() {
 }
 
 // =================================================================
-// loadValidatedBlob — generic helper for Store structs with magic/version
+// Static NVS helpers — usable without NvsManager instance
 // =================================================================
-bool NvsManager::loadValidatedBlob(const char* ns, const char* key,
-                                    uint16_t expectedMagic, uint16_t expectedVersion,
-                                    void* out, size_t size) {
-  if (size > 128) return false;  // safety — all Store structs are small
+
+namespace {
+// Shared implementation for loadBlob and checkBlob — no code duplication.
+// If out == nullptr, validates only (checkBlob). If out != nullptr, copies data (loadBlob).
+bool readAndValidateBlob(const char* ns, const char* key,
+                          uint16_t expectedMagic, uint8_t expectedVersion,
+                          void* out, size_t expectedSize) {
+  if (expectedSize > NVS_BLOB_MAX_SIZE) {
+    #if DEBUG_SERIAL
+    Serial.printf("[NVS] %s/%s: size %d exceeds max %d\n", ns, key, (int)expectedSize, (int)NVS_BLOB_MAX_SIZE);
+    #endif
+    return false;
+  }
   Preferences prefs;
-  if (!prefs.begin(ns, true)) return false;
+  if (!prefs.begin(ns, true)) {
+    #if DEBUG_SERIAL
+    Serial.printf("[NVS] %s/%s: namespace open failed\n", ns, key);
+    #endif
+    return false;
+  }
   bool ok = false;
   size_t len = prefs.getBytesLength(key);
-  if (len == size) {
-    uint8_t tmp[128];
-    prefs.getBytes(key, tmp, size);
-    const uint16_t* header = reinterpret_cast<const uint16_t*>(tmp);
-    if (header[0] == expectedMagic && header[1] == expectedVersion) {
-      memcpy(out, tmp, size);
+  if (len == expectedSize) {
+    uint8_t tmp[NVS_BLOB_MAX_SIZE];
+    prefs.getBytes(key, tmp, expectedSize);
+    uint16_t magic;
+    memcpy(&magic, tmp, sizeof(uint16_t));
+    uint8_t version = tmp[2];
+    if (magic == expectedMagic && version == expectedVersion) {
+      if (out) memcpy(out, tmp, expectedSize);
       ok = true;
     }
+    #if DEBUG_SERIAL
+    else {
+      if (magic != expectedMagic)
+        Serial.printf("[NVS] %s/%s: magic 0x%04X != expected 0x%04X\n", ns, key, magic, expectedMagic);
+      else
+        Serial.printf("[NVS] %s/%s: version %d != expected %d\n", ns, key, version, expectedVersion);
+    }
+    #endif
   }
+  #if DEBUG_SERIAL
+  else if (len > 0) {
+    Serial.printf("[NVS] %s/%s: size %d != expected %d\n", ns, key, (int)len, (int)expectedSize);
+  }
+  // len == 0 = key not found, silent (normal on first boot)
+  #endif
   prefs.end();
   return ok;
+}
+} // anonymous namespace
+
+bool NvsManager::loadBlob(const char* ns, const char* key,
+                           uint16_t expectedMagic, uint8_t expectedVersion,
+                           void* out, size_t expectedSize) {
+  return readAndValidateBlob(ns, key, expectedMagic, expectedVersion, out, expectedSize);
+}
+
+bool NvsManager::checkBlob(const char* ns, const char* key,
+                            uint16_t expectedMagic, uint8_t expectedVersion,
+                            size_t expectedSize) {
+  return readAndValidateBlob(ns, key, expectedMagic, expectedVersion, nullptr, expectedSize);
+}
+
+bool NvsManager::saveBlob(const char* ns, const char* key,
+                           const void* data, size_t size) {
+  #if DEBUG_SERIAL
+  if (size >= 2) {
+    uint16_t magic;
+    memcpy(&magic, data, sizeof(uint16_t));
+    if (magic == 0) Serial.printf("[NVS] WARNING: %s/%s saving blob with magic=0!\n", ns, key);
+  }
+  #endif
+  Preferences prefs;
+  if (!prefs.begin(ns, false)) {
+    #if DEBUG_SERIAL
+    Serial.printf("[NVS] %s/%s: namespace open for write failed\n", ns, key);
+    #endif
+    return false;
+  }
+  size_t written = prefs.putBytes(key, data, size);
+  prefs.end();
+  #if DEBUG_SERIAL
+  if (written != size)
+    Serial.printf("[NVS] %s/%s: write failed (%d/%d bytes)\n", ns, key, (int)written, (int)size);
+  #endif
+  return (written == size);
 }
 
 // =================================================================
@@ -561,7 +638,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   // --- Global pot params (shape, slew, deadzone) ---
   {
     PotParamsStore pps;
-    if (loadValidatedBlob(POT_PARAMS_NVS_NAMESPACE, POT_PARAMS_NVS_KEY,
+    if (loadBlob(POT_PARAMS_NVS_NAMESPACE, POT_PARAMS_NVS_KEY,
                            EEPROM_MAGIC, POT_PARAMS_VERSION, &pps, sizeof(pps))) {
       _pendingResponseShape = (float)pps.responseShapeRaw / 4095.0f;
       _pendingSlewRate = pps.slewRate;
@@ -594,7 +671,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   // --- Pad order ---
   {
     NoteMapStore nms;
-    if (loadValidatedBlob(NOTEMAP_NVS_NAMESPACE, NOTEMAP_NVS_KEY,
+    if (loadBlob(NOTEMAP_NVS_NAMESPACE, NOTEMAP_NVS_KEY,
                            EEPROM_MAGIC, NOTEMAP_VERSION, &nms, sizeof(nms))) {
       memcpy(padOrder, nms.noteMap, NUM_KEYS);
       #if DEBUG_SERIAL
@@ -606,7 +683,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   // --- Bank pads ---
   {
     BankPadStore bps;
-    if (loadValidatedBlob(BANKPAD_NVS_NAMESPACE, BANKPAD_NVS_KEY,
+    if (loadBlob(BANKPAD_NVS_NAMESPACE, BANKPAD_NVS_KEY,
                            EEPROM_MAGIC, BANKPAD_VERSION, &bps, sizeof(bps))) {
       memcpy(bankPads, bps.bankPads, NUM_BANKS);
       for (uint8_t j = 0; j < NUM_BANKS; j++) {
@@ -663,7 +740,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
               DEFAULT_BLE_INTERVAL, DEFAULT_CLOCK_MODE,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT, DEFAULT_PANIC_ON_RECONNECT,
               0, DEFAULT_BAT_ADC_AT_FULL};
-  loadValidatedBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY,
+  loadBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY,
                      EEPROM_MAGIC, SETTINGS_VERSION, &settings, sizeof(settings));
   #if DEBUG_SERIAL
   Serial.printf("[NVS] Settings: profile=%d, atRate=%d, bleInt=%d, clock=%d, dblTap=%d\n",
@@ -672,9 +749,9 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   #endif
 
   // --- LED settings (Tool 7) ---
-  loadValidatedBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
+  loadBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
                      EEPROM_MAGIC, LED_SETTINGS_VERSION, &_ledSettings, sizeof(_ledSettings));
-  loadValidatedBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
+  loadBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
                      COLOR_SLOT_MAGIC, 1, &_colorSlots, sizeof(_colorSlots));
   #if DEBUG_SERIAL
   Serial.println("[NVS] LED settings + color slots loaded.");
@@ -683,7 +760,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   // --- Pot mapping (user-configurable pot assignments) ---
   {
     PotMappingStore pms;
-    if (loadValidatedBlob(POTMAP_NVS_NAMESPACE, POTMAP_NVS_KEY,
+    if (loadBlob(POTMAP_NVS_NAMESPACE, POTMAP_NVS_KEY,
                            EEPROM_MAGIC, POTMAP_VERSION, &pms, sizeof(pms))) {
       potRouter.loadMapping(pms);
       #if DEBUG_SERIAL
@@ -748,16 +825,6 @@ void NvsManager::saveBank() {
   Preferences prefs;
   if (prefs.begin(BANK_NVS_NAMESPACE, false)) {
     prefs.putUChar(BANK_NVS_KEY, _pendingBank);
-    prefs.end();
-  }
-}
-
-void NvsManager::saveBankTypes() {
-  Preferences prefs;
-  if (prefs.begin(BANKTYPE_NVS_NAMESPACE, false)) {
-    uint8_t types[NUM_BANKS];
-    for (uint8_t i = 0; i < NUM_BANKS; i++) types[i] = (uint8_t)_pendingTypes[i];
-    prefs.putBytes(BANKTYPE_NVS_KEY, types, NUM_BANKS);
     prefs.end();
   }
 }
