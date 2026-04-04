@@ -5,6 +5,7 @@
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
 #include "../core/KeyboardData.h"
+#include "../managers/NvsManager.h"
 #include <Arduino.h>
 #include <Preferences.h>
 #include <string.h>
@@ -14,16 +15,27 @@
 // =================================================================
 
 ToolPadOrdering::ToolPadOrdering()
-  : _keyboard(nullptr), _leds(nullptr), _nvs(nullptr),
+  : _keyboard(nullptr), _leds(nullptr),
     _ui(nullptr), _padOrder(nullptr) {}
 
 void ToolPadOrdering::begin(CapacitiveKeyboard* keyboard, LedController* leds,
-                             NvsManager* nvs, SetupUI* ui, uint8_t* padOrder) {
+                             SetupUI* ui, uint8_t* padOrder) {
   _keyboard = keyboard;
   _leds = leds;
-  _nvs = nvs;
   _ui = ui;
   _padOrder = padOrder;
+}
+
+bool ToolPadOrdering::saveOrder(const uint8_t* orderMap) {
+  NoteMapStore nms;
+  nms.magic = EEPROM_MAGIC;
+  nms.version = NOTEMAP_VERSION;
+  nms.reserved = 0;
+  memcpy(nms.noteMap, orderMap, NUM_KEYS);
+  if (!NvsManager::saveBlob(NOTEMAP_NVS_NAMESPACE, NOTEMAP_NVS_KEY, &nms, sizeof(nms)))
+    return false;
+  memcpy(_padOrder, orderMap, NUM_KEYS);
+  return true;
 }
 
 // =================================================================
@@ -46,18 +58,14 @@ void ToolPadOrdering::run() {
   bool hasExistingOrder = false;
   uint8_t existingOrder[NUM_KEYS];
   {
-    Preferences prefs;
-    if (prefs.begin(NOTEMAP_NVS_NAMESPACE, true)) {
-      size_t len = prefs.getBytesLength(NOTEMAP_NVS_KEY);
-      if (len == sizeof(NoteMapStore)) {
-        NoteMapStore tmp;
-        prefs.getBytes(NOTEMAP_NVS_KEY, &tmp, sizeof(NoteMapStore));
-        if (tmp.magic == EEPROM_MAGIC && tmp.version == NOTEMAP_VERSION) {
-          memcpy(existingOrder, tmp.noteMap, NUM_KEYS);
-          hasExistingOrder = true;
-        }
+    NoteMapStore tmp;
+    if (NvsManager::loadBlob(NOTEMAP_NVS_NAMESPACE, NOTEMAP_NVS_KEY,
+                              EEPROM_MAGIC, NOTEMAP_VERSION, &tmp, sizeof(tmp))) {
+      memcpy(existingOrder, tmp.noteMap, NUM_KEYS);
+      for (uint8_t i = 0; i < NUM_KEYS; i++) {
+        if (existingOrder[i] >= NUM_KEYS) existingOrder[i] = i;
       }
-      prefs.end();
+      hasExistingOrder = true;
     }
   }
 
@@ -141,19 +149,10 @@ void ToolPadOrdering::run() {
           for (int i = 0; i < NUM_KEYS; i++) {
             existingOrder[i] = (uint8_t)i;
           }
-          NoteMapStore nms;
-          nms.magic = EEPROM_MAGIC;
-          nms.version = NOTEMAP_VERSION;
-          nms.reserved = 0;
-          memcpy(nms.noteMap, existingOrder, NUM_KEYS);
-          Preferences prefs;
-          if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
-            prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
-            prefs.end();
+          if (saveOrder(existingOrder)) {
+            nvsSaved = true;
+            _ui->flashSaved();
           }
-          memcpy(_padOrder, existingOrder, NUM_KEYS);
-          nvsSaved = true;
-          _ui->flashSaved();
           confirmDefaults = false;
           screenDirty = true;
         } else if (ev.type != NAV_NONE) {
@@ -288,19 +287,10 @@ void ToolPadOrdering::run() {
             assignHistory[i] = (uint8_t)i;
           }
           assignedCount = NUM_KEYS;
-          NoteMapStore nms;
-          nms.magic = EEPROM_MAGIC;
-          nms.version = NOTEMAP_VERSION;
-          nms.reserved = 0;
-          memcpy(nms.noteMap, orderMap, NUM_KEYS);
-          Preferences prefs;
-          if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
-            prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
-            prefs.end();
+          if (saveOrder(orderMap)) {
+            nvsSaved = true;
+            _ui->flashSaved();
           }
-          memcpy(_padOrder, orderMap, NUM_KEYS);
-          nvsSaved = true;
-          _ui->flashSaved();
           _ui->setProgress(-1);
           _ui->vtClear();
           state = ORD_DONE;
@@ -410,20 +400,9 @@ void ToolPadOrdering::run() {
         }
       }
 
-      NoteMapStore nms;
-      nms.magic = EEPROM_MAGIC;
-      nms.version = NOTEMAP_VERSION;
-      nms.reserved = 0;
-      memcpy(nms.noteMap, orderMap, NUM_KEYS);
-
-      Preferences prefs;
-      if (prefs.begin(NOTEMAP_NVS_NAMESPACE, false)) {
-        prefs.putBytes(NOTEMAP_NVS_KEY, &nms, sizeof(NoteMapStore));
-        prefs.end();
+      if (saveOrder(orderMap)) {
+        _ui->flashSaved();
       }
-
-      memcpy(_padOrder, orderMap, NUM_KEYS);
-      _ui->flashSaved();
       delay(800);
       _ui->vtClear();
       state = ORD_DONE;

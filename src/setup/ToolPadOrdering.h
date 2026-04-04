@@ -6,7 +6,6 @@
 
 class CapacitiveKeyboard;
 class LedController;
-class NvsManager;
 class SetupUI;
 
 class ToolPadOrdering {
@@ -14,13 +13,14 @@ public:
   ToolPadOrdering();
 
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
-             NvsManager* nvs, SetupUI* ui, uint8_t* padOrder);
+             SetupUI* ui, uint8_t* padOrder);
   void run();  // Blocking
 
 private:
+  bool saveOrder(const uint8_t* orderMap);
+
   CapacitiveKeyboard* _keyboard;
   LedController*      _leds;
-  NvsManager*         _nvs;
   SetupUI*            _ui;
   uint8_t*            _padOrder;
 };
