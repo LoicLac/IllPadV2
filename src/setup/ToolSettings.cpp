@@ -1,6 +1,7 @@
 #include "ToolSettings.h"
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
+#include "../core/PotFilter.h"
 #include "../managers/NvsManager.h"
 #include "SetupUI.h"
 #include "InputParser.h"
@@ -76,6 +77,61 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
       break;
     case 7:
       break;
+  }
+}
+
+// =================================================================
+// seedPotForEdit — seed pot with mode/range matching each param
+// =================================================================
+void ToolSettings::seedPotForEdit(const SettingsStore& wk, uint8_t param) {
+  switch (param) {
+    case 0:  // Profile (3 choices)
+      _potEditVal = wk.baselineProfile;
+      _pots.seed(0, &_potEditVal, 0, NUM_BASELINE_PROFILES - 1, POT_RELATIVE, 6);
+      break;
+    case 1:  // AT rate (continuous 10-100)
+      _potEditVal = wk.aftertouchRate;
+      _pots.seed(0, &_potEditVal, AT_RATE_MIN, AT_RATE_MAX, POT_ABSOLUTE);
+      break;
+    case 2:  // BLE interval (4 choices)
+      _potEditVal = wk.bleInterval;
+      _pots.seed(0, &_potEditVal, 0, NUM_BLE_INTERVALS - 1, POT_RELATIVE, 8);
+      break;
+    case 3:  // Clock mode (2 choices)
+      _potEditVal = wk.clockMode;
+      _pots.seed(0, &_potEditVal, 0, NUM_CLOCK_MODES - 1, POT_RELATIVE, 4);
+      break;
+    case 4:  // Double-tap (continuous 100-250)
+      _potEditVal = wk.doubleTapMs;
+      _pots.seed(0, &_potEditVal, DOUBLE_TAP_MS_MIN, DOUBLE_TAP_MS_MAX, POT_ABSOLUTE);
+      break;
+    case 5:  // Bargraph duration (continuous)
+      _potEditVal = wk.potBarDurationMs;
+      _pots.seed(0, &_potEditVal, LED_BARGRAPH_DURATION_MIN, LED_BARGRAPH_DURATION_MAX, POT_ABSOLUTE);
+      break;
+    case 6:  // Panic on reconnect (toggle)
+      _potEditVal = wk.panicOnReconnect;
+      _pots.seed(0, &_potEditVal, 0, 1, POT_RELATIVE, 4);
+      break;
+    case 7:  // Battery cal (read-only)
+      _pots.disable(0);
+      break;
+  }
+}
+
+// =================================================================
+// applyPotEdit — copy pot value back into wk for current param
+// =================================================================
+void ToolSettings::applyPotEdit(SettingsStore& wk, uint8_t param) {
+  switch (param) {
+    case 0: wk.baselineProfile  = (uint8_t)_potEditVal; break;
+    case 1: wk.aftertouchRate   = (uint8_t)_potEditVal; break;
+    case 2: wk.bleInterval      = (uint8_t)_potEditVal; break;
+    case 3: wk.clockMode        = (uint8_t)_potEditVal; break;
+    case 4: wk.doubleTapMs      = (uint8_t)_potEditVal; break;
+    case 5: wk.potBarDurationMs = (uint16_t)_potEditVal; break;
+    case 6: wk.panicOnReconnect = (uint8_t)_potEditVal; break;
+    default: break;
   }
 }
 
@@ -186,10 +242,27 @@ void ToolSettings::run() {
   bool screenDirty = true;
   bool confirmDefaults = false;
 
+  // Seed pot for param navigation
+  _potCursorIdx = cursor;
+  _pots.seed(0, &_potCursorIdx, 0, NUM_PARAMS - 1, POT_RELATIVE, 16);
+
   _ui->vtClear();
 
   while (true) {
+    PotFilter::updateAll();
+    _pots.update();
     if (_leds) _leds->update();
+
+    // --- Pot navigation ---
+    if (!confirmDefaults) {
+      if (!editing && _pots.getMove(0)) {
+        cursor = (uint8_t)_potCursorIdx;
+        screenDirty = true;
+      } else if (editing && _pots.getMove(0)) {
+        applyPotEdit(wk, cursor);
+        screenDirty = true;
+      }
+    }
 
     NavEvent ev = input.update();
 
@@ -221,6 +294,9 @@ void ToolSettings::run() {
       if (editing) {
         wk = original;
         editing = false;
+        // Re-seed pot for nav mode
+        _potCursorIdx = cursor;
+        _pots.seed(0, &_potCursorIdx, 0, NUM_PARAMS - 1, POT_RELATIVE, 16);
         screenDirty = true;
       } else {
         _ui->vtClear();
@@ -237,21 +313,28 @@ void ToolSettings::run() {
       if (ev.type == NAV_UP) {
         if (cursor > 0) cursor--;
         else cursor = NUM_PARAMS - 1;
+        _potCursorIdx = cursor;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_DOWN) {
         if (cursor < NUM_PARAMS - 1) cursor++;
         else cursor = 0;
+        _potCursorIdx = cursor;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         editing = true;
+        seedPotForEdit(wk, cursor);
         screenDirty = true;
       }
     } else {
       if (ev.type == NAV_LEFT) {
         adjustParam(wk, cursor, -1, ev.accelerated);
+        // Sync pot target from arrow change
+        seedPotForEdit(wk, cursor);
         screenDirty = true;
       } else if (ev.type == NAV_RIGHT) {
         adjustParam(wk, cursor, +1, ev.accelerated);
+        // Sync pot target from arrow change
+        seedPotForEdit(wk, cursor);
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         if (cursor == 7) {
@@ -262,6 +345,9 @@ void ToolSettings::run() {
           nvsSaved = true;
           _ui->flashSaved();
           original = wk;
+          // Re-seed pot for nav mode
+          _potCursorIdx = cursor;
+          _pots.seed(0, &_potCursorIdx, 0, NUM_PARAMS - 1, POT_RELATIVE, 16);
           screenDirty = true;
         }
       }
