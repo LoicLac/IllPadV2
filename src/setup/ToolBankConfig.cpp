@@ -22,14 +22,15 @@ void ToolBankConfig::begin(LedController* leds, NvsManager* nvs, SetupUI* ui, Ba
 // saveConfig — write types + quantize to NVS, update live banks
 // =================================================================
 bool ToolBankConfig::saveConfig(const BankType* types, const uint8_t* quantize) {
-  Preferences prefs;
-  if (!prefs.begin(BANKTYPE_NVS_NAMESPACE, false)) return false;
+  BankTypeStore bts;
+  bts.magic = EEPROM_MAGIC;
+  bts.version = BANKTYPE_VERSION;
+  bts.reserved = 0;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) bts.types[i] = (uint8_t)types[i];
+  memcpy(bts.quantize, quantize, NUM_BANKS);
 
-  uint8_t rawTypes[NUM_BANKS];
-  for (uint8_t i = 0; i < NUM_BANKS; i++) rawTypes[i] = (uint8_t)types[i];
-  prefs.putBytes(BANKTYPE_NVS_KEY, rawTypes, NUM_BANKS);
-  prefs.putBytes("qmode", quantize, NUM_BANKS);
-  prefs.end();
+  if (!NvsManager::saveBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2, &bts, sizeof(bts)))
+    return false;
 
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     _banks[i].type = types[i];
@@ -68,27 +69,18 @@ void ToolBankConfig::run() {
     wkQuantize[i] = _nvs ? _nvs->getLoadedQuantizeMode(i) : DEFAULT_ARP_START_MODE;
   }
 
-  // Load saved bank config from NVS (setup mode may run before NvsManager::loadAll)
+  // Override from NVS if valid v2 store exists
   bool nvsSaved = false;
   {
-    Preferences prefs;
-    if (prefs.begin(BANKTYPE_NVS_NAMESPACE, true)) {
-      size_t len = prefs.getBytesLength(BANKTYPE_NVS_KEY);
-      nvsSaved = (len == NUM_BANKS);
-      if (nvsSaved) {
-        uint8_t rawTypes[NUM_BANKS];
-        prefs.getBytes(BANKTYPE_NVS_KEY, rawTypes, NUM_BANKS);
-        for (uint8_t i = 0; i < NUM_BANKS; i++)
-          wkTypes[i] = ((BankType)rawTypes[i] <= BANK_ARPEG) ? (BankType)rawTypes[i] : BANK_NORMAL;
+    BankTypeStore bts;
+    if (NvsManager::loadBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
+                              EEPROM_MAGIC, BANKTYPE_VERSION, &bts, sizeof(bts))) {
+      nvsSaved = true;
+      validateBankTypeStore(bts);
+      for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        wkTypes[i] = (BankType)bts.types[i];
+        wkQuantize[i] = bts.quantize[i];
       }
-      size_t qlen = prefs.getBytesLength("qmode");
-      if (qlen == NUM_BANKS) {
-        uint8_t rawQ[NUM_BANKS];
-        prefs.getBytes("qmode", rawQ, NUM_BANKS);
-        for (uint8_t i = 0; i < NUM_BANKS; i++)
-          wkQuantize[i] = (rawQ[i] < NUM_ARP_START_MODES) ? rawQ[i] : DEFAULT_ARP_START_MODE;
-      }
-      prefs.end();
     }
   }
 
