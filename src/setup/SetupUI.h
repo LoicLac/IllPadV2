@@ -22,6 +22,7 @@ class LedController;
 #define VT_MAGENTA    "\033[35m"
 #define VT_BLUE       "\033[34m"
 #define VT_WHITE      "\033[37m"
+#define VT_ORANGE     "\033[38;5;208m"
 #define VT_CL         "\033[K"
 #define VT_SYNC_START "\033[?2026h"
 #define VT_SYNC_END   "\033[?2026l"

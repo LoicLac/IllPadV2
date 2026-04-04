@@ -441,18 +441,20 @@ void SetupUI::drawCellGrid(
         pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "%s %4u" VT_RESET, color, val);
       } else if (mode == GRID_MEASUREMENT) {
         if (key == activeKey) {
-          if (activeIsDone) {
-            pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
-                            VT_MAGENTA " *%2u*" VT_RESET, activeDelta);
-          } else {
-            pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
-                            VT_CYAN " >%2u<" VT_RESET, activeDelta);
-          }
+          // Active pad: show live delta with cyan highlight
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                          VT_CYAN " %4u" VT_RESET, activeDelta);
         } else if (done && done[key]) {
+          // Calibrated pad: color by delta value
           uint16_t d = measuredDeltas ? measuredDeltas[key] : 0;
-          const char* color = (d >= 50) ? VT_GREEN : VT_RED;
+          const char* color;
+          if      (d < 100) color = VT_RED;
+          else if (d < 300) color = VT_ORANGE;
+          else if (d < 500) color = VT_YELLOW;
+          else              color = VT_GREEN;
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, "%s %4u" VT_RESET, color, d);
         } else {
+          // Uncalibrated pad: dim placeholder
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos, VT_DIM "  -- " VT_RESET);
         }
       }

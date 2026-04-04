@@ -151,10 +151,19 @@ void ToolCalibration::run() {
   bool     calibrated[NUM_KEYS];
   uint16_t currentMaxDelta = 0;
   int      activeKey = -1;
-  int      lastActiveKey = -1;
 
   memset(calibrated, 0, sizeof(calibrated));
   memset(measuredDeltas, 0, sizeof(measuredDeltas));
+
+  // Free-mode state
+  static const unsigned long CAL_DOUBLETAP_WINDOW_MS = 200;
+  unsigned long lastReleaseTime[NUM_KEYS];
+  memset(lastReleaseTime, 0, sizeof(lastReleaseTime));
+  int prevDetected = -1;
+  bool confirmPending = false;
+  char confirmType = 0;   // 'v' = validate incomplete, 'q' = abort with data
+  bool justReset = false;  // true for 1 display cycle after double-tap reset
+  int resetKey = -1;
 
   InputParser input;
 
@@ -184,7 +193,7 @@ void ToolCalibration::run() {
           // ARE from disrupting baselines while user presses pads
           _keyboard->setAutoReconfigEnabled(false);
           activeKey = -1;
-          lastActiveKey = -1;
+          prevDetected = -1;
           currentMaxDelta = 0;
           lastRefresh = 0;
           _ui->vtClear();
@@ -231,31 +240,54 @@ void ToolCalibration::run() {
     }
 
     // =============================================================
-    // TOUCH-TO-SELECT MEASUREMENT (exact V1 lines 588-737)
+    // FREE-PLAY MEASUREMENT — auto-capture + double-tap reset
     // =============================================================
     case CAL_MEASUREMENT: {
       _keyboard->pollAllSensorData();
+      unsigned long now = millis();
 
       int detected = detectActiveKey(*_keyboard, referenceBaselines);
 
-      if (detected >= 0) {
-        if (detected != lastActiveKey) {
-          activeKey = detected;
-          currentMaxDelta = 0;
-        }
-        uint16_t f = _keyboard->getFilteredData(activeKey);
-        uint16_t delta = (referenceBaselines[activeKey] > f)
-                       ? (referenceBaselines[activeKey] - f) : 0;
-        if (delta > currentMaxDelta) currentMaxDelta = delta;
-        lastActiveKey = detected;
+      // --- Release detection: update lastReleaseTime ---
+      if (prevDetected >= 0 && (detected != prevDetected)) {
+        lastReleaseTime[prevDetected] = now;
       }
 
-      // detected == -1: pad released — keep activeKey + currentMaxDelta
-      // so user can lift finger then press ENTER/button to validate
+      // --- New touch on a pad ---
+      if (detected >= 0 && detected != prevDetected) {
+        // Double-tap check: pad already calibrated + touched within window
+        if (calibrated[detected] &&
+            lastReleaseTime[detected] > 0 &&
+            (now - lastReleaseTime[detected]) < CAL_DOUBLETAP_WINDOW_MS) {
+          // Reset this pad
+          calibrated[detected] = false;
+          measuredDeltas[detected] = 0;
+          justReset = true;
+          resetKey = detected;
+        }
+        activeKey = detected;
+        currentMaxDelta = 0;
+      }
 
-      // Refresh display
-      if (millis() - lastRefresh >= 200) {
-        lastRefresh = millis();
+      // --- Live delta tracking + auto-capture ---
+      if (detected >= 0) {
+        uint16_t f = _keyboard->getFilteredData(detected);
+        uint16_t delta = (referenceBaselines[detected] > f)
+                       ? (referenceBaselines[detected] - f) : 0;
+        if (delta > currentMaxDelta) currentMaxDelta = delta;
+
+        // Auto-capture: update stored max if improved
+        if (currentMaxDelta > measuredDeltas[detected]) {
+          measuredDeltas[detected] = currentMaxDelta;
+          if (!calibrated[detected]) calibrated[detected] = true;
+        }
+      }
+
+      prevDetected = detected;
+
+      // --- Display refresh ---
+      if (now - lastRefresh >= 200) {
+        lastRefresh = now;
 
         int doneCount = 0;
         for (int i = 0; i < NUM_KEYS; i++) {
@@ -269,106 +301,123 @@ void ToolCalibration::run() {
         _ui->drawFrameEmpty();
         _ui->drawSection("GRID");
 
-        bool activeIsDone = (activeKey >= 0) && calibrated[activeKey];
         _ui->drawGrid(GRID_MEASUREMENT, 0, referenceBaselines, measuredDeltas, calibrated,
-                 activeKey, currentMaxDelta, activeIsDone, nullptr);
+                       (detected >= 0) ? activeKey : -1,
+                       currentMaxDelta, false, nullptr);
 
         _ui->drawFrameEmpty();
-
-        // Detail box
         _ui->drawSection("INFO");
-        if (detected == -2) {
-          _ui->drawFrameLine(VT_YELLOW "Multiple pads detected!" VT_RESET);
-          _ui->drawFrameLine("Lift off and touch ONE pad at a time.");
-          _ui->drawFrameEmpty();
-        }
-        else if (activeKey >= 0) {
-          int sensor = activeKey / CHANNELS_PER_SENSOR;
-          int channel = activeKey % CHANNELS_PER_SENSOR;
-          char sc = 'A' + sensor;
-          uint16_t f = _keyboard->getFilteredData(activeKey);
-          uint16_t bl = referenceBaselines[activeKey];
-          uint16_t delta = (bl > f) ? (bl - f) : 0;
 
-          if (activeIsDone) {
-            _ui->drawFrameLine(VT_CYAN "Key %d" VT_RESET " (%c:Ch%d)  " VT_MAGENTA "ALREADY CALIBRATED" VT_RESET,
-                               activeKey, sc, channel);
-            _ui->drawFrameLine("Previous: %-5u   Current delta: %-5u",
-                               measuredDeltas[activeKey], delta);
-            _ui->drawFrameLine(VT_DIM "[Enter] Overwrite   or touch another" VT_RESET);
+        if (confirmPending) {
+          if (confirmType == 'v') {
+            _ui->drawFrameLine(VT_YELLOW "Only %d/%d calibrated. Continue?" VT_RESET, doneCount, NUM_KEYS);
           } else {
-            _ui->drawFrameLine(VT_CYAN "Key %d" VT_RESET " (Sensor %c, Channel %d)",
-                               activeKey, sc, channel);
-            _ui->drawFrameLine("Baseline: %-5u  Filtered: %-5u  Delta: %-5u",
-                               bl, f, delta);
-            if (currentMaxDelta > 0 && currentMaxDelta < CAL_PRESSURE_MIN_DELTA_TO_VALIDATE) {
-              _ui->drawFrameLine("Max delta: " VT_YELLOW "%-5u" VT_RESET "  (low -- press harder)",
-                                 currentMaxDelta);
-            } else {
-              _ui->drawFrameLine("Max delta: %-5u", currentMaxDelta);
-            }
+            _ui->drawFrameLine(VT_YELLOW "Discard %d calibrated pads?" VT_RESET, doneCount);
           }
-        }
-        else {
-          _ui->drawFrameLine(VT_DIM "Press any uncalibrated pad with MAX force." VT_RESET);
           _ui->drawFrameEmpty();
-        }
-
-        _ui->drawFrameEmpty();
-        _ui->drawSection("STATS");
-        CalStats st = computeStats(measuredDeltas, calibrated);
-        if (st.count > 0) {
-          _ui->drawFrameLine("Progress: %d/%d   Min: %u  Max: %u  Avg: %u",
-                             st.count, NUM_KEYS, st.minVal, st.maxVal, st.avgVal);
+          _ui->drawControlBar(VT_BOLD "[y] YES  [n] NO" VT_RESET);
         } else {
-          _ui->drawFrameLine("Progress: 0/%d", NUM_KEYS);
+          if (justReset) {
+            _ui->drawFrameLine(VT_CYAN "Key %d" VT_RESET VT_YELLOW " reset -- touch again to recalibrate" VT_RESET, resetKey);
+            _ui->drawFrameEmpty();
+            justReset = false;
+          } else if (detected == -2) {
+            _ui->drawFrameLine(VT_YELLOW "Multiple pads detected!" VT_RESET);
+            _ui->drawFrameLine("Lift off and touch ONE pad at a time.");
+            _ui->drawFrameEmpty();
+          } else if (detected >= 0) {
+            int sensor = activeKey / CHANNELS_PER_SENSOR;
+            int channel = activeKey % CHANNELS_PER_SENSOR;
+            char sc = 'A' + sensor;
+
+            if (calibrated[activeKey] && measuredDeltas[activeKey] >= currentMaxDelta) {
+              _ui->drawFrameLine(VT_CYAN "Key %d" VT_RESET " (%c:Ch%d)  Stored: %-5u  Current: %-5u",
+                                 activeKey, sc, channel, measuredDeltas[activeKey], currentMaxDelta);
+              _ui->drawFrameLine(VT_DIM "Double-tap to reset. Press harder to improve." VT_RESET);
+            } else {
+              uint16_t f = _keyboard->getFilteredData(activeKey);
+              uint16_t liveDelta = (referenceBaselines[activeKey] > f)
+                                 ? (referenceBaselines[activeKey] - f) : 0;
+              _ui->drawFrameLine(VT_CYAN "Key %d" VT_RESET " (%c:Ch%d)  Delta: %-5u  Max: " VT_GREEN "%-5u" VT_RESET,
+                                 activeKey, sc, channel, liveDelta, currentMaxDelta);
+            }
+          } else {
+            _ui->drawFrameLine(VT_DIM "Touch pads with MAX force. Double-tap to redo." VT_RESET);
+            _ui->drawFrameEmpty();
+          }
+
+          _ui->drawFrameEmpty();
+          _ui->drawSection("STATS");
+          CalStats st = computeStats(measuredDeltas, calibrated);
+          if (st.count > 0) {
+            _ui->drawFrameLine("Progress: %d/%d   Min: %u  Max: %u  Avg: %u",
+                               st.count, NUM_KEYS, st.minVal, st.maxVal, st.avgVal);
+          } else {
+            _ui->drawFrameLine("Progress: 0/%d", NUM_KEYS);
+          }
+          _ui->drawFrameEmpty();
+          _ui->drawControlBar(VT_DIM "[RET] VALIDATE ALL  [q] ABORT" VT_RESET);
         }
-        _ui->drawFrameEmpty();
-        _ui->drawControlBar(VT_DIM "[RET] VALIDATE  [s] SAVE  [q] ABORT" VT_RESET);
         _ui->vtFrameEnd();
       }
 
-      // Handle input
-      if (ev.type == NAV_ENTER && activeKey >= 0) {
-        measuredDeltas[activeKey] = currentMaxDelta;
-        calibrated[activeKey] = true;
-        _keyboard->setCalibrationMaxDelta(activeKey, currentMaxDelta);
-        _leds->playValidation();
-
-        // Refresh reference baselines for uncalibrated pads to compensate
-        // for drift during long calibration sessions
-        _keyboard->pollAllSensorData();
-        uint16_t freshBl[NUM_KEYS];
-        _keyboard->getBaselineData(freshBl);
-        for (int i = 0; i < NUM_KEYS; i++) {
-          if (!calibrated[i]) referenceBaselines[i] = freshBl[i];
+      // --- Input handling ---
+      if (confirmPending) {
+        if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+          if (confirmType == 'v') {
+            for (int i = 0; i < NUM_KEYS; i++) {
+              if (calibrated[i]) {
+                _keyboard->setCalibrationMaxDelta(i, measuredDeltas[i]);
+              }
+            }
+            _keyboard->setAutoReconfigEnabled(true);
+            _ui->vtClear();
+            state = CAL_RECAP;
+            screenDirty = true;
+          } else {
+            _keyboard->setAutoReconfigEnabled(true);
+            _ui->vtClear();
+            state = CAL_DONE;
+          }
+          confirmPending = false;
+        } else if (ev.type == NAV_CHAR && (ev.ch == 'n' || ev.ch == 'N')) {
+          confirmPending = false;
         }
-
-        int doneCount = 0;
-        for (int i = 0; i < NUM_KEYS; i++) {
-          if (calibrated[i]) doneCount++;
+      } else {
+        if (ev.type == NAV_ENTER) {
+          int doneCount = 0;
+          for (int i = 0; i < NUM_KEYS; i++) {
+            if (calibrated[i]) doneCount++;
+          }
+          if (doneCount == 0) {
+            // Nothing calibrated — ignore ENTER
+          } else if (doneCount < NUM_KEYS) {
+            confirmPending = true;
+            confirmType = 'v';
+          } else {
+            for (int i = 0; i < NUM_KEYS; i++) {
+              _keyboard->setCalibrationMaxDelta(i, measuredDeltas[i]);
+            }
+            _keyboard->setAutoReconfigEnabled(true);
+            _ui->vtClear();
+            state = CAL_RECAP;
+            screenDirty = true;
+          }
         }
-        if (doneCount == NUM_KEYS) {
-          _keyboard->setAutoReconfigEnabled(true);
-          _ui->vtClear();
-          state = CAL_RECAP;
-          screenDirty = true;
-        } else {
-          activeKey = -1;
-          lastActiveKey = -1;
-          currentMaxDelta = 0;
+        else if (ev.type == NAV_QUIT) {
+          int doneCount = 0;
+          for (int i = 0; i < NUM_KEYS; i++) {
+            if (calibrated[i]) doneCount++;
+          }
+          if (doneCount > 0) {
+            confirmPending = true;
+            confirmType = 'q';
+          } else {
+            _keyboard->setAutoReconfigEnabled(true);
+            _ui->vtClear();
+            state = CAL_DONE;
+          }
         }
-      }
-      else if (ev.type == NAV_CHAR && (ev.ch == 's' || ev.ch == 'S')) {
-        _keyboard->setAutoReconfigEnabled(true);
-        _ui->vtClear();
-        state = CAL_RECAP;
-        screenDirty = true;
-      }
-      else if (ev.type == NAV_QUIT) {
-        _keyboard->setAutoReconfigEnabled(true);
-        _ui->vtClear();
-        state = CAL_DONE;
       }
       break;
     }
