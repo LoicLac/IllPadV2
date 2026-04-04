@@ -7,18 +7,16 @@
 #include "SetupPotInput.h"
 
 class LedController;
-class NvsManager;
 class SetupUI;
 
 class ToolLedSettings {
 public:
   ToolLedSettings();
-  void begin(LedController* leds, NvsManager* nvs, SetupUI* ui);
+  void begin(LedController* leds, SetupUI* ui);
   void run();
 
 private:
   LedController* _leds;
-  NvsManager*    _nvs;
   SetupUI*       _ui;
 
   // Working copies

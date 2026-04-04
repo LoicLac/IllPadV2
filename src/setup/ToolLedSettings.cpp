@@ -130,7 +130,7 @@ static ColorSlotStore s_colorDefaults() {
 // Constructor
 // =================================================================
 ToolLedSettings::ToolLedSettings()
-  : _leds(nullptr), _nvs(nullptr), _ui(nullptr),
+  : _leds(nullptr), _ui(nullptr),
     _page(0), _cursor(0), _colorField(0),
     _editing(false), _nvsSaved(true), _confirmDefaults(false),
     _prevState(PREV_IDLE), _prevStart(0), _prevEventRow(0)
@@ -139,9 +139,8 @@ ToolLedSettings::ToolLedSettings()
   memset(&_cwk, 0, sizeof(_cwk));
 }
 
-void ToolLedSettings::begin(LedController* leds, NvsManager* nvs, SetupUI* ui) {
+void ToolLedSettings::begin(LedController* leds, SetupUI* ui) {
   _leds = leds;
-  _nvs = nvs;
   _ui = ui;
 }
 
@@ -382,21 +381,17 @@ void ToolLedSettings::adjustConfirmParam(int8_t dir, bool accel) {
 bool ToolLedSettings::saveLedSettings() {
   _wk.magic = EEPROM_MAGIC;
   _wk.version = LED_SETTINGS_VERSION;
-  Preferences prefs;
-  if (!prefs.begin(LED_SETTINGS_NVS_NAMESPACE, false)) return false;
-  prefs.putBytes(LED_SETTINGS_NVS_KEY, &_wk, sizeof(LedSettingsStore));
-  prefs.end();
+  if (!NvsManager::saveBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY, &_wk, sizeof(_wk)))
+    return false;
   if (_leds) _leds->loadLedSettings(_wk);
   return true;
 }
 
 bool ToolLedSettings::saveColorSlots() {
   _cwk.magic = COLOR_SLOT_MAGIC;
-  _cwk.version = 1;
-  Preferences prefs;
-  if (!prefs.begin(LED_SETTINGS_NVS_NAMESPACE, false)) return false;
-  prefs.putBytes(COLOR_SLOT_NVS_KEY, &_cwk, sizeof(ColorSlotStore));
-  prefs.end();
+  _cwk.version = COLOR_SLOT_VERSION;  // constant instead of hardcoded 1
+  if (!NvsManager::saveBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY, &_cwk, sizeof(_cwk)))
+    return false;
   if (_leds) _leds->loadColorSlots(_cwk);
   return true;
 }
@@ -1068,34 +1063,13 @@ void ToolLedSettings::run() {
   // Load working copies from NVS or defaults
   _wk = s_ledDefaults();
   _cwk = s_colorDefaults();
-  bool loadedFromNvs = false;
-  {
-    Preferences prefs;
-    if (prefs.begin(LED_SETTINGS_NVS_NAMESPACE, true)) {
-      size_t len = prefs.getBytesLength(LED_SETTINGS_NVS_KEY);
-      if (len == sizeof(LedSettingsStore)) {
-        LedSettingsStore tmp;
-        prefs.getBytes(LED_SETTINGS_NVS_KEY, &tmp, sizeof(LedSettingsStore));
-        if (tmp.magic == EEPROM_MAGIC && tmp.version == LED_SETTINGS_VERSION) {
-          _wk = tmp;
-          if (_wk.fgArpStopMin > _wk.fgArpStopMax) _wk.fgArpStopMax = _wk.fgArpStopMin;
-          if (_wk.fgArpPlayMin > _wk.fgArpPlayMax) _wk.fgArpPlayMax = _wk.fgArpPlayMin;
-          if (_wk.bgArpStopMin > _wk.bgArpStopMax) _wk.bgArpStopMax = _wk.bgArpStopMin;
-          if (_wk.bgArpPlayMin > _wk.bgArpPlayMax) _wk.bgArpPlayMax = _wk.bgArpPlayMin;
-          loadedFromNvs = true;
-        }
-      }
-      len = prefs.getBytesLength(COLOR_SLOT_NVS_KEY);
-      if (len == sizeof(ColorSlotStore)) {
-        ColorSlotStore tmp;
-        prefs.getBytes(COLOR_SLOT_NVS_KEY, &tmp, sizeof(ColorSlotStore));
-        if (tmp.magic == COLOR_SLOT_MAGIC && tmp.version == 1) {
-          _cwk = tmp;
-        }
-      }
-      prefs.end();
-    }
+  bool loadedFromNvs = NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
+                                             EEPROM_MAGIC, LED_SETTINGS_VERSION, &_wk, sizeof(_wk));
+  if (loadedFromNvs) {
+    validateLedSettingsStore(_wk);
   }
+  NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
+                        COLOR_SLOT_MAGIC, COLOR_SLOT_VERSION, &_cwk, sizeof(_cwk));
 
   Serial.print(ITERM_RESIZE);
 
@@ -1239,7 +1213,7 @@ void ToolLedSettings::run() {
           bool ok = saveLedSettings() & saveColorSlots();
           _editing = false;
           _nvsSaved = ok;
-          _ui->flashSaved();
+          if (ok) _ui->flashSaved();
           originalWk = _wk;
           originalCwk = _cwk;
           screenDirty = true;
@@ -1251,10 +1225,12 @@ void ToolLedSettings::run() {
           screenDirty = true;
         }
         if (ev.type == NAV_ENTER) {
-          _nvsSaved = saveLedSettings();
+          bool ok = saveLedSettings() & saveColorSlots();
           _editing = false;
-          _ui->flashSaved();
+          _nvsSaved = ok;
+          if (ok) _ui->flashSaved();
           originalWk = _wk;
+          originalCwk = _cwk;
           screenDirty = true;
         }
       } else {
@@ -1264,10 +1240,12 @@ void ToolLedSettings::run() {
           screenDirty = true;
         }
         if (ev.type == NAV_ENTER) {
-          _nvsSaved = saveLedSettings();
+          bool ok = saveLedSettings() & saveColorSlots();
           _editing = false;
-          _ui->flashSaved();
+          _nvsSaved = ok;
+          if (ok) _ui->flashSaved();
           originalWk = _wk;
+          originalCwk = _cwk;
           screenDirty = true;
         }
       }

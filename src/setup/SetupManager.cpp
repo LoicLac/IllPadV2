@@ -33,7 +33,7 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _toolBankConfig.begin(leds, nvs, &_ui, banks);
   _toolSettings.begin(keyboard, leds, &_ui);
   _toolPotMapping.begin(leds, &_ui, potRouter);
-  _toolLedSettings.begin(leds, nvs, &_ui);
+  _toolLedSettings.begin(leds, &_ui);
 }
 
 static InputParser s_input;
