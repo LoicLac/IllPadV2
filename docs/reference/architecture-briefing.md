@@ -87,9 +87,15 @@ Key files: `ScaleManager.cpp:123-227`, `main.cpp:handleManagerUpdates()` (line 5
 
 ### Pot → Parameter
 ```
-readAndSmooth(): analogRead → EMA (α=0.02) → deadband gate (±15 ADC)
-resolveBindings(): button state + bank type → find best binding
+PotFilter::updateAll(): oversample 4× → adaptive EMA → deadband gate → edge snap → sleep/wake
+  State machine per pot: ACTIVE → SETTLING → SLEEPING (peek every 50ms)
+  Output: getStable() (0-4095), hasMoved() (bool)
+PotRouter::update():
+  PotFilter::updateAll()
+  resolveBindings(): button state + bank type → find best binding
+  for each pot with hasMoved(): applyBinding()
 applyBinding():
+  adc = PotFilter::getStable(potIndex)
   if TARGET_LED_BRIGHTNESS: bypass catch, apply immediately
   if !caught: compare adc vs storedValue, show uncaught bargraph, WAIT
   if caught: convert ADC → parameter range, write output, show bargraph
@@ -97,7 +103,7 @@ applyBinding():
 handlePotPipeline(): read getters → write to BankSlot/ArpEngine/atomics
   → consumeCC/consumePitchBend → MidiTransport sends
 ```
-Key files: `PotRouter.cpp:331-340` (update), `345-360` (readAndSmooth), `365-412` (resolveBindings), `417-560` (applyBinding), `main.cpp:handlePotPipeline()` (line 697), `pushParamsToEngine()` (line 684)
+Key files: `PotFilter.cpp` (updateAll), `PotRouter.cpp:317-330` (update), `335-400` (resolveBindings), `400-560` (applyBinding), `main.cpp:handlePotPipeline()` (line 697), `pushParamsToEngine()` (line 684)
 
 ---
 

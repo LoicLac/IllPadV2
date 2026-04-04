@@ -90,6 +90,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `SettingsStore` | `illpad_set` | `settings` | 0xBEEF | 10 | 14B | T5 Settings |
 | `PotParamsStore` | `illpad_pot` | `params` | 0xBEEF | 2 | 10B | NvsManager (runtime) |
 | `PotMappingStore` | `illpad_pmap` | `mapping` | 0xBEEF | 1 | 36B | T6 PotMapping |
+| `PotFilterStore` | `illpad_pflt` | `cfg` | 0xBEEF | 1 | 12B | PotFilter (runtime, tuned via T6 Monitor) |
 | `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 2 | 38B | T7 LedSettings |
 | `ColorSlotStore` | `illpad_lset` | `ledcolors` | 0xC010 | 1 | 30B | T7 LedSettings |
 

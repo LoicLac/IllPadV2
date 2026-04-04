@@ -329,6 +329,7 @@ Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous 
 | `illpad_led` | LED brightness (global) — scalar, not blob |
 | `illpad_sens` | pad sensitivity (global) — scalar, not blob |
 | `illpad_pmap` | PotMappingStore (both NORMAL + ARPEG contexts) |
+| `illpad_pflt` | PotFilterStore (snap, activity threshold, sleep, deadband, edge snap, wake threshold) |
 | `illpad_lset` | LedSettingsStore (intensities, timings, confirmations, gammaTenths) + ColorSlotStore (13 preset+hue slots, magic 0xC010) |
 
 NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never blocks on flash.
