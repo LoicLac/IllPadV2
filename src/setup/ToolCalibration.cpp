@@ -5,6 +5,7 @@
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
 #include "../core/KeyboardData.h"
+#include "../managers/NvsManager.h"
 #include <Arduino.h>
 #include <Preferences.h>
 
@@ -136,14 +137,8 @@ void ToolCalibration::run() {
   CalState state = CAL_SENSITIVITY;
 
   // Check NVS for existing calibration data
-  bool nvsSaved = false;
-  {
-    Preferences p;
-    if (p.begin(CAL_PREFERENCES_NAMESPACE, true)) {
-      nvsSaved = (p.getBytesLength(CAL_PREFERENCES_KEY) == sizeof(CalDataStore));
-      p.end();
-    }
-  }
+  bool nvsSaved = NvsManager::checkBlob(CAL_PREFERENCES_NAMESPACE, CAL_PREFERENCES_KEY,
+                                         EEPROM_MAGIC, EEPROM_VERSION, sizeof(CalDataStore));
 
   // Shared state
   uint16_t referenceBaselines[NUM_KEYS];
@@ -444,7 +439,7 @@ void ToolCalibration::run() {
     case CAL_SAVE: {
       _ui->vtClear();
       _ui->vtFrameStart();
-      _ui->drawConsoleHeader("TOOL 1: SAVING", true);
+      _ui->drawConsoleHeader("TOOL 1: SAVING", false);
       _ui->drawFrameEmpty();
       _ui->drawFrameLine(VT_BOLD "Saving calibration data..." VT_RESET);
       _ui->drawFrameEmpty();

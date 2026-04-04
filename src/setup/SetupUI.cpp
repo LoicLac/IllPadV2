@@ -1,6 +1,7 @@
 #include "SetupUI.h"
 #include "../core/LedController.h"
 #include "../core/KeyboardData.h"
+#include "../managers/NvsManager.h"
 #include "../managers/PotRouter.h"
 #include <Arduino.h>
 #include <Preferences.h>
@@ -268,69 +269,27 @@ void SetupUI::drawHeader(const char* title, const char* rightText) {
 // =================================================================
 
 void SetupUI::printMainMenu() {
-  // Quick NVS status checks (read-only, ~1ms each)
-  Preferences prefs;
-  char calStatus = ' ';
-  char ordStatus = ' ';
-  char roleStatus = ' ';
-  char bankStatus = ' ';
-  char setStatus = ' ';
-
-  if (prefs.begin(CAL_PREFERENCES_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(CAL_PREFERENCES_KEY);
-    calStatus = (len == sizeof(CalDataStore)) ? 'v' : '!';
-    prefs.end();
-  } else { calStatus = '!'; }
-
-  if (prefs.begin(NOTEMAP_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(NOTEMAP_NVS_KEY);
-    ordStatus = (len == sizeof(NoteMapStore)) ? 'v' : '!';
-    prefs.end();
-  } else { ordStatus = '!'; }
-
-  if (prefs.begin(BANKPAD_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(BANKPAD_NVS_KEY);
-    roleStatus = (len > 0) ? 'v' : '!';
-    prefs.end();
-  } else { roleStatus = '!'; }
-
-  if (prefs.begin(BANKTYPE_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(BANKTYPE_NVS_KEY);
-    bankStatus = (len == NUM_BANKS) ? 'v' : '!';
-    prefs.end();
-  } else { bankStatus = '!'; }
-
-  if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
-    if (len == sizeof(SettingsStore)) {
-      SettingsStore tmp;
-      prefs.getBytes(SETTINGS_NVS_KEY, &tmp, sizeof(SettingsStore));
-      setStatus = (tmp.magic == EEPROM_MAGIC && tmp.version == SETTINGS_VERSION) ? 'v' : '!';
-    } else { setStatus = '!'; }
-    prefs.end();
-  } else { setStatus = '!'; }
-
-  char potStatus = ' ';
-  if (prefs.begin(POTMAP_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(POTMAP_NVS_KEY);
-    if (len == sizeof(PotMappingStore)) {
-      PotMappingStore tmp;
-      prefs.getBytes(POTMAP_NVS_KEY, &tmp, sizeof(PotMappingStore));
-      potStatus = (tmp.magic == EEPROM_MAGIC && tmp.version == POTMAP_VERSION) ? 'v' : '!';
-    } else { potStatus = '!'; }
-    prefs.end();
-  } else { potStatus = '!'; }
-
-  char ledStatus = ' ';
-  if (prefs.begin(LED_SETTINGS_NVS_NAMESPACE, true)) {
-    size_t len = prefs.getBytesLength(LED_SETTINGS_NVS_KEY);
-    if (len == sizeof(LedSettingsStore)) {
-      LedSettingsStore tmp;
-      prefs.getBytes(LED_SETTINGS_NVS_KEY, &tmp, sizeof(LedSettingsStore));
-      ledStatus = (tmp.magic == EEPROM_MAGIC && tmp.version == LED_SETTINGS_VERSION) ? 'v' : '!';
-    } else { ledStatus = '!'; }
-    prefs.end();
-  } else { ledStatus = '!'; }
+  // Unified NVS status checks via descriptor table
+  char toolStatus[7];
+  for (uint8_t t = 0; t < 7; t++) {
+    bool allOk = true;
+    for (uint8_t d = TOOL_NVS_FIRST[t]; d <= TOOL_NVS_LAST[t]; d++) {
+      if (!NvsManager::checkBlob(NVS_DESCRIPTORS[d].ns, NVS_DESCRIPTORS[d].key,
+                                  NVS_DESCRIPTORS[d].magic, NVS_DESCRIPTORS[d].version,
+                                  NVS_DESCRIPTORS[d].size)) {
+        allOk = false;
+        break;
+      }
+    }
+    toolStatus[t] = allOk ? 'v' : '!';
+  }
+  char calStatus  = toolStatus[0];
+  char ordStatus  = toolStatus[1];
+  char roleStatus = toolStatus[2];
+  char bankStatus = toolStatus[3];
+  char setStatus  = toolStatus[4];
+  char potStatus  = toolStatus[5];
+  char ledStatus  = toolStatus[6];
 
   auto statusStr = [](char s) -> const char* {
     if (s == 'v') return VT_REVERSE VT_GREEN " ok " VT_RESET;
