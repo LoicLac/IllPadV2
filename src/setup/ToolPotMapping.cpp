@@ -3,6 +3,7 @@
 #include "InputParser.h"
 #include "../core/LedController.h"
 #include "../managers/PotRouter.h"
+#include "../managers/NvsManager.h"
 #include <Preferences.h>
 #include <Arduino.h>
 #include <string.h>
@@ -152,13 +153,10 @@ int8_t ToolPotMapping::detectMovedPot(bool btnLeftHeld) {
 bool ToolPotMapping::saveMapping() {
   _wk.magic = EEPROM_MAGIC;
   _wk.version = POTMAP_VERSION;
-  Preferences prefs;
-  if (!prefs.begin(POTMAP_NVS_NAMESPACE, false)) return false;
-  prefs.putBytes(POTMAP_NVS_KEY, &_wk, sizeof(PotMappingStore));
-  prefs.end();
-  if (_potRouter) {
-    _potRouter->applyMapping(_wk);
-  }
+  _wk.reserved = 0;  // FIX: was uninitialized
+  if (!NvsManager::saveBlob(POTMAP_NVS_NAMESPACE, POTMAP_NVS_KEY, &_wk, sizeof(_wk)))
+    return false;
+  if (_potRouter) _potRouter->applyMapping(_wk);
   _nvsSaved = true;
   return true;
 }
@@ -172,11 +170,14 @@ void ToolPotMapping::assignCurrentTarget() {
   PotTarget newTarget = _pool[_poolIdx];
 
   if (newTarget == TARGET_EMPTY) {
+    PotMapping backup = map[slot];
     map[slot].target = TARGET_EMPTY;
     map[slot].ccNumber = 0;
     if (saveMapping()) {
       _ui->flashSaved();
       _editing = false;
+    } else {
+      map[slot] = backup;
     }
     return;
   }
@@ -220,11 +221,14 @@ void ToolPotMapping::assignCurrentTarget() {
     return;
   }
 
+  PotMapping backup = map[slot];
   map[slot].target = newTarget;
   map[slot].ccNumber = 0;
   if (saveMapping()) {
     _ui->flashSaved();
     _editing = false;
+  } else {
+    map[slot] = backup;
   }
 }
 
@@ -545,14 +549,8 @@ void ToolPotMapping::run() {
   _stealSourceSlot = -1;
   _stealTarget = TARGET_EMPTY;
   // Check if NVS actually has saved data (not just defaults)
-  {
-    Preferences prefs;
-    _nvsSaved = false;
-    if (prefs.begin(POTMAP_NVS_NAMESPACE, true)) {
-      _nvsSaved = (prefs.getBytesLength(POTMAP_NVS_KEY) == sizeof(PotMappingStore));
-      prefs.end();
-    }
-  }
+  _nvsSaved = NvsManager::checkBlob(POTMAP_NVS_NAMESPACE, POTMAP_NVS_KEY,
+                                     EEPROM_MAGIC, POTMAP_VERSION, sizeof(PotMappingStore));
 
   Serial.print(ITERM_RESIZE);
 
@@ -610,15 +608,21 @@ void ToolPotMapping::run() {
     if (_confirmSteal) {
       if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
         PotMapping* map = currentMap();
+        uint8_t slot = cursorToSlot();
+        PotMapping backupSource = map[_stealSourceSlot];
+        PotMapping backupSlot = map[slot];
         map[_stealSourceSlot].target = TARGET_EMPTY;
         map[_stealSourceSlot].ccNumber = 0;
-        uint8_t slot = cursorToSlot();
         map[slot].target = _stealTarget;
         map[slot].ccNumber = 0;
         if (saveMapping()) {
           _ui->flashSaved();
           _confirmSteal = false;
           _editing = false;
+        } else {
+          map[_stealSourceSlot] = backupSource;
+          map[slot] = backupSlot;
+          _confirmSteal = false;
         }
         screenDirty = true;
       } else if (ev.type != NAV_NONE) {
