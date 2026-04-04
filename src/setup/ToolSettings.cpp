@@ -25,12 +25,11 @@ static const uint8_t CAT_SAFE_START = 6;
 static const uint8_t CAT_SAFE_END   = 8;   // 6,7
 
 ToolSettings::ToolSettings()
-  : _keyboard(nullptr), _leds(nullptr), _nvs(nullptr), _ui(nullptr) {}
+  : _keyboard(nullptr), _leds(nullptr), _ui(nullptr) {}
 
-void ToolSettings::begin(CapacitiveKeyboard* keyboard, LedController* leds, NvsManager* nvs, SetupUI* ui) {
+void ToolSettings::begin(CapacitiveKeyboard* keyboard, LedController* leds, SetupUI* ui) {
   _keyboard = keyboard;
   _leds = leds;
-  _nvs = nvs;
   _ui = ui;
 }
 
@@ -87,14 +86,12 @@ bool ToolSettings::saveSettings(const SettingsStore& wk) {
   SettingsStore toSave = wk;
   toSave.magic = EEPROM_MAGIC;
   toSave.version = SETTINGS_VERSION;
-  Preferences prefs;
-  if (!prefs.begin(SETTINGS_NVS_NAMESPACE, false)) return false;
-  prefs.putBytes(SETTINGS_NVS_KEY, &toSave, sizeof(SettingsStore));
-  prefs.end();
+  // PIEGE: SettingsStore byte 3 is baselineProfile, NOT reserved. Do NOT zero it.
+  // The static_assert in KeyboardData.h defends this layout.
+  if (!NvsManager::saveBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY, &toSave, sizeof(toSave)))
+    return false;
 
-  if (_keyboard) {
-    _keyboard->setBaselineProfile(toSave.baselineProfile);
-  }
+  if (_keyboard) _keyboard->setBaselineProfile(toSave.baselineProfile);
   return true;
 }
 
@@ -174,29 +171,10 @@ void ToolSettings::run() {
                       DEFAULT_CLOCK_MODE,
                       DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
                       DEFAULT_PANIC_ON_RECONNECT, 0, DEFAULT_BAT_ADC_AT_FULL};
-  bool loadedFromNvs = false;
-  {
-    Preferences prefs;
-    if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
-      size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
-      if (len == sizeof(SettingsStore)) {
-        SettingsStore tmp;
-        prefs.getBytes(SETTINGS_NVS_KEY, &tmp, sizeof(SettingsStore));
-        if (tmp.magic == EEPROM_MAGIC && tmp.version == SETTINGS_VERSION) {
-          wk = tmp;
-          loadedFromNvs = true;
-          // Validate individual fields against ranges
-          if (wk.baselineProfile >= NUM_BASELINE_PROFILES) wk.baselineProfile = DEFAULT_BASELINE_PROFILE;
-          if (wk.aftertouchRate < AT_RATE_MIN || wk.aftertouchRate > AT_RATE_MAX) wk.aftertouchRate = AT_RATE_DEFAULT;
-          if (wk.bleInterval >= NUM_BLE_INTERVALS) wk.bleInterval = DEFAULT_BLE_INTERVAL;
-          if (wk.clockMode >= NUM_CLOCK_MODES) wk.clockMode = DEFAULT_CLOCK_MODE;
-          if (wk.doubleTapMs < DOUBLE_TAP_MS_MIN || wk.doubleTapMs > DOUBLE_TAP_MS_MAX) wk.doubleTapMs = DOUBLE_TAP_MS_DEFAULT;
-          if (wk.potBarDurationMs < LED_BARGRAPH_DURATION_MIN || wk.potBarDurationMs > LED_BARGRAPH_DURATION_MAX) wk.potBarDurationMs = LED_BARGRAPH_DURATION_DEFAULT;
-          if (wk.panicOnReconnect > 1) wk.panicOnReconnect = DEFAULT_PANIC_ON_RECONNECT;
-        }
-      }
-      prefs.end();
-    }
+  bool loadedFromNvs = NvsManager::loadBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY,
+                                             EEPROM_MAGIC, SETTINGS_VERSION, &wk, sizeof(wk));
+  if (loadedFromNvs) {
+    validateSettingsStore(wk);
   }
 
   Serial.print(ITERM_RESIZE);

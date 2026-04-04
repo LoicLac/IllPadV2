@@ -5,7 +5,6 @@
 
 class CapacitiveKeyboard;
 class LedController;
-class NvsManager;
 class SetupUI;
 struct SettingsStore;
 
@@ -13,7 +12,7 @@ class ToolSettings {
 public:
   ToolSettings();
 
-  void begin(CapacitiveKeyboard* keyboard, LedController* leds, NvsManager* nvs, SetupUI* ui);
+  void begin(CapacitiveKeyboard* keyboard, LedController* leds, SetupUI* ui);
   void run();  // Blocking — unified arrow navigation, immediate save per param
 
 private:
@@ -23,7 +22,6 @@ private:
 
   CapacitiveKeyboard* _keyboard;
   LedController*      _leds;
-  NvsManager*         _nvs;
   SetupUI*            _ui;
 };
 
