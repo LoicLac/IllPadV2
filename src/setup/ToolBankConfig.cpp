@@ -1,5 +1,6 @@
 #include "ToolBankConfig.h"
 #include "../core/LedController.h"
+#include "../core/PotFilter.h"
 #include "../managers/NvsManager.h"
 #include "SetupUI.h"
 #include "InputParser.h"
@@ -100,10 +101,45 @@ void ToolBankConfig::run() {
   bool errorShown = false;
   unsigned long errorTime = 0;
 
+  // Seed pot for bank navigation
+  _potBankIdx = cursor;
+  _pots.seed(0, &_potBankIdx, 0, NUM_BANKS - 1, POT_RELATIVE, 16);
+
   _ui->vtClear();
 
   while (true) {
+    PotFilter::updateAll();
+    _pots.update();
     if (_leds) _leds->update();
+
+    // --- Pot navigation ---
+    if (!confirmDefaults) {
+      if (!editing && _pots.getMove(0)) {
+        cursor = (uint8_t)_potBankIdx;
+        screenDirty = true;
+      } else if (editing && _pots.getMove(0)) {
+        // Combined state pot: apply type/quantize
+        if (_potComboState > 0) {
+          // Check 4-ARPEG limit (exclude current bank)
+          uint8_t arpCount = 0;
+          for (uint8_t i = 0; i < NUM_BANKS; i++)
+            if (i != cursor && wkTypes[i] == BANK_ARPEG) arpCount++;
+          if (arpCount >= 4) {
+            _potComboState = 0;  // Force back to NORMAL
+            errorShown = true;
+            errorTime = millis();
+          }
+        }
+        if (_potComboState == 0) {
+          wkTypes[cursor] = BANK_NORMAL;
+          wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
+        } else {
+          wkTypes[cursor] = BANK_ARPEG;
+          wkQuantize[cursor] = _potComboState - 1;
+        }
+        screenDirty = true;
+      }
+    }
 
     NavEvent ev = input.update();
 
@@ -142,6 +178,9 @@ void ToolBankConfig::run() {
         wkTypes[cursor] = savedTypes[cursor];
         wkQuantize[cursor] = savedQuantize[cursor];
         editing = false;
+        // Re-seed pot for nav mode
+        _potBankIdx = cursor;
+        _pots.seed(0, &_potBankIdx, 0, NUM_BANKS - 1, POT_RELATIVE, 16);
         screenDirty = true;
       } else {
         _ui->vtClear();
@@ -158,13 +197,18 @@ void ToolBankConfig::run() {
       if (ev.type == NAV_UP) {
         if (cursor > 0) cursor--;
         else cursor = NUM_BANKS - 1;
+        _potBankIdx = cursor;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_DOWN) {
         if (cursor < NUM_BANKS - 1) cursor++;
         else cursor = 0;
+        _potBankIdx = cursor;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         editing = true;
+        // Seed pot for combined state cycle
+        _potComboState = (wkTypes[cursor] == BANK_NORMAL) ? 0 : 1 + wkQuantize[cursor];
+        _pots.seed(0, &_potComboState, 0, 3, POT_RELATIVE, 8);
         screenDirty = true;
       }
     } else {
@@ -194,6 +238,7 @@ void ToolBankConfig::run() {
           wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
           errorShown = false;
         }
+        _potComboState = (wkTypes[cursor] == BANK_NORMAL) ? 0 : 1 + wkQuantize[cursor];
         screenDirty = true;
       } else if (ev.type == NAV_LEFT) {
         if (wkTypes[cursor] == BANK_NORMAL) {
@@ -220,6 +265,7 @@ void ToolBankConfig::run() {
           wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
           errorShown = false;
         }
+        _potComboState = (wkTypes[cursor] == BANK_NORMAL) ? 0 : 1 + wkQuantize[cursor];
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         if (saveConfig(wkTypes, wkQuantize)) {
@@ -228,6 +274,9 @@ void ToolBankConfig::run() {
           editing = false;
           nvsSaved = true;
           _ui->flashSaved();
+          // Re-seed pot for nav mode
+          _potBankIdx = cursor;
+          _pots.seed(0, &_potBankIdx, 0, NUM_BANKS - 1, POT_RELATIVE, 16);
           screenDirty = true;
         }
       }
