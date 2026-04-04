@@ -82,7 +82,6 @@ private:
   // Dirty flags (set by queue calls on loop task, cleared by NVS task)
   std::atomic<bool> _bankDirty;
   std::atomic<bool> _scaleDirty[NUM_BANKS];
-  std::atomic<bool> _typesDirty;
   std::atomic<bool> _potDirty;
   std::atomic<bool> _velocityDirty[NUM_BANKS];
   std::atomic<bool> _pitchBendDirty[NUM_BANKS];
@@ -96,7 +95,6 @@ private:
   // Pending data (copied by queue calls, read by NVS task)
   uint8_t     _pendingBank;
   ScaleConfig _pendingScale[NUM_BANKS];
-  BankType    _pendingTypes[NUM_BANKS];
   uint8_t     _pendingBaseVel[NUM_BANKS];
   uint8_t     _pendingVelVar[NUM_BANKS];
   uint16_t    _pendingPitchBend[NUM_BANKS];
