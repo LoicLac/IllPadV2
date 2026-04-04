@@ -58,7 +58,7 @@ static const char* POOL_PLAYSTOP_LABELS[] = { "P/S" };
 // =================================================================
 
 ToolPadRoles::ToolPadRoles()
-  : _keyboard(nullptr), _leds(nullptr), _nvs(nullptr), _ui(nullptr),
+  : _keyboard(nullptr), _leds(nullptr), _ui(nullptr),
     _bankPads(nullptr), _rootPads(nullptr), _modePads(nullptr),
     _chromaticPad(nullptr), _holdPad(nullptr), _playStopPad(nullptr),
     _octavePads(nullptr),
@@ -76,13 +76,12 @@ ToolPadRoles::ToolPadRoles()
 }
 
 void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
-                          NvsManager* nvs, SetupUI* ui,
+                          SetupUI* ui,
                           uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
                           uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
                           uint8_t* octavePads) {
   _keyboard     = keyboard;
   _leds         = leds;
-  _nvs          = nvs;
   _ui           = ui;
   _bankPads     = bankPads;
   _rootPads     = rootPads;
@@ -275,45 +274,56 @@ void ToolPadRoles::resetToDefaults() {
 // =================================================================
 
 bool ToolPadRoles::saveAll() {
-  Preferences prefs;
-  bool ok = true;
+  bool allOk = true;
 
+  // 1. BankPadStore
   BankPadStore bps;
-  bps.magic    = EEPROM_MAGIC;
-  bps.version  = BANKPAD_VERSION;
+  bps.magic = EEPROM_MAGIC;
+  bps.version = BANKPAD_VERSION;
   bps.reserved = 0;
   memcpy(bps.bankPads, _wkBankPads, NUM_BANKS);
-  if (prefs.begin(BANKPAD_NVS_NAMESPACE, false)) {
-    prefs.putBytes(BANKPAD_NVS_KEY, &bps, sizeof(BankPadStore));
-    prefs.end();
-  } else { ok = false; }
+  if (NvsManager::saveBlob(BANKPAD_NVS_NAMESPACE, BANKPAD_NVS_KEY, &bps, sizeof(bps))) {
+    memcpy(_bankPads, _wkBankPads, NUM_BANKS);
+  } else {
+    allOk = false;
+  }
 
-  if (prefs.begin(SCALE_PAD_NVS_NAMESPACE, false)) {
-    prefs.putBytes(SCALE_PAD_ROOT_KEY, _wkRootPads, 7);
-    prefs.putBytes(SCALE_PAD_MODE_KEY, _wkModePads, 7);
-    prefs.putUChar(SCALE_PAD_CHROM_KEY, _wkChromPad);
-    prefs.end();
-  } else { ok = false; }
+  // 2. ScalePadStore
+  ScalePadStore sps;
+  sps.magic = EEPROM_MAGIC;
+  sps.version = SCALEPAD_VERSION;
+  sps.reserved = 0;
+  memcpy(sps.rootPads, _wkRootPads, 7);
+  memcpy(sps.modePads, _wkModePads, 7);
+  sps.chromaticPad = _wkChromPad;
+  sps._pad = 0;
+  if (NvsManager::saveBlob(SCALE_PAD_NVS_NAMESPACE, SCALEPAD_NVS_KEY, &sps, sizeof(sps))) {
+    memcpy(_rootPads, _wkRootPads, 7);
+    memcpy(_modePads, _wkModePads, 7);
+    *_chromaticPad = _wkChromPad;
+  } else {
+    allOk = false;
+  }
 
-  if (prefs.begin(ARP_PAD_NVS_NAMESPACE, false)) {
-    prefs.putUChar(ARP_PAD_HOLD_KEY, _wkHoldPad);
-    prefs.putUChar(ARP_PAD_PS_KEY, _wkPlayStopPad);
-    prefs.putBytes(ARP_PAD_OCT_KEY, _wkOctavePads, 4);
-    prefs.end();
-  } else { ok = false; }
+  // 3. ArpPadStore
+  ArpPadStore aps;
+  aps.magic = EEPROM_MAGIC;
+  aps.version = ARPPAD_VERSION;
+  aps.reserved = 0;
+  aps.holdPad = _wkHoldPad;
+  aps.playStopPad = _wkPlayStopPad;
+  memcpy(aps.octavePads, _wkOctavePads, 4);
+  memset(aps._pad, 0, 2);
+  if (NvsManager::saveBlob(ARP_PAD_NVS_NAMESPACE, ARPPAD_NVS_KEY, &aps, sizeof(aps))) {
+    *_holdPad      = _wkHoldPad;
+    *_playStopPad  = _wkPlayStopPad;
+    if (_octavePads) memcpy(_octavePads, _wkOctavePads, 4);
+  } else {
+    allOk = false;
+  }
 
-  if (!ok) return false;
-
-  memcpy(_bankPads, _wkBankPads, NUM_BANKS);
-  memcpy(_rootPads, _wkRootPads, 7);
-  memcpy(_modePads, _wkModePads, 7);
-  *_chromaticPad = _wkChromPad;
-  *_holdPad      = _wkHoldPad;
-  *_playStopPad  = _wkPlayStopPad;
-  if (_octavePads) memcpy(_octavePads, _wkOctavePads, 4);
-
-  _nvsSaved = true;
-  return true;
+  _nvsSaved = allOk;
+  return allOk;
 }
 
 // =================================================================
@@ -561,38 +571,37 @@ void ToolPadRoles::run() {
   _wkPlayStopPad = *_playStopPad;
   if (_octavePads) memcpy(_wkOctavePads, _octavePads, 4);
 
-  // Load saved pad roles from NVS (setup mode may run before NvsManager::loadAll)
+  // Load saved pad roles from NVS
   {
-    Preferences prefs;
-    if (prefs.begin(BANKPAD_NVS_NAMESPACE, true)) {
-      size_t len = prefs.getBytesLength(BANKPAD_NVS_KEY);
-      _nvsSaved = false;
-      if (len == sizeof(BankPadStore)) {
-        BankPadStore bps;
-        prefs.getBytes(BANKPAD_NVS_KEY, &bps, sizeof(BankPadStore));
-        if (bps.magic == EEPROM_MAGIC && bps.version == BANKPAD_VERSION) {
-          memcpy(_wkBankPads, bps.bankPads, NUM_BANKS);
-          _nvsSaved = true;
-        }
-      }
-      prefs.end();
+    BankPadStore bps;
+    bool bpOk = NvsManager::loadBlob(BANKPAD_NVS_NAMESPACE, BANKPAD_NVS_KEY,
+                                      EEPROM_MAGIC, BANKPAD_VERSION, &bps, sizeof(bps));
+    if (bpOk) {
+      validateBankPadStore(bps);
+      memcpy(_wkBankPads, bps.bankPads, NUM_BANKS);
     }
-    if (prefs.begin(SCALE_PAD_NVS_NAMESPACE, true)) {
-      size_t len;
-      len = prefs.getBytesLength(SCALE_PAD_ROOT_KEY);
-      if (len == 7) prefs.getBytes(SCALE_PAD_ROOT_KEY, _wkRootPads, 7);
-      len = prefs.getBytesLength(SCALE_PAD_MODE_KEY);
-      if (len == 7) prefs.getBytes(SCALE_PAD_MODE_KEY, _wkModePads, 7);
-      _wkChromPad = prefs.getUChar(SCALE_PAD_CHROM_KEY, _wkChromPad);
-      prefs.end();
+
+    ScalePadStore sps;
+    bool spOk = NvsManager::loadBlob(SCALE_PAD_NVS_NAMESPACE, SCALEPAD_NVS_KEY,
+                                      EEPROM_MAGIC, SCALEPAD_VERSION, &sps, sizeof(sps));
+    if (spOk) {
+      validateScalePadStore(sps);
+      memcpy(_wkRootPads, sps.rootPads, 7);
+      memcpy(_wkModePads, sps.modePads, 7);
+      _wkChromPad = sps.chromaticPad;
     }
-    if (prefs.begin(ARP_PAD_NVS_NAMESPACE, true)) {
-      _wkHoldPad     = prefs.getUChar(ARP_PAD_HOLD_KEY, _wkHoldPad);
-      _wkPlayStopPad = prefs.getUChar(ARP_PAD_PS_KEY, _wkPlayStopPad);
-      size_t octLen = prefs.getBytesLength(ARP_PAD_OCT_KEY);
-      if (octLen == 4) prefs.getBytes(ARP_PAD_OCT_KEY, _wkOctavePads, 4);
-      prefs.end();
+
+    ArpPadStore aps;
+    bool apOk = NvsManager::loadBlob(ARP_PAD_NVS_NAMESPACE, ARPPAD_NVS_KEY,
+                                      EEPROM_MAGIC, ARPPAD_VERSION, &aps, sizeof(aps));
+    if (apOk) {
+      validateArpPadStore(aps);
+      _wkHoldPad = aps.holdPad;
+      _wkPlayStopPad = aps.playStopPad;
+      memcpy(_wkOctavePads, aps.octavePads, 4);
     }
+
+    _nvsSaved = bpOk && spOk && apOk;
   }
 
   // Reset navigation state

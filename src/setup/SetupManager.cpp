@@ -26,7 +26,7 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _ui.begin(leds);
   _toolCal.begin(keyboard, leds, &_ui);
   _toolOrdering.begin(keyboard, leds, &_ui, padOrder);
-  _toolRoles.begin(keyboard, leds, nvs, &_ui,
+  _toolRoles.begin(keyboard, leds, &_ui,
                    bankPads, rootPads, modePads,
                    chromaticPad, holdPad, playStopPad,
                    octavePads);

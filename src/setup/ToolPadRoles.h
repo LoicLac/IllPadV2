@@ -7,7 +7,6 @@
 
 class CapacitiveKeyboard;
 class LedController;
-class NvsManager;
 class SetupUI;
 
 // Role codes for grid coloring
@@ -33,7 +32,7 @@ public:
   ToolPadRoles();
 
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
-             NvsManager* nvs, SetupUI* ui,
+             SetupUI* ui,
              uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
              uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
              uint8_t* octavePads);
@@ -42,7 +41,6 @@ public:
 private:
   CapacitiveKeyboard* _keyboard;
   LedController*      _leds;
-  NvsManager*         _nvs;
   SetupUI*            _ui;
 
   // Pointers to live pad assignment arrays (owned by caller)
