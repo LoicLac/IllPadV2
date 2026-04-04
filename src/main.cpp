@@ -209,6 +209,22 @@ void setup() {
   uint8_t octavePads[4] = {25, 26, 27, 28};
 
   // =================================================================
+  // PotFilter early init — needed in both runtime AND setup mode
+  // (Phase 2: pot nav in setup tools reads PotFilter::getStable())
+  // begin() has an internal guard so the second call at normal boot is a no-op.
+  // =================================================================
+  PotFilter::begin();
+  {
+    PotFilterStore pfs;
+    if (NvsManager::loadBlob(POTFILTER_NVS_NAMESPACE, POTFILTER_NVS_KEY,
+                             EEPROM_MAGIC, POT_FILTER_VERSION,
+                             &pfs, sizeof(pfs))) {
+      validatePotFilterStore(pfs);
+      PotFilter::setConfig(pfs);
+    }
+  }
+
+  // =================================================================
   // Setup Mode Detection (hold rear button 3s at boot)
   // Must happen BEFORE sensing task starts (needs direct keyboard access)
   // =================================================================

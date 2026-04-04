@@ -72,6 +72,10 @@ static uint16_t oversampleRead(uint8_t pin) {
 // =================================================================
 
 void PotFilter::begin() {
+    static bool s_begun = false;
+    if (s_begun) return;
+    s_begun = true;
+
     applyDefaults();
     s_rearCounter = 0;
 
