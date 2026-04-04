@@ -143,11 +143,11 @@ const uint8_t POT_RIGHT3_PIN = 6;   // GPIO6  — ADC1_CH5 — Right side pot 3 
 const uint8_t POT_RIGHT4_PIN = 7;   // GPIO7  — ADC1_CH6 — Right side pot 4 (base velocity / velocity variation)
 const uint8_t POT_REAR_PIN   = 1;   // GPIO1  — ADC1_CH0 — Rear (LED brightness / pad sensitivity)
 const uint8_t NUM_POTS = 5;
+const uint8_t POT_PINS[NUM_POTS] = {
+    POT_RIGHT1_PIN, POT_RIGHT2_PIN, POT_RIGHT3_PIN, POT_RIGHT4_PIN, POT_REAR_PIN
+};
 
 const int   POT_DEADZONE        = 50;    // ADC change threshold for debug display
-const float POT_SMOOTHING_ALPHA = 0.02f; // EMA filter (lower = smoother, 0.02 = heavy smoothing)
-const float POT_MOVE_THRESHOLD  = 4.0f;  // Smoothed ADC delta to register movement (higher = less jitter)
-const int   POT_OUTPUT_DEADBAND = 15;     // Output deadband: smoothed must move ≥ this from last stable value
 
 // --- Pot Catch & Bargraph ---
 const int      POT_CATCH_WINDOW          = 100;   // ADC units (±2.4% of 4095) to catch stored value

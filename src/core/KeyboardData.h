@@ -576,6 +576,34 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
 #define POTMAP_NVS_NAMESPACE    "illpad_pmap"   // User pot mapping (both contexts)
 #define POTMAP_NVS_KEY          "mapping"
 
+// ── Pot Filter ──────────────────────────────────
+#define POTFILTER_NVS_NAMESPACE "illpad_pflt"
+#define POTFILTER_NVS_KEY       "cfg"
+const uint8_t POT_FILTER_VERSION = 1;
+
+struct PotFilterStore {
+    uint16_t magic;        // EEPROM_MAGIC
+    uint8_t  version;      // POT_FILTER_VERSION
+    uint8_t  snap100;      // snapMultiplier × 100 (1-30, default 5)
+    uint8_t  actThresh10;  // activityThreshold × 10 (20-200, default 150)
+    uint8_t  sleepEn;      // 0=off, 1=on
+    uint16_t sleepMs;      // sleep delay ms (100-2000, default 500)
+    uint8_t  deadband;     // ADC units (1-30, default 16)
+    uint8_t  edgeSnap;     // ADC units (0-30, default 12)
+    uint8_t  wakeThresh;   // ADC units to wake from sleep (10-100, default 40)
+};
+static_assert(sizeof(PotFilterStore) <= NVS_BLOB_MAX_SIZE, "PotFilterStore too large");
+
+inline void validatePotFilterStore(PotFilterStore& s) {
+    if (s.snap100 < 1 || s.snap100 > 30)           s.snap100 = 5;
+    if (s.actThresh10 < 20 || s.actThresh10 > 200)  s.actThresh10 = 150;
+    if (s.sleepEn > 1)                               s.sleepEn = 1;
+    if (s.sleepMs < 100 || s.sleepMs > 2000)         s.sleepMs = 500;
+    if (s.deadband < 1 || s.deadband > 30)           s.deadband = 16;
+    if (s.edgeSnap > 30)                             s.edgeSnap = 12;
+    if (s.wakeThresh < 10 || s.wakeThresh > 100)    s.wakeThresh = 40;
+}
+
 // =================================================================
 // V2 — Shared Double Buffer (replaces mutex)
 // =================================================================
@@ -609,14 +637,15 @@ static constexpr NvsDescriptor NVS_DESCRIPTORS[] = {
   { BANKTYPE_NVS_NAMESPACE,    BANKTYPE_NVS_KEY_V2,    EEPROM_MAGIC,    BANKTYPE_VERSION,     (uint16_t)sizeof(BankTypeStore)     },  // 5: T4
   { SETTINGS_NVS_NAMESPACE,    SETTINGS_NVS_KEY,       EEPROM_MAGIC,    SETTINGS_VERSION,     (uint16_t)sizeof(SettingsStore)     },  // 6: T5
   { POTMAP_NVS_NAMESPACE,      POTMAP_NVS_KEY,         EEPROM_MAGIC,    POTMAP_VERSION,       (uint16_t)sizeof(PotMappingStore)   },  // 7: T6
-  { LED_SETTINGS_NVS_NAMESPACE,LED_SETTINGS_NVS_KEY,   EEPROM_MAGIC,    LED_SETTINGS_VERSION, (uint16_t)sizeof(LedSettingsStore)  },  // 8: T7a
-  { LED_SETTINGS_NVS_NAMESPACE,COLOR_SLOT_NVS_KEY,     COLOR_SLOT_MAGIC,COLOR_SLOT_VERSION,   (uint16_t)sizeof(ColorSlotStore)    },  // 9: T7b
+  { POTFILTER_NVS_NAMESPACE,   POTFILTER_NVS_KEY,      EEPROM_MAGIC,    POT_FILTER_VERSION,   (uint16_t)sizeof(PotFilterStore)    },  // 8: PotFilter (Monitor in T6)
+  { LED_SETTINGS_NVS_NAMESPACE,LED_SETTINGS_NVS_KEY,   EEPROM_MAGIC,    LED_SETTINGS_VERSION, (uint16_t)sizeof(LedSettingsStore)  },  // 9: T7a
+  { LED_SETTINGS_NVS_NAMESPACE,COLOR_SLOT_NVS_KEY,     COLOR_SLOT_MAGIC,COLOR_SLOT_VERSION,   (uint16_t)sizeof(ColorSlotStore)    },  // 10: T7b
 };
 static constexpr uint8_t NVS_DESCRIPTOR_COUNT = sizeof(NVS_DESCRIPTORS) / sizeof(NVS_DESCRIPTORS[0]);
 
 // Tool-to-descriptor mapping: each tool checks descriptors in range [first, last] inclusive
-// T3 spans 3 descriptors (bankpad + scalepad + arppad), T7 spans 2 (ledsettings + colorslots)
-static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 5, 6, 7, 8 };  // T1..T7
-static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 7, 9 };  // T1..T7
+// T3 spans 3 (bankpad+scalepad+arppad), T6 spans 2 (potmapping+potfilter), T7 spans 2 (ledsettings+colorslots)
+static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 5, 6, 7, 9 };   // T1..T7
+static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 8, 10 };  // T6 covers 7-8, T7 covers 9-10
 
 #endif // KEYBOARD_DATA_H
