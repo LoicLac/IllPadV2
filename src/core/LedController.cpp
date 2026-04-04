@@ -324,14 +324,25 @@ bool LedController::renderBargraph(unsigned long now) {
 
   clearPixels();
 
+  uint8_t full = (uint8_t)_potBarRealLevel;           // fully-lit LED count
+  float   frac = _potBarRealLevel - (float)full;       // fractional tip brightness
+
   if (_potBarCaught) {
-    for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
+    for (uint8_t i = 0; i < full && i < NUM_LEDS; i++) {
       setPixel(i, barColor, 100);
     }
+    if (frac > 0.01f && full < NUM_LEDS) {
+      setPixel(full, barColor, (uint8_t)(frac * 100.0f));
+    }
   } else {
-    for (uint8_t i = 0; i < _potBarRealLevel && i < NUM_LEDS; i++) {
+    // Dim bar = stored level (with fractional tip scaled to 30%)
+    for (uint8_t i = 0; i < full && i < NUM_LEDS; i++) {
       setPixel(i, barDim, 30);
     }
+    if (frac > 0.01f && full < NUM_LEDS) {
+      setPixel(full, barDim, (uint8_t)(frac * 30.0f));
+    }
+    // Bright dot = physical pot position
     if (_potBarPotLevel < NUM_LEDS) {
       setPixel(_potBarPotLevel, barColor, 100);
     }
@@ -771,8 +782,8 @@ void LedController::showBatteryGauge(uint8_t percent) {
 // Pot Bargraph (with catch visualization)
 // =================================================================
 
-void LedController::showPotBargraph(uint8_t realLevel, uint8_t potLevel, bool caught) {
-  _potBarRealLevel = (realLevel > NUM_LEDS) ? NUM_LEDS : realLevel;     // 0-8 (LED count)
+void LedController::showPotBargraph(float realLevel, uint8_t potLevel, bool caught) {
+  _potBarRealLevel = (realLevel > (float)NUM_LEDS) ? (float)NUM_LEDS : (realLevel < 0.0f ? 0.0f : realLevel);
   _potBarPotLevel = (potLevel >= NUM_LEDS) ? (NUM_LEDS - 1) : potLevel; // 0-7 (LED index)
   _potBarCaught = caught;
   _potBarStart = millis();

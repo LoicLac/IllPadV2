@@ -80,7 +80,7 @@ public:
   void showBatteryGauge(uint8_t percent);
 
   // Pot bargraph with catch visualization
-  void showPotBargraph(uint8_t realLevel, uint8_t potLevel, bool caught);
+  void showPotBargraph(float realLevel, uint8_t potLevel, bool caught);
 
   // Calibration
   void setCalibrationMode(bool active);
@@ -180,7 +180,7 @@ private:
   // Bargraph
   uint16_t _potBarDurationMs;
   bool _showingPotBar;
-  uint8_t _potBarRealLevel;
+  float   _potBarRealLevel;
   uint8_t _potBarPotLevel;
   bool    _potBarCaught;
   unsigned long _potBarStart;

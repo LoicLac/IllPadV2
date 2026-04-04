@@ -422,29 +422,29 @@ void ToolLedSettings::drawColorRow(uint8_t row, bool selected, bool editing) {
   // Buffers sized for VT escapes: \033[36m\033[1m[content]\033[0m = ~25 bytes overhead
   char presetBuf[48], hueBuf[32], intBuf[32];
 
-  // Preset field
-  if (editing && _colorField == 0) {
-    snprintf(presetBuf, sizeof(presetBuf), VT_CYAN VT_BOLD "[%-12s]" VT_RESET, presetName);
+  // Preset field — arrows control this
+  if (editing) {
+    snprintf(presetBuf, sizeof(presetBuf), VT_CYAN VT_BOLD "\xe2\x97\x84%-12s\xe2\x96\xba" VT_RESET, presetName);
   } else if (selected) {
     snprintf(presetBuf, sizeof(presetBuf), VT_BRIGHT_WHITE "%-13s " VT_RESET, presetName);
   } else {
     snprintf(presetBuf, sizeof(presetBuf), "%-13s ", presetName);
   }
 
-  // Hue field
-  if (editing && _colorField == 1) {
-    snprintf(hueBuf, sizeof(hueBuf), VT_CYAN VT_BOLD "[%+4d" "\xc2\xb0]" VT_RESET, slot.hueOffset);
+  // Hue field — pot 1 controls this
+  if (editing && _pots.isActive(0)) {
+    snprintf(hueBuf, sizeof(hueBuf), VT_YELLOW "%+4d" "\xc2\xb0" VT_RESET, slot.hueOffset);
   } else if (selected) {
     snprintf(hueBuf, sizeof(hueBuf), VT_BRIGHT_WHITE "%+4d" "\xc2\xb0" VT_RESET, slot.hueOffset);
   } else {
     snprintf(hueBuf, sizeof(hueBuf), "%+4d\xc2\xb0", slot.hueOffset);
   }
 
-  // Intensity field
+  // Intensity field — pot 2 controls this
   if (!hasInt) {
     intBuf[0] = '\0';
-  } else if (editing && _colorField == 2) {
-    snprintf(intBuf, sizeof(intBuf), VT_CYAN VT_BOLD " [%3d%%]" VT_RESET, intensity);
+  } else if (editing && _pots.isActive(1)) {
+    snprintf(intBuf, sizeof(intBuf), VT_YELLOW " %3d%%" VT_RESET, intensity);
   } else if (selected) {
     snprintf(intBuf, sizeof(intBuf), VT_BRIGHT_WHITE " %3d%%" VT_RESET, intensity);
   } else {
@@ -1197,16 +1197,18 @@ void ToolLedSettings::run() {
     } else {
       // --- Editing ---
       if (_page == 0 && _cursor < 20) {
-        // COLOR row editing: TAB cycles fields, ◄► adjusts
-        if (ev.type == NAV_CHAR && ev.ch == '\t') {
-          if (rowHasEditableIntensity(_cursor))
-            _colorField = (_colorField + 1) % 3;
-          else
-            _colorField = (_colorField + 1) % 2;
-          screenDirty = true;
-        }
+        // COLOR row: ◄► = preset only (pot handles hue + intensity)
         if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
-          adjustColorField(ev.type == NAV_RIGHT ? +1 : -1, ev.accelerated);
+          int8_t dir = ev.type == NAV_RIGHT ? +1 : -1;
+          uint8_t slotId = COLOR_ROWS[_cursor].slotId;
+          ColorSlot& slot = _cwk.slots[slotId];
+          int val = (int)slot.presetId + dir;
+          if (val < 0) val = COLOR_PRESET_COUNT - 1;
+          if (val >= COLOR_PRESET_COUNT) val = 0;
+          slot.presetId = (uint8_t)val;
+          slot.hueOffset = 0;   // Reset hue on preset change
+          seedPotsForCursor();  // Reseed pot to new hue=0 (deactivates until moved)
+          _nvsSaved = false;
           screenDirty = true;
         }
         if (ev.type == NAV_ENTER) {
@@ -1219,9 +1221,10 @@ void ToolLedSettings::run() {
           screenDirty = true;
         }
       } else if (_page == 0 && _cursor >= 20) {
-        // Timing rows: standard ◄► adjust
+        // Timing rows: ◄► adjust + reseed pot to prevent fight
         if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
           adjustTimingParam(ev.type == NAV_RIGHT ? +1 : -1, ev.accelerated);
+          seedPotsForCursor();  // Reseed pot (deactivates until moved)
           screenDirty = true;
         }
         if (ev.type == NAV_ENTER) {
@@ -1234,9 +1237,10 @@ void ToolLedSettings::run() {
           screenDirty = true;
         }
       } else {
-        // CONFIRM page: standard ◄► adjust
+        // CONFIRM page: ◄► adjust + reseed pot to prevent fight
         if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
           adjustConfirmParam(ev.type == NAV_RIGHT ? +1 : -1, ev.accelerated);
+          seedPotsForCursor();  // Reseed pot (deactivates until moved)
           screenDirty = true;
         }
         if (ev.type == NAV_ENTER) {
@@ -1411,7 +1415,7 @@ void ToolLedSettings::run() {
         _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
       } else if (_editing) {
         if (_page == 0 && _cursor < 20) {
-          _ui->drawControlBar(VT_DIM "[</>] ADJUST  [TAB] FIELD  [RET] SAVE  [q] CANCEL" VT_RESET);
+          _ui->drawControlBar(VT_DIM "[</>] PRESET  [P1] HUE  [P2] INT  [RET] SAVE  [q] CANCEL" VT_RESET);
         } else {
           _ui->drawControlBar(VT_DIM "[</>] ADJUST  [RET] SAVE  [q] CANCEL" VT_RESET);
         }
