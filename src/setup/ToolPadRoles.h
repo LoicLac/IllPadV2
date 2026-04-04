@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "../core/HardwareConfig.h"
 #include "InputParser.h"
+#include "SetupPotInput.h"
 
 class CapacitiveKeyboard;
 class LedController;
@@ -77,6 +78,11 @@ private:
   bool    _confirmDefaults;  // true = waiting for y/n defaults confirmation
   bool    _confirmClearAll;  // true = waiting for y/n clear-all confirmation
   bool    _nvsSaved;         // NVS status for header badge
+
+  // Pot navigation
+  SetupPotInput _pots;
+  int32_t _potNavIdx;        // Linearized grid index 0-47 (RELATIVE)
+  int32_t _potPoolLinear;    // Linearized pool index 0-29 (RELATIVE)
 
   // Touch detection baselines
   uint16_t _refBaselines[NUM_KEYS];

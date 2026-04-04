@@ -3,11 +3,36 @@
 #include "SetupUI.h"
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
+#include "../core/PotFilter.h"
 #include "../core/KeyboardData.h"
 #include "../managers/NvsManager.h"
 #include <Arduino.h>
 #include <Preferences.h>
 #include <string.h>
+
+// =================================================================
+// Pool linearisation for pot navigation
+// 7 lines: Clear(1) + Bank(8) + Root(7) + Mode(8) + Octave(4) + Hold(1) + Play/Stop(1) = 30
+// =================================================================
+static const uint8_t POOL_OFFSETS[] = {0, 1, 9, 16, 24, 28, 29, 30};
+static const uint8_t TOTAL_POOL_ITEMS = 30;
+
+static void linearToPool(int32_t linear, uint8_t& line, uint8_t& idx) {
+  for (uint8_t i = 0; i < 7; i++) {
+    if (linear < POOL_OFFSETS[i + 1]) {
+      line = i;
+      idx = (uint8_t)(linear - POOL_OFFSETS[i]);
+      return;
+    }
+  }
+  line = 6;
+  idx = 0;
+}
+
+static int32_t poolToLinear(uint8_t line, uint8_t idx) {
+  if (line >= 7) return TOTAL_POOL_ITEMS - 1;
+  return POOL_OFFSETS[line] + idx;
+}
 
 // =================================================================
 // Short labels for pool items
@@ -617,13 +642,33 @@ void ToolPadRoles::run() {
 
   captureBaselines(*_keyboard, _refBaselines);
 
+  // Seed pot for grid navigation
+  _potNavIdx = _gridRow * 12 + _gridCol;
+  _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
+
   _ui->vtClear();
   bool screenDirty = true;
 
   while (true) {
+    PotFilter::updateAll();
+    _pots.update();
     _leds->update();
     _keyboard->pollAllSensorData();
 
+
+    // --- Pot navigation ---
+    if (!_confirmSteal && !_confirmDefaults && !_confirmClearAll) {
+      if (!_editing && _pots.getMove(0)) {
+        // Grid mode: pot drives linearized index
+        _gridRow = (uint8_t)(_potNavIdx / 12);
+        _gridCol = (uint8_t)(_potNavIdx % 12);
+        screenDirty = true;
+      } else if (_editing && _pots.getMove(0)) {
+        // Pool mode: pot drives linearized pool index
+        linearToPool(_potPoolLinear, _poolLine, _poolIdx);
+        screenDirty = true;
+      }
+    }
 
     // --- Touch detection (jump to cell) ---
     if (!_confirmSteal && !_confirmDefaults && !_confirmClearAll) {
@@ -634,6 +679,11 @@ void ToolPadRoles::run() {
         if (newRow != _gridRow || newCol != _gridCol) {
           if (_editing) {
             _editing = false;
+            // Re-seed pot for grid mode
+            _potNavIdx = newRow * 12 + newCol;
+            _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
+          } else {
+            _potNavIdx = newRow * 12 + newCol;  // Sync pot target
           }
           _gridRow = newRow;
           _gridCol = newCol;
@@ -698,6 +748,9 @@ void ToolPadRoles::run() {
         if (saveAll()) {
           _ui->flashSaved();
           _editing = false;
+          // Re-seed pot for grid mode
+          _potNavIdx = _gridRow * 12 + _gridCol;
+          _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
         }
         _confirmSteal = false;
         screenDirty = true;
@@ -718,6 +771,9 @@ void ToolPadRoles::run() {
     if (ev.type == NAV_QUIT) {
       if (_editing) {
         _editing = false;
+        // Re-seed pot for grid mode
+        _potNavIdx = _gridRow * 12 + _gridCol;
+        _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
         screenDirty = true;
       } else {
         _ui->vtClear();
@@ -738,14 +794,15 @@ void ToolPadRoles::run() {
 
     if (!_editing) {
       // --- Grid navigation ---
+      bool arrowMoved = false;
       if (ev.type == NAV_UP) {
         if (_gridRow == 0) _gridRow = 3;
         else _gridRow--;
-        screenDirty = true;
+        arrowMoved = true;
       } else if (ev.type == NAV_DOWN) {
         if (_gridRow == 3) _gridRow = 0;
         else _gridRow++;
-        screenDirty = true;
+        arrowMoved = true;
       } else if (ev.type == NAV_RIGHT) {
         if (_gridCol == 11) {
           _gridCol = 0;
@@ -754,7 +811,7 @@ void ToolPadRoles::run() {
         } else {
           _gridCol++;
         }
-        screenDirty = true;
+        arrowMoved = true;
       } else if (ev.type == NAV_LEFT) {
         if (_gridCol == 0) {
           _gridCol = 11;
@@ -763,43 +820,51 @@ void ToolPadRoles::run() {
         } else {
           _gridCol--;
         }
-        screenDirty = true;
+        arrowMoved = true;
       } else if (ev.type == NAV_ENTER) {
         _editing = true;
         int pad = _gridRow * 12 + _gridCol;
         PadRole role = getRoleForPad((uint8_t)pad);
         _poolLine = role.line;
         _poolIdx = role.index;
+        // Seed pot for pool navigation
+        _potPoolLinear = poolToLinear(_poolLine, _poolIdx);
+        _pots.seed(0, &_potPoolLinear, 0, TOTAL_POOL_ITEMS - 1, POT_RELATIVE, TOTAL_POOL_ITEMS * 2);
+        screenDirty = true;
+      }
+      if (arrowMoved) {
+        _potNavIdx = _gridRow * 12 + _gridCol;  // Sync pot target
         screenDirty = true;
       }
     } else {
       // --- Pool navigation (edit mode) ---
+      bool poolArrowMoved = false;
       if (ev.type == NAV_UP) {
         if (_poolLine == 0) _poolLine = POOL_LINE_COUNT - 1;
         else _poolLine--;
         uint8_t sz = poolLineSize(_poolLine);
         if (sz > 0 && _poolIdx >= sz) _poolIdx = sz - 1;
-        screenDirty = true;
+        poolArrowMoved = true;
       } else if (ev.type == NAV_DOWN) {
         if (_poolLine == POOL_LINE_COUNT - 1) _poolLine = 0;
         else _poolLine++;
         uint8_t sz = poolLineSize(_poolLine);
         if (sz > 0 && _poolIdx >= sz) _poolIdx = sz - 1;
-        screenDirty = true;
+        poolArrowMoved = true;
       } else if (ev.type == NAV_LEFT) {
         uint8_t sz = poolLineSize(_poolLine);
         if (sz > 0) {
           if (_poolIdx == 0) _poolIdx = sz - 1;
           else _poolIdx--;
         }
-        screenDirty = true;
+        poolArrowMoved = true;
       } else if (ev.type == NAV_RIGHT) {
         uint8_t sz = poolLineSize(_poolLine);
         if (sz > 0) {
           if (_poolIdx >= sz - 1) _poolIdx = 0;
           else _poolIdx++;
         }
-        screenDirty = true;
+        poolArrowMoved = true;
       } else if (ev.type == NAV_ENTER) {
         int pad = _gridRow * 12 + _gridCol;
 
@@ -808,6 +873,9 @@ void ToolPadRoles::run() {
           if (saveAll()) {
             _ui->flashSaved();
             _editing = false;
+            // Re-seed pot for grid mode
+            _potNavIdx = _gridRow * 12 + _gridCol;
+            _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
           }
           screenDirty = true;
         } else {
@@ -821,10 +889,17 @@ void ToolPadRoles::run() {
             if (saveAll()) {
               _ui->flashSaved();
               _editing = false;
+              // Re-seed pot for grid mode
+              _potNavIdx = _gridRow * 12 + _gridCol;
+              _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
             }
           }
           screenDirty = true;
         }
+      }
+      if (poolArrowMoved) {
+        _potPoolLinear = poolToLinear(_poolLine, _poolIdx);  // Sync pot target
+        screenDirty = true;
       }
     }
 
