@@ -1,5 +1,6 @@
 #include "ToolLedSettings.h"
 #include "../core/LedController.h"
+#include "../core/PotFilter.h"
 #include "../managers/NvsManager.h"
 #include "SetupUI.h"
 #include "InputParser.h"
@@ -720,20 +721,20 @@ void ToolLedSettings::seedPotsForCursor() {
     // COLOR rows: pot 1 = hue, pot 2 = intensity
     uint8_t slotId = COLOR_ROWS[_cursor].slotId;
     _potVal[0] = _cwk.slots[slotId].hueOffset;
-    _pots.seed(0, &_potVal[0], -128, 127);
+    _pots.seed(0, &_potVal[0], -128, 127, POT_ABSOLUTE);
     if (rowHasEditableIntensity(_cursor)) {
       _potVal[1] = getRowIntensity(_cursor);
-      _pots.seed(1, &_potVal[1], 0, 100);
+      _pots.seed(1, &_potVal[1], 0, 100, POT_ABSOLUTE);
     }
   } else if (_page == 0 && _cursor == 20) {
     _potVal[0] = _wk.pulsePeriodMs;
-    _pots.seed(0, &_potVal[0], 500, 4000);
+    _pots.seed(0, &_potVal[0], 500, 4000, POT_ABSOLUTE);
   } else if (_page == 0 && _cursor == 21) {
     _potVal[0] = _wk.tickFlashDurationMs;
-    _pots.seed(0, &_potVal[0], 10, 100);
+    _pots.seed(0, &_potVal[0], 10, 100, POT_ABSOLUTE);
   } else if (_page == 0 && _cursor == 22) {
     _potVal[0] = _wk.gammaTenths;
-    _pots.seed(0, &_potVal[0], 10, 30);
+    _pots.seed(0, &_potVal[0], 10, 30, POT_ABSOLUTE);
   } else if (_page == 1) {
     // CONFIRM page: pot 1 = current param value
     _potVal[0] = 0;
@@ -755,7 +756,7 @@ void ToolLedSettings::seedPotsForCursor() {
       case 13: _potVal[0] = _wk.octaveDurationMs;     mn=100; mx=500; break;
       default: return;
     }
-    _pots.seed(0, &_potVal[0], mn, mx);
+    _pots.seed(0, &_potVal[0], mn, mx, POT_ABSOLUTE);
   }
 }
 
@@ -1105,7 +1106,8 @@ void ToolLedSettings::run() {
       updatePreview(now);
     }
 
-    // Pot input: read ADCs, apply to params (~30ms)
+    // Pot input: refresh PotFilter then read stable values (~30ms)
+    PotFilter::updateAll();
     if ((now - lastPotMs) >= 30) {
       lastPotMs = now;
       if (_pots.update()) {
