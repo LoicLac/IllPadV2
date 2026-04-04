@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 #include "../managers/PotRouter.h"
+#include "SetupPotInput.h"
 
 class LedController;
 class SetupUI;
@@ -61,10 +62,15 @@ private:
   static const char* slotName(uint8_t slot);
   static const char* targetName(PotTarget t);
 
-  // Pot detection
+  // Pot detection (physical pot → slot jump, uses PotFilter)
   uint16_t _potBaseline[4];
   void samplePotBaselines();
   int8_t detectMovedPot(bool btnLeftHeld);
+
+  // Pot navigation (edit mode only — pool + CC#)
+  SetupPotInput _pots;
+  int32_t _potPoolIdx;     // Pool index (edit mode)
+  int32_t _potCcNum;       // CC# 0-127 (CC edit mode)
 
   // NVS
   bool saveMapping();

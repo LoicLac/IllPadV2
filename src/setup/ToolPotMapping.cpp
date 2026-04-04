@@ -2,6 +2,7 @@
 #include "SetupUI.h"
 #include "InputParser.h"
 #include "../core/LedController.h"
+#include "../core/PotFilter.h"
 #include "../managers/PotRouter.h"
 #include "../managers/NvsManager.h"
 #include <Preferences.h>
@@ -126,21 +127,21 @@ const PotMapping* ToolPotMapping::currentMapConst() const {
 // =================================================================
 // Pot detection
 // =================================================================
-static const uint16_t POT_DETECT_THRESHOLD = 200;
+static const uint16_t POT_DETECT_THRESHOLD = 60;  // Filtered signal, ~3x deadband
 
 void ToolPotMapping::samplePotBaselines() {
   for (uint8_t i = 0; i < 4; i++) {
-    _potBaseline[i] = analogRead(POT_PINS[i]);
+    _potBaseline[i] = PotFilter::getStable(i);
   }
 }
 
 int8_t ToolPotMapping::detectMovedPot(bool btnLeftHeld) {
   for (uint8_t i = 0; i < 4; i++) {
-    uint16_t raw = analogRead(POT_PINS[i]);
-    int16_t delta = (int16_t)raw - (int16_t)_potBaseline[i];
+    uint16_t val = PotFilter::getStable(i);
+    int16_t delta = (int16_t)val - (int16_t)_potBaseline[i];
     if (delta < 0) delta = -delta;
     if ((uint16_t)delta > POT_DETECT_THRESHOLD) {
-      _potBaseline[i] = raw;
+      _potBaseline[i] = val;
       return (int8_t)(i * 2 + (btnLeftHeld ? 1 : 0));
     }
   }
@@ -187,6 +188,9 @@ void ToolPotMapping::assignCurrentTarget() {
     _ccNumber = map[slot].ccNumber;
     if (_ccNumber == 0) _ccNumber = 1;
     _ccEditing = true;
+    // Seed pot for CC# sweep (ABSOLUTE 0-127)
+    _potCcNum = _ccNumber;
+    _pots.seed(0, &_potCcNum, 0, 127, POT_ABSOLUTE);
     return;
   }
 
@@ -563,9 +567,21 @@ void ToolPotMapping::run() {
 
   _ui->vtClear();
 
+  _pots.disable(0);  // Pot disabled in nav mode
+
   while (true) {
+    PotFilter::updateAll();
+    _pots.update();
     _leds->update();
 
+    // --- Pot edit handling ---
+    if (_editing && !_ccEditing && _pots.getMove(0)) {
+      _poolIdx = (uint8_t)_potPoolIdx;
+      screenDirty = true;
+    } else if (_ccEditing && _pots.getMove(0)) {
+      _ccNumber = (uint8_t)_potCcNum;
+      screenDirty = true;
+    }
 
     // Physical pot detection (when not editing)
     if (!_editing && !_ccEditing && !_confirmSteal && !confirmDefaults) {
@@ -619,6 +635,7 @@ void ToolPotMapping::run() {
           _ui->flashSaved();
           _confirmSteal = false;
           _editing = false;
+          _pots.disable(0);  // Back to nav mode
         } else {
           map[_stealSourceSlot] = backupSource;
           map[slot] = backupSlot;
@@ -640,12 +657,14 @@ void ToolPotMapping::run() {
         int val = (int)_ccNumber - step;
         if (val < 0) val = 0;
         _ccNumber = (uint8_t)val;
+        _potCcNum = _ccNumber;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_RIGHT) {
         int step = ev.accelerated ? 10 : 1;
         int val = (int)_ccNumber + step;
         if (val > 127) val = 127;
         _ccNumber = (uint8_t)val;
+        _potCcNum = _ccNumber;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         PotMapping* map = currentMap();
@@ -664,6 +683,7 @@ void ToolPotMapping::run() {
           _ui->flashSaved();
           _ccEditing = false;
           _editing = false;
+          _pots.disable(0);  // Back to nav mode
         } else {
           // Restore working copy on NVS failure
           map[slot] = savedSlot;
@@ -681,6 +701,9 @@ void ToolPotMapping::run() {
         } else {
           currentMap()[slot] = {TARGET_EMPTY, 0};
         }
+        // Re-seed pot for pool navigation (back from CC# cancel)
+        _potPoolIdx = _poolIdx;
+        _pots.seed(0, &_potPoolIdx, 0, _poolCount - 1, POT_RELATIVE, _poolCount * 2);
         screenDirty = true;
       }
       delay(5);
@@ -733,6 +756,9 @@ void ToolPotMapping::run() {
             break;
           }
         }
+        // Seed pot for pool navigation
+        _potPoolIdx = _poolIdx;
+        _pots.seed(0, &_potPoolIdx, 0, _poolCount - 1, POT_RELATIVE, _poolCount * 2);
         screenDirty = true;
       }
     } else {
@@ -742,15 +768,18 @@ void ToolPotMapping::run() {
           if (_poolIdx == 0) _poolIdx = _poolCount - 1;
           else _poolIdx--;
         }
+        _potPoolIdx = _poolIdx;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_RIGHT) {
         if (_poolCount > 0) {
           _poolIdx++;
           if (_poolIdx >= _poolCount) _poolIdx = 0;
         }
+        _potPoolIdx = _poolIdx;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         assignCurrentTarget();
+        _pots.disable(0);  // Back to nav mode
         screenDirty = true;
       } else if (ev.type == NAV_QUIT) {
         if (_potRouter) {
@@ -760,6 +789,7 @@ void ToolPotMapping::run() {
           currentMap()[slot] = liveMap[slot];
         }
         _editing = false;
+        _pots.disable(0);  // Back to nav mode
         screenDirty = true;
       }
     }
