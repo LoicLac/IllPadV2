@@ -53,8 +53,8 @@ struct NvsDescriptor {
 | T3 Pad Roles | [2..4] | BankPadStore + ScalePadStore + ArpPadStore |
 | T4 Bank Config | [5] | BankTypeStore |
 | T5 Settings | [6] | SettingsStore |
-| T6 Pot Mapping | [7] | PotMappingStore |
-| T7 LED Settings | [8..9] | LedSettingsStore + ColorSlotStore |
+| T6 Pot Mapping | [7..8] | PotMappingStore + PotFilterStore |
+| T7 LED Settings | [9..10] | LedSettingsStore + ColorSlotStore |
 
 Menu (`SetupUI::printMainMenu`) loops over these to check all stores in one pass.
 
@@ -90,7 +90,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `SettingsStore` | `illpad_set` | `settings` | 0xBEEF | 10 | 14B | T5 Settings |
 | `PotParamsStore` | `illpad_pot` | `params` | 0xBEEF | 2 | 10B | NvsManager (runtime) |
 | `PotMappingStore` | `illpad_pmap` | `mapping` | 0xBEEF | 1 | 36B | T6 PotMapping |
-| `PotFilterStore` | `illpad_pflt` | `cfg` | 0xBEEF | 1 | 12B | PotFilter (runtime, tuned via T6 Monitor) |
+| `PotFilterStore` | `illpad_pflt` | `cfg` | 0xBEEF | 1 | 12B | PotFilter (runtime, tuned via T6 Monitor). Fields: snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
 | `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 2 | 38B | T7 LedSettings |
 | `ColorSlotStore` | `illpad_lset` | `ledcolors` | 0xC010 | 1 | 30B | T7 LedSettings |
 

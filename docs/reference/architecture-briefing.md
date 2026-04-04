@@ -87,7 +87,7 @@ Key files: `ScaleManager.cpp:123-227`, `main.cpp:handleManagerUpdates()` (line 5
 
 ### Pot → Parameter
 ```
-PotFilter::updateAll(): oversample 4× → adaptive EMA → deadband gate → edge snap → sleep/wake
+PotFilter::updateAll(): oversample 16× → adaptive EMA → deadband gate → edge snap → sleep/wake
   State machine per pot: ACTIVE → SETTLING → SLEEPING (peek every 50ms)
   Output: getStable() (0-4095), hasMoved() (bool)
 PotRouter::update():
@@ -180,7 +180,7 @@ All lock-free. No mutex anywhere in runtime code.
 |------|--------|-------------|---------|
 | `_sequenceDirty` | addPad, removePad, setPattern, setOctaveRange | `rebuildSequence()` at next tick | Arp sequence rebuild |
 | `_tickFlash` | `ArpEngine::tick()` | `LedController::update()` via `consumeTickFlash()` | LED beat flash |
-| `_moved[p]` | `readAndSmooth()` deadband | `applyBinding()` per frame | Pot movement gate |
+| `hasMoved(p)` | `PotFilter::updateAll()` deadband | `applyBinding()` per frame | Pot movement gate |
 | `_ccDirty[s]` | `applyBinding()` CC value change | `consumeCC()` in main loop | MIDI CC send |
 | `_midiPbDirty` | `applyBinding()` PB value change | `consumePitchBend()` in main loop | MIDI PB send |
 | `_dirty` (pot) | Any parameter write | `clearDirty()` after NVS debounce | NVS save trigger |

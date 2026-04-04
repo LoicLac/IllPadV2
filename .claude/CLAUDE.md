@@ -88,7 +88,7 @@ Critical path first, secondary after. MIDI latency depends on this order.
 9b. ArpScheduler.processEvents()             ← gate noteOff + shuffle noteOn
 10. MidiEngine.flush()                        ← CRITICAL PATH END
 ── handlePotPipeline(leftHeld, rearHeld) ──
-11. PotRouter.update()                        ← SECONDARY (5 pots)
+11. PotRouter.update()                        ← SECONDARY (PotFilter::updateAll + 5 pots)
 11b. Send MIDI CC/PB if dirty                 ← from user-assigned pot mappings
 12. BatteryMonitor.update()
 13. LedController.update()                    ← multi-bank state + confirmations
@@ -196,7 +196,7 @@ Play ack flash uses `LED_CONFIRM_UNIT_MS` (50ms) for fixed timing. Beat-synced f
 
 ## Pots — PotRouter
 
-PotRouter reads 5 ADCs (4 right + 1 rear), resolves button combos, applies catch system, exposes getters. Binding table is **runtime data** rebuilt from a user-configurable `PotMappingStore`.
+PotFilter reads 5 ADCs via 16× oversampling + adaptive EMA + deadband gate + sleep/wake. PotRouter consumes `PotFilter::getStable()` / `hasMoved()`, resolves button combos, applies catch system, exposes getters. Binding table is **runtime data** rebuilt from a user-configurable `PotMappingStore`.
 
 **Button modifiers**: Left button = modifier for 4 right pots. Rear button = modifier for rear pot only. They never cross.
 
@@ -269,7 +269,7 @@ Two context pages (NORMAL / ARPEG), toggle with `t`. Physical pot detection: tur
 ```
 src/
 ├── main.cpp, HardwareConfig.h
-├── core/       CapacitiveKeyboard†, MidiTransport, LedController, KeyboardData.h
+├── core/       CapacitiveKeyboard†, MidiTransport, LedController, PotFilter, KeyboardData.h
 ├── managers/   BankManager, ScaleManager, PotRouter, BatteryMonitor, NvsManager
 ├── midi/       MidiEngine, ScaleResolver, ClockManager, GrooveTemplates.h
 ├── arp/        ArpEngine, ArpScheduler
