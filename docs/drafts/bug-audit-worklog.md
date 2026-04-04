@@ -1,7 +1,7 @@
 # Bug Audit — Setup Tools — Worklog
 
 Source: audit RTF 2026-04-04
-Updated: 2026-04-04 (bugs 5,6,7,11,12,13 done)
+Updated: 2026-04-04 (bugs 5,6,7,9,11,12,13 done)
 
 ## Legende
 - DONE = verifie, plus rien a faire
@@ -22,6 +22,7 @@ Updated: 2026-04-04 (bugs 5,6,7,11,12,13 done)
 | 6 | Pas de confirmation reboot | Ajout prompt `y/n` avant ESP.restart(). Toute touche sauf `y` = annule. |
 | 7 | needsReboot inutile | Supprime flag, condition, affichage dans ToolSettings + commentaires reboot-only dans ToolLedSettings et HardwareConfig. |
 | 12 | BLE ON/OFF pas clair | Labels reformates `ON ─ ...` / `OFF (USB only)`. Param renomme `BLE:`. |
+| 9 | Undo/reset Tool 2 | Ajout `r` = reset all assignments (y/n confirm) dans Tool 2. Tool 3 undo pas necessaire. |
 | 11 | Tool 4 navigation | Flat cycle LEFT/RIGHT: NORMAL → ARPEG-Immediate → Beat → Bar → NORMAL. Plus de sous-nav DOWN/UP. ENTER save, q cancel. |
 | 13 | Cal tool validation globale | Free-play mode: auto-capture, double-tap 200ms reset, 4-tier delta coloring, ENTER global validate with confirm prompt. Docs: `docs/archive/bug-13-cal-free-mode/` |
 
@@ -70,42 +71,7 @@ L'intervalle est **deja hardcode a 500ms** (= 120 BPM). Le `flashMs` est la dure
 
 ---
 
-## A FAIRE — UX features (1-2 sessions)
-
-### Bug 9 — Undo queue Tool 3 (ToolPadRoles) + extension Tool 2
-
-**Tool 3 (ToolPadRoles)** — `ToolPadRoles.cpp` :
-- **Aucun undo existant** (confirme par recherche)
-- L'assignation se fait via `assignRole(pad, line, index)` (lignes 206-228)
-- Le clear se fait via `clearRole(pad)` (lignes 230-247)
-- Le flow principal est a lignes 770-825 : touch pad → NAV_ENTER → assignRole
-
-**Roles** (enum `PadRoleCode`, lignes 13-22) :
-```
-ROLE_NONE, ROLE_BANK, ROLE_ROOT, ROLE_MODE,
-ROLE_OCTAVE, ROLE_HOLD, ROLE_PLAYSTOP
-```
-
-**Pool sizes** (lignes 95-100) : 8 bank + 7 root + 8 mode (7+1 chrom) + 4 octave + 1 hold + 1 playstop = **29 roles sur 48 pads**.
-
-**Donnees pour undo** : `{ uint8_t padIndex, uint8_t oldLine, uint8_t oldIndex }` — permet de restaurer l'assignation precedente.
-
----
-
-**Tool 2 (ToolPadOrdering)** — `ToolPadOrdering.cpp` :
-- **Undo EXISTE DEJA** via touche 'u' (lignes 303-310) :
-  ```cpp
-  assignedCount--;
-  uint8_t undoneKey = assignHistory[assignedCount];
-  assigned[undoneKey] = false;
-  orderMap[undoneKey] = 0xFF;
-  ```
-- Utilise `assignHistory[assignedCount]` comme stack LIFO simple
-
-**Conclusion** : Tool 2 a deja un undo. Le travail est seulement pour Tool 3.
-Pattern reutilisable `UndoRing<T, N>` si pertinent, mais Tool 2 n'en a pas besoin (son undo LIFO est suffisant).
-
----
+## A FAIRE — UX features
 
 ### Bug 10 — Pad ordering ancien rank en gris (Tool 2)
 

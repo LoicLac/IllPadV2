@@ -84,6 +84,7 @@ void ToolPadOrdering::run() {
   int     activeKey = -1;
   int     lastActiveKey = -1;
   bool    confirmDefaults = false;
+  bool    confirmReset = false;
 
   memset(orderMap, 0xFF, sizeof(orderMap));
   memset(assigned, 0, sizeof(assigned));
@@ -272,8 +273,10 @@ void ToolPadOrdering::run() {
         // Control bar
         if (confirmDefaults) {
           _ui->drawControlBar(VT_DIM "Reset to linear order 0-47? [y/n]" VT_RESET);
+        } else if (confirmReset) {
+          _ui->drawControlBar(VT_DIM "Clear all assignments and start over? [y/n]" VT_RESET);
         } else {
-          _ui->drawControlBar(VT_DIM "[TOUCH] auto-assign  [u] UNDO  [d] DFLT  [s] SAVE  [q] ABORT" VT_RESET);
+          _ui->drawControlBar(VT_DIM "[TOUCH] auto-assign  [u] UNDO  [r] RESET  [d] DFLT  [s] SAVE  [q] ABORT" VT_RESET);
         }
         _ui->vtFrameEnd();
       }
@@ -297,7 +300,21 @@ void ToolPadOrdering::run() {
           confirmDefaults = false;
         } else if (ev.type != NAV_NONE) {
           confirmDefaults = false;
-          lastRefresh = 0;  // Force redraw
+          lastRefresh = 0;
+        }
+      }
+      else if (confirmReset) {
+        if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+          memset(orderMap, 0xFF, sizeof(orderMap));
+          memset(assigned, 0, sizeof(assigned));
+          assignedCount = 0;
+          activeKey = -1;
+          lastActiveKey = -1;
+          confirmReset = false;
+          lastRefresh = 0;
+        } else if (ev.type != NAV_NONE) {
+          confirmReset = false;
+          lastRefresh = 0;
         }
       }
       else if (ev.type == NAV_CHAR && (ev.ch == 'u' || ev.ch == 'U') && assignedCount > 0) {
@@ -307,6 +324,10 @@ void ToolPadOrdering::run() {
         orderMap[undoneKey] = 0xFF;
         activeKey = -1;
         lastActiveKey = -1;
+      }
+      else if (ev.type == NAV_CHAR && (ev.ch == 'r' || ev.ch == 'R') && assignedCount > 0) {
+        confirmReset = true;
+        lastRefresh = 0;
       }
       else if (ev.type == NAV_DEFAULTS) {
         confirmDefaults = true;
