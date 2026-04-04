@@ -71,7 +71,7 @@ struct SettingsStore {
   uint8_t  version;             // SETTINGS_VERSION
   uint8_t  baselineProfile;     // 0-2 (BaselineProfile enum)
   uint8_t  aftertouchRate;      // 10-100 (ms between aftertouch msgs)
-  uint8_t  bleInterval;         // 0-2 (BleInterval enum)
+  uint8_t  bleInterval;         // 0-3 (BleInterval enum: Normal, Fast, Slow, Off)
   uint8_t  clockMode;           // 0=Slave, 1=Master (ClockMode enum)
   uint8_t  doubleTapMs;         // 100-250 (ms), double-tap window for ARPEG HOLD
   uint16_t potBarDurationMs;    // 1000-10000 (ms), bargraph display persistence
@@ -334,21 +334,13 @@ enum ArpDivision : uint8_t {
 // =================================================================
 
 #define BANKTYPE_NVS_NAMESPACE  "illpad_btype"
-#define BANKTYPE_NVS_KEY        "types"
 
 #define SCALE_NVS_NAMESPACE     "illpad_scale"
 // Keys: "cfg_0" through "cfg_7" (per bank)
 
 #define SCALE_PAD_NVS_NAMESPACE "illpad_spad"
-#define SCALE_PAD_ROOT_KEY      "root_pads"
-#define SCALE_PAD_MODE_KEY      "mode_pads"
-#define SCALE_PAD_CHROM_KEY     "chrom_pad"
 
 #define ARP_PAD_NVS_NAMESPACE   "illpad_apad"
-// pat_pads and oct_pad removed — pattern/octave now on pots
-#define ARP_PAD_HOLD_KEY        "hold_pad"
-#define ARP_PAD_PS_KEY          "ps_pad"
-#define ARP_PAD_OCT_KEY         "oct_pads"  // uint8_t[4], octave pads 1-4
 
 // =================================================================
 // NVS blob size limit — all Store structs must fit in a stack buffer

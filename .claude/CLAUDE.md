@@ -282,26 +282,54 @@ src/
 
 ## NVS (via NvsManager only)
 
+### Unified API — 3 static helpers
+
+All setup Tools and `loadAll()` use these 3 static methods on `NvsManager`:
+
+- **`loadBlob(ns, key, magic, version, out, size)`** — read + validate magic/version. Returns false on missing/corrupt.
+- **`saveBlob(ns, key, data, size)`** — write blob. Warns (`DEBUG_SERIAL`) if magic==0. Returns false on write failure.
+- **`checkBlob(ns, key, magic, version, size)`** — validate only (no data copy). Used by menu status badges.
+
+Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous namespace, no duplication). All error paths log under `DEBUG_SERIAL`.
+
+### Descriptor table + validation
+
+`NVS_DESCRIPTORS[10]` in `KeyboardData.h` — one entry per Store blob (ns, key, magic, version, size). `TOOL_NVS_FIRST[7]`/`TOOL_NVS_LAST[7]` map Tools 1-7 to descriptor ranges (T3 spans 3, T7 spans 2). Menu uses a loop over these to check all stores.
+
+`NVS_BLOB_MAX_SIZE` (128) — all Store structs must fit. `static_assert` on every Store struct enforces this at compile time. `static_assert(offsetof(SettingsStore, baselineProfile) == 3)` guards the byte-3 layout.
+
+7 `inline validate*()` functions in `KeyboardData.h` — shared by `loadAll()`, setup Tools, and future WiFi handler. Single source of truth for field bounds.
+
+### Store structs (V2 — replace raw formats)
+
+| Struct | Namespace | Key | Size | Replaces |
+|---|---|---|---|---|
+| `ScalePadStore` | `illpad_spad` | `"pads"` | 20B | 3 separate keys (root_pads, mode_pads, chrom_pad) |
+| `ArpPadStore` | `illpad_apad` | `"pads"` | 12B | 3 separate keys (hold_pad, ps_pad, oct_pads) |
+| `BankTypeStore` | `illpad_btype` | `"config"` | 20B | raw types[8] + qmode[8] (2 blobs, desync risk) |
+
+### Namespace table
+
 | Namespace | Content |
 |---|---|
 | `illpad_cal` | CalDataStore (maxDelta[48]) |
-| `illpad_nmap` | padOrder[48] (positions, NOT MIDI notes) |
-| `illpad_bpad` | bankPads[8] |
-| `illpad_bank` | current bank (0-7) |
-| `illpad_set` | settings (profile, AT rate, BLE interval, clock mode, double-tap, bargraph duration, panic-on-reconnect, battery ADC cal) |
-| `illpad_pot` | global pot params (shape, slew, AT deadzone) |
-| `illpad_tempo` | tempo BPM (global) |
-| `illpad_btype` | bank types[8] (NORMAL/ARPEG) + quantize modes[8] (Immediate/Beat/Bar) |
-| `illpad_scale` | scale config per bank (chromatic, root, mode) |
-| `illpad_spad` | scale pads (7 root + 7 mode + 1 chrom) |
-| `illpad_apad` | arp pads (1 hold + 1 play/stop + 4 octave) |
-| `illpad_apot` | arp pot params per bank (gate, shuffle depth, shuffle template, div, pattern, octave range) |
+| `illpad_nmap` | NoteMapStore — padOrder[48] (positions, NOT MIDI notes) |
+| `illpad_bpad` | BankPadStore — bankPads[8] |
+| `illpad_bank` | current bank (0-7) — scalar, not blob |
+| `illpad_set` | SettingsStore (profile, AT rate, BLE interval, clock mode, double-tap, bargraph duration, panic-on-reconnect, battery ADC cal) |
+| `illpad_pot` | PotParamsStore (shape, slew, AT deadzone) |
+| `illpad_tempo` | tempo BPM (global) — scalar, not blob |
+| `illpad_btype` | BankTypeStore — types[8] + quantize[8] (key `"config"`) |
+| `illpad_scale` | ScaleConfig per bank (keys `"cfg_0"` through `"cfg_7"`) |
+| `illpad_spad` | ScalePadStore — 7 root + 7 mode + 1 chrom (key `"pads"`) |
+| `illpad_apad` | ArpPadStore — 1 hold + 1 play/stop + 4 octave (key `"pads"`) |
+| `illpad_apot` | ArpPotStore per bank (gate, shuffle depth, shuffle template, div, pattern, octave range) |
 | `illpad_bvel` | base velocity + velocity variation per bank (NORMAL + ARPEG) |
 | `illpad_pbnd` | pitch bend offset per bank (NORMAL) |
-| `illpad_led` | LED brightness (global) |
-| `illpad_sens` | pad sensitivity (global) |
-| `illpad_pmap` | pot mapping (PotMappingStore: both NORMAL + ARPEG contexts, magic/version checked) |
-| `illpad_lset` | LED settings (LedSettingsStore v2: intensities 0-100%, timings, confirmations, gammaTenths) + color slots (ColorSlotStore: 13 preset+hue slots, magic 0xC010) |
+| `illpad_led` | LED brightness (global) — scalar, not blob |
+| `illpad_sens` | pad sensitivity (global) — scalar, not blob |
+| `illpad_pmap` | PotMappingStore (both NORMAL + ARPEG contexts) |
+| `illpad_lset` | LedSettingsStore (intensities, timings, confirmations, gammaTenths) + ColorSlotStore (13 preset+hue slots, magic 0xC010) |
 
 NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never blocks on flash.
 
@@ -313,8 +341,9 @@ NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never bl
 
 ## CRITICAL — KEEP IN SYNC
 
-- **`docs/architecture-briefing.md`** — runtime data flows, inter-core sync points, invariants, dirty flags. Used by subagents (testmusicien, audit) and new sessions for quick context. **Update when you change a function in any of the 5 documented flows** (pad→MIDI, arp tick, bank switch, scale change, pot→param).
-- **`docs/vt100-design-guide.md`** — VT100 terminal aesthetic spec: Unicode box drawing, color palette, navigation patterns, frame primitives, grid system, save feedback, Python script conventions. Part 1 is generic (reusable across instruments), Part 2 is ILLPAD-specific (tool layouts, role categories, amber palette). **Read before touching any setup UI code. Update when adding new visual patterns or changing the aesthetic.**
+- **`docs/reference/architecture-briefing.md`** — runtime data flows, inter-core sync points, invariants, dirty flags. Used by subagents (testmusicien, audit) and new sessions for quick context. **Update when you change a function in any of the 5 documented flows** (pad→MIDI, arp tick, bank switch, scale change, pot→param).
+- **`docs/reference/vt100-design-guide.md`** — VT100 terminal aesthetic spec: Unicode box drawing, color palette, navigation patterns, frame primitives, grid system, save feedback, Python script conventions. Part 1 is generic (reusable across instruments), Part 2 is ILLPAD-specific (tool layouts, role categories, amber palette). **Read before touching any setup UI code. Update when adding new visual patterns or changing the aesthetic.**
+- **`docs/reference/nvs-reference.md`** — NVS Store struct catalog, load/save/check patterns, how to add a namespace. **Read before touching any NVS code. Update when adding a new Store struct or namespace.**
 - **`ItermCode/vt100_serial_terminal.py`** — the Python serial terminal is the only way to interact with setup mode. When setup tools (`src/setup/`) change input handling, escape sequences, line endings, or VT100 rendering, **always verify and update the terminal script**. The two must stay synchronised (e.g., arrow key atomic send, line ending normalization, DEC 2026 sync support).
 
 ## Conventions
