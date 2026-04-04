@@ -76,7 +76,7 @@ public:
 
   // LED bargraph — caller reads and shows on LEDs
   bool    hasBargraphUpdate();
-  uint8_t getBargraphLevel() const;
+  float   getBargraphLevel() const;      // 0.0-8.0 (fractional = tip LED brightness)
   uint8_t getBargraphPotLevel() const;   // Physical pot position mapped to 0-7
   bool    isBargraphCaught() const;      // True if active binding is caught
 
@@ -84,11 +84,8 @@ public:
   bool isDirty() const;
   void clearDirty();
 
-  // Stable ADC values after deadband (public for debug display)
-  const float* getSmoothedAdc() const { return _stableAdc; }
-
-  // ADC pin mapping (public for Tool 6 pot detection)
-  static const uint8_t POT_PINS[NUM_POTS];
+  // POT_PINS[] now in HardwareConfig.h (shared globally)
+  // ADC reads now in PotFilter (getStable/hasMoved)
 
   // Default mappings (public for Tool 6 reset-to-defaults)
   static const PotMappingStore DEFAULT_MAPPING;
@@ -108,11 +105,7 @@ private:
   // Range lookup for a target
   static void getRangeForTarget(PotTarget t, uint16_t& lo, uint16_t& hi);
 
-  // Hardware ADC
-  uint16_t _rawAdc[NUM_POTS];
-  float    _smoothedAdc[NUM_POTS];
-  float    _stableAdc[NUM_POTS];   // Last output value (deadband gate)
-  bool     _moved[NUM_POTS];
+  // Hardware ADC now in PotFilter (removed: _rawAdc, _smoothedAdc, _stableAdc, _moved)
 
   // Catch per-binding
   struct CatchState {
@@ -152,7 +145,7 @@ private:
 
   // Bargraph
   bool    _bargraphDirty;
-  uint8_t _bargraphLevel;
+  float   _bargraphLevel;       // 0.0-8.0 (fractional tip for continuous, snapped for discrete)
   uint8_t _bargraphPotLevel;   // Physical pot position (0-7)
   bool    _bargraphCaught;     // Catch state of active binding
 
@@ -160,7 +153,6 @@ private:
   bool _dirty;
 
   void resolveBindings(bool btnLeft, bool btnRear, BankType type);
-  void readAndSmooth();
   void applyBinding(uint8_t potIndex);
 
   // Helpers
@@ -168,6 +160,7 @@ private:
   float    adcToFloat(float adc) const;
   float    adcToGate(float adc) const;
   bool     isPerBankTarget(PotTarget t) const;
+  static uint8_t getDiscreteSteps(PotTarget t);
 };
 
 #endif // POT_ROUTER_H

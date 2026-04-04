@@ -2,7 +2,7 @@
 #include "../core/HardwareConfig.h"
 #include <Arduino.h>
 
-static const uint8_t POT_PINS[2] = { POT_RIGHT1_PIN, POT_RIGHT2_PIN };
+// POT_PINS[] now in HardwareConfig.h (full 5-pot array)
 
 SetupPotInput::SetupPotInput() {
   for (uint8_t i = 0; i < NUM_CHANNELS; i++) {

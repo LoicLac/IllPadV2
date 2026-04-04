@@ -9,6 +9,7 @@
 #include "core/CapacitiveKeyboard.h"
 #include "core/MidiTransport.h"
 #include "core/LedController.h"
+#include "core/PotFilter.h"
 
 // MIDI
 #include "midi/MidiEngine.h"
@@ -411,12 +412,16 @@ void setup() {
   // Battery Monitor
   s_batteryMonitor.begin(&s_leds);
 
-  // Pot Router
+  // ── Boot order matters ──
+  // 1. loadAll()          → params loaded into PotRouter (done above)
+  // 2. PotFilter::begin() → GPIO + initial ADC reads
+  // 3. PotRouter::begin() → seedCatchValues() uses both
+  PotFilter::begin();
   s_potRouter.begin();
   s_leds.showBootProgress(7);  // Step 7: managers ready
   s_leds.update();
   #if DEBUG_SERIAL
-  Serial.println("[INIT] PotRouter OK.");
+  Serial.println("[INIT] PotFilter + PotRouter OK.");
   #endif
 
   // NVS Manager — start task (after all loading done)
@@ -854,10 +859,9 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     static bool s_lastRear = false;
     static int  s_lastPot[NUM_POTS] = {0, 0, 0, 0, 0};
 
-    const float* smoothed = s_potRouter.getSmoothedAdc();
     int potNow[NUM_POTS];
     for (uint8_t i = 0; i < NUM_POTS; i++) {
-      potNow[i] = (int)smoothed[i];
+      potNow[i] = (int)PotFilter::getStable(i);
     }
 
     if (!s_hwInit) {

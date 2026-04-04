@@ -1,5 +1,6 @@
 #include "NvsManager.h"
 #include "PotRouter.h"
+#include "../core/PotFilter.h"
 #include "../midi/GrooveTemplates.h"
 #include <Preferences.h>
 #include <Arduino.h>
@@ -737,6 +738,20 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       Serial.println("[NVS] Pot mapping loaded.");
       #endif
     }
+  }
+
+  // --- Pot filter config ---
+  {
+    PotFilterStore pfs;
+    if (loadBlob(POTFILTER_NVS_NAMESPACE, POTFILTER_NVS_KEY,
+                 EEPROM_MAGIC, POT_FILTER_VERSION, &pfs, sizeof(pfs))) {
+      validatePotFilterStore(pfs);
+      PotFilter::setConfig(pfs);
+      #if DEBUG_SERIAL
+      Serial.println("[NVS] Pot filter config loaded.");
+      #endif
+    }
+    // else: PotFilter uses built-in defaults (set in begin())
   }
 
   // --- Apply loaded values to PotRouter (BEFORE PotRouter::begin()) ---

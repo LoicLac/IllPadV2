@@ -130,13 +130,13 @@ static const uint16_t POT_DETECT_THRESHOLD = 200;
 
 void ToolPotMapping::samplePotBaselines() {
   for (uint8_t i = 0; i < 4; i++) {
-    _potBaseline[i] = analogRead(PotRouter::POT_PINS[i]);
+    _potBaseline[i] = analogRead(POT_PINS[i]);
   }
 }
 
 int8_t ToolPotMapping::detectMovedPot(bool btnLeftHeld) {
   for (uint8_t i = 0; i < 4; i++) {
-    uint16_t raw = analogRead(PotRouter::POT_PINS[i]);
+    uint16_t raw = analogRead(POT_PINS[i]);
     int16_t delta = (int16_t)raw - (int16_t)_potBaseline[i];
     if (delta < 0) delta = -delta;
     if ((uint16_t)delta > POT_DETECT_THRESHOLD) {

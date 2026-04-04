@@ -1,18 +1,10 @@
 #include "PotRouter.h"
+#include "../core/PotFilter.h"
 #include "../midi/GrooveTemplates.h"
 #include <Arduino.h>
 #include <string.h>
 
-// =================================================================
-// ADC pin mapping: pot index → GPIO
-// =================================================================
-const uint8_t PotRouter::POT_PINS[NUM_POTS] = {
-  POT_RIGHT1_PIN,  // 0 = Right 1
-  POT_RIGHT2_PIN,  // 1 = Right 2
-  POT_RIGHT3_PIN,  // 2 = Right 3
-  POT_RIGHT4_PIN,  // 3 = Right 4
-  POT_REAR_PIN     // 4 = Rear
-};
+// POT_PINS[] now in HardwareConfig.h (shared with PotFilter, SetupPotInput, ToolPotMapping)
 
 // =================================================================
 // Default pot mapping — matches original hardcoded binding table.
@@ -70,17 +62,13 @@ PotRouter::PotRouter()
   , _midiPitchBend(8192)
   , _midiPbDirty(false)
   , _bargraphDirty(false)
-  , _bargraphLevel(0)
+  , _bargraphLevel(0.0f)
   , _bargraphPotLevel(0)
   , _bargraphCaught(false)
   , _dirty(false)
 {
-  // Init hardware state
+  // Init per-pot state (ADC arrays now in PotFilter)
   for (uint8_t i = 0; i < NUM_POTS; i++) {
-    _rawAdc[i] = 0;
-    _smoothedAdc[i] = 0.0f;
-    _stableAdc[i] = 0.0f;
-    _moved[i] = false;
     _activeIdx[i] = -1;
   }
   for (uint8_t i = 0; i < MAX_BINDINGS; i++) {
@@ -312,17 +300,10 @@ void PotRouter::seedCatchValues(bool keepGlobalCatch) {
 }
 
 // =================================================================
-// begin — configure ADC, seed catch values
+// begin — seed catch values (PotFilter::begin() must be called first)
 // =================================================================
 void PotRouter::begin() {
-  for (uint8_t i = 0; i < NUM_POTS; i++) {
-    pinMode(POT_PINS[i], INPUT);
-    uint16_t raw = analogRead(POT_PINS[i]);
-    _rawAdc[i] = raw;
-    _smoothedAdc[i] = (float)raw;
-    _stableAdc[i] = (float)raw;
-  }
-
+  // PotFilter::begin() already called — GPIO init and initial reads done there
   seedCatchValues();
 
   #if DEBUG_SERIAL
@@ -334,35 +315,17 @@ void PotRouter::begin() {
 // update — main entry point, called every loop iteration
 // =================================================================
 void PotRouter::update(bool btnLeft, bool btnRear, BankType currentType) {
-  readAndSmooth();
+  PotFilter::updateAll();
   resolveBindings(btnLeft, btnRear, currentType);
 
   for (uint8_t p = 0; p < NUM_POTS; p++) {
-    if (_activeIdx[p] >= 0 && _moved[p]) {
+    if (_activeIdx[p] >= 0 && PotFilter::hasMoved(p)) {
       applyBinding(p);
     }
   }
 }
 
-// =================================================================
-// readAndSmooth — read ADCs, EMA smooth, detect movement
-// =================================================================
-void PotRouter::readAndSmooth() {
-  for (uint8_t i = 0; i < NUM_POTS; i++) {
-    _rawAdc[i] = analogRead(POT_PINS[i]);
-    _smoothedAdc[i] += POT_SMOOTHING_ALPHA * ((float)_rawAdc[i] - _smoothedAdc[i]);
-
-    // Output deadband: only update stable value when smoothed drifts far enough
-    float diff = _smoothedAdc[i] - _stableAdc[i];
-    if (diff < 0) diff = -diff;
-    if (diff >= POT_OUTPUT_DEADBAND) {
-      _stableAdc[i] = _smoothedAdc[i];
-      _moved[i] = true;
-    } else {
-      _moved[i] = false;
-    }
-  }
-}
+// readAndSmooth() removed — ADC reads now in PotFilter::updateAll()
 
 // =================================================================
 // resolveBindings — find best matching binding for each pot
@@ -424,7 +387,7 @@ void PotRouter::applyBinding(uint8_t potIndex) {
   if (idx < 0) return;
 
   CatchState& cs = _catch[idx];
-  float adc = _stableAdc[potIndex];
+  float adc = (float)PotFilter::getStable(potIndex);
   const PotBinding& bind = _bindings[idx];
 
   // --- Brightness: no catch, no bargraph — direct real-time update ---
@@ -443,8 +406,15 @@ void PotRouter::applyBinding(uint8_t potIndex) {
     if (diff <= POT_CATCH_WINDOW) {
       cs.caught = true;
     } else {
-      _bargraphLevel = (uint8_t)(cs.storedValue * 8.0f / 4095.0f);
-      _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f);
+      // Bargraph: discrete targets snap to step positions, continuous is smooth
+      uint8_t dSteps = getDiscreteSteps(bind.target);
+      if (dSteps > 0) {
+        uint8_t step = (uint8_t)adcToRange((float)cs.storedValue, 0, dSteps);
+        _bargraphLevel = step * 8.0f / (float)dSteps;
+      } else {
+        _bargraphLevel = cs.storedValue * 8.0f / 4095.0f;
+      }
+      _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f + 0.5f);
       _bargraphCaught = false;
       _bargraphDirty = true;
       return;
@@ -553,9 +523,17 @@ void PotRouter::applyBinding(uint8_t potIndex) {
     }
   }
 
-  _bargraphLevel = (uint8_t)(adc * 8.0f / 4095.0f);
-  if (_bargraphLevel > 8) _bargraphLevel = 8;
-  _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f);
+  // Bargraph: discrete targets snap to step positions, continuous is smooth
+  {
+    uint8_t dSteps = getDiscreteSteps(bind.target);
+    if (dSteps > 0) {
+      uint8_t step = (uint8_t)adcToRange(adc, 0, dSteps);
+      _bargraphLevel = step * 8.0f / (float)dSteps;
+    } else {
+      _bargraphLevel = adc * 8.0f / 4095.0f;
+    }
+  }
+  _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f + 0.5f);
   _bargraphCaught = true;
   _bargraphDirty = true;
   // Only set NVS dirty for non-volatile targets (CC/PB are volatile, not saved)
@@ -624,6 +602,22 @@ bool PotRouter::isPerBankTarget(PotTarget t) const {
   }
 }
 
+// Returns max discrete steps for bargraph snapping, or 0 for continuous targets.
+// Uses getRangeForTarget so adding steps only requires changing one place.
+uint8_t PotRouter::getDiscreteSteps(PotTarget t) {
+  switch (t) {
+    case TARGET_DIVISION:
+    case TARGET_PATTERN:
+    case TARGET_SHUFFLE_TEMPLATE: {
+      uint16_t lo, hi;
+      getRangeForTarget(t, lo, hi);
+      return (uint8_t)(hi - lo);
+    }
+    default:
+      return 0;
+  }
+}
+
 // =================================================================
 // Getters — internal params
 // =================================================================
@@ -677,7 +671,7 @@ bool PotRouter::hasBargraphUpdate() {
   return false;
 }
 
-uint8_t PotRouter::getBargraphLevel() const    { return _bargraphLevel; }
+float   PotRouter::getBargraphLevel() const     { return _bargraphLevel; }
 uint8_t PotRouter::getBargraphPotLevel() const { return _bargraphPotLevel; }
 bool    PotRouter::isBargraphCaught() const    { return _bargraphCaught; }
 
