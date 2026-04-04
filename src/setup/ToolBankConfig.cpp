@@ -95,7 +95,6 @@ void ToolBankConfig::run() {
   InputParser input;
   uint8_t cursor = 0;
   bool editing = false;
-  uint8_t editField = 0;     // 0 = type, 1 = quantize
   bool screenDirty = true;
   bool confirmDefaults = false;
   bool errorShown = false;
@@ -143,7 +142,6 @@ void ToolBankConfig::run() {
         wkTypes[cursor] = savedTypes[cursor];
         wkQuantize[cursor] = savedQuantize[cursor];
         editing = false;
-        editField = 0;
         screenDirty = true;
       } else {
         _ui->vtClear();
@@ -167,63 +165,70 @@ void ToolBankConfig::run() {
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         editing = true;
-        editField = 0;
         screenDirty = true;
       }
     } else {
-      if (editField == 0) {
-        if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
-          if (wkTypes[cursor] == BANK_NORMAL) {
-            uint8_t arpCount = 0;
-            for (uint8_t i = 0; i < NUM_BANKS; i++) {
-              if (wkTypes[i] == BANK_ARPEG) arpCount++;
-            }
-            if (arpCount >= 4) {
-              errorShown = true;
-              errorTime = millis();
-            } else {
-              wkTypes[cursor] = BANK_ARPEG;
-              errorShown = false;
-            }
+      // Flat cycle: NORMAL → ARPEG-Immediate → ARPEG-Beat → ARPEG-Bar → NORMAL
+      if (ev.type == NAV_RIGHT) {
+        if (wkTypes[cursor] == BANK_NORMAL) {
+          // NORMAL → ARPEG-Immediate (check 4-limit)
+          uint8_t arpCount = 0;
+          for (uint8_t i = 0; i < NUM_BANKS; i++) {
+            if (wkTypes[i] == BANK_ARPEG) arpCount++;
+          }
+          if (arpCount >= 4) {
+            errorShown = true;
+            errorTime = millis();
           } else {
-            wkTypes[cursor] = BANK_NORMAL;
-            wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
+            wkTypes[cursor] = BANK_ARPEG;
+            wkQuantize[cursor] = ARP_START_IMMEDIATE;
             errorShown = false;
           }
-          screenDirty = true;
-        } else if (ev.type == NAV_DOWN && wkTypes[cursor] == BANK_ARPEG) {
-          editField = 1;
-          screenDirty = true;
-        } else if (ev.type == NAV_ENTER) {
-          if (saveConfig(wkTypes, wkQuantize)) {
-            memcpy(savedTypes, wkTypes, sizeof(savedTypes));
-            memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
-            editing = false;
-            nvsSaved = true;
-            _ui->flashSaved();
-            screenDirty = true;
-          }
+        } else if (wkQuantize[cursor] < ARP_START_BAR) {
+          // ARPEG: Immediate → Beat → Bar
+          wkQuantize[cursor]++;
+          errorShown = false;
+        } else {
+          // ARPEG-Bar → NORMAL
+          wkTypes[cursor] = BANK_NORMAL;
+          wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
+          errorShown = false;
         }
-      } else {
-        // editField == 1: quantize
-        if (ev.type == NAV_LEFT) {
-          wkQuantize[cursor] = (wkQuantize[cursor] + NUM_ARP_START_MODES - 1) % NUM_ARP_START_MODES;
-          screenDirty = true;
-        } else if (ev.type == NAV_RIGHT) {
-          wkQuantize[cursor] = (wkQuantize[cursor] + 1) % NUM_ARP_START_MODES;
-          screenDirty = true;
-        } else if (ev.type == NAV_UP) {
-          editField = 0;
-          screenDirty = true;
-        } else if (ev.type == NAV_ENTER) {
-          if (saveConfig(wkTypes, wkQuantize)) {
-            memcpy(savedTypes, wkTypes, sizeof(savedTypes));
-            memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
-            editing = false;
-            nvsSaved = true;
-            _ui->flashSaved();
-            screenDirty = true;
+        screenDirty = true;
+      } else if (ev.type == NAV_LEFT) {
+        if (wkTypes[cursor] == BANK_NORMAL) {
+          // NORMAL → ARPEG-Bar (check 4-limit)
+          uint8_t arpCount = 0;
+          for (uint8_t i = 0; i < NUM_BANKS; i++) {
+            if (wkTypes[i] == BANK_ARPEG) arpCount++;
           }
+          if (arpCount >= 4) {
+            errorShown = true;
+            errorTime = millis();
+          } else {
+            wkTypes[cursor] = BANK_ARPEG;
+            wkQuantize[cursor] = ARP_START_BAR;
+            errorShown = false;
+          }
+        } else if (wkQuantize[cursor] > ARP_START_IMMEDIATE) {
+          // ARPEG: Bar → Beat → Immediate
+          wkQuantize[cursor]--;
+          errorShown = false;
+        } else {
+          // ARPEG-Immediate → NORMAL
+          wkTypes[cursor] = BANK_NORMAL;
+          wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
+          errorShown = false;
+        }
+        screenDirty = true;
+      } else if (ev.type == NAV_ENTER) {
+        if (saveConfig(wkTypes, wkQuantize)) {
+          memcpy(savedTypes, wkTypes, sizeof(savedTypes));
+          memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
+          editing = false;
+          nvsSaved = true;
+          _ui->flashSaved();
+          screenDirty = true;
         }
       }
     }
@@ -266,13 +271,11 @@ void ToolBankConfig::run() {
         // Bank label
         pos += snprintf(line + pos, sizeof(line) - pos, "Bank %d    ", i + 1);
 
-        // Type field — active field gets [brackets] + cyan
-        bool editingType = isEditing && (editField == 0);
-        bool editingQuantize = isEditing && (editField == 1);
-
-        if (editingType) {
+        // Type + quantize — editing shows [brackets] + cyan
+        if (isEditing) {
           if (isArpeg) {
-            pos += snprintf(line + pos, sizeof(line) - pos, VT_CYAN VT_BOLD "[ARPEG]" VT_RESET);
+            pos += snprintf(line + pos, sizeof(line) - pos,
+                            VT_CYAN VT_BOLD "[ARPEG ─ %s]" VT_RESET, QUANTIZE_NAMES[wkQuantize[i]]);
           } else {
             pos += snprintf(line + pos, sizeof(line) - pos, VT_CYAN VT_BOLD "[NORMAL]" VT_RESET);
           }
@@ -280,24 +283,11 @@ void ToolBankConfig::run() {
           if (isArpeg) {
             pos += snprintf(line + pos, sizeof(line) - pos,
                             selected ? VT_CYAN "ARPEG" VT_RESET "  " : "ARPEG   ");
+            pos += snprintf(line + pos, sizeof(line) - pos,
+                            "    Quantize: %s", QUANTIZE_NAMES[wkQuantize[i]]);
           } else {
             pos += snprintf(line + pos, sizeof(line) - pos,
                             selected ? VT_CYAN "NORMAL" VT_RESET " " : "NORMAL  ");
-          }
-        }
-
-        // Quantize field — only for ARPEG
-        if (isArpeg) {
-          if (editingQuantize) {
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            "    Quantize: " VT_CYAN VT_BOLD "[%s]" VT_RESET, QUANTIZE_NAMES[wkQuantize[i]]);
-          } else if (isEditing) {
-            // Editing type but quantize visible as dim hint
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            "    " VT_DIM "Quantize: %s" VT_RESET, QUANTIZE_NAMES[wkQuantize[i]]);
-          } else {
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            "    Quantize: %s", QUANTIZE_NAMES[wkQuantize[i]]);
           }
         }
 
@@ -317,8 +307,8 @@ void ToolBankConfig::run() {
       } else {
         drawDescription(cursor, wkTypes[cursor] == BANK_ARPEG);
 
-        // Quantize descriptions (when editing quantize)
-        if (editing && editField == 1) {
+        // Quantize description (when editing an ARPEG bank)
+        if (editing && wkTypes[cursor] == BANK_ARPEG) {
           _ui->drawFrameEmpty();
           switch (wkQuantize[cursor]) {
             case 0:
@@ -345,13 +335,7 @@ void ToolBankConfig::run() {
       if (confirmDefaults) {
         _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
       } else if (editing) {
-        if (editField == 0 && wkTypes[cursor] == BANK_ARPEG) {
-          _ui->drawControlBar(VT_DIM "[</>] TYPE  [v] QUANTIZE  [RET] SAVE  [q] CANCEL" VT_RESET);
-        } else if (editField == 1) {
-          _ui->drawControlBar(VT_DIM "[</>] QUANTIZE  [^] TYPE  [RET] SAVE  [q] CANCEL" VT_RESET);
-        } else {
-          _ui->drawControlBar(VT_DIM "[</>] TYPE  [RET] SAVE  [q] CANCEL" VT_RESET);
-        }
+        _ui->drawControlBar(VT_DIM "[</>] CHANGE  [RET] SAVE  [q] CANCEL" VT_RESET);
       } else {
         _ui->drawControlBar(VT_DIM "[^v] NAV  [RET] EDIT  [d] DFLT  [q] EXIT" VT_RESET);
       }

@@ -1,7 +1,7 @@
 # Bug Audit — Setup Tools — Worklog
 
 Source: audit RTF 2026-04-04
-Updated: 2026-04-04 (bugs 5,6,7,12,13 done)
+Updated: 2026-04-04 (bugs 5,6,7,11,12,13 done)
 
 ## Legende
 - DONE = verifie, plus rien a faire
@@ -22,6 +22,7 @@ Updated: 2026-04-04 (bugs 5,6,7,12,13 done)
 | 6 | Pas de confirmation reboot | Ajout prompt `y/n` avant ESP.restart(). Toute touche sauf `y` = annule. |
 | 7 | needsReboot inutile | Supprime flag, condition, affichage dans ToolSettings + commentaires reboot-only dans ToolLedSettings et HardwareConfig. |
 | 12 | BLE ON/OFF pas clair | Labels reformates `ON ─ ...` / `OFF (USB only)`. Param renomme `BLE:`. |
+| 11 | Tool 4 navigation | Flat cycle LEFT/RIGHT: NORMAL → ARPEG-Immediate → Beat → Bar → NORMAL. Plus de sous-nav DOWN/UP. ENTER save, q cancel. |
 | 13 | Cal tool validation globale | Free-play mode: auto-capture, double-tap 200ms reset, 4-tier delta coloring, ENTER global validate with confirm prompt. Docs: `docs/archive/bug-13-cal-free-mode/` |
 
 ---
@@ -66,36 +67,6 @@ bool flashing = ((elapsed % 500) < flashMs) && (elapsed < 1500);
 L'intervalle est **deja hardcode a 500ms** (= 120 BPM). Le `flashMs` est la duree du flash (10-100ms), pas l'intervalle entre ticks. Le preview simule 3 ticks a 120 BPM pendant 1.5s.
 
 **A verifier sur hardware** : est-ce que le preview est visuellement satisfaisant? L'audit RTF dit que le tick preview "utilise le pulse period, pas un vrai tempo" — mais le code montre le contraire. Si le preview est OK, ce bug est deja fixe.
-
----
-
-## A FAIRE — UX display (1 session)
-
-### Bug 11 — Tool 4 navigation
-
-**Fichier** : `ToolBankConfig.cpp`
-
-**State machine actuelle** (lignes 159-228) — 3 niveaux :
-1. **Non-editing** : UP/DOWN pour naviguer les 8 banks, ENTER pour editer
-2. **editField == 0 (Type)** : LEFT/RIGHT cycle NORMAL↔ARPEG, DOWN pour aller au quantize, ENTER save
-3. **editField == 1 (Quantize)** : LEFT/RIGHT cycle Immediate/Beat/Bar, UP retour au type, ENTER save
-
-**Quantize modes** (3 valeurs, `HardwareConfig.h` lignes 262-268) :
-```cpp
-enum ArpStartMode : uint8_t {
-  ARP_START_IMMEDIATE = 0,   // Fire on next division boundary
-  ARP_START_BEAT      = 1,   // Snap to next beat (24 ticks)
-  ARP_START_BAR       = 2,   // Snap to next bar (96 ticks, 4/4)
-};
-```
-
-**Max 4 ARPEG** banks impose (lignes 177-187).
-
-**Fix propose** : un seul mode editing. LEFT/RIGHT cycle la combinaison complete :
-- Si curseur sur bank NORMAL : LEFT/RIGHT toggle NORMAL↔ARPEG (pas de quantize a montrer)
-- Si curseur sur bank ARPEG : LEFT/RIGHT cycle `ARPEG-Immediate → ARPEG-Beat → ARPEG-Bar → NORMAL`
-- Quantize masque pour NORMAL (decision validee)
-- ENTER save directement, pas de sous-navigation DOWN
 
 ---
 
