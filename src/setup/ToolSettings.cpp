@@ -10,7 +10,7 @@
 static const uint8_t NUM_PARAMS = 8;
 
 static const char* s_profileNames[]   = {"Adaptive", "Expressive", "Percussive"};
-static const char* s_bleNames[]       = {"Low Latency (7.5ms)", "Normal (15ms)", "Battery Saver (30ms)", "Off (USB only)"};
+static const char* s_bleNames[]       = {"ON " "\xe2\x94\x80" " Low Latency (7.5ms)", "ON " "\xe2\x94\x80" " Normal (15ms)", "ON " "\xe2\x94\x80" " Battery Saver (30ms)", "OFF (USB only)"};
 static const char* s_clockModeNames[] = {"Slave", "Master"};
 static const char* s_yesNoNames[]     = {"No", "Yes"};
 
@@ -120,14 +120,12 @@ void ToolSettings::drawDescription(uint8_t param) {
       _ui->drawFrameLine(VT_DIM "Connection interval negotiated with host. Lower = less latency." VT_RESET);
       _ui->drawFrameLine(VT_DIM "7.5ms: best for live perf, ~2x battery. 15ms: Apple-compatible default." VT_RESET);
       _ui->drawFrameLine(VT_DIM "30ms: touring/battery mode. Off: BLE disabled, saves ~40KB RAM." VT_RESET);
-      _ui->drawFrameLine(VT_REVERSE VT_YELLOW " Reboot required after change " VT_RESET);
       break;
     case 3:
       _ui->drawFrameLine(VT_BRIGHT_WHITE "Clock Mode" VT_RESET);
       _ui->drawFrameLine(VT_DIM "Slave: sync arp tempo to incoming MIDI clock (0xF8) from DAW." VT_RESET);
       _ui->drawFrameLine(VT_DIM "USB clock has priority over BLE. PLL smooths BLE jitter." VT_RESET);
       _ui->drawFrameLine(VT_DIM "Master: generate clock from pot tempo (10-260 BPM), broadcast." VT_RESET);
-      _ui->drawFrameLine(VT_REVERSE VT_YELLOW " Reboot required after change " VT_RESET);
       break;
     case 4:
       _ui->drawFrameLine(VT_BRIGHT_WHITE "Double-Tap Window" VT_RESET);
@@ -180,7 +178,6 @@ void ToolSettings::run() {
   Serial.print(ITERM_RESIZE);
 
   SettingsStore original = wk;
-  bool needsReboot = false;
   bool nvsSaved = loadedFromNvs;
 
   InputParser input;
@@ -264,10 +261,6 @@ void ToolSettings::run() {
           editing = false;
           nvsSaved = true;
           _ui->flashSaved();
-          if (wk.bleInterval != original.bleInterval ||
-              wk.clockMode != original.clockMode) {
-            needsReboot = true;
-          }
           original = wk;
           screenDirty = true;
         }
@@ -307,7 +300,7 @@ void ToolSettings::run() {
 
       // --- CONNECTIVITY ---
       _ui->drawSection("CONNECTIVITY");
-      drawParam(2, "BLE Interval:", s_bleNames[wk.bleInterval]);
+      drawParam(2, "BLE:", s_bleNames[wk.bleInterval]);
       drawParam(3, "Clock Mode:", s_clockModeNames[wk.clockMode]);
       _ui->drawFrameEmpty();
 
@@ -353,11 +346,6 @@ void ToolSettings::run() {
         _ui->drawFrameEmpty();
       } else {
         drawDescription(cursor);
-      }
-
-      if (needsReboot) {
-        _ui->drawFrameEmpty();
-        _ui->drawFrameLine(VT_REVERSE VT_YELLOW " * Reboot required for BLE/Clock changes * " VT_RESET);
       }
 
       _ui->drawFrameEmpty();

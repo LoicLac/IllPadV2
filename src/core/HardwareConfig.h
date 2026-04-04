@@ -52,7 +52,7 @@ static constexpr RGBW COL_BATTERY[NUM_LEDS] = {
 };
 
 // Gamma LUT is now runtime-generated in LedController::rebuildGammaLut().
-// Configurable via gammaTenths in LedSettingsStore (Tool 7, reboot-only).
+// Configurable via gammaTenths in LedSettingsStore (Tool 7).
 // Default gamma 2.0. Range 1.0-3.0 (stored as 10-30).
 
 // --- Brightness Pot Response Curve ---

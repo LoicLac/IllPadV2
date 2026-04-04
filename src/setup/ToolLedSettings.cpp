@@ -1322,7 +1322,7 @@ void ToolLedSettings::run() {
           }
         }
 
-        // Gamma curve (reboot-only)
+        // Gamma curve
         {
           bool sel = (_cursor == 22);
           bool edt = sel && _editing;

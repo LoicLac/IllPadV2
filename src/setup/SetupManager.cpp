@@ -66,7 +66,6 @@ void SetupManager::run() {
     NavEvent ev = s_input.update();
     char input = 0;
     if (ev.type == NAV_CHAR) input = ev.ch;
-    else if (ev.type == NAV_QUIT) input = '0';  // q = reboot from main menu
 
     switch (input) {
       case '1':
@@ -112,15 +111,36 @@ void SetupManager::run() {
         screenDirty = true;
         break;
 
-      case '0':
-        _leds->stopSetupComet();
-        _leds->allOff();
-        _ui.vtClear();
-        Serial.println("  Rebooting...");
-        Serial.flush();
-        delay(300);
-        ESP.restart();
+      case '0': {
+        _ui.vtFrameStart();
+        _ui.drawConsoleHeader("REBOOT", false);
+        _ui.drawFrameEmpty();
+        _ui.drawFrameLine(VT_YELLOW "Reboot and exit setup?" VT_RESET);
+        _ui.drawFrameEmpty();
+        _ui.drawControlBar(VT_BOLD "[y] YES  [n] NO" VT_RESET);
+        _ui.vtFrameEnd();
+        // Wait for y/n
+        InputParser confirmInput;
+        bool answered = false;
+        while (!answered) {
+          _leds->update();
+          NavEvent cev = confirmInput.update();
+          if (cev.type == NAV_CHAR && (cev.ch == 'y' || cev.ch == 'Y')) {
+            _leds->stopSetupComet();
+            _leds->allOff();
+            _ui.vtClear();
+            Serial.println("  Rebooting...");
+            Serial.flush();
+            delay(300);
+            ESP.restart();
+          } else if (cev.type == NAV_CHAR || cev.type == NAV_QUIT) {
+            answered = true;  // any other key = cancel
+          }
+          delay(5);
+        }
+        screenDirty = true;
         break;
+      }
 
       default:
         break;

@@ -1,7 +1,7 @@
 # Bug Audit — Setup Tools — Worklog
 
 Source: audit RTF 2026-04-04
-Updated: 2026-04-04 (post PotFilter Phase 1)
+Updated: 2026-04-04 (bugs 5,6,7,12,13 done)
 
 ## Legende
 - DONE = verifie, plus rien a faire
@@ -18,11 +18,15 @@ Updated: 2026-04-04 (post PotFilter Phase 1)
 | 1 | Freeze fleches Tool 7 | seedPotsForCursor() desactive le pot apres arrow. Pas un bug — design intentionnel. |
 | 2 | Fleches mortes Tool 7 | Meme mecanisme que bug 1. Arrows modifient presetId puis re-seed. |
 | 4 | Pipeline pot unifie | PotFilter Phase 1 implemente. 16x oversampling, deadband 20, sleep/wake, NVS. |
-| 13 | Cal tool validation globale | Free-play mode: auto-capture, double-tap 200ms reset, 4-tier delta coloring, ENTER global validate with confirm prompt. |
+| 5 | `q` = reboot immediat | Supprime le mapping NAV_QUIT → '0' au menu principal. `q` ne fait plus rien au menu. |
+| 6 | Pas de confirmation reboot | Ajout prompt `y/n` avant ESP.restart(). Toute touche sauf `y` = annule. |
+| 7 | needsReboot inutile | Supprime flag, condition, affichage dans ToolSettings + commentaires reboot-only dans ToolLedSettings et HardwareConfig. |
+| 12 | BLE ON/OFF pas clair | Labels reformates `ON ─ ...` / `OFF (USB only)`. Param renomme `BLE:`. |
+| 13 | Cal tool validation globale | Free-play mode: auto-capture, double-tap 200ms reset, 4-tier delta coloring, ENTER global validate with confirm prompt. Docs: `docs/archive/bug-13-cal-free-mode/` |
 
 ---
 
-## A FAIRE — Quick wins (1 session)
+## A FAIRE — A VERIFIER hardware
 
 ### Bug 3 — Preset ne reinit pas le hue (Tool 7) — A VERIFIER
 
@@ -47,58 +51,6 @@ Updated: 2026-04-04 (post PotFilter Phase 1)
 **Storage** : `ColorSlot { uint8_t presetId; int8_t hueOffset; }` dans `KeyboardData.h`.
 
 **A verifier** : est-ce que `adjustColorField()` case 0 est encore appele pour changer le preset, ou est-ce un dead path remplace par la nav arrows? Si c'est un dead path, le bug est deja fixe. Sinon, ajouter `slot.hueOffset = 0;` dans le case 0.
-
----
-
-### Bug 5 — `q` = reboot immediat
-
-**Fichier** : `SetupManager.cpp`
-
-**Ligne 69** — mapping NAV_QUIT vers '0' :
-```cpp
-else if (ev.type == NAV_QUIT) input = '0';  // q = reboot from main menu
-```
-
-**Fix** : supprimer cette ligne. `q` ne doit rien faire au menu principal (c'est le "quit" de tous les tools, reflexe dangereux ici).
-
----
-
-### Bug 6 — Pas de confirmation reboot
-
-**Fichier** : `SetupManager.cpp`
-
-**Lignes 115-123** — reboot immediat sans confirmation :
-```cpp
-case '0':
-  _leds->stopSetupComet();
-  _leds->allOff();
-  _ui->vtClear();
-  Serial.println("  Rebooting...");
-  Serial.flush();
-  delay(300);
-  ESP.restart();
-  break;
-```
-
-**Fix** : ajouter un prompt `y/n` avant `ESP.restart()`. Afficher `"Reboot? (y/n)"`, attendre input. Si `n` ou autre → retour au menu. Si `y` → reboot.
-
----
-
-### Bug 7 — Supprimer needsReboot partout
-
-Le flag est inutile : on reboot TOUJOURS pour quitter le setup (option `[0] Reboot & Exit Setup`). Tout changement est applique au prochain boot.
-
-**Occurrences a supprimer** (toutes dans `ToolSettings.cpp` sauf mention contraire) :
-
-| Ligne | Contenu | Action |
-|-------|---------|--------|
-| 183 | `bool needsReboot = false;` | Supprimer declaration |
-| 267-270 | `if (wk.bleInterval != original....) needsReboot = true;` | Supprimer condition |
-| 358-361 | `if (needsReboot) { drawFrameLine("Reboot required...") }` | Supprimer bloc affichage |
-| 123 | `drawFrameLine(VT_REVERSE VT_YELLOW " Reboot required after change " VT_RESET);` (description BLE) | Supprimer ligne |
-| 130 | `drawFrameLine(VT_REVERSE VT_YELLOW " Reboot required after change " VT_RESET);` (description Clock) | Supprimer ligne |
-| ToolLedSettings.cpp:1325 | `// Gamma curve (reboot-only)` | Supprimer commentaire |
-| HardwareConfig.h:55 | `// Configurable via gammaTenths... (Tool 7, reboot-only).` | Retirer "(reboot-only)" du commentaire |
 
 ---
 
@@ -144,45 +96,6 @@ enum ArpStartMode : uint8_t {
 - Si curseur sur bank ARPEG : LEFT/RIGHT cycle `ARPEG-Immediate → ARPEG-Beat → ARPEG-Bar → NORMAL`
 - Quantize masque pour NORMAL (decision validee)
 - ENTER save directement, pas de sous-navigation DOWN
-
----
-
-### Bug 12 — BLE ON/OFF pas clair
-
-**Fichier** : `ToolSettings.cpp`
-
-**Ligne 13** — noms actuels :
-```cpp
-static const char* s_bleNames[] = {
-    "Low Latency (7.5ms)", "Normal (15ms)", "Battery Saver (30ms)", "Off (USB only)"
-};
-```
-
-**Ligne 310** — affichage :
-```cpp
-drawParam(2, "BLE Interval:", s_bleNames[wk.bleInterval]);
-```
-
-**Enum** (`HardwareConfig.h` lignes 240-247) :
-```cpp
-enum BleInterval : uint8_t {
-  BLE_LOW_LATENCY   = 0,   // 7.5ms
-  BLE_NORMAL        = 1,   // 15ms (default, Apple compatible)
-  BLE_BATTERY_SAVER = 2,   // 30ms
-  BLE_OFF           = 3,   // BLE disabled, USB only (~35KB RAM saved)
-};
-```
-
-**Fix propose** : reformater le label pour que ON/OFF soit le premier mot visible :
-```cpp
-static const char* s_bleNames[] = {
-    "ON ─ Low Latency (7.5ms)",
-    "ON ─ Normal (15ms)",
-    "ON ─ Battery Saver (30ms)",
-    "OFF (USB only)"
-};
-```
-Et changer le label du parametre : `"BLE:"` au lieu de `"BLE Interval:"`.
 
 ---
 
