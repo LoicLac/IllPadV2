@@ -150,6 +150,8 @@ All lock-free. No mutex anywhere in runtime code.
 | Timing burst after clock glitch | ArpScheduler fires many steps | `ArpScheduler.cpp` ticksElapsed guard (capped at 24 ticks = 1 quarter note) |
 | BLE/USB tick contamination | PLL mixes intervals from 2 sources | `ClockManager.cpp` per-source atomic counters (`_pendingUsbTicks`, `_pendingBleTicks`) + per-source timestamps — only the active source feeds the PLL |
 | Button combo confusion | Rear+left held simultaneously | `PotRouter::resolveBindings` mask checks |
+| BLE noteOff drop under AT congestion | 8+ pads with AT released simultaneously — BLE buffer may be full of AT from previous cycle, noteOff dropped → stuck notes. USB unaffected. Safety net: `midiPanic()` (triple-click rear). | `MidiTransport.cpp` BLE send path, `MidiEngine.cpp:138` flush() |
+| Rapid bank switch with held pad | 4+ bank switches in <500ms while pad held — each switch sends allNotesOff + re-triggers noteOn, producing rapid click artifacts. Physically unlikely (hold+switch = same hand). | `BankManager.cpp:117` switchToBank(), `main.cpp:967` s_lastKeys sync. **To verify on hardware.** |
 
 ---
 
@@ -191,6 +193,6 @@ All lock-free. No mutex anywhere in runtime code.
 ### Event queues
 | Queue | Size | Producer | Consumer | Overflow behavior |
 |-------|------|----------|----------|-------------------|
-| Aftertouch ring | 64 entries | `updateAftertouch()` | `flush()` (16/frame max) | Silent drop |
+| Aftertouch ring | 64 entries | `updateAftertouch()` | `flush()` (16/frame max) | Silent drop. **Capacity math**: at default 25ms rate, N pads generate N events/25ms. flush drains 16/frame × ~40 frames/25ms = 640 drain capacity. Safe up to ~48 pads. At minimum rate (10ms): N events/10ms vs 16×10=160 drain → safe up to ~40 pads. Real-world: ≤10 fingers, never saturates. |
 | Arp events | 64 per engine | `tick()` (noteOn/Off pairs) | `processEvents()` every frame | noteOff fail → skip entire step (safe); noteOn fail → cancel orphaned noteOff (safe) |
 | NVS writes | per-field dirty flags | Main loop | Background FreeRTOS task | Coalesced (latest wins) |

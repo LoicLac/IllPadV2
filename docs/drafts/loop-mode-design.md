@@ -41,13 +41,14 @@ A third bank type (alongside NORMAL and ARPEG) for percussion looping. Records p
 ## Key Decisions
 
 - **Max 2 LOOP banks** (18.8 KB SRAM, ~6% of 320 KB)
-- **Ephemeral** — loops lost on reboot, no NVS persistence
+- **Ephemeral loop content** — recorded events lost on reboot, no NVS persistence for loop data
+- **Persistent params** — per-bank effect params (shuffle, chaos, vel pattern) saved in NVS via `LoopPotStore` (same pattern as `ArpPotStore`)
 - **Background playback** — continues when switching banks (like arp)
 - **Microsecond timestamps** — events stored as `micros()` offsets (NOT tick-based — see Timing Model)
 - **Loop duration**: free recording, snapped to nearest bar on close
 - **Live play during playback** — pads play live on top of the loop
 - **Separate from ArpScheduler** — LoopEngine has own `tick()`/`processEvents()` (different playback model)
-- **LED feedback**: WS2812 RGB NeoPixel — red/magenta color family (distinct from white=NORMAL, blue=ARPEG)
+- **LED feedback**: SK6812 RGBW NeoPixel — red/magenta color family (distinct from white=NORMAL, blue=ARPEG)
 
 ---
 
@@ -245,6 +246,26 @@ public:
 ```
 
 Memory per engine: ~9.4 KB. Two engines = ~18.8 KB (5.9% of 320 KB SRAM).
+
+### LoopPotStore (8 bytes, NVS per-bank)
+
+Same pattern as `ArpPotStore` (`illpad_apot`, `arp_0`..`arp_7`): raw blob per bank, no magic/version.
+Stored in `illpad_lpot`, keys `loop_0`..`loop_7`.
+
+```cpp
+struct LoopPotStore {
+    uint16_t shuffleDepthRaw;   // 0-4095 (maps to 0.0-1.0)
+    uint8_t  shuffleTemplate;   // 0-9 (index into shared groove templates)
+    uint8_t  velPatternIdx;     // 0-3 (LUT index)
+    uint16_t chaosRaw;          // 0-4095 (maps to 0.0-1.0)
+    uint16_t velPatternDepthRaw; // 0-4095 (maps to 0.0-1.0)
+};
+static_assert(sizeof(LoopPotStore) == 8, "LoopPotStore must be 8 bytes");
+```
+
+Loaded at boot by `NvsManager::loadAll()`. Saved at runtime via dirty flags (same async
+pattern as `ArpPotStore`). `baseVelocity` and `velocityVariation` are already per-bank
+in `illpad_bvel` — shared by NORMAL, ARPEG, and LOOP, no duplication needed.
 
 ---
 
@@ -456,7 +477,30 @@ New:      BANK(8) + SCALE(15) + ARP(6) + LOOP(3: rec + play/stop + clear) = 32 p
 16 pads remain for music. A drum kit rarely exceeds 16 sounds — this is generous.
 The 3 LOOP pads should be physically grouped for ergonomics (adjacent on the circular layout).
 
-NVS storage: new namespace `illpad_lpad` with 3 pad indices (recPad, playStopPad, clearPad).
+NVS storage: new namespace `illpad_lpad`, key `"pads"`. Same pattern as `ArpPadStore`.
+
+```cpp
+#define LOOP_PAD_NVS_NAMESPACE "illpad_lpad"
+#define LOOPPAD_NVS_KEY        "pads"
+#define LOOPPAD_VERSION        1
+
+struct LoopPadStore {
+    uint16_t magic;        // EEPROM_MAGIC
+    uint8_t  version;      // LOOPPAD_VERSION
+    uint8_t  reserved;
+    uint8_t  recPad;       // pad index for REC (0xFF = unassigned)
+    uint8_t  playStopPad;  // pad index for PLAY/STOP
+    uint8_t  clearPad;     // pad index for CLEAR
+    uint8_t  _pad;         // alignment to 8 bytes
+};
+static_assert(sizeof(LoopPadStore) == 8, "LoopPadStore must be 8 bytes");
+
+inline void validateLoopPadStore(LoopPadStore& s) {
+    if (s.recPad >= NUM_KEYS)      s.recPad = 0xFF;
+    if (s.playStopPad >= NUM_KEYS) s.playStopPad = 0xFF;
+    if (s.clearPad >= NUM_KEYS)    s.clearPad = 0xFF;
+}
+```
 
 ### Bank switch denied during RECORDING/OVERDUBBING
 
@@ -895,14 +939,15 @@ engine based on the foreground bank type. This works because:
 
 8 params for 8 slots. Fits existing slot architecture.
 
-### PotMappingStore migration (PotRouter.h:60)
+### PotMappingStore rewrite (PotRouter.h:60)
+
+No backward compatibility — rewrite from scratch. Old NVS data is discarded on first boot.
 
 ```cpp
-// Current (v1): normalMap[8] + arpegMap[8] = 36 bytes
-// New (v2):     normalMap[8] + arpegMap[8] + loopMap[8] = 52 bytes
+// New: normalMap[8] + arpegMap[8] + loopMap[8] = 52 bytes
 struct PotMappingStore {
     uint16_t   magic;
-    uint8_t    version;        // bump 1 -> 2
+    uint8_t    version;        // 1 (fresh format, no migration)
     uint8_t    reserved;
     PotMapping normalMap[8];
     PotMapping arpegMap[8];
@@ -910,7 +955,7 @@ struct PotMappingStore {
 };
 ```
 
-Migration: on load, if `version == 1`: copy normalMap + arpegMap, fill loopMap with defaults, write back as v2. Add to `PotRouter::loadMapping()`.
+On load, if size mismatch (old 36B vs new 52B): `loadBlob()` returns false → defaults applied. No migration code needed.
 
 ### ToolPotMapping refactor (ToolPotMapping.h)
 
@@ -977,17 +1022,17 @@ No changes needed — the existing guard excludes LOOP banks.
 
 ---
 
-## LED Feedback — WS2812 RGB NeoPixel
+## LED Feedback — SK6812 RGBW NeoPixel
 
 LOOP uses **red/magenta** color family — visually distinct from white (NORMAL) and blue (ARPEG).
 
 ### New colors (add to HardwareConfig.h)
 
 ```cpp
-// LOOP colors (red/magenta family)
-const RGB COL_LOOP        = {255,   0,  60};  // LOOP foreground — hot magenta
-const RGB COL_LOOP_DIM    = { 40,   0,  10};  // LOOP background
-const RGB COL_LOOP_REC    = {255,   0,  40};  // Recording — red-magenta (distinct from COL_ERROR {255,0,0})
+// LOOP colors (red/magenta family) — RGBW, W=0 for pure chromatic
+const RGBW COL_LOOP        = {255,   0,  60,  0};  // LOOP foreground — hot magenta
+const RGBW COL_LOOP_DIM    = { 40,   0,  10,  0};  // LOOP background
+const RGBW COL_LOOP_REC    = {255,   0,  40,  0};  // Recording — red-magenta (distinct from COL_ERROR {255,0,0,0})
 ```
 
 ### Intensity constants (add to HardwareConfig.h)
@@ -1264,7 +1309,7 @@ if (slot.type == BANK_LOOP && slot.loopEngine) {
             if (eng->noteRefIncrement(note)) {
                 s_transport.sendNoteOn(note, vel, slot.channel);
             }
-            if (eng->getState() == LoopEngine::OVERDUBBING) {
+            if (eng->getState() == LoopEngine::RECORDING || eng->getState() == LoopEngine::OVERDUBBING) {
                 eng->recordNoteOn(p, vel);
             }
         } else if (!pressed && wasPressed) {
@@ -1273,7 +1318,7 @@ if (slot.type == BANK_LOOP && slot.loopEngine) {
             if (eng->noteRefDecrement(note)) {
                 s_transport.sendNoteOff(note, 0, slot.channel);
             }
-            if (eng->getState() == LoopEngine::OVERDUBBING) {
+            if (eng->getState() == LoopEngine::RECORDING || eng->getState() == LoopEngine::OVERDUBBING) {
                 eng->recordNoteOff(p);
             }
         }
@@ -1350,7 +1395,8 @@ Both ArpEngine and LoopEngine include ShuffleLUT.h. Zero-risk refactor.
 | Max loop duration | 64 bars | Clamped at bar-snap |
 | Min loop duration | 1 bar | Snap rounds up |
 | Max total sequencer banks | 4 ARP + 2 LOOP | Independent pools |
-| Persistence | None | Ephemeral, lost on reboot |
+| Loop content persistence | None | Ephemeral, lost on reboot |
+| Effect params persistence | NVS per-bank | `LoopPotStore` in `illpad_lpot` (same pattern as `ArpPotStore`) |
 | Static SRAM cost | 18.8 KB always allocated | Even with 0 LOOP banks configured |
 
 ### Compile-time guard (optional)
@@ -1368,7 +1414,7 @@ loop tick/processEvents, BANK_LOOP enum usage, ToolBankConfig 3-way cycle.
 - No **recording** quantize (free timing, microsecond resolution) — playback start quantize IS supported (Immediate/Beat/Bar)
 - No rest before first note — recording clock starts on first pad press, so beat 1 is always where the first hit lands. Patterns that enter mid-bar (e.g., pickup on "&" of 4) will shift left. This is a deliberate zero-friction choice (no count-in needed). Future enhancement: clock-synced record start using `_quantizeMode` for record-start alignment (Beat/Bar boundary).
 - No "armed" state before recording — tapping play/stop on EMPTY immediately starts recording. This matches Boss RC looper behavior. Beginners may accidentally start recording; the red LED blink is the only cue.
-- No NVS persistence of loop content
+- No NVS persistence of loop content (recorded events are ephemeral). Effect params (shuffle, chaos, vel pattern) DO persist via `LoopPotStore`.
 - No pitch bend
 - No octave range control
 - No buffer-full feedback — when `_events[]` reaches 1024 entries, new events are silently dropped. Live play still sounds (MIDI sent immediately) but won't be captured. The buffer overflow guard prevents memory corruption.
@@ -1395,13 +1441,14 @@ read-only indicator.
 | File | Change | Scope |
 |---|---|---|
 | `core/KeyboardData.h` | `BANK_LOOP` enum, `loopEngine*` in BankSlot | Small |
-| `core/HardwareConfig.h` | LOOP RGB colors, LED intensity constants | Small |
+| `core/HardwareConfig.h` | LOOP RGBW colors, LED intensity constants | Small |
+| `core/KeyboardData.h` | `LoopPotStore` struct, `LoopPadStore` struct + validate, NVS defines | Small |
 | `core/ShuffleLUT.h/.cpp` | **New** — extracted from ArpEngine.cpp | Small |
 | `loop/LoopEngine.h/.cpp` | **New** — entire engine | Large |
 | `arp/ArpEngine.cpp` | Remove local SHUFFLE_TEMPLATES, include ShuffleLUT.h | Small |
-| `managers/PotRouter.h/.cpp` | 3 new PotTargets, LOOP context, `loadStoredPerBankLoop()`, PotMappingStore v2 + migration | Medium |
+| `managers/PotRouter.h/.cpp` | 3 new PotTargets, LOOP context, `loadStoredPerBankLoop()`, PotMappingStore rewrite (no migration — fresh) | Medium |
 | `managers/ScaleManager.cpp` | Guard root/mode/chromatic pads to skip BANK_LOOP (prevent misleading blinks + wasted NVS writes) | Small |
-| `managers/NvsManager` | BankType value 2, PotMappingStore v2 migration, quantize for LOOP banks (already in `illpad_btype` qmode array) | Small |
+| `managers/NvsManager` | BankType value 2, `LoopPotStore` load/save (per-bank, `illpad_lpot`), `LoopPadStore` load (`illpad_lpad`), PotMappingStore rewrite (no migration — fresh), quantize for LOOP banks | Medium |
 | `setup/ToolBankConfig` | 3-way type cycle, max 2 LOOP constraint | Medium |
 | `setup/ToolPotMapping` | `_contextIdx` replaces `_contextNormal`, LOOP pool | Medium |
 | `setup/ToolPadRoles` | 4th category LOOP (3 pads: rec, play/stop, clear), color grid update | Medium |
@@ -1446,7 +1493,7 @@ resetPerBankCatch, applyBinding all loop `_numBindings` and filter by BankType):
 // FIX 1: PotRouter.h:60 — add loopMap field
 struct PotMappingStore {
   uint16_t   magic;
-  uint8_t    version;         // bump 1 -> 2
+  uint8_t    version;         // 1 (fresh format, no migration)
   uint8_t    reserved;
   PotMapping normalMap[POT_MAPPING_SLOTS];
   PotMapping arpegMap[POT_MAPPING_SLOTS];
@@ -1455,7 +1502,7 @@ struct PotMappingStore {
 
 // FIX 2: PotRouter.cpp:21-47 — add LOOP defaults after ARPEG block
 static const PotMappingStore DEFAULT_MAPPING = {
-  POT_MAPPING_MAGIC, 2, 0,
+  POT_MAPPING_MAGIC, 1, 0,
   { /* normalMap[8] — unchanged */ },
   { /* arpegMap[8]  — unchanged */ },
   { // loopMap[8]:
@@ -1638,9 +1685,9 @@ Steps 1-7 = playable LOOP mode. Steps 8-10 = polish.
 | # | Draft Issue | Resolution |
 |---|---|---|
 | 1 | 480 PPQN vs 24 PPQN clock mismatch | Use `micros()` timestamps, not PPQN ticks |
-| 2 | "NeoPixel RGB" — wrong description | Correct: WS2812 RGB NeoPixel, red/magenta color family |
+| 2 | "NeoPixel RGB" — wrong description | Correct: SK6812 RGBW NeoPixel, red/magenta color family |
 | 3 | Shuffle/chaos negative offsets break linear cursor | Two-phase PendingNoteOn queue (matches ArpEngine pattern) |
 | 4 | ArpScheduler rename to EventScheduler | Keep ArpScheduler. LoopEngine has own tick/processEvents |
 | 5 | `bool _contextNormal` can't handle 3 contexts | Replace with `uint8_t _contextIdx` |
-| 6 | PotMappingStore layout change loses NVS data | v1->v2 migration in loadMapping() |
+| 6 | PotMappingStore layout change loses NVS data | No backward compat — rewrite from scratch, size mismatch triggers defaults |
 | 7 | uint16_t tick overflow at 34 bars | Eliminated — uint32_t micros() has no practical limit |
