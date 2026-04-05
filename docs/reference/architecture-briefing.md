@@ -192,5 +192,5 @@ All lock-free. No mutex anywhere in runtime code.
 | Queue | Size | Producer | Consumer | Overflow behavior |
 |-------|------|----------|----------|-------------------|
 | Aftertouch ring | 64 entries | `updateAftertouch()` | `flush()` (16/frame max) | Silent drop |
-| Arp events | 36 per engine | `tick()` (noteOn/Off pairs) | `processEvents()` every frame | noteOff fail → skip entire step (safe); noteOn fail → cancel orphaned noteOff (safe) |
+| Arp events | 64 per engine | `tick()` (noteOn/Off pairs) | `processEvents()` every frame | noteOff fail → skip entire step (safe); noteOn fail → cancel orphaned noteOff (safe) |
 | NVS writes | per-field dirty flags | Main loop | Background FreeRTOS task | Coalesced (latest wins) |

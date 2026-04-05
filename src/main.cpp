@@ -382,7 +382,7 @@ void setup() {
 
       // Apply NVS-loaded arp params to each engine
       const ArpPotStore& arp = s_nvsManager.getLoadedArpParams(i);
-      s_banks[i].arpEngine->setGateLength((float)arp.gateRaw / 4095.0f);
+      s_banks[i].arpEngine->setGateLength(max(0.05f, (float)arp.gateRaw / 4095.0f));
       s_banks[i].arpEngine->setShuffleDepth((float)arp.shuffleDepthRaw / 4095.0f);
       s_banks[i].arpEngine->setDivision((ArpDivision)arp.division);
       s_banks[i].arpEngine->setPattern((ArpPattern)arp.pattern);

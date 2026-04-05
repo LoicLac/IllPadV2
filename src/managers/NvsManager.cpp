@@ -767,7 +767,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   potRouter.loadStoredPerBank(
     _pendingBaseVel[currentBank], _pendingVelVar[currentBank],
     _pendingPitchBend[currentBank],
-    (float)arp.gateRaw / 4095.0f,
+    max(0.05f, (float)arp.gateRaw / 4095.0f),
     (float)arp.shuffleDepthRaw / 4095.0f,
     (ArpDivision)arp.division, (ArpPattern)arp.pattern,
     arp.shuffleTemplate

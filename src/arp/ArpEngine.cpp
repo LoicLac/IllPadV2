@@ -68,6 +68,7 @@ void ArpEngine::setBaseVelocity(uint8_t vel)          { _baseVelocity = vel; }
 void ArpEngine::setVelocityVariation(uint8_t pct)     { _velocityVariation = pct; }
 void ArpEngine::setStartMode(uint8_t mode) {
   _quantizeMode = (mode < NUM_ARP_START_MODES) ? mode : ARP_START_IMMEDIATE;
+  if (_quantizeMode == ARP_START_IMMEDIATE) _waitingForQuantize = false;
 }
 
 // =================================================================

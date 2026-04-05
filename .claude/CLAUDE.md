@@ -77,7 +77,7 @@ Critical path first, secondary after. MIDI latency depends on this order.
 4. BankManager.update()                       ← left button
 5. ScaleManager.update()                      ← left button (same as bank)
 5b. Consume scale/octave/hold flags + LED confirmations
-    (ARPEG scale change: flush noteOffs before re-resolve)
+    (ARPEG scale change: no flush needed — events store resolved MIDI notes)
 6. ClockManager.update()                      ← PLL + tick generation
 ── handlePlayStopPad(state, holdBeforeUpdate, bankSwitched) ──
 7. Play/Stop pad (ARPEG + HOLD ON only)
@@ -186,7 +186,7 @@ New confirmation preempts active one. `LedController` no longer depends on `Cloc
 
 ## Arpeggiator
 
-**Pile stores padOrder positions, NOT MIDI notes.** Resolution happens at each tick via current ScaleConfig. Changing scale on a background arp = immediate effect at next tick, no interruption.
+**Pile stores padOrder positions, NOT MIDI notes.** Resolution happens at each tick via current ScaleConfig. Each arp engine keeps its own ScaleConfig copy (set via `setScaleConfig()` when foreground). Background arps retain their last-set ScaleConfig — scale changes only affect the foreground bank's engine.
 
 **HOLD OFF (live)**: press=add position, release=remove. All fingers up = arp stops naturally. BankManager has NO arp stop logic.
 
@@ -196,7 +196,7 @@ New confirmation preempts active one. `LedController` no longer depends on `Cloc
 
 **Quantized start** (per-bank, set in Tool 4): Immediate (fire on next division boundary), Beat (snap to next 1/4 note, 24 ticks), or Bar (snap to next bar, 96 ticks). Stop is always immediate. HOLD OFF auto-play also respects quantize on 0→1 finger transition.
 
-**Shuffle**: 5 groove templates (16 steps each), depth 0.0–1.0 via pot (extreme: notes can overlap across steps). Template selected via hold+pot right 3 (5 discrete values). Depth controls intensity, template controls groove shape. Shuffle offset = template[step%16] × depth × stepDuration / 100. Gate and shuffle use a unified time-based event system with reference counting (up to 36 pending events per engine): ArpScheduler.tick() schedules noteOn (with shuffle delay) and noteOff (at noteOnTime + stepDuration × gateLength), ArpScheduler.processEvents() fires them in real time. Overlapping notes handled via per-note refcount (MIDI noteOn only on 0→1, noteOff only on 1→0). Shuffle step counter resets on: play/stop toggle, pile 0→1 note, pattern change.
+**Shuffle**: 10 groove templates (16 steps each, 0-4 positive-only classic, 5-9 bipolar), depth 0.0–1.0 via pot (extreme: notes can overlap across steps). Template selected via hold+pot right 3 (10 discrete values). Depth controls intensity, template controls groove shape. Shuffle offset = template[step%16] × depth × stepDuration / 100. Gate and shuffle use a unified time-based event system with reference counting (up to 64 pending events per engine): ArpScheduler.tick() schedules noteOn (with shuffle delay) and noteOff (at noteOnTime + stepDuration × gateLength), ArpScheduler.processEvents() fires them in real time. Overlapping notes handled via per-note refcount (MIDI noteOn only on 0→1, noteOff only on 1→0). Shuffle step counter resets on: play/stop toggle, pile 0→1 note, pattern change.
 
 ## Pots — PotRouter
 
@@ -212,7 +212,7 @@ PotFilter reads 5 ADCs via 16× oversampling + adaptive EMA + deadband gate + sl
 |---|---|---|---|---|
 | Right 1 | Tempo (10-260 BPM) | — empty — | Tempo (10-260 BPM) | Division (9 binary) |
 | Right 2 | Response shape | AT deadzone | Gate length | Shuffle depth (0.0-1.0) |
-| Right 3 | Slew rate | Pitch bend (per-bank) | Pattern (5 discrete) | Shuffle template (5) |
+| Right 3 | Slew rate | Pitch bend (per-bank) | Pattern (5 discrete) | Shuffle template (10) |
 | Right 4 | Base velocity | Velocity variation | Base velocity | Velocity variation |
 
 | Rear pot | Alone | + hold rear |
