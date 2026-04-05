@@ -514,9 +514,9 @@ void ToolPotMapping::drawScreen() {
   if (_confirmSteal) {
     _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
   } else if (_ccEditing) {
-    _ui->drawControlBar(VT_DIM "[</>] CC#  [RET] CONFIRM  [q] CANCEL" VT_RESET);
+    _ui->drawControlBar(VT_DIM "[</>] CC#  [P1] sweep  [RET] CONFIRM  [q] CANCEL" VT_RESET);
   } else if (_editing) {
-    _ui->drawControlBar(VT_DIM "[</>] CYCLE POOL  [RET] ASSIGN  [q] CANCEL" VT_RESET);
+    _ui->drawControlBar(VT_DIM "[</>] CYCLE POOL  [P1] scroll  [RET] ASSIGN  [q] CANCEL" VT_RESET);
   } else {
     {
       char ctrlBuf[128];

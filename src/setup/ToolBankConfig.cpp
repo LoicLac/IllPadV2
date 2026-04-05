@@ -384,9 +384,9 @@ void ToolBankConfig::run() {
       if (confirmDefaults) {
         _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
       } else if (editing) {
-        _ui->drawControlBar(VT_DIM "[</>] CHANGE  [RET] SAVE  [q] CANCEL" VT_RESET);
+        _ui->drawControlBar(VT_DIM "[</>] CHANGE  [P1] cycle  [RET] SAVE  [q] CANCEL" VT_RESET);
       } else {
-        _ui->drawControlBar(VT_DIM "[^v] NAV  [RET] EDIT  [d] DFLT  [q] EXIT" VT_RESET);
+        _ui->drawControlBar(VT_DIM "[^v] NAV  [P1] scroll  [RET] EDIT  [d] DFLT  [q] EXIT" VT_RESET);
       }
 
       _ui->vtFrameEnd();

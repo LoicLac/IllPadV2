@@ -542,9 +542,9 @@ void ToolPadRoles::drawControlBar() {
   }
 
   if (_editing) {
-    _ui->drawControlBar(VT_DIM "[^v] pool line  [<>] cycle  [RET] assign  [q] cancel" VT_RESET);
+    _ui->drawControlBar(VT_DIM "[^v<>] browse  [P1] scroll  [RET] assign  [q] cancel" VT_RESET);
   } else {
-    _ui->drawControlBar(VT_DIM "[^v<>] NAV  [RET] EDIT  [TOUCH] JUMP  [d] DFLT  [r] CLEAR  [q] EXIT" VT_RESET);
+    _ui->drawControlBar(VT_DIM "[^v<>] NAV  [P1] scroll  [RET] EDIT  [TOUCH] JUMP  [d] DFLT  [r] CLEAR  [q] EXIT" VT_RESET);
   }
 }
 
