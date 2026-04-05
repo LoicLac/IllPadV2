@@ -3,6 +3,7 @@
 #include "InputParser.h"
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
+#include "../core/PotFilter.h"
 #include "../managers/NvsManager.h"
 #include "../managers/PotRouter.h"
 #include <Arduino.h>
@@ -48,6 +49,17 @@ void SetupManager::run() {
   _leds->allOff();
   _leds->startSetupComet();
   _leds->update();
+
+  // Apply setup-specific PotFilter config (snappier for UI navigation).
+  // No restore needed — setup always ends with ESP.restart().
+  {
+    PotFilterStore setupCfg = PotFilter::getConfig();
+    setupCfg.snap100     = 20;   // 0.20 (4x faster than runtime 0.05)
+    setupCfg.actThresh10 = 80;   // 8.0 (reacts to slow movements, runtime=20.0)
+    setupCfg.deadband    = 10;   // ~410 positions (runtime=20, ~205 positions)
+    setupCfg.sleepEn     = 0;    // no sleep in setup
+    PotFilter::setConfig(setupCfg);
+  }
 
   // Debounce: wait for entry conditions to settle
   delay(200);
