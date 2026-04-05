@@ -635,7 +635,8 @@ void ToolPotMapping::run() {
           _ui->flashSaved();
           _confirmSteal = false;
           _editing = false;
-          _pots.disable(0);  // Back to nav mode
+          _pots.disable(0);
+          samplePotBaselines();  // Refresh baselines for NAV detect
         } else {
           map[_stealSourceSlot] = backupSource;
           map[slot] = backupSlot;
@@ -683,7 +684,8 @@ void ToolPotMapping::run() {
           _ui->flashSaved();
           _ccEditing = false;
           _editing = false;
-          _pots.disable(0);  // Back to nav mode
+          _pots.disable(0);
+          samplePotBaselines();  // Refresh baselines for NAV detect
         } else {
           // Restore working copy on NVS failure
           map[slot] = savedSlot;
@@ -779,7 +781,12 @@ void ToolPotMapping::run() {
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         assignCurrentTarget();
-        _pots.disable(0);  // Back to nav mode
+        // assignCurrentTarget may enter CC# sub-editor (seeds pot ABSOLUTE)
+        // Only disable pot if we actually left edit mode
+        if (!_ccEditing) {
+          _pots.disable(0);
+          samplePotBaselines();  // Refresh baselines for NAV detect
+        }
         screenDirty = true;
       } else if (ev.type == NAV_QUIT) {
         if (_potRouter) {
@@ -789,7 +796,8 @@ void ToolPotMapping::run() {
           currentMap()[slot] = liveMap[slot];
         }
         _editing = false;
-        _pots.disable(0);  // Back to nav mode
+        _pots.disable(0);
+        samplePotBaselines();  // Refresh baselines for NAV detect
         screenDirty = true;
       }
     }
