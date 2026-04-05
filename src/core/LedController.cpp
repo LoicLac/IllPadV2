@@ -2,7 +2,6 @@
 #include "HardwareConfig.h"
 #include "KeyboardData.h"
 #include "../arp/ArpEngine.h"
-#include "../midi/ClockManager.h"
 #include <Arduino.h>
 #include <math.h>
 
@@ -34,21 +33,20 @@ LedController::LedController()
     _scaleRootBlinks(2), _scaleRootDurationMs(200),
     _scaleModeBlinks(2), _scaleModeDurationMs(200),
     _scaleChromBlinks(2), _scaleChromDurationMs(200),
-    _holdOnFlashMs(150), _holdFadeMs(300), _stopFadeMs(300),
-    _playBeatCount(3),
+    _holdFadeMs(300),
+    _playBlinks(2), _playDurationMs(200),
+    _stopBlinks(2), _stopDurationMs(200),
     _octaveBlinks(3), _octaveDurationMs(300),
-    _clock(nullptr),
     _confirmType(CONFIRM_NONE),
     _confirmStart(0),
     _confirmParam(0),
-    _fadeStartTime(0),
-    _playFlashPhase(0),
-    _playLastBeatTick(0),
     _potBarDurationMs(LED_BARGRAPH_DURATION_DEFAULT),
     _showingPotBar(false),
     _potBarRealLevel(0),
     _potBarPotLevel(0),
     _potBarCaught(true),
+    _potBarIsTempo(false),
+    _potBarBpm(120),
     _potBarStart(0),
     _bootMode(false),
     _bootStep(0),
@@ -71,11 +69,6 @@ LedController::LedController()
     _batLowLastBurstTime(0),
     _previewMode(false)
 {
-  // Precompute sine LUT -- 256 entries covering one full period (0-255 output range)
-  // Only runs once at boot, no float in update()
-  for (uint16_t i = 0; i < 256; i++) {
-    _sineTable[i] = (uint8_t)(127.5f + 127.5f * sinf((float)i * 6.2831853f / 256.0f));
-  }
   // Init tick flash timers
   for (uint8_t i = 0; i < NUM_LEDS; i++) {
     _flashStartTime[i] = 0;
@@ -203,9 +196,7 @@ void LedController::update() {
   if (_error)                            { renderError(now); return; }
   if (renderBattery(now))                return;
   if (renderBargraph(now))               return;
-  if (renderConfirmation(now)) {
-    if (_confirmType != CONFIRM_BANK_SWITCH) return;
-  }
+  renderConfirmation(now);  // State tracking only — all overlays in renderNormalDisplay
   if (_calibrationMode)                  { renderCalibration(now); return; }
   renderNormalDisplay(now);
 }
@@ -348,6 +339,17 @@ bool LedController::renderBargraph(unsigned long now) {
     }
   }
 
+  // Tempo pulse: tip LED blinks at BPM rate
+  if (_potBarIsTempo && _potBarCaught && _potBarBpm > 0) {
+    uint32_t periodMs = 60000UL / _potBarBpm;
+    bool beatOn = ((now % periodMs) < (periodMs / 2));
+    uint8_t tipLed = (uint8_t)_potBarRealLevel;
+    if (tipLed >= NUM_LEDS) tipLed = NUM_LEDS - 1;
+    if (!beatOn) {
+      _strip.setPixelColor(tipLed, 0);  // Off phase of pulse
+    }
+  }
+
   _strip.show();
   return true;
 }
@@ -356,168 +358,34 @@ bool LedController::renderConfirmation(unsigned long now) {
   if (_confirmType == CONFIRM_NONE) return false;
   unsigned long elapsed = now - _confirmStart;
 
+  // All confirmations are overlays — state tracking only, no rendering here.
+  // Rendering happens in renderNormalDisplay() overlay section.
   switch (_confirmType) {
-    case CONFIRM_BANK_SWITCH: {
-      if (elapsed >= _bankDurationMs) {
-        _confirmType = CONFIRM_NONE;
-        return false;
-      }
-      return true;  // Active, but overlay handled by renderNormalDisplay
-    }
-
-    case CONFIRM_SCALE_ROOT: {
-      if (elapsed < _scaleRootDurationMs) {
-        uint16_t unitMs = _scaleRootDurationMs / (_scaleRootBlinks * 2);
-        uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
-        bool on = (phase % 2 == 0);
-        clearPixels();
-        if (on) setPixel(_currentBank, _colScaleRoot, 100);
-        _strip.show();
-        return true;
-      }
-      _confirmType = CONFIRM_NONE;
-      return false;
-    }
-
-    case CONFIRM_SCALE_MODE: {
-      if (elapsed < _scaleModeDurationMs) {
-        uint16_t unitMs = _scaleModeDurationMs / (_scaleModeBlinks * 2);
-        uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
-        bool on = (phase % 2 == 0);
-        clearPixels();
-        if (on) setPixel(_currentBank, _colScaleMode, 100);
-        _strip.show();
-        return true;
-      }
-      _confirmType = CONFIRM_NONE;
-      return false;
-    }
-
-    case CONFIRM_SCALE_CHROM: {
-      if (elapsed < _scaleChromDurationMs) {
-        uint16_t unitMs = _scaleChromDurationMs / (_scaleChromBlinks * 2);
-        uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
-        bool on = (phase % 2 == 0);
-        clearPixels();
-        if (on) setPixel(_currentBank, _colScaleChrom, 100);
-        _strip.show();
-        return true;
-      }
-      _confirmType = CONFIRM_NONE;
-      return false;
-    }
-
-    case CONFIRM_HOLD_ON: {
-      if (elapsed < (uint16_t)_holdOnFlashMs + 100) {
-        clearPixels();
-        if (elapsed < _holdOnFlashMs) {
-          setPixel(_currentBank, _colHold, 100);
-        }
-        _strip.show();
-        return true;
-      }
-      _confirmType = CONFIRM_NONE;
-      return false;
-    }
-
-    case CONFIRM_HOLD_OFF: {
-      if (elapsed < _holdFadeMs) {
-        // Fade from 100% to 0% over _holdFadeMs
-        uint8_t fadePct = (uint8_t)((uint32_t)(_holdFadeMs - elapsed) * 100 / _holdFadeMs);
-        clearPixels();
-        setPixel(_currentBank, _colHold, fadePct);
-        _strip.show();
-        return true;
-      }
-      _confirmType = CONFIRM_NONE;
-      return false;
-    }
-
-    case CONFIRM_PLAY: {
-      uint8_t playSteps = _playBeatCount + 1;
-      if (_playFlashPhase == 255) {
-        uint8_t ackUnitMs = LED_CONFIRM_UNIT_MS;
-        if (elapsed < (uint16_t)ackUnitMs * 2) {
-          bool on = (elapsed < ackUnitMs);
-          clearPixels();
-          if (on) setPixel(_currentBank, _colPlayAck, 100);
-          _strip.show();
-          return true;
-        }
-        _playFlashPhase = 0;
-        if (_clock) {
-          _playLastBeatTick = _clock->getCurrentTick();
-        }
-      }
-
-      if (_playFlashPhase < playSteps) {
-        // Intensity ramp: 50%, 75%, 100% for beat-synced flashes
-        static const uint8_t playIntensity[] = {0, 50, 75, 100};
-
-        if (_clock) {
-          uint32_t currentTick = _clock->getCurrentTick();
-          if (currentTick >= _playLastBeatTick + 24) {
-            _playLastBeatTick = currentTick - (currentTick % 24);
-            _fadeStartTime = now;
-            _playFlashPhase++;
-          }
-        } else {
-          uint8_t beatPhase = (uint8_t)(elapsed / 200);
-          if (beatPhase > _playFlashPhase) {
-            _fadeStartTime = now;
-            _playFlashPhase = beatPhase;
-          }
-        }
-
-        // Show flash while timer active
-        if (_fadeStartTime != 0 && (now - _fadeStartTime) < _tickFlashDurationMs) {
-          uint8_t phase = (_playFlashPhase < 4) ? _playFlashPhase : 3;
-          clearPixels();
-          setPixel(_currentBank, _colStop, playIntensity[phase]);
-          _strip.show();
-          return true;
-        }
-
-        // End confirmation only after last beat's flash has fully expired
-        if (_playFlashPhase >= _playBeatCount) {
-          _confirmType = CONFIRM_NONE;
-          return false;
-        }
-      }
-      return false;
-    }
-
-    case CONFIRM_STOP: {
-      if (elapsed < _stopFadeMs) {
-        uint8_t fadePct = (uint8_t)((uint32_t)(_stopFadeMs - elapsed) * 100 / _stopFadeMs);
-        clearPixels();
-        setPixel(_currentBank, _colStop, fadePct);
-        _strip.show();
-        return true;
-      }
-      _confirmType = CONFIRM_NONE;
-      return false;
-    }
-
-    case CONFIRM_OCTAVE: {
-      if (elapsed < _octaveDurationMs) {
-        uint16_t unitMs = _octaveDurationMs / (_octaveBlinks * 2);
-        uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
-        bool on = (phase % 2 == 0);
-        clearPixels();
-        if (on && _confirmParam >= 1 && _confirmParam <= 4) {
-          uint8_t baseLed = (_confirmParam - 1) * 2;
-          setPixel(baseLed, _colOctave, 100);
-          if (baseLed + 1 < NUM_LEDS) {
-            setPixel(baseLed + 1, _colOctave, 100);
-          }
-        }
-        _strip.show();
-        return true;
-      }
-      _confirmType = CONFIRM_NONE;
-      return false;
-    }
+    case CONFIRM_BANK_SWITCH:
+      if (elapsed >= _bankDurationMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+    case CONFIRM_SCALE_ROOT:
+      if (elapsed >= _scaleRootDurationMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+    case CONFIRM_SCALE_MODE:
+      if (elapsed >= _scaleModeDurationMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+    case CONFIRM_SCALE_CHROM:
+      if (elapsed >= _scaleChromDurationMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+    case CONFIRM_HOLD_ON:
+    case CONFIRM_HOLD_OFF:
+      if (elapsed >= _holdFadeMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+    case CONFIRM_PLAY:
+      if (elapsed >= _playDurationMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+    case CONFIRM_STOP:
+      if (elapsed >= _stopDurationMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+    case CONFIRM_OCTAVE:
+      if (elapsed >= _octaveDurationMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
 
     default:
       _confirmType = CONFIRM_NONE;
@@ -554,31 +422,46 @@ void LedController::renderBankNormal(uint8_t led, bool isFg) {
            isFg ? _normalFgIntensity : _normalBgIntensity);
 }
 
-void LedController::renderBankArpeg(uint8_t led, bool isFg, uint16_t sine16, unsigned long now) {
+void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
   const BankSlot& slot = _slots[led];
   bool playing = slot.arpEngine && slot.arpEngine->isPlaying() && slot.arpEngine->hasNotes();
+  bool hasNotes = slot.arpEngine && slot.arpEngine->hasNotes();
 
+  // Tick flash: consume flag, track flash timer
   if (slot.arpEngine && slot.arpEngine->consumeTickFlash()) {
     _flashStartTime[led] = now;
   }
-  bool flashing = (_flashStartTime[led] != 0) &&
-                   ((now - _flashStartTime[led]) < _tickFlashDurationMs);
-
-  uint8_t pMin, pMax;
-  const RGBW& col = isFg ? _colArpFg : _colArpBg;
-  if (isFg) {
-    pMin = playing ? _fgArpPlayMin : _fgArpStopMin;
-    pMax = playing ? _fgArpPlayMax : _fgArpStopMax;
-  } else {
-    pMin = playing ? _bgArpPlayMin : _bgArpStopMin;
-    pMax = playing ? _bgArpPlayMax : _bgArpStopMax;
+  bool flashing = false;
+  if (_flashStartTime[led] != 0) {
+    if ((now - _flashStartTime[led]) < _tickFlashDurationMs) {
+      flashing = true;
+    } else {
+      _flashStartTime[led] = 0;
+    }
   }
 
-  if (flashing) {
+  const RGBW& col = isFg ? _colArpFg : _colArpBg;
+
+  if (flashing && playing) {
+    // Tick flash overrides during playback
     setPixel(led, _colTickFlash, isFg ? _tickFlashFg : _tickFlashBg);
-  } else {
-    uint8_t intensity = pMin + (uint8_t)((uint32_t)sine16 * (pMax - pMin) / 65280);
+  } else if (playing) {
+    // Playing: solid bright (FG) or solid dim (BG) — no pulse
+    setPixel(led, col, isFg ? _fgArpPlayMax : _bgArpPlayMin);
+  } else if (isFg && hasNotes) {
+    // FG stopped with notes loaded: slow pulse (the ONLY remaining pulse)
+    uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
+    uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
+    uint8_t  idx   = phase >> 8;
+    uint8_t  frac  = phase & 0xFF;
+    uint16_t sine16 = (uint16_t)LED_SINE_LUT[idx] * (256 - frac)
+                    + (uint16_t)LED_SINE_LUT[(idx + 1) & 0xFF] * frac;
+    uint8_t intensity = _fgArpStopMin
+                      + (uint8_t)((uint32_t)sine16 * (_fgArpStopMax - _fgArpStopMin) / 65280);
     setPixel(led, col, intensity);
+  } else {
+    // BG (all states) or FG idle (no notes): solid dim
+    setPixel(led, col, isFg ? _fgArpStopMin : _bgArpStopMin);
   }
 }
 
@@ -586,21 +469,11 @@ void LedController::renderNormalDisplay(unsigned long now) {
   clearPixels();
 
   if (_slots) {
-    // 16-bit phase + linear interpolation for smooth sine pulse.
-    // phase: 0..65535 maps to one full sine period.
-    // idx: top 8 bits select LUT entry, frac: bottom 8 bits interpolate.
-    uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
-    uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
-    uint8_t  idx   = phase >> 8;
-    uint8_t  frac  = phase & 0xFF;
-    uint16_t sine16 = (uint16_t)_sineTable[idx] * (256 - frac)
-                    + (uint16_t)_sineTable[(idx + 1) & 0xFF] * frac;  // 0..65280
-
     for (uint8_t i = 0; i < NUM_LEDS; i++) {
       bool isFg = (i == _currentBank);
       switch (_slots[i].type) {
         case BANK_NORMAL: renderBankNormal(i, isFg); break;
-        case BANK_ARPEG:  renderBankArpeg(i, isFg, sine16, now); break;
+        case BANK_ARPEG:  renderBankArpeg(i, isFg, now); break;
       }
 
       // Battery low override: 3-blink burst on foreground bank
@@ -624,18 +497,75 @@ void LedController::renderNormalDisplay(unsigned long now) {
     setPixel(_currentBank, _colNormalFg, _normalFgIntensity);
   }
 
-  // --- CONFIRM_BANK_SWITCH overlay ---
-  if (_confirmType == CONFIRM_BANK_SWITCH) {
+  // --- Confirmation overlays (all types, applied on current bank LED) ---
+  if (_confirmType != CONFIRM_NONE) {
     unsigned long elapsed = now - _confirmStart;
-    if (elapsed < _bankDurationMs) {
-      uint16_t unitMs = _bankDurationMs / (_bankBlinks * 2);
-      uint8_t phase = elapsed / (unitMs > 0 ? unitMs : 1);
-      bool on = (phase % 2 == 0);
-      if (on) {
-        setPixel(_currentBank, _colBankSwitch, _bankBrightnessPct);
-      } else {
-        _strip.setPixelColor(_currentBank, 0);
+
+    switch (_confirmType) {
+      case CONFIRM_BANK_SWITCH: {
+        uint16_t unitMs = _bankDurationMs / (_bankBlinks * 2);
+        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
+        if (on) {
+          setPixel(_currentBank, _colBankSwitch, _bankBrightnessPct);
+        } else {
+          _strip.setPixelColor(_currentBank, 0);
+        }
+        break;
       }
+      case CONFIRM_SCALE_ROOT: {
+        uint16_t unitMs = _scaleRootDurationMs / (_scaleRootBlinks * 2);
+        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
+        if (on) setPixel(_currentBank, _colScaleRoot, 100);
+        else _strip.setPixelColor(_currentBank, 0);
+        break;
+      }
+      case CONFIRM_SCALE_MODE: {
+        uint16_t unitMs = _scaleModeDurationMs / (_scaleModeBlinks * 2);
+        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
+        if (on) setPixel(_currentBank, _colScaleMode, 100);
+        else _strip.setPixelColor(_currentBank, 0);
+        break;
+      }
+      case CONFIRM_SCALE_CHROM: {
+        uint16_t unitMs = _scaleChromDurationMs / (_scaleChromBlinks * 2);
+        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
+        if (on) setPixel(_currentBank, _colScaleChrom, 100);
+        else _strip.setPixelColor(_currentBank, 0);
+        break;
+      }
+      case CONFIRM_HOLD_ON: {
+        // Fade IN: 0% -> 100% over holdFadeMs
+        uint8_t fadePct = (uint8_t)((uint32_t)elapsed * 100 / _holdFadeMs);
+        if (fadePct > 100) fadePct = 100;
+        setPixel(_currentBank, _colHold, fadePct);
+        break;
+      }
+      case CONFIRM_HOLD_OFF: {
+        // Fade OUT: 100% -> 0% over holdFadeMs
+        if (elapsed > _holdFadeMs) elapsed = _holdFadeMs;  // clamp to prevent underflow
+        uint8_t fadePct = (uint8_t)((uint32_t)(_holdFadeMs - elapsed) * 100 / _holdFadeMs);
+        setPixel(_currentBank, _colHold, fadePct);
+        break;
+      }
+      case CONFIRM_PLAY: {
+        uint16_t unitMs = _playDurationMs / (_playBlinks * 2);
+        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
+        if (on) setPixel(_currentBank, _colPlayAck, 100);
+        break;
+      }
+      case CONFIRM_STOP: {
+        uint16_t unitMs = _stopDurationMs / (_stopBlinks * 2);
+        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
+        if (on) setPixel(_currentBank, _colStop, 100);
+        break;
+      }
+      case CONFIRM_OCTAVE: {
+        uint16_t unitMs = _octaveDurationMs / (_octaveBlinks * 2);
+        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
+        if (on) setPixel(_currentBank, _colOctave, 100);
+        break;
+      }
+      default: break;
     }
   }
 
@@ -662,9 +592,6 @@ void LedController::setBankSlots(const BankSlot* slots) {
   _slots = slots;
 }
 
-void LedController::setClockManager(const ClockManager* clock) {
-  _clock = clock;
-}
 
 // =================================================================
 // Confirmation Blinks
@@ -674,15 +601,6 @@ void LedController::triggerConfirm(ConfirmType type, uint8_t param) {
   _confirmType = type;
   _confirmStart = millis();
   _confirmParam = param;
-
-  // Special init for play confirmation
-  if (type == CONFIRM_PLAY) {
-    _playFlashPhase = 255;  // 255 = ack sentinel; 0 = waiting for beat 1
-    _fadeStartTime = 0;  // Used as flash hold timer during beat-synced phases
-    if (_clock) {
-      _playLastBeatTick = _clock->getCurrentTick();
-    }
-  }
 }
 
 void LedController::setPotBarDuration(uint16_t ms) {
@@ -714,10 +632,11 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
   _scaleModeDurationMs = s.scaleModeDurationMs;
   _scaleChromBlinks = s.scaleChromBlinks;
   _scaleChromDurationMs = s.scaleChromDurationMs;
-  _holdOnFlashMs = s.holdOnFlashMs;
   _holdFadeMs = s.holdFadeMs;
-  _stopFadeMs = s.stopFadeMs;
-  _playBeatCount = s.playBeatCount;
+  _playBlinks = (s.playBlinks > 0) ? s.playBlinks : 2;
+  _playDurationMs = s.playDurationMs;
+  _stopBlinks = (s.stopBlinks > 0) ? s.stopBlinks : 2;
+  _stopDurationMs = s.stopDurationMs;
   _octaveBlinks = s.octaveBlinks;
   _octaveDurationMs = s.octaveDurationMs;
   rebuildGammaLut(s.gammaTenths > 0 ? s.gammaTenths : 20);
@@ -784,8 +703,19 @@ void LedController::showBatteryGauge(uint8_t percent) {
 
 void LedController::showPotBargraph(float realLevel, uint8_t potLevel, bool caught) {
   _potBarRealLevel = (realLevel > (float)NUM_LEDS) ? (float)NUM_LEDS : (realLevel < 0.0f ? 0.0f : realLevel);
-  _potBarPotLevel = (potLevel >= NUM_LEDS) ? (NUM_LEDS - 1) : potLevel; // 0-7 (LED index)
+  _potBarPotLevel = (potLevel >= NUM_LEDS) ? (NUM_LEDS - 1) : potLevel;
   _potBarCaught = caught;
+  _potBarIsTempo = false;
+  _potBarStart = millis();
+  _showingPotBar = true;
+}
+
+void LedController::showTempoBargraph(float realLevel, uint8_t potLevel, bool caught, uint16_t bpm) {
+  _potBarRealLevel = (realLevel > (float)NUM_LEDS) ? (float)NUM_LEDS : (realLevel < 0.0f ? 0.0f : realLevel);
+  _potBarPotLevel = (potLevel >= NUM_LEDS) ? (NUM_LEDS - 1) : potLevel;
+  _potBarCaught = caught;
+  _potBarIsTempo = true;
+  _potBarBpm = bpm;
   _potBarStart = millis();
   _showingPotBar = true;
 }
@@ -822,6 +752,7 @@ void LedController::allOff() {
   _validationFlashing = false;
   _error = false;
   _showingPotBar = false;
+  _potBarIsTempo = false;
   _showingBattery = false;
   _confirmType = CONFIRM_NONE;
   for (uint8_t i = 0; i < NUM_LEDS; i++) _flashStartTime[i] = 0;

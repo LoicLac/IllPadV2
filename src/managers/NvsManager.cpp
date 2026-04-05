@@ -57,10 +57,11 @@ NvsManager::NvsManager()
   _ledSettings.scaleModeDurationMs = 200;
   _ledSettings.scaleChromBlinks = 2;
   _ledSettings.scaleChromDurationMs = 200;
-  _ledSettings.holdOnFlashMs = 150;
   _ledSettings.holdFadeMs = 300;
-  _ledSettings.stopFadeMs = 300;
-  _ledSettings.playBeatCount = 3;
+  _ledSettings.playBlinks = 2;
+  _ledSettings.playDurationMs = 200;
+  _ledSettings.stopBlinks = 2;
+  _ledSettings.stopDurationMs = 200;
   _ledSettings.octaveBlinks = 3;
   _ledSettings.octaveDurationMs = 300;
 

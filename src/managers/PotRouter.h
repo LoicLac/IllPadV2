@@ -79,6 +79,7 @@ public:
   float   getBargraphLevel() const;      // 0.0-8.0 (fractional = tip LED brightness)
   uint8_t getBargraphPotLevel() const;   // Physical pot position mapped to 0-7
   bool    isBargraphCaught() const;      // True if active binding is caught
+  PotTarget getBargraphTarget() const;   // Which target triggered the bargraph
 
   // Dirty flag for NVS save debounce
   bool isDirty() const;
@@ -148,6 +149,7 @@ private:
   float   _bargraphLevel;       // 0.0-8.0 (fractional tip for continuous, snapped for discrete)
   uint8_t _bargraphPotLevel;   // Physical pot position (0-7)
   bool    _bargraphCaught;     // Catch state of active binding
+  PotTarget _bargraphTarget;   // Which target triggered the last bargraph
 
   // Dirty (any output changed since last clearDirty)
   bool _dirty;

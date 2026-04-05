@@ -9,7 +9,6 @@
 // Forward declarations
 struct BankSlot;
 class ArpEngine;
-class ClockManager;
 
 // =================================================================
 // Confirmation blink types
@@ -42,9 +41,6 @@ public:
 
   // Multi-bank state
   void setBankSlots(const BankSlot* slots);
-
-  // Clock manager (for play confirmation beat sync)
-  void setClockManager(const ClockManager* clock);
 
   // Confirmations
   void triggerConfirm(ConfirmType type, uint8_t param = 0);
@@ -82,6 +78,9 @@ public:
   // Pot bargraph with catch visualization
   void showPotBargraph(float realLevel, uint8_t potLevel, bool caught);
 
+  // Tempo bargraph (level bar + BPM pulse on tip LED)
+  void showTempoBargraph(float realLevel, uint8_t potLevel, bool caught, uint16_t bpm);
+
   // Calibration
   void setCalibrationMode(bool active);
   void playValidation();
@@ -115,7 +114,7 @@ private:
   void renderCalibration(unsigned long now);
   void renderNormalDisplay(unsigned long now);
   void renderBankNormal(uint8_t led, bool isFg);
-  void renderBankArpeg(uint8_t led, bool isFg, uint16_t sine16, unsigned long now);
+  void renderBankArpeg(uint8_t led, bool isFg, unsigned long now);
 
   // Master brightness (0-100 perceptual, from pot via POT_BRIGHTNESS_CURVE)
   uint8_t _brightnessPct;
@@ -153,29 +152,21 @@ private:
   uint16_t _scaleModeDurationMs;
   uint8_t  _scaleChromBlinks;
   uint16_t _scaleChromDurationMs;
-  uint8_t  _holdOnFlashMs;
   uint16_t _holdFadeMs;
-  uint16_t _stopFadeMs;
-  uint8_t  _playBeatCount;
+  uint8_t  _playBlinks;
+  uint16_t _playDurationMs;
+  uint8_t  _stopBlinks;
+  uint16_t _stopDurationMs;
   uint8_t  _octaveBlinks;
   uint16_t _octaveDurationMs;
 
-  uint8_t _sineTable[256];
   uint8_t _gammaLut[256];
   unsigned long _flashStartTime[NUM_LEDS];
-
-  // Clock manager (for play beat detection)
-  const ClockManager* _clock;
 
   // Confirmation state
   ConfirmType   _confirmType;
   unsigned long _confirmStart;
   uint8_t       _confirmParam;
-
-  // Play confirmation state
-  unsigned long _fadeStartTime;    // Flash hold timer for beat-synced play flashes
-  uint8_t       _playFlashPhase;    // 0=ack done, 1-3=beat flashes
-  uint32_t      _playLastBeatTick;  // Clock tick at last beat flash
 
   // Bargraph
   uint16_t _potBarDurationMs;
@@ -183,6 +174,8 @@ private:
   float   _potBarRealLevel;
   uint8_t _potBarPotLevel;
   bool    _potBarCaught;
+  bool     _potBarIsTempo;
+  uint16_t _potBarBpm;
   unsigned long _potBarStart;
 
   // Boot

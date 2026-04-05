@@ -232,7 +232,7 @@ inline RGBW resolveColorSlot(const ColorSlot& slot) {
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       2
+#define LED_SETTINGS_VERSION       3
 
 struct LedSettingsStore {
   uint16_t magic;
@@ -243,16 +243,16 @@ struct LedSettingsStore {
   uint8_t  normalBgIntensity;     // default 10
   uint8_t  fgArpStopMin;          // default 30
   uint8_t  fgArpStopMax;          // default 100
-  uint8_t  fgArpPlayMin;          // default 30
-  uint8_t  fgArpPlayMax;          // default 80
-  uint8_t  bgArpStopMin;          // default 8
-  uint8_t  bgArpStopMax;          // default 25
-  uint8_t  bgArpPlayMin;          // default 8
-  uint8_t  bgArpPlayMax;          // default 20
+  uint8_t  fgArpPlayMin;          // default 30  — LEGACY v2: unused (no pulse on playing), kept for NVS compat
+  uint8_t  fgArpPlayMax;          // default 80  — solid intensity FG arpeg playing (between tick flashes)
+  uint8_t  bgArpStopMin;          // default 8   — solid dim intensity BG arpeg stopped/idle
+  uint8_t  bgArpStopMax;          // default 25  — LEGACY v2: unused (no pulse on BG), kept for NVS compat
+  uint8_t  bgArpPlayMin;          // default 8   — solid dim intensity BG arpeg playing (between tick flashes)
+  uint8_t  bgArpPlayMax;          // default 20  — LEGACY v2: unused (no pulse on BG playing), kept for NVS compat
   uint8_t  tickFlashFg;           // default 100
   uint8_t  tickFlashBg;           // default 25
   // --- Timing ---
-  uint16_t pulsePeriodMs;         // default 1472
+  uint16_t pulsePeriodMs;         // default 1472 — FG arpeg stopped-loaded breathing only
   uint8_t  tickFlashDurationMs;   // default 30
   uint8_t  gammaTenths;           // 10-30 → gamma 1.0-3.0, default 20 (2.0). Reboot-only.
   // --- Confirmations ---
@@ -265,10 +265,11 @@ struct LedSettingsStore {
   uint16_t scaleModeDurationMs;   // default 200
   uint8_t  scaleChromBlinks;      // default 2
   uint16_t scaleChromDurationMs;  // default 200
-  uint8_t  holdOnFlashMs;         // default 150
-  uint16_t holdFadeMs;            // default 300
-  uint8_t  playBeatCount;         // default 3
-  uint16_t stopFadeMs;            // default 300
+  uint16_t holdFadeMs;            // default 300 (fade IN for ON, fade OUT for OFF)
+  uint8_t  playBlinks;            // 1-3, default 2
+  uint16_t playDurationMs;        // 100-500, default 200
+  uint8_t  stopBlinks;            // 1-3, default 2
+  uint16_t stopDurationMs;        // 100-500, default 200
   uint8_t  octaveBlinks;          // default 3
   uint16_t octaveDurationMs;      // default 300
 };
@@ -552,10 +553,11 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
   if (s.scaleModeDurationMs < 100 || s.scaleModeDurationMs > 500) s.scaleModeDurationMs = 200;
   if (s.scaleChromBlinks < 1 || s.scaleChromBlinks > 3) s.scaleChromBlinks = 2;
   if (s.scaleChromDurationMs < 100 || s.scaleChromDurationMs > 500) s.scaleChromDurationMs = 200;
-  if (s.holdOnFlashMs < 50 || s.holdOnFlashMs > 250) s.holdOnFlashMs = 150;
   if (s.holdFadeMs < 100 || s.holdFadeMs > 600) s.holdFadeMs = 300;
-  if (s.playBeatCount < 1 || s.playBeatCount > 4) s.playBeatCount = 3;
-  if (s.stopFadeMs < 100 || s.stopFadeMs > 600) s.stopFadeMs = 300;
+  if (s.playBlinks < 1 || s.playBlinks > 3) s.playBlinks = 2;
+  if (s.playDurationMs < 100 || s.playDurationMs > 500) s.playDurationMs = 200;
+  if (s.stopBlinks < 1 || s.stopBlinks > 3) s.stopBlinks = 2;
+  if (s.stopDurationMs < 100 || s.stopDurationMs > 500) s.stopDurationMs = 200;
   if (s.octaveBlinks < 1 || s.octaveBlinks > 3) s.octaveBlinks = 3;
   if (s.octaveDurationMs < 100 || s.octaveDurationMs > 500) s.octaveDurationMs = 300;
 }

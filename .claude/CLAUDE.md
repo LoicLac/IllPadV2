@@ -124,34 +124,36 @@ LedController drives a SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel` (NEO_G
 
 | State | Color | Pattern | Intensity | Rate |
 |---|---|---|---|---|
-| Current NORMAL | White (W channel) | Solid | 100% | — |
-| Current ARPEG stopped | Blue | Sine pulse | 30%↔100% | ~1.5s period |
-| Current ARPEG playing | Blue | Sine pulse + white tick flash | 30%↔80%, spike white 100% on beat | Pulse ~1.5s, flash 30ms |
+| Current NORMAL | White (W channel) | Solid | 85% | — |
+| Current ARPEG idle (pile empty) | Blue | Solid dim | fgArpStopMin | — |
+| Current ARPEG stopped (notes loaded) | Blue | Sine pulse | fgArpStopMin↔fgArpStopMax | ~1.5s period |
+| Current ARPEG playing | Blue | Solid + white tick flash | fgArpPlayMax, spike tickFlashFg on step | flash 30ms |
 | Background NORMAL | White dim | Solid | ~10% | — |
-| Background ARPEG stopped | Blue dim | Sine pulse | 8%↔25% | ~1.5s period |
-| Background ARPEG playing | Blue dim | Sine pulse + tick flash | 8%↔20%, spike 25% on beat | Pulse ~1.5s, flash 30ms |
+| Background ARPEG (all states) | Blue dim | Solid (+ tick flash if playing) | bgArpStopMin or bgArpPlayMin | flash 30ms if playing |
 
-**Sine pulse**: 256-entry precomputed LUT with 16-bit phase + linear interpolation. Phase = `(now * 65536 / pulsePeriodMs) % 65536`, top 8 bits select LUT entry, bottom 8 bits interpolate between adjacent entries. Smooth sub-millisecond stepping, no staircase artifacts.
+**Sine pulse (FG stopped-loaded only)**: 256-entry precomputed `LED_SINE_LUT[256]` in HardwareConfig.h, shared with ToolLedSettings. 16-bit phase + linear interpolation. Only used for FG arpeg stopped with notes loaded ("breathing = ready to play"). All other states are solid.
 
-**Tick flash**: `ArpEngine::consumeTickFlash()` returns true once per arp step. LedController stores `_flashStartTime[i]` and holds the flash for `LED_TICK_FLASH_DURATION_MS`.
+**Tick flash**: `ArpEngine::consumeTickFlash()` returns true once per arp step. LedController stores `_flashStartTime[i]` and holds the flash for `tickFlashDurationMs` (default 30ms). Only fires during playback.
 
-### Confirmation Blinks (auto-expiring overlays)
+**Legacy fields**: `fgArpPlayMin`, `bgArpStopMax`, `bgArpPlayMax` exist in LedSettingsStore for NVS compatibility but are unused at runtime (no pulse on playing/BG states). Hidden in Tool 7 UI.
 
-Each confirmation type has a distinct RGB color. 10 `ConfirmType` enum values:
+### Confirmation Blinks (ALL overlay — bar never blanks)
+
+All 10 `ConfirmType` values are **overlay-only**: `renderConfirmation()` tracks state/expiry, `renderNormalDisplay()` renders the overlay on top of the normal bank display. No confirmation ever calls `clearPixels()`. The normal display (including tick flashes) runs underneath at all times.
 
 | Event | ConfirmType | Color | Pattern | Duration |
 |---|---|---|---|---|
-| Bank switch | `CONFIRM_BANK_SWITCH` | White | Triple blink destination LED, brightness % configurable | 300ms |
-| Scale root | `CONFIRM_SCALE_ROOT` | Vivid yellow | Double blink current LED | 200ms |
-| Scale mode | `CONFIRM_SCALE_MODE` | Pale yellow | Double blink current LED | 200ms |
-| Scale chromatic | `CONFIRM_SCALE_CHROM` | Golden yellow | Double blink current LED | 200ms |
-| Hold ON | `CONFIRM_HOLD_ON` | Deep blue | Single long blink | 250ms (150ms on + 100ms off) |
-| Hold OFF | `CONFIRM_HOLD_OFF` | Deep blue | Fade-out | 300ms |
-| Play | `CONFIRM_PLAY` | Green ack → blue-cyan ramp | Ack flash + 3 beat-synced flashes | Beat-synced (4 steps) |
-| Stop | `CONFIRM_STOP` | Blue-cyan | Fade-out | 300ms |
-| Octave | `CONFIRM_OCTAVE` | Blue-violet | Triple blink of a 2-LED group (octave 1→LEDs 0-1, 2→LEDs 2-3, 3→LEDs 4-5, 4→LEDs 6-7) | 300ms |
+| Bank switch | `CONFIRM_BANK_SWITCH` | White | Blink on/off destination LED | bankDurationMs (300ms) |
+| Scale root | `CONFIRM_SCALE_ROOT` | Vivid yellow | Blink on/off current LED | scaleRootDurationMs (200ms) |
+| Scale mode | `CONFIRM_SCALE_MODE` | Pale yellow | Blink on/off current LED | scaleModeDurationMs (200ms) |
+| Scale chromatic | `CONFIRM_SCALE_CHROM` | Golden yellow | Blink on/off current LED | scaleChromDurationMs (200ms) |
+| Hold ON | `CONFIRM_HOLD_ON` | Deep blue | Fade IN 0%→100% (latch engage) | holdFadeMs (300ms) |
+| Hold OFF | `CONFIRM_HOLD_OFF` | Deep blue | Fade OUT 100%→0% (latch release) | holdFadeMs (300ms) |
+| Play | `CONFIRM_PLAY` | Green | Blink overlay on current LED | playDurationMs (200ms) |
+| Stop | `CONFIRM_STOP` | Cyan | Blink overlay on current LED | stopDurationMs (200ms) |
+| Octave | `CONFIRM_OCTAVE` | Blue-violet | Blink overlay on current LED (1 LED, not 2) | octaveDurationMs (300ms) |
 
-Play ack flash uses `LED_CONFIRM_UNIT_MS` (50ms) for fixed timing. Beat-synced flashes use `ClockManager` (fallback: 200ms/beat if no clock). Stop fade uses independent `stopFadeMs` (not aliased with hold-off). Priority: below error/battery/bargraph, above normal display. New confirmation preempts active one.
+New confirmation preempts active one. `LedController` no longer depends on `ClockManager` (beat-sync removed). All blink counts and durations configurable in Tool 7.
 
 ### Priority State Machine (in `update()`)
 
@@ -161,15 +163,17 @@ Play ack flash uses `LED_CONFIRM_UNIT_MS` (50ms) for fixed timing. Beat-synced f
 3. Chase pattern      (calibration entry — white chase)
 4. Error              (LEDs 3-4 blink red 500ms — sensing task stall)
 5. Battery gauge      (8-LED red→green gradient bar, 3s)
-6. Pot bargraph       (solid bar + catch visualization, configurable duration)
-7. Confirmation blinks (10 types, color-coded, auto-expire)
+6. Pot bargraph       (solid bar + catch visualization; tempo bargraph adds BPM pulse on tip LED)
+7. Confirmation state tracking (10 types, auto-expire timers)
 8. Calibration mode   (all off + validation flash)
-9. Normal bank display (multi-bank RGB state with sine pulse + tick flash)
+9. Normal bank display + confirmation overlays (multi-bank solid/pulse/tick + overlay blinks/fades)
 ```
 
 ### Pot Bargraph
 
 `showPotBargraph(realLevel, potLevel, caught)` — 3 params. Shows target level as solid bar + physical pot position indicator. Catch state visualized: uncaught pots show pot position dimly until caught. Configurable duration via Tool 5 Settings (parameter 6, 0-indexed as case 5). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
+
+`showTempoBargraph(realLevel, potLevel, caught, bpm)` — 4 params. Same as pot bargraph but with **tempo pulse**: the tip LED (highest lit) blinks on/off at the displayed BPM rate (period = 60000/bpm, duty 50%). Only pulses when caught. Called from `handlePotPipeline()` when `PotRouter::getBargraphTarget() == TARGET_TEMPO_BPM`.
 
 ## Buttons
 
@@ -256,7 +260,7 @@ VT100 terminal, serial keyboard input only (no physical button in setup mode).
 [4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
 [5] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
 [6] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
-[7] LED Settings           — color presets + hue + intensity + timing + gamma, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink). COLOR page split into STOPPED/PLAYING/EVENTS sections (20 color rows + 3 timing rows = 23 params). CONFIRM page: 14 params.
+[7] LED Settings           — color presets + hue + intensity + timing + gamma, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink). COLOR page: STOPPED(5 rows)/PLAYING(2 rows)/EVENTS(10 rows)/TIMING(3 rows) = 20 visible params (3 legacy rows hidden). CONFIRM page: 15 params (hold fade, play/stop blinks+duration, octave blinks+duration).
 [0] Reboot
 ```
 

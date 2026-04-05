@@ -401,7 +401,6 @@ void setup() {
 
   // Give LedController access to bank states for multi-bank display
   s_leds.setBankSlots(s_banks);
-  s_leds.setClockManager(&s_clockManager);
 
   // Store hold pad for ARPEG toggle detection in loop
   s_holdPad = holdPad;
@@ -758,11 +757,20 @@ static void handlePotPipeline(bool leftHeld, bool rearHeld) {
 
   // LED bargraph from pot movement
   if (s_potRouter.hasBargraphUpdate()) {
-    s_leds.showPotBargraph(
-      s_potRouter.getBargraphLevel(),
-      s_potRouter.getBargraphPotLevel(),
-      s_potRouter.isBargraphCaught()
-    );
+    if (s_potRouter.getBargraphTarget() == TARGET_TEMPO_BPM) {
+      s_leds.showTempoBargraph(
+        s_potRouter.getBargraphLevel(),
+        s_potRouter.getBargraphPotLevel(),
+        s_potRouter.isBargraphCaught(),
+        s_potRouter.getTempoBPM()
+      );
+    } else {
+      s_leds.showPotBargraph(
+        s_potRouter.getBargraphLevel(),
+        s_potRouter.getBargraphPotLevel(),
+        s_potRouter.isBargraphCaught()
+      );
+    }
   }
 
   // Battery monitor + low battery LED flag
