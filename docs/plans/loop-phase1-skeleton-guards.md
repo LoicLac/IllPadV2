@@ -108,7 +108,12 @@ inline void validateLoopPadStore(LoopPadStore& s) {
 
 ### 3b. Fix validateBankTypeStore (line 495)
 
-Replace the current function:
+Replace the current function.
+
+> **AUDIT FIX (BUG #1)**: The original plan clamped unconditionally after
+> counting — `if (arpCount > MAX) s.types[i] = NORMAL` would demote a
+> legitimate LOOP bank just because the arp counter overflowed earlier.
+> Each clamp must be gated on the bank's own type.
 
 ```cpp
 inline void validateBankTypeStore(BankTypeStore& s) {
@@ -116,10 +121,14 @@ inline void validateBankTypeStore(BankTypeStore& s) {
   uint8_t loopCount = 0;
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     if (s.types[i] > BANK_LOOP) s.types[i] = BANK_NORMAL;  // was: > BANK_ARPEG
-    if (s.types[i] == BANK_ARPEG) arpCount++;
-    if (s.types[i] == BANK_LOOP)  loopCount++;
-    if (arpCount > MAX_ARP_BANKS) s.types[i] = BANK_NORMAL;
-    if (loopCount > MAX_LOOP_BANKS) s.types[i] = BANK_NORMAL;
+    if (s.types[i] == BANK_ARPEG) {
+      arpCount++;
+      if (arpCount > MAX_ARP_BANKS) s.types[i] = BANK_NORMAL;
+    }
+    if (s.types[i] == BANK_LOOP) {
+      loopCount++;
+      if (loopCount > MAX_LOOP_BANKS) s.types[i] = BANK_NORMAL;
+    }
     if (s.quantize[i] >= NUM_ARP_START_MODES) s.quantize[i] = DEFAULT_ARP_START_MODE;
   }
 }
@@ -162,18 +171,49 @@ static constexpr RGBW COL_LOOP_REC  = {255,   0,  40,   0};  // Recording — re
 ### 4b. Add LOOP LED intensity constants (after battery gradient, line ~53)
 
 ```cpp
-// LOOP LED intensities (compile-time; future Tool 7 will make runtime-configurable)
-static constexpr uint8_t LED_FG_LOOP_STOP_MIN   = 51;   // Stopped+EMPTY sine 20%
-static constexpr uint8_t LED_FG_LOOP_STOP_MAX   = 128;  // Stopped+EMPTY sine 50%
-static constexpr uint8_t LED_FG_LOOP_PLAY_MIN   = 77;   // Playing sine 30%
-static constexpr uint8_t LED_FG_LOOP_PLAY_MAX   = 230;  // Playing sine 90%
-static constexpr uint8_t LED_FG_LOOP_PLAY_FLASH = 255;  // Wrap flash 100%
-static constexpr uint8_t LED_BG_LOOP_STOP_MIN   = 13;   // BG stopped sine 5%
-static constexpr uint8_t LED_BG_LOOP_STOP_MAX   = 40;   // BG stopped sine 16%
-static constexpr uint8_t LED_BG_LOOP_PLAY_MIN   = 20;   // BG playing sine 8%
-static constexpr uint8_t LED_BG_LOOP_PLAY_MAX   = 51;   // BG playing sine 20%
-static constexpr uint8_t LED_BG_LOOP_PLAY_FLASH = 64;   // BG wrap flash 25%
+// LOOP LED intensities — 0-100 PERCEPTUAL % (same unit as setPixel intensityPct)
+// Mirrors ARPEG pattern: solid states, sine pulse only on FG stopped+events loaded.
+// Compile-time for now; future Tool 7 will make runtime-configurable.
+static constexpr uint8_t LED_FG_LOOP_IDLE       = 20;   // FG EMPTY or STOPPED (no events) — solid dim
+static constexpr uint8_t LED_FG_LOOP_STOP_MIN   = 20;   // FG STOPPED + events loaded — sine pulse min
+static constexpr uint8_t LED_FG_LOOP_STOP_MAX   = 80;   // FG STOPPED + events loaded — sine pulse max
+static constexpr uint8_t LED_FG_LOOP_PLAY       = 85;   // FG PLAYING — solid bright
+static constexpr uint8_t LED_FG_LOOP_FLASH      = 100;  // FG wrap flash spike
+static constexpr uint8_t LED_BG_LOOP_DIM        = 5;    // BG (all non-playing states) — solid dim
+static constexpr uint8_t LED_BG_LOOP_PLAY       = 8;    // BG PLAYING — solid dim
+static constexpr uint8_t LED_BG_LOOP_FLASH      = 25;   // BG wrap flash spike
 ```
+
+---
+
+## Step 4c — LedController.h: CONFIRM_LOOP_REC + showClearRamp stub
+
+Phase 2 `handleLoopControls()` calls `triggerConfirm(CONFIRM_LOOP_REC)` and
+`showClearRamp()`. Both must exist for Phase 2 to compile. The real rendering
+logic comes in Phase 4 — here we add the minimal skeleton.
+
+### 4c-1. Add CONFIRM_LOOP_REC to ConfirmType enum (line 27, after CONFIRM_OCTAVE)
+
+```cpp
+  CONFIRM_OCTAVE       = 9,
+  CONFIRM_LOOP_REC     = 10,  // LOOP record/overdub started — rendering in Phase 4
+```
+
+### 4c-2. Add showClearRamp stub (LedController.h, public section)
+
+```cpp
+  void showClearRamp(uint8_t pct) { (void)pct; }  // Stub — Phase 4 adds real ramp rendering
+```
+
+### 4c-3. Forward-declare LoopEngine (LedController.h, near top)
+
+```cpp
+class LoopEngine;  // Needed by Phase 4 renderBankLoop, declared early for clean includes
+```
+
+Phase 4 will replace the `showClearRamp` stub with a real implementation
+(member variables `_clearRampPct`, `_showingClearRamp`, rendering in
+`renderNormalDisplay`).
 
 ---
 
@@ -221,11 +261,18 @@ void BankManager::begin(MidiEngine* engine, LedController* leds,
 
 After the initial guard `if (newBank >= NUM_BANKS || newBank == _currentBank) return;`, add:
 
+> **AUDIT FIX (BUG #2)**: The original stub checked only `loopEngine != nullptr`,
+> which blocks ALL bank switches from a LOOP bank as soon as Phase 2 assigns the
+> engine. The guard must check the engine's recording/overdubbing STATE.
+> Phase 1 has no LoopEngine class yet, so use `nullptr` check (always false)
+> with a comment showing the real check for Phase 2.
+
 ```cpp
   // LOOP recording lock: deny switch while recording/overdubbing
   if (_banks[_currentBank].type == BANK_LOOP && _banks[_currentBank].loopEngine) {
-    // Will be active once LoopEngine exists; for now loopEngine is always nullptr
-    return;
+    // Phase 2 will replace this with:
+    //   if (_banks[_currentBank].loopEngine->isRecording()) return;
+    // For now loopEngine is always nullptr — guard never fires.
   }
 ```
 
@@ -234,8 +281,7 @@ Before the foreground flag swap (line ~126), add:
 ```cpp
   // Flush LOOP live notes on outgoing bank (CC123)
   if (_banks[_currentBank].type == BANK_LOOP && _banks[_currentBank].loopEngine && _transport) {
-    // loopEngine->flushLiveNotes(*_transport, _currentBank);
-    // Stub — LoopEngine not yet implemented
+    // Phase 2: loopEngine->flushLiveNotes(*_transport, _currentBank);
   }
 ```
 
@@ -286,9 +332,37 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
 
 ## Step 7 — Initialize loopEngine to nullptr in main.cpp
 
-Find where `s_banks[]` is initialized in main.cpp setup(). Ensure every BankSlot has `loopEngine = nullptr`. Since BankSlot is a struct, if it's zero-initialized or memset to 0, the pointer will be nullptr. Verify this.
+> **AUDIT SNIPPET (GAP #5)**: The code at main.cpp lines 191-202 assigns each
+> BankSlot field explicitly (channel, type, scale, arpEngine, isForeground,
+> baseVelocity, velocityVariation, pitchBendOffset). Add `loopEngine` in the
+> same loop, right after `arpEngine`.
 
-If banks are initialized with designated initializers, add `.loopEngine = nullptr` explicitly.
+```cpp
+// main.cpp setup(), line ~197 (after arpEngine line)
+  s_banks[i].loopEngine         = nullptr;       // <-- ADD
+```
+
+## Step 7b — Add `loopMap[8]` to PotMappingStore (KeyboardData.h)
+
+> **AUDIT FIX (BUG #3)**: Phase 4 Step 5b says "PotMappingStore is already
+> extended in Phase 1" but no step in Phase 1 adds it. Must be done here to
+> avoid a compile error in Phase 4. Adding `loopMap` changes the struct size
+> from 36 to 52 bytes — still under NVS_BLOB_MAX_SIZE (128).
+
+```cpp
+struct PotMappingStore {
+  uint16_t   magic;    // Must match EEPROM_MAGIC
+  uint8_t    version;  // POTMAP_VERSION
+  uint8_t    reserved;
+  PotMapping normalMap[POT_MAPPING_SLOTS];
+  PotMapping arpegMap[POT_MAPPING_SLOTS];
+  PotMapping loopMap[POT_MAPPING_SLOTS];    // <-- ADD
+};
+```
+
+> **AUDIT NOTE**: Version bump is optional. Per Zero Migration Policy
+> (CLAUDE.md), the size mismatch (36 vs 52 bytes) will cause `loadBlob()`
+> to reject the old blob and apply defaults. No migration code needed.
 
 ---
 
@@ -313,20 +387,43 @@ Expected: **clean build, zero warnings** related to LOOP. Possible warning about
 
 | File | Changes |
 |---|---|
-| `src/core/KeyboardData.h` | BANK_LOOP enum, LoopEngine forward-declare, BankSlot.loopEngine, MAX_LOOP_BANKS, LoopPadStore, LoopPotStore, validateLoopPadStore, fix validateBankTypeStore, NVS defines, NVS_DESCRIPTORS, TOOL_NVS indices |
+| `src/core/KeyboardData.h` | BANK_LOOP enum, LoopEngine forward-declare, BankSlot.loopEngine, MAX_LOOP_BANKS, LoopPadStore, LoopPotStore, validateLoopPadStore, fix validateBankTypeStore, PotMappingStore.loopMap, NVS defines, NVS_DESCRIPTORS, TOOL_NVS indices |
 | `src/core/HardwareConfig.h` | COL_LOOP/COL_LOOP_DIM/COL_LOOP_REC, LED_FG/BG_LOOP_* intensity constants |
 | `src/managers/BankManager.h` | MidiTransport forward-declare, _transport member, begin() signature |
 | `src/managers/BankManager.cpp` | begin() body, switchToBank() LOOP guards (stub), debug print 3-way |
 | `src/managers/ScaleManager.cpp` | processScalePads() LOOP early return with _lastScaleKeys sync |
 | `src/main.cpp` | begin() call updated with &s_transport |
+| `src/core/LedController.h` | CONFIRM_LOOP_REC enum value, showClearRamp stub, LoopEngine forward-declare |
 
 ## Files NOT Modified
 
 | File | Why |
 |---|---|
-| `LedController` | No LOOP rendering yet (Phase 4) |
+| `LedController.cpp` | No LOOP rendering yet (Phase 4) |
 | `PotRouter` | No LOOP targets yet (Phase 4) |
 | `ToolBankConfig` | No LOOP cycling yet (Phase 3) |
 | `ToolPadRoles` | No LOOP pads yet (Phase 3) |
 | `NvsManager` | LoopPotStore load/save comes with Phase 4 |
 | `GrooveTemplates.h` | Already extracted (commit 0f31838) |
+
+---
+
+## Audit Notes (2026-04-05)
+
+### BUG #1 — validateBankTypeStore clamp croisé (**FIXED above**)
+Le clamp `if (arpCount > MAX) s.types[i] = NORMAL` s'exécutait pour TOUT bank après overflow du compteur, y compris des LOOP banks légitimes. Fix : gater chaque clamp sur le type du bank courant.
+
+### BUG #2 — BankManager recording lock stub bloquant (**FIXED above**)
+Le guard `if (loopEngine != nullptr) return;` bloque tout switch dès Phase 2 quand les engines sont assignées. Le guard doit tester `isRecording()`, pas la présence du pointer. En Phase 1, loopEngine est toujours nullptr, pas de risque, mais le commentaire doit documenter le vrai guard pour Phase 2.
+
+### BUG #3 — PotMappingStore loopMap absent (**FIXED above**)
+Phase 4 référence `loopMap[8]` comme "already extended in Phase 1" mais aucun step ne l'ajoutait. Ajouté en Step 7b.
+
+### ~~GAP #4~~ — POTMAP_VERSION (**SUPPRIMÉ — Zero Migration Policy**)
+Le size mismatch (36→52 octets) suffit à rejeter l'ancien blob. Pas de bump nécessaire.
+
+### GAP #5 — main.cpp init BankSlot snippet manquant (**FIXED above**)
+Le code actuel initialise chaque champ explicitement (pas de memset). Le `loopEngine = nullptr` doit être ajouté dans la boucle.
+
+### OBSERVATION #6 — LED intensités LOOP en compile-time
+Les `LED_FG_LOOP_*` sont des `constexpr` dans HardwareConfig.h. Les intensités ARPEG équivalentes sont dans LedSettingsStore (runtime, configurables via Tool 7). Cette incohérence est acceptée en Phase 1 mais devra être résolue quand Tool 7 intègre les paramètres LOOP (future phase).

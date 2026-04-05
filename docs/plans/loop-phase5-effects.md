@@ -31,9 +31,9 @@ int32_t LoopEngine::calcShuffleOffsetUs(uint32_t eventOffsetUs, uint32_t recordD
 }
 ```
 
-**Requires**: `#include "midi/GrooveTemplates.h"` in LoopEngine.cpp (already extracted, commit `0f31838`).
+**Requires**: `#include "../midi/GrooveTemplates.h"` in LoopEngine.cpp (already extracted, commit `0f31838`).
 
-Verify that `SHUFFLE_TEMPLATES` is accessible — it's declared in `GrooveTemplates.h` as an `extern const` or `static const` array. If it's `static const` in the header, the include is sufficient.
+`SHUFFLE_TEMPLATES` is `static const int8_t [10][16]` in the header — the include is sufficient. 10 templates (0-4 positive-only classic, 5-9 bipolar), 16 steps each. Same formula as ArpEngine (identical core math, only step-index derivation differs: position-based here vs counter-based in arp).
 
 ---
 
@@ -42,11 +42,13 @@ Verify that `SHUFFLE_TEMPLATES` is accessible — it's declared in `GrooveTempla
 Replace stub. Reference: design doc section "Effects > Chaos / Jitter".
 
 ```cpp
-int32_t LoopEngine::calcChaosOffsetUs(uint16_t eventIndex) {
+int32_t LoopEngine::calcChaosOffsetUs(uint32_t eventOffsetUs) {
     if (_chaosAmount < 0.001f) return 0;
 
-    // Deterministic hash — same event always gets same jitter
-    uint32_t hash = eventIndex * 7919;
+    // Deterministic hash — same event always gets same jitter across loop cycles.
+    // Hash on offsetUs (stable across overdub merges — index would shift).
+    // +1 offset: without it, offsetUs 0 hashes to 0 (all operations absorb zero).
+    uint32_t hash = (eventOffsetUs + 1) * 7919;
     hash ^= (hash >> 13);
     hash *= 0x5bd1e995;
     hash ^= (hash >> 15);
@@ -60,7 +62,9 @@ int32_t LoopEngine::calcChaosOffsetUs(uint16_t eventIndex) {
 }
 ```
 
-**Key property**: Deterministic — same event index always produces same jitter across loop iterations. This makes the groove feel consistent, not random.
+**Key properties**:
+- **Deterministic** — same event always produces same jitter across loop iterations (groove feels consistent, not random).
+- **Stable across overdubs** — hashed on `offsetUs` (temporal position), not buffer index. Buffer indices shift after `mergeOverdub()`, but `offsetUs` never changes. The groove doesn't change when the user adds notes via overdub.
 
 ---
 
@@ -97,15 +101,28 @@ uint8_t LoopEngine::applyVelocityPattern(uint8_t origVel, uint32_t offsetUs,
 
 ## Step 4 — Verify tick() uses effects
 
-The `tick()` method should already call these 3 methods in the cursor scan loop (written in Phase 2). Verify:
+The `tick()` method should already call these 3 methods in the cursor scan loop (written in Phase 2). Both noteOn AND noteOff go through `schedulePending` with shuffle/chaos offsets applied (Design #1 redesign — preserves gate length on sustained sounds).
+
+Verify the cursor scan inner loop matches:
 
 ```cpp
-    int32_t shuffleUs = calcShuffleOffsetUs(ev.offsetUs, recordDurationUs);
-    int32_t chaosUs   = calcChaosOffsetUs(_cursorIdx);
-    uint8_t vel       = applyVelocityPattern(ev.velocity, ev.offsetUs, recordDurationUs);
+    while (_cursorIdx < _eventCount && _events[_cursorIdx].offsetUs <= positionUs) {
+        const LoopEvent& ev = _events[_cursorIdx];
+        int32_t shuffleUs = calcShuffleOffsetUs(ev.offsetUs, recordDurationUs);
+        int32_t chaosUs   = calcChaosOffsetUs(ev.offsetUs);
+
+        if (ev.velocity > 0) {
+            uint8_t vel = applyVelocityPattern(ev.velocity, ev.offsetUs, recordDurationUs);
+            schedulePending(now + shuffleUs + chaosUs, padToNote(ev.padIndex), vel);
+        } else {
+            // noteOff also through pending — shuffle/chaos preserves gate
+            schedulePending(now + shuffleUs + chaosUs, padToNote(ev.padIndex), 0);
+        }
+        _cursorIdx++;
+    }
 ```
 
-If Phase 2 used stubs that returned 0/identity, the call sites are already correct — the stubs are now replaced with real logic.
+If Phase 2 used stubs that returned 0/identity, the call sites are already correct — the stubs are now replaced with real logic. The `applyVelocityPattern` is only called for noteOn (velocity > 0) — no wasted computation on noteOff events.
 
 ---
 

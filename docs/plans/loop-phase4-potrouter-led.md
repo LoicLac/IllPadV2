@@ -10,16 +10,24 @@
 
 ### Step 1 — KeyboardData.h: New PotTargets
 
-Add 3 LOOP-specific targets to the PotTarget enum (line 410, before TARGET_BASE_VELOCITY):
+Append 3 LOOP-specific targets **before TARGET_EMPTY** (end of assignable range),
+NOT in the middle of the enum. PotTarget is auto-numbered — inserting in the middle
+shifts all subsequent values, which would invalidate any NVS-stored PotMapping blob
+(even though Zero Migration Policy handles size mismatches, future additions without
+size change would corrupt silently).
 
 ```cpp
-  TARGET_SHUFFLE_TEMPLATE,
-  // LOOP per-bank
+  TARGET_MIDI_PITCHBEND,
+  // LOOP per-bank (appended — preserves existing numeric values 0-15)
   TARGET_CHAOS,              // <-- ADD (0.0-1.0)
   TARGET_VEL_PATTERN,        // <-- ADD (0-3 discrete)
   TARGET_VEL_PATTERN_DEPTH,  // <-- ADD (0.0-1.0)
-  // Shared per-bank (NORMAL + ARPEG + LOOP)
-  TARGET_BASE_VELOCITY,
+  // Empty slot (explicit "no parameter here")
+  TARGET_EMPTY,
+  // Sentinel
+  TARGET_NONE,
+  TARGET_COUNT = TARGET_NONE
+};
 ```
 
 **Note**: TARGET_SHUFFLE_DEPTH and TARGET_SHUFFLE_TEMPLATE are reused — they already exist. LOOP shares the templates but each engine has independent values.
@@ -28,11 +36,16 @@ Add 3 LOOP-specific targets to the PotTarget enum (line 410, before TARGET_BASE_
 
 ### Step 2 — PotRouter.h: New members + MAX_CC_SLOTS
 
-#### 2a. Bump MAX_CC_SLOTS (line 138)
+#### 2a. Bump MAX_CC_SLOTS and MAX_BINDINGS (line 96, 138)
 
 ```cpp
+static const uint8_t MAX_BINDINGS = 26;  // was 24 — 3 contexts × 8 user + 2 rear
 static const uint8_t MAX_CC_SLOTS = 24;  // was 16 — 8 NORMAL + 8 ARPEG + 8 LOOP
 ```
+
+Without bumping MAX_BINDINGS, the rear pot bindings (brightness + sensitivity) are
+silently dropped because the guard `if (_numBindings >= MAX_BINDINGS)` fires at 24
+before the 2 rear bindings are added (rebuildBindings lines 214-222).
 
 #### 2b. Add LOOP param members (after existing _shuffleTemplate, around line ~120)
 
@@ -224,46 +237,152 @@ static void pushParamsToLoop(BankSlot& slot) {
 
 ---
 
-### Step 7 — NvsManager: LoopPotStore load/save
+### Step 7 — NvsManager: LoopPotStore persistence (8 sub-steps, mirrors ArpPotStore exactly)
 
-#### 7a. Add LoopPotStore per-bank storage (NvsManager.h + .cpp)
-
-Follow the exact ArpPotStore pattern:
+#### 7a. NvsManager.h — add dirty flags + pending data (after _arpPotDirty, line 88)
 
 ```cpp
-// NvsManager.h — add member
-LoopPotStore _pendingLoopPot[NUM_BANKS];
-
-// NvsManager.h — add getter
-const LoopPotStore& getLoadedLoopParams(uint8_t bankIdx) const;
-
-// NvsManager.cpp — queueLoopPotWrite() + dirty flag
-// NvsManager.cpp — loadAll(): load from illpad_lpot, loop_0..loop_7
-// NvsManager.cpp — background task: write dirty LoopPotStore entries
+  std::atomic<bool> _loopPotDirty[NUM_BANKS];   // <-- ADD
 ```
 
-#### 7b. Wire in main.cpp
+After `_pendingArpPot` (line 101):
+```cpp
+  LoopPotStore _pendingLoopPot[NUM_BANKS];       // <-- ADD
+```
 
-In the pot debounce section (line ~984), add LoopPotStore dirty check (same pattern as ArpPotStore).
+#### 7b. NvsManager.h — add queue method + getter (after queueArpPotWrite, line 25)
+
+```cpp
+  void queueLoopPotWrite(uint8_t bankIdx, float shuffleDepth, uint8_t shuffleTmpl,
+                         uint8_t velPat, float chaos, float velPatDepth);
+  const LoopPotStore& getLoadedLoopParams(uint8_t bankIdx) const;
+```
+
+#### 7c. NvsManager.cpp — constructor init (in the for loop, after _arpPotDirty init, line ~84)
+
+```cpp
+    _loopPotDirty[i] = false;
+    _pendingLoopPot[i] = {0, 0, 0, 0, 0};  // all zeros = no shuffle, no chaos, no vel pattern
+```
+
+#### 7d. NvsManager.cpp — tickPotDebounce: add BANK_LOOP branch (after BANK_ARPEG block, line ~225)
+
+```cpp
+  // === Per-bank: loop pot params (LOOP only) ===
+  if (currentType == BANK_LOOP) {
+    LoopPotStore newLoop;
+    newLoop.shuffleDepthRaw   = (uint16_t)(potRouter.getShuffleDepth() * 4095.0f);
+    newLoop.shuffleTemplate   = potRouter.getShuffleTemplate();
+    newLoop.velPatternIdx     = potRouter.getVelPatternIdx();
+    newLoop.chaosRaw          = (uint16_t)(potRouter.getChaosAmount() * 4095.0f);
+    newLoop.velPatternDepthRaw = (uint16_t)(potRouter.getVelPatternDepth() * 4095.0f);
+
+    const LoopPotStore& cur = _pendingLoopPot[currentBank];
+    if (newLoop.shuffleDepthRaw != cur.shuffleDepthRaw
+        || newLoop.shuffleTemplate != cur.shuffleTemplate
+        || newLoop.velPatternIdx != cur.velPatternIdx
+        || newLoop.chaosRaw != cur.chaosRaw
+        || newLoop.velPatternDepthRaw != cur.velPatternDepthRaw) {
+      _pendingLoopPot[currentBank] = newLoop;
+      _loopPotDirty[currentBank] = true;
+      _anyDirty = true;
+    }
+  }
+```
+
+#### 7e. NvsManager.cpp — queueLoopPotWrite (after queueArpPotWrite, line ~289)
+
+```cpp
+void NvsManager::queueLoopPotWrite(uint8_t bankIdx, float shuffleDepth, uint8_t shuffleTmpl,
+                                    uint8_t velPat, float chaos, float velPatDepth) {
+  if (bankIdx >= NUM_BANKS) return;
+  _pendingLoopPot[bankIdx].shuffleDepthRaw    = (uint16_t)(shuffleDepth * 4095.0f);
+  _pendingLoopPot[bankIdx].shuffleTemplate    = shuffleTmpl;
+  _pendingLoopPot[bankIdx].velPatternIdx      = velPat;
+  _pendingLoopPot[bankIdx].chaosRaw           = (uint16_t)(chaos * 4095.0f);
+  _pendingLoopPot[bankIdx].velPatternDepthRaw = (uint16_t)(velPatDepth * 4095.0f);
+  _loopPotDirty[bankIdx] = true;
+  _anyDirty = true;
+}
+```
+
+#### 7f. NvsManager.cpp — commitAll: batch LoopPotStore writes (after ArpPotStore batch, line ~398)
+
+```cpp
+  // Batch loop pot saves (one namespace open)
+  {
+    bool anyLoop = false;
+    for (uint8_t i = 0; i < NUM_BANKS; i++) { if (_loopPotDirty[i]) { anyLoop = true; break; } }
+    if (anyLoop) {
+      Preferences prefs;
+      if (prefs.begin(LOOPPOT_NVS_NAMESPACE, false)) {
+        for (uint8_t i = 0; i < NUM_BANKS; i++) {
+          if (_loopPotDirty[i]) {
+            char key[8];
+            snprintf(key, sizeof(key), "loop_%d", i);
+            prefs.putBytes(key, &_pendingLoopPot[i], sizeof(LoopPotStore));
+            _loopPotDirty[i] = false;
+          }
+        }
+        prefs.end();
+      }
+    }
+  }
+```
+
+#### 7g. NvsManager.cpp — loadAll: load LoopPotStore per-bank (after ArpPotStore load section)
+
+```cpp
+  // Load LOOP pot params per bank
+  {
+    Preferences prefs;
+    if (prefs.begin(LOOPPOT_NVS_NAMESPACE, true)) {
+      for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        char key[8];
+        snprintf(key, sizeof(key), "loop_%d", i);
+        size_t len = prefs.getBytesLength(key);
+        if (len == sizeof(LoopPotStore)) {
+          prefs.getBytes(key, &_pendingLoopPot[i], sizeof(LoopPotStore));
+          // Validate
+          if (_pendingLoopPot[i].shuffleTemplate >= NUM_SHUFFLE_TEMPLATES)
+            _pendingLoopPot[i].shuffleTemplate = 0;
+          if (_pendingLoopPot[i].velPatternIdx > 3)
+            _pendingLoopPot[i].velPatternIdx = 0;
+        }
+      }
+      prefs.end();
+    }
+  }
+```
+
+#### 7h. NvsManager.cpp — getLoadedLoopParams (after getLoadedArpParams)
+
+```cpp
+const LoopPotStore& NvsManager::getLoadedLoopParams(uint8_t bankIdx) const {
+  static const LoopPotStore defaultLoop = {0, 0, 0, 0, 0};
+  if (bankIdx >= NUM_BANKS) return defaultLoop;
+  return _pendingLoopPot[bankIdx];
+}
+```
+
+**No main.cpp wiring needed** — `tickPotDebounce()` already receives `currentType`
+(line 985 of main.cpp) and handles the BANK_LOOP branch internally (Step 7d).
+The boot-time seed of LoopEngine params from NVS happens in Phase 2's setup() wiring,
+calling `getLoadedLoopParams()` after engine assignment.
 
 ---
 
 ## Part B — LED Feedback
 
-### Step 8 — LedController.h: New ConfirmType + forward-declare
+### Step 8 — LedController.h: ConfirmType + forward-declare (already in Phase 1)
 
-#### 8a. Add CONFIRM_LOOP_REC (after CONFIRM_OCTAVE, line 26)
+#### 8a. CONFIRM_LOOP_REC — already added in Phase 1 Step 4c-1
 
-```cpp
-  CONFIRM_OCTAVE       = 9,
-  CONFIRM_LOOP_REC     = 10,  // <-- ADD
-```
+Verify it exists: `CONFIRM_LOOP_REC = 10` after `CONFIRM_OCTAVE = 9`. No action needed.
 
-#### 8b. Forward-declare LoopEngine (near top of .h)
+#### 8b. LoopEngine forward-declare — already added in Phase 1 Step 4c-3
 
-```cpp
-class LoopEngine;
-```
+Verify `class LoopEngine;` exists near top of LedController.h. No action needed.
 
 ---
 
@@ -283,102 +402,78 @@ class LoopEngine;
 
 #### 9c. Implement renderBankLoop() (after renderBankArpeg, line ~466)
 
+Follows renderBankArpeg pattern exactly — same structure, same sine math, different colors.
+Sine pulse ONLY on "FG stopped + events loaded" (equivalent of arp "FG stopped + hasNotes").
+All other states are solid. Recording/Overdubbing get a fast blink (unique to LOOP, no arp equivalent).
+
 ```cpp
 void LedController::renderBankLoop(uint8_t led, bool isFg, unsigned long now) {
     if (!_slots) return;
     const BankSlot& slot = _slots[led];
     if (!slot.loopEngine) {
-        // LOOP bank with no engine — dim magenta
-        setPixel(led, COL_LOOP_DIM, 5);
+        setPixel(led, COL_LOOP_DIM, LED_BG_LOOP_DIM);
         return;
     }
 
     LoopEngine::State ls = slot.loopEngine->getState();
-    bool playing = (ls == LoopEngine::PLAYING || ls == LoopEngine::OVERDUBBING);
+    bool playing  = (ls == LoopEngine::PLAYING || ls == LoopEngine::OVERDUBBING);
+    bool hasEvents = slot.loopEngine->getEventCount() > 0;
 
-    if (isFg) {
-        if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
-            // Fast red-magenta blink (150ms period)
-            bool on = ((now / 150) % 2 == 0);
-            setPixel(led, COL_LOOP_REC, on ? 100 : 0);
-        } else if (ls == LoopEngine::PLAYING) {
-            // Magenta sine pulse + wrap flash
-            uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
-            uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
-            uint8_t idx  = phase >> 8;
-            uint8_t frac = phase & 0xFF;
-            uint16_t sine16 = (uint16_t)LED_SINE_LUT[idx] * (256 - frac)
-                            + (uint16_t)LED_SINE_LUT[(idx + 1) & 0xFF] * frac;
-            uint8_t intensity = LED_FG_LOOP_PLAY_MIN
-                + (uint8_t)((uint32_t)sine16 * (LED_FG_LOOP_PLAY_MAX - LED_FG_LOOP_PLAY_MIN) / 65280);
-
-            // Wrap flash (same pattern as arp tick flash)
-            if (slot.loopEngine->consumeTickFlash()) _flashStartTime[led] = now;
-            if (_flashStartTime[led] && (now - _flashStartTime[led]) < _tickFlashDurationMs) {
-                intensity = LED_FG_LOOP_PLAY_FLASH;
-            } else if (_flashStartTime[led] && (now - _flashStartTime[led]) >= _tickFlashDurationMs) {
-                _flashStartTime[led] = 0;
-            }
-            setPixel(led, COL_LOOP, intensity);
-        } else if (ls == LoopEngine::STOPPED) {
-            // Slow sine
-            uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
-            uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
-            uint8_t idx  = phase >> 8;
-            uint8_t frac = phase & 0xFF;
-            uint16_t sine16 = (uint16_t)LED_SINE_LUT[idx] * (256 - frac)
-                            + (uint16_t)LED_SINE_LUT[(idx + 1) & 0xFF] * frac;
-            uint8_t intensity = LED_FG_LOOP_STOP_MIN
-                + (uint8_t)((uint32_t)sine16 * (LED_FG_LOOP_STOP_MAX - LED_FG_LOOP_STOP_MIN) / 65280);
-            setPixel(led, COL_LOOP, intensity);
+    // Tick flash (wrap): consume flag, track timer — same pattern as arp
+    if (slot.loopEngine->consumeTickFlash()) {
+        _flashStartTime[led] = now;
+    }
+    bool flashing = false;
+    if (_flashStartTime[led] != 0) {
+        if ((now - _flashStartTime[led]) < _tickFlashDurationMs) {
+            flashing = true;
         } else {
-            // EMPTY — same slow sine as STOPPED
-            uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
-            uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
-            uint8_t idx  = phase >> 8;
-            uint8_t frac = phase & 0xFF;
-            uint16_t sine16 = (uint16_t)LED_SINE_LUT[idx] * (256 - frac)
-                            + (uint16_t)LED_SINE_LUT[(idx + 1) & 0xFF] * frac;
-            uint8_t intensity = LED_FG_LOOP_STOP_MIN
-                + (uint8_t)((uint32_t)sine16 * (LED_FG_LOOP_STOP_MAX - LED_FG_LOOP_STOP_MIN) / 65280);
-            setPixel(led, COL_LOOP, intensity);
+            _flashStartTime[led] = 0;
         }
-    } else {
-        // Background
-        if (playing) {
-            uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
-            uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
-            uint8_t idx  = phase >> 8;
-            uint8_t frac = phase & 0xFF;
-            uint16_t sine16 = (uint16_t)LED_SINE_LUT[idx] * (256 - frac)
-                            + (uint16_t)LED_SINE_LUT[(idx + 1) & 0xFF] * frac;
-            uint8_t intensity = LED_BG_LOOP_PLAY_MIN
-                + (uint8_t)((uint32_t)sine16 * (LED_BG_LOOP_PLAY_MAX - LED_BG_LOOP_PLAY_MIN) / 65280);
+    }
 
-            if (slot.loopEngine->consumeTickFlash()) _flashStartTime[led] = now;
-            if (_flashStartTime[led] && (now - _flashStartTime[led]) < _tickFlashDurationMs) {
-                intensity = LED_BG_LOOP_PLAY_FLASH;
-            } else if (_flashStartTime[led] && (now - _flashStartTime[led]) >= _tickFlashDurationMs) {
-                _flashStartTime[led] = 0;
-            }
-            setPixel(led, COL_LOOP, intensity);
-        } else if (ls == LoopEngine::STOPPED) {
-            uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
-            uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
-            uint8_t idx  = phase >> 8;
-            uint8_t frac = phase & 0xFF;
-            uint16_t sine16 = (uint16_t)LED_SINE_LUT[idx] * (256 - frac)
-                            + (uint16_t)LED_SINE_LUT[(idx + 1) & 0xFF] * frac;
-            uint8_t intensity = LED_BG_LOOP_STOP_MIN
-                + (uint8_t)((uint32_t)sine16 * (LED_BG_LOOP_STOP_MAX - LED_BG_LOOP_STOP_MIN) / 65280);
-            setPixel(led, COL_LOOP, intensity);
-        }
-        // EMPTY background = off (default clearPixels already handled)
+    // --- Recording/Overdubbing: fast blink (LOOP-specific, no arp equivalent) ---
+    if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
+        // Only visible when FG (bank switch denied during rec/overdub, but defensive)
+        bool on = ((now / 150) % 2 == 0);
+        setPixel(led, COL_LOOP_REC, on ? 100 : 0);
+        return;
+    }
+
+    // --- From here: EMPTY, STOPPED, or PLAYING — mirrors arp exactly ---
+    const RGBW& col = COL_LOOP;  // arp uses _colArpFg/_colArpBg; LOOP uses single COL_LOOP
+
+    if (flashing && playing) {
+        // Wrap flash overrides during playback
+        setPixel(led, _colTickFlash, isFg ? LED_FG_LOOP_FLASH : LED_BG_LOOP_FLASH);
+    } else if (playing) {
+        // Playing: solid bright (FG) or solid dim (BG) — no pulse
+        setPixel(led, col, isFg ? LED_FG_LOOP_PLAY : LED_BG_LOOP_PLAY);
+    } else if (isFg && hasEvents) {
+        // FG stopped with events loaded: slow sine pulse (the ONLY pulse in LOOP)
+        uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
+        uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
+        uint8_t  idx   = phase >> 8;
+        uint8_t  frac  = phase & 0xFF;
+        uint16_t sine16 = (uint16_t)LED_SINE_LUT[idx] * (256 - frac)
+                        + (uint16_t)LED_SINE_LUT[(idx + 1) & 0xFF] * frac;
+        uint8_t intensity = LED_FG_LOOP_STOP_MIN
+                          + (uint8_t)((uint32_t)sine16 * (LED_FG_LOOP_STOP_MAX - LED_FG_LOOP_STOP_MIN) / 65280);
+        setPixel(led, col, intensity);
+    } else {
+        // BG (all states) or FG idle (no events): solid dim
+        setPixel(led, col, isFg ? LED_FG_LOOP_IDLE : LED_BG_LOOP_DIM);
     }
 }
 ```
 
-**Implementation note**: The sine pulse code is duplicated from renderBankArpeg. A future refactor could extract a `calcSineIntensity(min, max, now)` helper. Not done here to minimize Phase 4 scope.
+**Compared to renderBankArpeg line-by-line:**
+- Tick flash setup: identical pattern (lines 431-441 → same)
+- Recording blink: NEW (arp has no equivalent — arp never "records")
+- flash + playing → wrap flash with `_colTickFlash` (identical)
+- playing → solid `LED_FG_LOOP_PLAY` / `LED_BG_LOOP_PLAY` (arp uses `_fgArpPlayMax` / `_bgArpPlayMin`)
+- FG stopped + events → sine pulse `STOP_MIN↔STOP_MAX` (arp uses `_fgArpStopMin↔Max`)
+- else → solid dim (identical structure)
 
 ---
 
@@ -401,15 +496,18 @@ Replace the ternary with 3-way:
 
 ---
 
-### Step 11 — LedController.cpp: showClearRamp()
+### Step 11 — LedController: showClearRamp() (replace Phase 1 stub)
 
-#### 11a. Add method and member (LedController.h)
+#### 11a. Replace stub with real declaration + add private members (LedController.h)
+
+Phase 1 added an inline stub: `void showClearRamp(uint8_t pct) { (void)pct; }`.
+Replace it with a real declaration + add private state:
 
 ```cpp
-  // Public
+  // Public — replace the Phase 1 inline stub
   void showClearRamp(uint8_t pct);  // 0-100, red ramp on current bank LED
 
-  // Private
+  // Private — add
   uint8_t _clearRampPct = 0;
   bool    _showingClearRamp = false;
 ```
@@ -435,22 +533,32 @@ void LedController::showClearRamp(uint8_t pct) {
 
 ---
 
-### Step 12 — renderConfirmation: CONFIRM_LOOP_REC
+### Step 12 — CONFIRM_LOOP_REC: expiry + rendering (TWO locations)
 
-Add case in renderConfirmation() switch (line ~393):
+Confirmation has two parts in separate functions — both must be updated:
+
+**12a. Expiry in `renderConfirmation()`** (line 388, after CONFIRM_OCTAVE case):
 
 ```cpp
-  case CONFIRM_LOOP_REC: {
-      // Double blink red-magenta on current LED — 200ms
-      uint16_t unitMs = 50;  // 4 phases × 50ms = 200ms
-      uint8_t phase = (uint8_t)(elapsed / unitMs) % 4;
-      if (phase == 0 || phase == 2) {
-          setPixel(_currentBank, COL_LOOP_REC, 100);
+    case CONFIRM_LOOP_REC:
+      if (elapsed >= 200) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+```
+
+Without this, the `default:` branch kills CONFIRM_LOOP_REC immediately
+(sets CONFIRM_NONE, returns false) and the overlay in renderNormalDisplay never fires.
+
+**12b. Rendering in `renderNormalDisplay()` overlay section** (line 562, after CONFIRM_OCTAVE case):
+
+```cpp
+      case CONFIRM_LOOP_REC: {
+        // Double blink red-magenta on current LED — 200ms total
+        uint16_t unitMs = 50;  // 4 phases × 50ms = 200ms
+        bool on = ((elapsed / unitMs) % 2 == 0);
+        if (on) setPixel(_currentBank, COL_LOOP_REC, 100);
+        // else: off (normal display shows through)
+        break;
       }
-      // else: off (normal display shows through)
-      if (elapsed >= 200) _confirmType = CONFIRM_NONE;
-      break;
-  }
 ```
 
 ---
@@ -470,14 +578,15 @@ Add case in renderConfirmation() switch (line ~393):
 4. Switch to ARPEG bank and back → catch system resets, params reload
 5. Reboot → LOOP params persist (LoopPotStore)
 
-**LED:**
-1. LOOP bank EMPTY → slow magenta sine pulse
-2. Tap REC → fast red-magenta blink (recording)
-3. Tap REC again → magenta sine pulse + white wrap flash at loop boundary
-4. Tap PLAY/STOP → slow magenta sine (stopped)
-5. Hold CLEAR → red ramp-up on current LED over 500ms → flash on clear
-6. Switch banks → background LOOP shows dim magenta + wrap flash if playing
-7. Bank switch blink → uses normal _colBankSwitch (unchanged)
+**LED** (follows arp pattern — sine pulse only on FG stopped+events):
+1. LOOP bank EMPTY → solid dim magenta (like arp FG idle no notes)
+2. Tap REC → fast red-magenta blink (recording — LOOP-specific)
+3. Tap REC again → solid bright magenta + white wrap flash (like arp FG playing)
+4. Tap PLAY/STOP → stopped with events: slow magenta sine pulse (like arp FG stopped+notes)
+5. Tap PLAY/STOP again → cleared events, no events: solid dim (like arp FG idle)
+6. Hold CLEAR → red ramp-up on current LED over 500ms → confirm blink on clear
+7. Switch banks → background LOOP: dim magenta solid + wrap flash if playing (like arp BG)
+8. Bank switch blink → uses normal _colBankSwitch (unchanged)
 
 ---
 
@@ -485,11 +594,11 @@ Add case in renderConfirmation() switch (line ~393):
 
 | File | Changes |
 |---|---|
-| `src/core/KeyboardData.h` | 3 new PotTargets in enum |
-| `src/managers/PotRouter.h` | MAX_CC_SLOTS→24, LOOP members+getters, loadStoredPerBankLoop() |
+| `src/core/KeyboardData.h` | 3 new PotTargets appended before TARGET_EMPTY |
+| `src/managers/PotRouter.h` | MAX_BINDINGS→26, MAX_CC_SLOTS→24, LOOP members+getters, loadStoredPerBankLoop() |
 | `src/managers/PotRouter.cpp` | applyBinding, isPerBank, getRange, getDiscrete, seedCatch, rebuildBindings 3-ctx, DEFAULT_MAPPING loopMap, loadStoredPerBankLoop |
-| `src/managers/NvsManager.h` | _pendingLoopPot[8], getLoadedLoopParams() |
-| `src/managers/NvsManager.cpp` | LoopPotStore load/save/dirty pattern |
-| `src/core/LedController.h` | CONFIRM_LOOP_REC, renderBankLoop decl, showClearRamp, _clearRampPct |
-| `src/core/LedController.cpp` | renderBankLoop(), bargraph 3-way color, showClearRamp(), CONFIRM_LOOP_REC |
-| `src/main.cpp` | reloadPerBankParams complete, pushParamsToLoop complete, LoopPotStore dirty check |
+| `src/managers/NvsManager.h` | _loopPotDirty[8], _pendingLoopPot[8], queueLoopPotWrite(), getLoadedLoopParams() |
+| `src/managers/NvsManager.cpp` | Constructor init, tickPotDebounce BANK_LOOP branch, queueLoopPotWrite, commitAll batch, loadAll section, getLoadedLoopParams |
+| `src/core/LedController.h` | CONFIRM_LOOP_REC, LoopEngine forward-declare, renderBankLoop decl, showClearRamp, _clearRampPct |
+| `src/core/LedController.cpp` | renderBankLoop (arp-pattern), renderConfirmation LOOP_REC expiry, renderNormalDisplay LOOP_REC overlay, bargraph 3-way color, showClearRamp |
+| `src/main.cpp` | reloadPerBankParams complete, pushParamsToLoop complete |

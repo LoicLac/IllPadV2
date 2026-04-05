@@ -2,6 +2,16 @@
 
 **Prototype — fresh start, no backward compatibility. Change freely.**
 
+## NVS & Persistence — Zero Migration Policy
+
+**This is a prototype. There is NO backward compatibility requirement.**
+
+1. **No NVS migration code.** When a Store struct changes (new fields, reordered fields, size change), simply bump the version number or change the struct. Old NVS data that fails `loadBlob()` validation (wrong size, wrong version, wrong magic) is silently discarded and replaced by compile-time defaults. Do NOT write migration code, compatibility shims, or version-upgrade paths.
+
+2. **User-stored values are expendable.** It is accepted that any firmware update touching NVS structures will reset the affected settings to defaults on first boot. The user re-enters their preferences via setup mode (Tools 1-7). A `Serial.printf` warning at boot ("NVS: xyz reset to defaults") is sufficient — no other mitigation needed.
+
+**Consequence:** never keep a stale version number "for compatibility", never add padding "to preserve layout", never duplicate a struct "to support old format". Change the struct, bump the version, move on.
+
 ## Build
 
 ```bash
