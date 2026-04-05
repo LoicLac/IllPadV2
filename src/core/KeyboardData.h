@@ -646,6 +646,6 @@ static constexpr uint8_t NVS_DESCRIPTOR_COUNT = sizeof(NVS_DESCRIPTORS) / sizeof
 // Tool-to-descriptor mapping: each tool checks descriptors in range [first, last] inclusive
 // T3 spans 3 (bankpad+scalepad+arppad), T6 spans 2 (potmapping+potfilter), T7 spans 2 (ledsettings+colorslots)
 static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 5, 6, 7, 9 };   // T1..T7
-static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 8, 10 };  // T6 covers 7-8, T7 covers 9-10
+static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 7, 10 };  // T6=7 only (PotFilter descriptor 8 added when Phase 3 Monitor is implemented), T7 covers 9-10
 
 #endif // KEYBOARD_DATA_H
