@@ -14,3 +14,6 @@ DOCUMENTATION/CodeILLPADV1/
 
 # Claude skills (local only)
 .claude/skills/
+
+# Claude per-user local settings (permissions, etc.)
+.claude/settings.local.json
