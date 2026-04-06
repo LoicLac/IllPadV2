@@ -161,6 +161,13 @@ private:
   bool    _waitingForQuantize;  // True after play until quantize boundary reached
   uint8_t _quantizeMode;        // ArpStartMode (0=immediate, 1=beat, 2=bar)
 
+  // B-001 + B-CODE-1 fix (2026-04-07): sentinel-based boundary crossing detection.
+  // Replaces the (globalTick % boundary == 0) exact-equality check that could
+  // skip a boundary when ClockManager::generateTicks() catches up multiple ticks
+  // in one call (up to 4 — see ClockManager.cpp:181-203).
+  // Value 0xFFFFFFFF = "fresh wait, fire on next observed tick" (sentinel).
+  uint32_t _lastDispatchedGlobalTick;
+
   // --- State classification ---
   ArpState currentState() const;
 

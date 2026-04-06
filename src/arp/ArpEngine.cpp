@@ -18,7 +18,8 @@ ArpEngine::ArpEngine()
     _padOrder(nullptr),
     _stepIndex(-1), _playing(false), _holdOn(false),
     _shuffleStepCounter(0), _tickFlash(false),
-    _waitingForQuantize(false), _quantizeMode(ARP_START_IMMEDIATE) {
+    _waitingForQuantize(false), _quantizeMode(ARP_START_IMMEDIATE),
+    _lastDispatchedGlobalTick(0xFFFFFFFF) {  // B-001/B-CODE-1 fix sentinel
   // Init pile arrays
   for (uint8_t i = 0; i < MAX_ARP_NOTES; i++) {
     _positions[i] = 0xFF;
@@ -178,6 +179,7 @@ void ArpEngine::playStop(MidiTransport& transport) {
     _stepIndex = -1;              // Restart from beginning on next tick
     _shuffleStepCounter = 0;      // Reset groove on play
     _waitingForQuantize = (_quantizeMode != ARP_START_IMMEDIATE);
+    _lastDispatchedGlobalTick = 0xFFFFFFFF;  // B-001 fix: mark fresh wait
   } else {
     flushPendingNoteOffs(transport);  // Silence all ringing notes
   }
@@ -281,8 +283,15 @@ void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
 
     case ArpState::WAITING_QUANTIZE: {
       uint16_t boundary = (_quantizeMode == ARP_START_BAR) ? 96 : 24;
-      if (globalTick % boundary != 0) return;  // Not on boundary yet
-      _waitingForQuantize = false;               // Boundary reached, proceed
+      // B-001 fix (2026-04-07): crossing detection. Sentinel 0xFFFFFFFF means
+      // "fresh wait, fire on next observed tick". Subsequent waits within the
+      // same play session use the strict crossing check, robust against
+      // ClockManager::generateTicks() multi-tick catch-up bursts (up to 4).
+      bool crossed = (_lastDispatchedGlobalTick == 0xFFFFFFFF)
+                   || ((globalTick / boundary) > (_lastDispatchedGlobalTick / boundary));
+      if (!crossed) return;
+      _waitingForQuantize = false;
+      _lastDispatchedGlobalTick = globalTick;
       break;
     }
 
@@ -292,9 +301,11 @@ void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
         _playing = true;
         _waitingForQuantize = (_quantizeMode != ARP_START_IMMEDIATE);
         if (_waitingForQuantize) {
-          uint16_t boundary = (_quantizeMode == ARP_START_BAR) ? 96 : 24;
-          if (globalTick % boundary != 0) return;
-          _waitingForQuantize = false;
+          // B-CODE-1 fix (2026-04-07): mark fresh wait + defer to next tick
+          // via WAITING_QUANTIZE branch (single source of truth for boundary
+          // crossing detection — no logic duplication with the case above).
+          _lastDispatchedGlobalTick = 0xFFFFFFFF;
+          return;
         }
       }
       break;
