@@ -146,7 +146,10 @@ private:
   uint16_t velPatternDepthRaw // 0-4095
   uint8_t  baseVelocity       // 1-127
   uint8_t  velocityVariation  // 0-100
-  uint8_t  reserved2[8]       // padding to 32 bytes (room for future fields)
+  uint8_t  reserved2[10]      // F-PLAN-3 fix (audit 2026-04-07): explicit
+                              // padding to reach 32 bytes total. Previously
+                              // reserved2[8] relied on implicit GCC trailing
+                              // alignment padding which is fragile.
 
 [LoopEvent[eventCount] : eventCount × 8 bytes]
   // existing LoopEvent format from LoopEngine.h

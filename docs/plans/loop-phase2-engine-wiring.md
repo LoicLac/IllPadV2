@@ -819,11 +819,19 @@ void LoopEngine::mergeOverdub() {
     if (_overdubCount == 0) return;
     uint16_t totalCount = _eventCount + _overdubCount;
     if (totalCount > MAX_LOOP_EVENTS) {
-        // Overflow guard — drop overdub events that won't fit (rare edge case
-        // with very long overdubs on an already dense loop). Defensive; the
-        // sort below still works on the truncated count.
-        totalCount = MAX_LOOP_EVENTS;
-        _overdubCount = totalCount - _eventCount;
+        // B-PLAN-1 fix (audit 2026-04-07): refuse the entire overdub merge
+        // rather than silently truncate arbitrary events. The original
+        // truncation kept _overdubCount = (MAX - eventCount), which dropped
+        // the LATEST overdub events from the buffer tail (musically
+        // counter-intuitive — overdub usually accumulates at the end).
+        // Refusing the whole merge preserves the existing loop and signals
+        // via DEBUG log that the user has hit the buffer ceiling.
+        #if DEBUG_SERIAL
+        Serial.printf("[LOOP] mergeOverdub refused: total %u > max %u, %u overdub events lost\n",
+                      totalCount, MAX_LOOP_EVENTS, _overdubCount);
+        #endif
+        _overdubCount = 0;
+        return;
     }
 
     int32_t i = (int32_t)_eventCount - 1;     // tail of main buffer

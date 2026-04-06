@@ -120,7 +120,12 @@ struct LoopSlotHeader {
   uint16_t velPatternDepthRaw; // 0-4095
   uint8_t  baseVelocity;       // 1-127
   uint8_t  velocityVariation;  // 0-100
-  uint8_t  reserved2[8];       // padding to 32 bytes (room for future fields)
+  // F-PLAN-3 fix (audit 2026-04-07): explicit padding to 32 bytes total.
+  // Previously was reserved2[8] which relied on implicit GCC float-alignment
+  // trailing padding (2 bytes) to reach 32 via static_assert. Adding any
+  // uint8_t field later would silently break the static_assert without
+  // explicit reserved2 sizing. reserved2[10] makes the layout explicit.
+  uint8_t  reserved2[10];      // explicit padding to 32 bytes
 };
 static_assert(sizeof(LoopSlotHeader) == 32, "LoopSlotHeader must be 32 bytes");
 
@@ -536,6 +541,13 @@ bool LoopEngine::deserializeFromBuffer(const uint8_t* buf, size_t bufSize,
   if (hdr.eventCount > MAX_LOOP_EVENTS) return false;
   size_t expectedSize = sizeof(LoopSlotHeader) + (size_t)hdr.eventCount * sizeof(LoopEvent);
   if (bufSize < expectedSize) return false;
+
+  // F-PLAN-2 defensive validation (audit 2026-04-07): structural fields must
+  // be sane. A crafted/corrupt header could otherwise pass through with
+  // loopBars=0 (causing later division by zero in calcLoopDurationUs / Phase 5
+  // helpers) or recordBpm out of range (causing wrong proportional scaling).
+  if (hdr.loopBars == 0 || hdr.loopBars > 64) return false;
+  if (hdr.recordBpm < 10.0f || hdr.recordBpm > 300.0f) return false;
 
   // ---- Hard cut: flush all active notes + pending queue ----
   flushActiveNotes(transport, /*hard=*/true);

@@ -19,8 +19,13 @@ Replace the Phase 2 stub with the real implementation below.
 ```cpp
 int32_t LoopEngine::calcShuffleOffsetUs(uint32_t eventOffsetUs, uint32_t recordDurationUs) {
     if (_shuffleDepth < 0.001f) return 0;
+    // B-PLAN-2 defensive guard (audit 2026-04-07): tick() upstream guards on
+    // liveDurationUs/recordDurationUs == 0, but the helpers should also be
+    // defensive (consistency with the rest of LoopEngine).
+    if (_loopLengthBars == 0) return 0;
 
     uint32_t barDurationUs = recordDurationUs / _loopLengthBars;
+    if (barDurationUs < 16) return 0;  // step would be 0, no shuffle possible
     uint32_t posInBar = eventOffsetUs % barDurationUs;
     uint32_t stepDurationUs = barDurationUs / 16;
     uint8_t stepInBar = posInBar / stepDurationUs;
@@ -84,8 +89,11 @@ static const uint8_t VEL_PATTERNS[4][16] = {
 uint8_t LoopEngine::applyVelocityPattern(uint8_t origVel, uint32_t offsetUs,
                                           uint32_t recordDurationUs) {
     if (_velPatternDepth < 0.001f) return origVel;
+    // B-PLAN-2 defensive guard (audit 2026-04-07).
+    if (_loopLengthBars == 0) return origVel;
 
     uint32_t barDurationUs = recordDurationUs / _loopLengthBars;
+    if (barDurationUs < 16) return origVel;  // step would be 0
     uint8_t step = (offsetUs % barDurationUs) / (barDurationUs / 16);
     if (step > 15) step = 15;
 
