@@ -14,7 +14,8 @@ Tracker des bugs identifiés lors d'audits ou de tests, classés par sévérité
 
 | ID | Fichier:ligne | Description courte | Sévérité | Status | Date |
 |---|---|---|---|---|---|
-| B-001 | `src/arp/ArpEngine.cpp:284` | `WAITING_QUANTIZE` boundary check uses `globalTick % boundary != 0` exact-equality. If `ClockManager::generateTicks()` catches up multiple ticks in one call (up to 4 — see `ClockManager.cpp:181-203`), a quantize boundary can be skipped entirely. The pending start waits one full beat (or bar) for the next opportunity. Same pattern as the LoopEngine bug fixed in 2026-04-06 pass-2 audit (B1 finding). | med | TODO | 2026-04-06 |
+
+*(aucun bug ouvert pour le moment)*
 
 ---
 
@@ -22,8 +23,8 @@ Tracker des bugs identifiés lors d'audits ou de tests, classés par sévérité
 
 | ID | Fichier:ligne | Description courte | Résolu par | Date |
 |---|---|---|---|---|
-
-*(vide pour le moment — sera peuplé au fil des fixes)*
+| B-001 | `src/arp/ArpEngine.cpp:284` (WAITING_QUANTIZE) | `globalTick % boundary != 0` exact-equality could skip quantize boundaries when `ClockManager::generateTicks()` caught up multiple ticks in one call (cap=4). User REC tap at quantize=BEAT/BAR could wait one extra full beat/bar. | commit c23eea4 — sentinel `_lastDispatchedGlobalTick` + crossing detection, pattern aligné avec LoopEngine plan Phase 2 Step 1c. | 2026-04-07 |
+| B-002 | `src/arp/ArpEngine.cpp:296` (PLAYING auto-play HOLD OFF) | Même pattern `% boundary != 0` dans la branche auto-play HOLD OFF — premier note add avec quantize=BEAT/BAR pouvait sauter une beat. Identifié pendant audit fresh pass 2026-04-07 (B-CODE-1). | commit c23eea4 — déduplication via deferral à la branche WAITING_QUANTIZE (single source of truth pour le crossing detection). | 2026-04-07 |
 
 ---
 
