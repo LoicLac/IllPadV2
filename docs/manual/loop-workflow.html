@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ILLPAD48 — LOOP Mode Workflow</title>
+<style>
+  :root {
+    --bg:        #1a0e00;
+    --bg-panel:  #2a1806;
+    --bg-cell:   #3a220a;
+    --fg:        #ffaa33;
+    --fg-bright: #ffd080;
+    --fg-dim:    #8a5a1a;
+    --accent:    #ff66aa;
+    --accent-2:  #66ccff;
+    --accent-3:  #88ff88;
+    --accent-4:  #ffee66;
+    --danger:    #ff5566;
+    --border:    #5a3a0a;
+    --border-bright: #8a5a1a;
+  }
+
+  * { box-sizing: border-box; }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: "VT323", "IBM Plex Mono", "Menlo", "Consolas", monospace;
+    font-size: 17px;
+    line-height: 1.5;
+  }
+
+  body {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+
+  /* CRT scanline effect (subtle) */
+  body::before {
+    content: "";
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      rgba(0,0,0,0.08) 0px,
+      rgba(0,0,0,0.08) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* Headings */
+  h1, h2, h3, h4 {
+    color: var(--fg-bright);
+    font-weight: normal;
+    letter-spacing: 0.04em;
+    margin: 0;
+  }
+
+  h1 {
+    font-size: 42px;
+    text-align: center;
+    margin-bottom: 4px;
+    text-shadow: 0 0 8px rgba(255, 170, 51, 0.4);
+  }
+
+  .subtitle {
+    text-align: center;
+    color: var(--fg-dim);
+    margin-bottom: 40px;
+    font-size: 18px;
+  }
+
+  h2 {
+    font-size: 26px;
+    margin-top: 56px;
+    margin-bottom: 20px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  h2::before {
+    content: "── ";
+    color: var(--fg-dim);
+  }
+  h2::after {
+    content: " ──";
+    color: var(--fg-dim);
+  }
+
+  h3 {
+    font-size: 20px;
+    color: var(--fg);
+    margin-top: 24px;
+    margin-bottom: 12px;
+  }
+
+  p {
+    margin: 8px 0 16px;
+  }
+
+  /* Box/panel */
+  .panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    padding: 20px 24px;
+    margin: 16px 0;
+  }
+
+  .panel-title {
+    display: inline-block;
+    background: var(--bg);
+    color: var(--fg-bright);
+    padding: 0 8px;
+    margin: -30px 0 12px -8px;
+    font-size: 18px;
+  }
+
+  /* Key/term */
+  .key {
+    display: inline-block;
+    background: var(--bg-cell);
+    border: 1px solid var(--border-bright);
+    padding: 1px 8px;
+    color: var(--fg-bright);
+    font-weight: bold;
+  }
+
+  .pad-rec  { color: var(--danger);  border-color: var(--danger); }
+  .pad-play { color: var(--accent-3); border-color: var(--accent-3); }
+  .pad-clr  { color: var(--accent-4); border-color: var(--accent-4); }
+
+  /* 3-column grid for modes */
+  .mode-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 16px;
+    margin: 24px 0;
+  }
+
+  .mode-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    padding: 20px;
+    position: relative;
+  }
+
+  .mode-card.free { border-color: var(--accent-3); }
+  .mode-card.beat { border-color: var(--accent-2); }
+  .mode-card.bar  { border-color: var(--accent); }
+
+  .mode-label {
+    display: inline-block;
+    font-size: 14px;
+    padding: 2px 10px;
+    margin-bottom: 8px;
+    color: var(--bg);
+    background: var(--fg);
+  }
+
+  .mode-card.free .mode-label { background: var(--accent-3); }
+  .mode-card.beat .mode-label { background: var(--accent-2); }
+  .mode-card.bar  .mode-label { background: var(--accent); }
+
+  .mode-card h3 {
+    margin-top: 8px;
+    color: var(--fg-bright);
+  }
+
+  .mode-card .feel {
+    color: var(--fg-dim);
+    font-style: italic;
+    font-size: 15px;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border);
+  }
+
+  /* State machine diagram */
+  .diagram {
+    text-align: center;
+    margin: 24px 0;
+    background: var(--bg-panel);
+    padding: 30px 10px;
+    border: 1px solid var(--border);
+  }
+  .diagram svg { max-width: 100%; height: auto; }
+
+  /* Main transitions table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    background: var(--bg-panel);
+  }
+
+  th, td {
+    border: 1px solid var(--border);
+    padding: 10px 14px;
+    text-align: left;
+    vertical-align: middle;
+  }
+
+  thead th {
+    background: var(--bg-cell);
+    color: var(--fg-bright);
+    font-weight: normal;
+    text-transform: uppercase;
+    font-size: 15px;
+    letter-spacing: 0.05em;
+  }
+
+  tbody tr:nth-child(even) td { background: rgba(255, 170, 51, 0.04); }
+
+  td.from, td.to {
+    color: var(--fg-bright);
+    font-weight: bold;
+  }
+
+  /* Free vs quantized cells */
+  .cell-free { background: rgba(136, 255, 136, 0.08) !important; color: var(--accent-3); }
+  .cell-beat { background: rgba(102, 204, 255, 0.08) !important; color: var(--accent-2); }
+  .cell-bar  { background: rgba(255, 102, 170, 0.08) !important; color: var(--accent); }
+  .cell-none { background: rgba(128, 128, 128, 0.06) !important; color: var(--fg-dim); }
+  .cell-abort { background: rgba(255, 85, 102, 0.08) !important; color: var(--danger); }
+
+  /* Timeline scenarios */
+  .timeline {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    padding: 20px 24px;
+    margin: 24px 0;
+    overflow-x: auto;
+  }
+
+  .timeline-title {
+    color: var(--fg-bright);
+    margin-bottom: 12px;
+    font-size: 18px;
+  }
+
+  .timeline-track {
+    display: grid;
+    grid-template-columns: 120px 1fr;
+    gap: 10px;
+    align-items: center;
+    margin: 8px 0;
+  }
+
+  .timeline-label {
+    color: var(--fg-dim);
+    text-align: right;
+    padding-right: 10px;
+    font-size: 15px;
+  }
+
+  .timeline-bar {
+    display: flex;
+    height: 34px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    position: relative;
+  }
+
+  .tl-cell {
+    flex: 1;
+    border-right: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    position: relative;
+  }
+
+  .tl-cell:last-child { border-right: none; }
+
+  .tl-beat-mark {
+    position: absolute;
+    top: -18px;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 12px;
+    color: var(--fg-dim);
+  }
+
+  .tl-rec    { background: rgba(255, 85, 102, 0.3); color: var(--danger); }
+  .tl-play   { background: rgba(136, 255, 136, 0.25); color: var(--accent-3); }
+  .tl-stop   { background: rgba(102, 204, 255, 0.25); color: var(--accent-2); }
+  .tl-ovd    { background: rgba(255, 102, 170, 0.25); color: var(--accent); }
+  .tl-wait   { background: rgba(255, 238, 102, 0.15); color: var(--accent-4); }
+
+  .tl-tap {
+    position: absolute;
+    top: -24px;
+    font-size: 15px;
+    color: var(--fg-bright);
+    white-space: nowrap;
+    transform: translateX(-50%);
+  }
+
+  /* legend */
+  .legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin: 20px 0 8px;
+    font-size: 14px;
+    color: var(--fg-dim);
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .legend-swatch {
+    width: 16px;
+    height: 16px;
+    border: 1px solid var(--border-bright);
+  }
+
+  /* Notes */
+  .note {
+    border-left: 3px solid var(--fg);
+    padding: 8px 16px;
+    margin: 16px 0;
+    background: rgba(255, 170, 51, 0.05);
+    color: var(--fg-dim);
+    font-size: 15px;
+  }
+
+  .note strong { color: var(--fg-bright); }
+
+  .danger-note {
+    border-left: 3px solid var(--danger);
+    background: rgba(255, 85, 102, 0.05);
+  }
+
+  /* Footer */
+  footer {
+    margin-top: 80px;
+    text-align: center;
+    color: var(--fg-dim);
+    font-size: 14px;
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+  }
+
+  /* Responsive */
+  @media (max-width: 820px) {
+    .mode-grid { grid-template-columns: 1fr; }
+    h1 { font-size: 32px; }
+    body { padding: 24px 16px 60px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>LOOP MODE — Workflow Guide</h1>
+<div class="subtitle">ILLPAD48 V2 · visual manual for players</div>
+
+<!-- ============================================================= -->
+<h2>What is LOOP mode</h2>
+<p>
+LOOP mode turns a bank into a percussion looper. You get <strong>three
+dedicated pads</strong> on the layout — <span class="key pad-rec">REC</span>,
+<span class="key pad-play">PLAY/STOP</span>,
+<span class="key pad-clr">CLEAR</span> — plus the 45 remaining pads which
+play drum sounds (fixed GM mapping, no scale, no aftertouch).
+</p>
+<p>
+The workflow is simple: <strong>record a pattern, let it loop, overdub,
+clear when done</strong>. A LOOP bank stays alive in the background when
+you switch to another bank — the groove keeps playing.
+</p>
+
+<div class="note">
+<strong>Up to 2 LOOP banks</strong> can exist at the same time. Each bank
+has its own independent loop and its own <strong>quantize setting</strong>.
+You can have one bank running a tight quantized groove and another bank as
+a free-feel looper, simultaneously.
+</div>
+
+<!-- ============================================================= -->
+<h2>The three quantize modes</h2>
+
+<p>
+Every LOOP bank has a <strong>quantize setting</strong> (Tool 4 in setup
+mode). It controls how the six "when does the transition fire?" moments
+behave: start record, close record, start overdub, close overdub, play,
+stop.
+</p>
+
+<div class="mode-grid">
+
+  <div class="mode-card free">
+    <div class="mode-label">FREE</div>
+    <h3>Free loop</h3>
+    <p>
+    Everything fires <strong>the instant you tap</strong>. No snap, no wait.
+    The loop you create is aligned on <em>your own</em> timing, not the
+    master clock.
+    </p>
+    <div class="feel">
+      Feel → spontaneous, reactive, slightly floating. Good for ambient,
+      experimental beats, solo play without a backing track.
+      <br><br>
+      <strong>LED</strong>: solid hot magenta-red while playing. No beat/bar
+      pulsing (the loop has no master-clock-aligned grid to reveal).
+    </div>
+  </div>
+
+  <div class="mode-card beat">
+    <div class="mode-label">BEAT</div>
+    <h3>Snap to beat</h3>
+    <p>
+    Transitions wait for the <strong>next 1/4 note boundary</strong> before
+    firing (up to ~1 beat delay). Your loop is locked to the master clock
+    down to the beat.
+    </p>
+    <div class="feel">
+      Feel → snug, tight, groove-friendly. Good for layering over existing
+      tracks, live jamming with a DAW.
+      <br><br>
+      <strong>LED</strong>: cooler magenta-violet base + beat/bar/wrap tick
+      flashes (hierarchical boost). You see the 1/4 notes and bars passing.
+    </div>
+  </div>
+
+  <div class="mode-card bar">
+    <div class="mode-label">BAR</div>
+    <h3>Snap to bar</h3>
+    <p>
+    Transitions wait for the <strong>next downbeat</strong> of a 4-beat
+    measure (up to ~4 beats delay). Your loop is locked to bar phrasing.
+    </p>
+    <div class="feel">
+      Feel → epic, arranged, song-structure. Good for intros/outros,
+      bringing a loop in on the "1" of a new section, stopping at the end
+      of a chorus.
+      <br><br>
+      <strong>LED</strong>: same base color as BEAT + the same tick flash
+      hierarchy. What changes is the <em>timing</em> of quantized
+      transitions, not the visual language.
+    </div>
+  </div>
+
+</div>
+
+<div class="note">
+<strong>How to change the mode:</strong> enter setup mode (rear button
+during boot), go to Tool 4, select a LOOP bank, press Up/Down to cycle
+Free → Beat → Bar. The setting persists across reboots.
+</div>
+
+<div class="note">
+<strong>Waiting quantize feedback:</strong> in BEAT/BAR mode, when you tap
+an action that must wait for a boundary, the LED switches to a <strong>rapid
+blink in the action's color</strong> (red for rec/stop, green for play)
+until the boundary is reached and the action fires. You always know your
+tap was registered — no more "did it see my press?" uncertainty.
+</div>
+
+<!-- ============================================================= -->
+<h2>The three control pads</h2>
+
+<div class="panel">
+<div class="panel-title">On a LOOP bank, these three pads control the loop</div>
+
+<table>
+<thead>
+<tr>
+  <th>Pad</th>
+  <th>Single tap</th>
+  <th>Long press (500 ms)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+  <td><span class="key pad-rec">REC</span></td>
+  <td>Cycles through record states (see below)</td>
+  <td>—</td>
+</tr>
+<tr>
+  <td><span class="key pad-play">PLAY/STOP</span></td>
+  <td>Toggles playback (or aborts an overdub)</td>
+  <td>—</td>
+</tr>
+<tr>
+  <td><span class="key pad-clr">CLEAR</span></td>
+  <td>—</td>
+  <td>Wipes the loop to empty (LED ramp shows progress)</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============================================================= -->
+<h2>State machine — what each tap does</h2>
+
+<div class="diagram">
+<svg viewBox="0 0 900 420" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ffaa33"/>
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ff5566"/>
+    </marker>
+    <marker id="arrow-yellow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#ffee66"/>
+    </marker>
+  </defs>
+
+  <!-- State nodes -->
+  <g font-family="monospace" font-size="16" fill="#ffd080" text-anchor="middle">
+
+    <!-- EMPTY -->
+    <rect x="40" y="180" width="130" height="60" fill="#2a1806" stroke="#8a5a1a" stroke-width="2"/>
+    <text x="105" y="215" font-weight="bold">EMPTY</text>
+
+    <!-- RECORDING -->
+    <rect x="260" y="180" width="130" height="60" fill="#3a1006" stroke="#ff5566" stroke-width="2"/>
+    <text x="325" y="215" font-weight="bold" fill="#ff5566">RECORDING</text>
+
+    <!-- PLAYING -->
+    <rect x="480" y="180" width="130" height="60" fill="#1a3a0e" stroke="#88ff88" stroke-width="2"/>
+    <text x="545" y="215" font-weight="bold" fill="#88ff88">PLAYING</text>
+
+    <!-- OVERDUBBING -->
+    <rect x="480" y="60" width="130" height="60" fill="#3a0e24" stroke="#ff66aa" stroke-width="2"/>
+    <text x="545" y="95" font-weight="bold" fill="#ff66aa">OVERDUBBING</text>
+
+    <!-- STOPPED -->
+    <rect x="700" y="180" width="130" height="60" fill="#0e2a3a" stroke="#66ccff" stroke-width="2"/>
+    <text x="765" y="215" font-weight="bold" fill="#66ccff">STOPPED</text>
+  </g>
+
+  <!-- Transitions (arrows) -->
+  <g font-family="monospace" font-size="13" fill="#ffaa33" text-anchor="middle">
+
+    <!-- EMPTY → RECORDING -->
+    <line x1="170" y1="210" x2="260" y2="210" stroke="#ffaa33" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="215" y="200">REC tap</text>
+
+    <!-- RECORDING → PLAYING -->
+    <line x1="390" y1="210" x2="480" y2="210" stroke="#ffaa33" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="435" y="200">REC tap</text>
+
+    <!-- PLAYING → OVERDUBBING -->
+    <line x1="545" y1="180" x2="545" y2="120" stroke="#ffaa33" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="590" y="155">REC tap</text>
+
+    <!-- OVERDUBBING → PLAYING -->
+    <line x1="525" y1="120" x2="525" y2="180" stroke="#ffaa33" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="478" y="155" text-anchor="end">REC tap</text>
+
+    <!-- PLAYING → STOPPED -->
+    <line x1="610" y1="210" x2="700" y2="210" stroke="#ffaa33" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="655" y="200">P/S tap</text>
+
+    <!-- STOPPED → PLAYING -->
+    <line x1="700" y1="230" x2="610" y2="230" stroke="#ffaa33" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="655" y="250">P/S tap</text>
+
+    <!-- OVERDUBBING → STOPPED (abort, red) -->
+    <path d="M 610 80 Q 780 40 780 180" fill="none" stroke="#ff5566" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrow-red)"/>
+    <text x="760" y="60" fill="#ff5566">P/S = ABORT</text>
+    <text x="760" y="78" fill="#ff5566" font-size="11">(always immediate)</text>
+
+    <!-- OVERDUBBING → PLAYING via CLEAR (undo overdub, orange/yellow shortcut) -->
+    <path d="M 480 95 Q 435 140 480 185" fill="none" stroke="#ffee66" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrow-yellow)"/>
+    <text x="400" y="135" fill="#ffee66" text-anchor="end">CLR hold =</text>
+    <text x="400" y="152" fill="#ffee66" text-anchor="end">UNDO OVERDUB</text>
+
+    <!-- any → EMPTY (CLEAR, yellow, from multiple states — NOT from OVERDUBBING) -->
+    <path d="M 325 240 Q 230 320 155 240" fill="none" stroke="#ffee66" stroke-width="2" stroke-dasharray="6,3" marker-end="url(#arrow-yellow)"/>
+    <text x="240" y="345" fill="#ffee66">CLEAR long-press</text>
+    <text x="240" y="362" fill="#ffee66" font-size="11">(always immediate — wipes loop)</text>
+    <path d="M 545 240 Q 380 360 175 250" fill="none" stroke="#ffee66" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.6" marker-end="url(#arrow-yellow)"/>
+    <path d="M 765 240 Q 500 380 180 255" fill="none" stroke="#ffee66" stroke-width="1.5" stroke-dasharray="4,3" opacity="0.6" marker-end="url(#arrow-yellow)"/>
+
+  </g>
+</svg>
+</div>
+
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background: #ffaa33;"></div>Quantizable transition</div>
+  <div class="legend-item"><div class="legend-swatch" style="background: #ff5566;"></div>Abort (always immediate)</div>
+  <div class="legend-item"><div class="legend-swatch" style="background: #ffee66;"></div>CLEAR (always immediate, any state)</div>
+</div>
+
+<!-- ============================================================= -->
+<h2>Quantize behavior — full chart</h2>
+
+<p>
+Each cell shows what happens when you perform the action <em>in that
+quantize mode</em>. Six transitions respect the mode; two are always
+immediate regardless of mode (abort and clear — the special cases).
+</p>
+
+<table>
+<thead>
+<tr>
+  <th>Action</th>
+  <th>From state</th>
+  <th>To state</th>
+  <th class="cell-free">FREE</th>
+  <th class="cell-beat">BEAT</th>
+  <th class="cell-bar">BAR</th>
+</tr>
+</thead>
+<tbody>
+
+<tr>
+  <td><span class="key pad-rec">REC</span> tap</td>
+  <td class="from">EMPTY</td>
+  <td class="to">RECORDING</td>
+  <td class="cell-free">Records from tap</td>
+  <td class="cell-beat">Records from next beat</td>
+  <td class="cell-bar">Records from next bar</td>
+</tr>
+
+<tr>
+  <td><span class="key pad-rec">REC</span> tap</td>
+  <td class="from">RECORDING</td>
+  <td class="to">PLAYING</td>
+  <td class="cell-free">Close now + bar-snap + play</td>
+  <td class="cell-beat">Keeps capturing until next beat, then close</td>
+  <td class="cell-bar">Keeps capturing until next bar, then close</td>
+</tr>
+
+<tr>
+  <td><span class="key pad-rec">REC</span> tap</td>
+  <td class="from">PLAYING</td>
+  <td class="to">OVERDUBBING</td>
+  <td class="cell-free">Overdub arms now</td>
+  <td class="cell-beat">Overdub arms at next beat</td>
+  <td class="cell-bar">Overdub arms at next bar</td>
+</tr>
+
+<tr>
+  <td><span class="key pad-rec">REC</span> tap</td>
+  <td class="from">OVERDUBBING</td>
+  <td class="to">PLAYING</td>
+  <td class="cell-free">Close + merge now</td>
+  <td class="cell-beat">Keeps capturing until next beat, then merge</td>
+  <td class="cell-bar">Keeps capturing until next bar, then merge</td>
+</tr>
+
+<tr>
+  <td><span class="key pad-play">P/S</span> tap</td>
+  <td class="from">STOPPED</td>
+  <td class="to">PLAYING</td>
+  <td class="cell-free">Plays from tap</td>
+  <td class="cell-beat">Plays from next beat</td>
+  <td class="cell-bar">Plays from next bar</td>
+</tr>
+
+<tr>
+  <td><span class="key pad-play">P/S</span> tap</td>
+  <td class="from">PLAYING</td>
+  <td class="to">STOPPED</td>
+  <td class="cell-free">Stops now (trailing tails ok)</td>
+  <td class="cell-beat">Stops at next beat (trailing tails ok)</td>
+  <td class="cell-bar">Stops at next bar (trailing tails ok)</td>
+</tr>
+
+<tr>
+  <td><span class="key pad-play">P/S</span> tap</td>
+  <td class="from">OVERDUBBING</td>
+  <td class="to">STOPPED</td>
+  <td class="cell-abort" colspan="3">
+    <strong>ABORT — always immediate.</strong>
+    Stops instantly, discards the current overdub, clean break.
+    Quantize mode is ignored.
+  </td>
+</tr>
+
+<tr>
+  <td><span class="key pad-clr">CLEAR</span> long-press</td>
+  <td class="from">OVERDUBBING</td>
+  <td class="to">PLAYING</td>
+  <td class="cell-abort" colspan="3">
+    <strong>UNDO OVERDUB — always immediate.</strong>
+    Discards <em>only the events captured during the current overdub pass</em>.
+    The underlying loop keeps playing without interruption — no audible gap,
+    no retrigger. Use this when you mess up an overdub and want to try again
+    without losing the base loop. The 500 ms hold is the "human quantize".
+  </td>
+</tr>
+
+<tr>
+  <td><span class="key pad-clr">CLEAR</span> long-press</td>
+  <td class="from">any other (except EMPTY)</td>
+  <td class="to">EMPTY</td>
+  <td class="cell-abort" colspan="3">
+    <strong>WIPE LOOP — always immediate.</strong>
+    The loop is completely wiped when the LED ramp completes. Destructive,
+    no undo. Quantize mode is ignored.
+  </td>
+</tr>
+
+<tr>
+  <td><span class="key pad-rec">REC</span> tap</td>
+  <td class="from">STOPPED</td>
+  <td class="to">—</td>
+  <td class="cell-none" colspan="3">Ignored</td>
+</tr>
+
+<tr>
+  <td><span class="key pad-play">P/S</span> tap</td>
+  <td class="from">EMPTY or RECORDING</td>
+  <td class="to">—</td>
+  <td class="cell-none" colspan="3">Ignored</td>
+</tr>
+
+</tbody>
+</table>
+
+<div class="note">
+<strong>About "trailing tails":</strong> when you stop playback, notes
+that were scheduled with shuffle, chaos, or a long gate time keep firing
+naturally until they finish. The loop stops cleanly but doesn't clip the
+tail of a sustained note. This is what shuffle/chaos sound natural.
+</div>
+
+<!-- ============================================================= -->
+<h2>Scenario A — free-feel ambient loop (FREE)</h2>
+
+<div class="timeline">
+<div class="timeline-title">Quantize mode: FREE</div>
+
+<div class="timeline-track">
+  <div class="timeline-label">Beat marker</div>
+  <div class="timeline-bar">
+    <div class="tl-cell"><span class="tl-beat-mark">1</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">2</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">3</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">4</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">1</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">2</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">3</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">4</span></div>
+  </div>
+</div>
+
+<div class="timeline-track">
+  <div class="timeline-label">Loop state</div>
+  <div class="timeline-bar">
+    <div class="tl-cell" style="flex: 1.3;">
+      <span class="tl-tap" style="left: 10%;">REC tap</span>
+    </div>
+    <div class="tl-cell tl-rec" style="flex: 3.7;">RECORDING</div>
+    <div class="tl-cell" style="flex: 0.1; position: relative;">
+      <span class="tl-tap" style="left: 0;">REC tap</span>
+    </div>
+    <div class="tl-cell tl-play" style="flex: 2.9;">PLAYING</div>
+  </div>
+</div>
+
+<p style="color: var(--fg-dim); font-size: 15px; margin-top: 12px;">
+You tap REC wherever your hand lands, play a few notes, tap REC again to
+close. The loop starts playing <em>immediately</em> — the first
+downbeat of the loop is wherever you placed it. Great for ambient/solo
+play, where you don't need to align with a click.
+</p>
+</div>
+
+<!-- ============================================================= -->
+<h2>Scenario B — beat-locked groove (BEAT)</h2>
+
+<div class="timeline">
+<div class="timeline-title">Quantize mode: BEAT · master clock running at 120 BPM</div>
+
+<div class="timeline-track">
+  <div class="timeline-label">Beat marker</div>
+  <div class="timeline-bar">
+    <div class="tl-cell"><span class="tl-beat-mark">1</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">2</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">3</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">4</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">1</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">2</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">3</span></div>
+    <div class="tl-cell"><span class="tl-beat-mark">4</span></div>
+  </div>
+</div>
+
+<div class="timeline-track">
+  <div class="timeline-label">Loop state</div>
+  <div class="timeline-bar">
+    <div class="tl-cell tl-wait" style="flex: 0.6;">
+      wait
+      <span class="tl-tap" style="left: 0;">REC tap</span>
+    </div>
+    <div class="tl-cell tl-rec" style="flex: 3.4;">RECORDING (aligned on beat 2)</div>
+    <div class="tl-cell tl-wait" style="flex: 0.5;">
+      wait
+      <span class="tl-tap" style="left: 0;">REC tap</span>
+    </div>
+    <div class="tl-cell tl-play" style="flex: 3.5;">PLAYING (aligned on beat 2 of next bar)</div>
+  </div>
+</div>
+
+<p style="color: var(--fg-dim); font-size: 15px; margin-top: 12px;">
+You tap REC slightly before beat 2 — recording waits for beat 2, then
+starts. You play your pattern. You tap REC again mid-beat — recording
+<em>keeps capturing</em> until the next beat, then closes. Playback
+starts seamlessly on the same beat. Your loop is locked to the master
+clock to the beat.
+</p>
+</div>
+
+<!-- ============================================================= -->
+<h2>Scenario C — bar-phrased intro (BAR)</h2>
+
+<div class="timeline">
+<div class="timeline-title">Quantize mode: BAR · you prepare an intro at bar 1, it fires at bar 2</div>
+
+<div class="timeline-track">
+  <div class="timeline-label">Bar marker</div>
+  <div class="timeline-bar">
+    <div class="tl-cell" style="flex: 4;"><span class="tl-beat-mark" style="left: 50%;">Bar 1</span></div>
+    <div class="tl-cell" style="flex: 4;"><span class="tl-beat-mark" style="left: 50%;">Bar 2</span></div>
+    <div class="tl-cell" style="flex: 4;"><span class="tl-beat-mark" style="left: 50%;">Bar 3</span></div>
+  </div>
+</div>
+
+<div class="timeline-track">
+  <div class="timeline-label">Loop state</div>
+  <div class="timeline-bar">
+    <div class="tl-cell tl-wait" style="flex: 1.5;">
+      wait for bar 2
+      <span class="tl-tap" style="left: 20%;">P/S tap</span>
+    </div>
+    <div class="tl-cell tl-play" style="flex: 10.5;">PLAYING (locked to bar boundaries)</div>
+  </div>
+</div>
+
+<p style="color: var(--fg-dim); font-size: 15px; margin-top: 12px;">
+Mid-bar 1, you tap PLAY on a previously recorded loop. The loop waits up
+to a full bar, then fires on the "1" of bar 2 — perfect for bringing
+an intro in at the right phrase boundary. Stopping works the same way in
+reverse: tap STOP mid-bar, the loop finishes the current bar, then stops
+on the next downbeat.
+</p>
+</div>
+
+<!-- ============================================================= -->
+<h2>Edge cases and tips</h2>
+
+<div class="note">
+<strong>Waiting for a boundary feels like doing nothing.</strong> Your tap
+was registered. In BEAT mode the wait is at most 1 beat (~500 ms at 120
+BPM), in BAR mode up to 4 beats (~2 s at 120 BPM). Plan your taps slightly
+ahead. LED feedback in Phase 4 will show the "waiting" state
+visibly — for now, trust that the tap was seen.
+</div>
+
+<div class="note">
+<strong>No master clock?</strong> In BEAT or BAR mode without an external
+clock, the ILLPAD uses its internal tempo (pot R1, 10–260 BPM). The
+boundary logic works identically.
+</div>
+
+<div class="note">
+<strong>Two ways to undo a bad overdub pass:</strong>
+<br>
+• <strong>CLEAR long-press</strong> during OVERDUBBING → <em>undo
+overdub</em>: discards only the current pass, the underlying loop keeps
+playing seamlessly. You stay in PLAYING state, ready to try another
+overdub. No audible gap, no retrigger. This is the musical "oops, let me
+try that again" button.
+<br>
+• <strong>PLAY/STOP tap</strong> during OVERDUBBING → <em>abort</em>: the
+overdub is thrown away <em>and</em> playback stops (clean break). The
+original loop is untouched — tap PLAY/STOP again and it resumes from the
+top. Use this when you want to stop altogether, not just retry.
+</div>
+
+<div class="note">
+<strong>Background playback:</strong> when you switch to another bank,
+your LOOP keeps playing on its own MIDI channel. Up to 2 LOOP banks can
+play simultaneously, each with independent quantize, shuffle, and groove
+settings.
+</div>
+
+<div class="note danger-note">
+<strong>CLEAR is destructive outside OVERDUBBING.</strong> In PLAYING,
+STOPPED, or RECORDING state, a completed CLEAR long-press wipes the
+entire loop — there is no undo. The 500 ms hold is your safety: if you
+start the hold by accident, release within the LED ramp window to cancel.
+In OVERDUBBING state, CLEAR has a different, non-destructive meaning
+(undo overdub) — the base loop is safe.
+</div>
+
+<div class="note">
+<strong>Bank switch during recording is blocked.</strong> If you try to
+switch banks while a LOOP bank is in RECORDING or OVERDUBBING state, the
+switch is silently denied. Close the recording first (tap REC) or abort
+(PLAY/STOP for overdub).
+</div>
+
+<!-- ============================================================= -->
+<footer>
+ILLPAD48 V2 · LOOP Mode Visual Manual
+</footer>
+
+</body>
+</html>
