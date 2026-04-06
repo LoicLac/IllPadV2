@@ -150,8 +150,12 @@ public:
   // Load slot into LoopEngine. Hard-cut + quantize-snap if PLAYING.
   // Returns false if slot is missing/corrupt.
   // On corruption, marks slot as unoccupied in the bitmask.
+  // currentBPM is the live tempo (NOT _recordBpm) — required for the
+  // PLAYING quantize-snap to align _playStartUs on the live beat.
+  // AUDIT FIX B4 2026-04-06.
   bool loadSlot(uint8_t slotIdx, LoopEngine& eng,
-                MidiTransport& transport, uint32_t globalTick);
+                MidiTransport& transport, uint32_t globalTick,
+                float currentBPM);
 
   // Delete slot file. Returns true on success or if slot already empty.
   bool deleteSlot(uint8_t slotIdx);
@@ -163,8 +167,10 @@ private:
   uint16_t _occupancyBitmask;   // bit i set = slot i occupied
 
   // Compose path string into a fixed buffer (no malloc).
-  // Result format: "/loops/slot05.lpb" or "/loops/slot05.tmp"
-  static void slotPath(uint8_t slotIdx, bool tmp, char out[24]);
+  // Result format: "/littlefs/loops/slot05.lpb" or "/littlefs/loops/slot05.tmp"
+  // Buffer is 32 bytes to comfortably fit the full path + nul terminator
+  // (17 chars base + NUL = 18, rounded up to 32 for alignment/future headroom).
+  static void slotPath(uint8_t slotIdx, bool tmp, char out[32]);
 
   void rescanOccupancy();
   void cleanupOrphanTmpFiles();
@@ -197,27 +203,29 @@ LoopSlotStore::LoopSlotStore()
 {
 }
 
-void LoopSlotStore::slotPath(uint8_t slotIdx, bool tmp, char out[24]) {
-  // Format: "/loops/slotNN.lpb" or "/loops/slotNN.tmp"
-  snprintf(out, 24, "/loops/slot%02u.%s", slotIdx, tmp ? "tmp" : "lpb");
+void LoopSlotStore::slotPath(uint8_t slotIdx, bool tmp, char out[32]) {
+  // AUDIT FIX (Q3, 2026-04-06): mount at /littlefs, not /. Prevents future
+  // collision if SPIFFS (or any other FS) is mounted at /. Matches the
+  // ESP32-Arduino convention. Path format: "/littlefs/loops/slotNN.lpb"
+  snprintf(out, 32, "/littlefs/loops/slot%02u.%s", slotIdx, tmp ? "tmp" : "lpb");
 }
 
 bool LoopSlotStore::begin() {
   if (_mounted) return true;
 
-  // Mount LittleFS on the loopfs partition.
+  // Mount LittleFS on the loopfs partition at /littlefs (Q3 fix).
   // The partition label is "loopfs" per partitions_illpad.csv (Step 1a).
-  // LittleFS.begin(formatOnFail=true, basePath="/", maxOpenFiles=10, partitionLabel="loopfs")
-  if (!LittleFS.begin(true, "/", 10, "loopfs")) {
+  // LittleFS.begin(formatOnFail=true, basePath="/littlefs", maxOpenFiles=10, partitionLabel="loopfs")
+  if (!LittleFS.begin(true, "/littlefs", 10, "loopfs")) {
     #if DEBUG_SERIAL
     Serial.println("[SLOT] FATAL: LittleFS mount failed on loopfs partition");
     #endif
     return false;
   }
 
-  // Ensure /loops directory exists
-  if (!LittleFS.exists("/loops")) {
-    LittleFS.mkdir("/loops");
+  // Ensure /littlefs/loops directory exists
+  if (!LittleFS.exists("/littlefs/loops")) {
+    LittleFS.mkdir("/littlefs/loops");
   }
 
   cleanupOrphanTmpFiles();
@@ -225,7 +233,7 @@ bool LoopSlotStore::begin() {
 
   _mounted = true;
   #if DEBUG_SERIAL
-  Serial.printf("[SLOT] LittleFS mounted, occupancy=0x%04X\n", _occupancyBitmask);
+  Serial.printf("[SLOT] LittleFS mounted at /littlefs, occupancy=0x%04X\n", _occupancyBitmask);
   #endif
   return true;
 }
@@ -233,7 +241,7 @@ bool LoopSlotStore::begin() {
 void LoopSlotStore::rescanOccupancy() {
   _occupancyBitmask = 0;
   for (uint8_t i = 0; i < SLOT_COUNT; i++) {
-    char path[24];
+    char path[32];   // Q3 fix: 32 bytes to fit /littlefs/loops/slotNN.lpb
     slotPath(i, false, path);
     if (LittleFS.exists(path)) {
       _occupancyBitmask |= (uint16_t)(1U << i);
@@ -243,7 +251,7 @@ void LoopSlotStore::rescanOccupancy() {
 
 void LoopSlotStore::cleanupOrphanTmpFiles() {
   for (uint8_t i = 0; i < SLOT_COUNT; i++) {
-    char path[24];
+    char path[32];   // Q3 fix: 32 bytes
     slotPath(i, true, path);
     if (LittleFS.exists(path)) {
       LittleFS.remove(path);
@@ -272,7 +280,7 @@ bool LoopSlotStore::saveSlot(uint8_t slotIdx, const LoopEngine& eng) {
     return false;
   }
 
-  char tmpPath[24], finalPath[24];
+  char tmpPath[32], finalPath[32];   // Q3 fix: 32 bytes for /littlefs/loops/...
   slotPath(slotIdx, true, tmpPath);
   slotPath(slotIdx, false, finalPath);
 
@@ -315,11 +323,12 @@ bool LoopSlotStore::saveSlot(uint8_t slotIdx, const LoopEngine& eng) {
 }
 
 bool LoopSlotStore::loadSlot(uint8_t slotIdx, LoopEngine& eng,
-                              MidiTransport& transport, uint32_t globalTick) {
+                              MidiTransport& transport, uint32_t globalTick,
+                              float currentBPM) {
   if (!_mounted || slotIdx >= SLOT_COUNT) return false;
   if (!isSlotOccupied(slotIdx)) return false;
 
-  char path[24];
+  char path[32];
   slotPath(slotIdx, false, path);
 
   File f = LittleFS.open(path, "r");
@@ -352,7 +361,8 @@ bool LoopSlotStore::loadSlot(uint8_t slotIdx, LoopEngine& eng,
   }
 
   // Deserialize into the engine. The engine validates magic/version itself.
-  if (!eng.deserializeFromBuffer(_serializeBuffer, fileSize, transport, globalTick)) {
+  // currentBPM is forwarded for the PLAYING quantize-snap (B4 fix).
+  if (!eng.deserializeFromBuffer(_serializeBuffer, fileSize, transport, globalTick, currentBPM)) {
     #if DEBUG_SERIAL
     Serial.printf("[SLOT] loadSlot(%u): deserialize failed (corrupt)\n", slotIdx);
     #endif
@@ -369,7 +379,7 @@ bool LoopSlotStore::loadSlot(uint8_t slotIdx, LoopEngine& eng,
 bool LoopSlotStore::deleteSlot(uint8_t slotIdx) {
   if (!_mounted || slotIdx >= SLOT_COUNT) return false;
 
-  char path[24];
+  char path[32];   // Q3 fix: 32 bytes
   slotPath(slotIdx, false, path);
 
   if (LittleFS.exists(path)) {
@@ -415,10 +425,24 @@ In the public section, after the existing setters:
 
   // Deserialize from buffer. Hard-cut: flushes refcount + pending queue,
   // replaces events. If _state == PLAYING, applies quantize-snap to align
-  // _playStartUs on the last beat. EMPTY → STOPPED. STOPPED stays STOPPED.
+  // _playStartUs on the last beat USING THE LIVE BPM (currentBPM), not the
+  // recorded BPM — so the snap aligns with the current playback grid.
+  // EMPTY → STOPPED. STOPPED stays STOPPED.
   // Returns: true if OK, false if magic/version mismatch.
+  // AUDIT FIX B4 2026-04-06: currentBPM parameter added.
   bool deserializeFromBuffer(const uint8_t* buf, size_t bufSize,
-                              MidiTransport& transport, uint32_t globalTick);
+                              MidiTransport& transport, uint32_t globalTick,
+                              float currentBPM);
+
+  // === Velocity getters for slot load writeback (AUDIT FIX B5 2026-04-06) ===
+  // After deserializeFromBuffer loads a slot, _baseVelocity and
+  // _velocityVariation hold the slot's stored values. handleLoopSlots reads
+  // them via these getters and writes them into BankSlot.baseVelocity /
+  // velocityVariation BEFORE calling reloadPerBankParams. This implements
+  // the "preset complet" semantics from Q2: loading a slot also restores
+  // its velocity params on the bank.
+  uint8_t getBaseVelocity() const      { return _baseVelocity; }
+  uint8_t getVelocityVariation() const { return _velocityVariation; }
 ```
 
 ### 3b. Implement `serializeToBuffer` in `src/loop/LoopEngine.cpp`
@@ -465,7 +489,8 @@ Add right after `serializeToBuffer`:
 ```cpp
 bool LoopEngine::deserializeFromBuffer(const uint8_t* buf, size_t bufSize,
                                         MidiTransport& transport,
-                                        uint32_t globalTick) {
+                                        uint32_t globalTick,
+                                        float currentBPM) {
   // Validate header presence
   if (bufSize < sizeof(LoopSlotHeader)) return false;
 
@@ -517,13 +542,14 @@ bool LoopEngine::deserializeFromBuffer(const uint8_t* buf, size_t bufSize,
   // ---- State-dependent timing setup ----
   if (_state == PLAYING) {
     // PLAYING: hard-cut + quantize-snap on the last beat passed.
-    // Compute where the loop "should" have started so that we are now
-    // exactly at (globalTick % 24) ticks past the last beat.
-    // Use a conservative BPM read — the live BPM is not directly available
-    // here, so we use _recordBpm (the loaded loop's reference). The next
-    // tick() call will recompute positions with the actual live BPM.
+    // AUDIT FIX (B4, 2026-04-06): use the LIVE BPM (currentBPM) here, NOT
+    // _recordBpm. (now - _playStartUs) is in real time, so usSinceLastBeat
+    // must also be in real time, which means usPerTick = 60e6 / liveBPM / 24.
+    // Using _recordBpm would offset the snap by ~8% of a beat per 20% BPM
+    // divergence — audible. The next tick() applies the live timebase scaling
+    // via positionUs = elapsedUs * recordDur / liveDur.
     uint32_t tickInBeat = globalTick % 24;
-    float    bpm        = _recordBpm;
+    float    bpm        = (currentBPM < 10.0f) ? 10.0f : currentBPM;  // safety floor
     uint32_t usPerBeat  = (uint32_t)(60000000.0f / bpm);
     uint32_t usPerTick  = usPerBeat / 24;
     uint32_t usSinceLastBeat = tickInBeat * usPerTick;
@@ -532,6 +558,8 @@ bool LoopEngine::deserializeFromBuffer(const uint8_t* buf, size_t bufSize,
   } else {
     // EMPTY/STOPPED → STOPPED with the loaded events ready to play.
     // The user presses PLAY/STOP to start.
+    // currentBPM unused in this branch (no quantize-snap needed).
+    (void)currentBPM;
     _playStartUs = micros();
     _state = STOPPED;
   }
@@ -890,13 +918,24 @@ static void handleLoopSlots(const SharedKeyboardState& state, bool leftHeld, uin
                     // Tap valid (between 300 and 1000 ms) — load
                     if (s_loopSlotStore.isSlotOccupied(i)) {
                         uint32_t globalTick = s_clockManager.getCurrentTick();
-                        if (s_loopSlotStore.loadSlot(i, *eng, s_transport, globalTick)) {
+                        // B4 fix: pass live BPM for the PLAYING quantize-snap
+                        // inside deserializeFromBuffer.
+                        float currentBPM = s_clockManager.getSmoothedBPMFloat();
+                        if (s_loopSlotStore.loadSlot(i, *eng, s_transport, globalTick, currentBPM)) {
+                            // B5 fix: propagate the loaded velocity params from
+                            // the engine to BankSlot BEFORE reloadPerBankParams,
+                            // so PotRouter is seeded with the loaded values
+                            // (preset complet semantics — see Q2 audit decision).
+                            BankSlot& curSlot = s_bankManager.getCurrentSlot();
+                            curSlot.baseVelocity      = eng->getBaseVelocity();
+                            curSlot.velocityVariation = eng->getVelocityVariation();
                             // Re-arm the catch system on PotRouter for per-bank LOOP
                             // params via the existing reloadPerBankParams() helper
-                            // (same path as a bank switch). It reads the engine's
-                            // current state and pushes it into the PotRouter, then
-                            // calls seedCatchValues + resetPerBankCatch.
-                            reloadPerBankParams(s_bankManager.getCurrentSlot());
+                            // (same path as a bank switch). It reads BankSlot
+                            // (now with loaded velocity values) and the engine's
+                            // shuffle/template/etc, pushes them into PotRouter,
+                            // then calls seedCatchValues + resetPerBankCatch.
+                            reloadPerBankParams(curSlot);
                             s_leds.triggerConfirm(CONFIRM_LOOP_SLOT_LOAD);
                         } else {
                             // Load failed (corrupt) — bitmask was already updated
@@ -1025,7 +1064,17 @@ Remove the test wiring (`s_loopSlotPads[0] = 30;`) before continuing.
 
 ### 7a. Add 16 slot role enum values to `PadRoleCode`
 
-In `src/setup/ToolPadRoles.h`, extend the enum (it was set up in Phase 3 Step 2a):
+> **AUDIT FIX (A3, 2026-04-06)**: this enum was already extended in Phase 3
+> Step 2a from the original `ROLE_NONE..ROLE_PLAYSTOP/COLLISION` baseline to
+> include `ROLE_ARPEG_PLAYSTOP` (renamed) and `ROLE_LOOP_REC/PS/CLR`. Phase 6
+> ADDS 16 more values between `ROLE_LOOP_CLR` and `ROLE_COLLISION`. This is
+> a **REPLACE** of the existing enum block, not an additive append. Do NOT
+> leave the Phase 3 enum intact and copy the new full enum below it — that
+> would produce a duplicate `enum PadRoleCode` definition (compile error).
+> Modify the existing enum body in place.
+
+**REPLACE** the enum body in `src/setup/ToolPadRoles.h` (the same block that
+Phase 3 Step 2a left at 10 values + ROLE_COLLISION) with this final version :
 
 ```cpp
 enum PadRoleCode : uint8_t {
@@ -1169,7 +1218,30 @@ static const char* POOL_LOOP_SLOT_LABELS[LOOP_SLOT_COUNT] = {
 
 ### 7h. Extend per-sub-page pool linearization with 16 slot lines
 
-In `ToolPadRoles.cpp`, the LOOP sub-page POOL_OFFSETS were defined in Phase 3 Step 2-pre-8 with only 4 entries (clear + 3 LOOP control lines). Replace with the 20-entry version:
+> **AUDIT FIX (A3, 2026-04-06)**: this sub-step REPLACES four file-scope/static
+> definitions that were created in Phase 3 Step 2-pre-8 with placeholder
+> 4-line versions. Phase 6 needs the full 20-line version (4 LOOP control
+> lines + 16 slot lines). Each item below is a **REPLACE in place** — do
+> NOT leave the Phase 3 versions and add the Phase 6 versions next to them
+> (would produce duplicate definitions and / or array length mismatches).
+>
+> The 4 items to **REPLACE** are:
+>   1. `POOL_OFFSETS_LOOP[]` (file-scope static — `ToolPadRoles.cpp` near
+>      the other `POOL_OFFSETS_*` tables)
+>   2. `TOTAL_POOL_LOOP` (file-scope constant in the same area)
+>   3. `MAP_LOOP[]` (static local inside `linearToPool()`, in the
+>      `subPage == 2` branch)
+>   4. `REV_LOOP[]` (static local inside `poolToLinear()`, in the
+>      `subPage == 2` branch) — AND its guard `if (line < 10)` becomes
+>      `if (line < 26)`
+>
+> Modify the existing definitions in place. Do NOT duplicate.
+
+#### REPLACE 1: `POOL_OFFSETS_LOOP[]` and `TOTAL_POOL_LOOP`
+
+In `ToolPadRoles.cpp` near the other per-sub-page offset tables, **REPLACE**
+the Phase 3 placeholder version (`{0, 1, 2, 3, 4}` + `TOTAL_POOL_LOOP = 4`)
+with the final 20-line version :
 
 ```cpp
 // Sub-page 2 (Loop): Clear(1) + LoopRec(1) + LoopPS(1) + LoopClr(1) + 16 Slots = 20
@@ -1182,15 +1254,27 @@ static const uint8_t POOL_OFFSETS_LOOP[] = {
 static const uint8_t TOTAL_POOL_LOOP = 20;
 ```
 
-And update the global ↔ local line mapping in `linearToPool` and `poolToLinear` (added in Phase 3 Step 2-pre-8):
+#### REPLACE 2: `MAP_LOOP[]` static local in `linearToPool()`
+
+Inside `linearToPool()`, the `subPage == 2` branch contains a static local
+`MAP_LOOP[]`. **REPLACE** the Phase 3 4-entry version with the 20-entry
+version :
 
 ```cpp
 // Sub-page 2 (Loop): 0=clear, 1..3=LoopRec/PS/Clr (global lines 7/8/9),
 //                    4..19=Slot0..15 (global lines 10..25)
-static const uint8_t MAP_LOOP[] = {0, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25};
+static const uint8_t MAP_LOOP[] = {
+    0,  7,  8,  9,
+    10, 11, 12, 13, 14, 15, 16, 17,
+    18, 19, 20, 21, 22, 23, 24, 25
+};
 ```
 
-Reverse mapping (in `poolToLinear`):
+#### REPLACE 3: `REV_LOOP[]` static local in `poolToLinear()` + guard
+
+Inside `poolToLinear()`, the `subPage == 2` branch contains a static local
+`REV_LOOP[]` AND a guard `if (line < 10)`. **REPLACE both** with the
+26-entry version + the new guard :
 
 ```cpp
 } else if (subPage == 2) {
@@ -1205,11 +1289,16 @@ Reverse mapping (in `poolToLinear`):
         1,         // line 7 (loopRec) → local 1
         2,         // line 8 (loopPS)  → local 2
         3,         // line 9 (loopClr) → local 3
-        4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19  // lines 10-25 (slots) → local 4-19
+        4,  5,  6,  7,  8,  9, 10, 11,   // lines 10-17 (Slot0..7)  → local 4-11
+       12, 13, 14, 15, 16, 17, 18, 19    // lines 18-25 (Slot8..15) → local 12-19
     };
-    if (line < 26) localIdx = REV_LOOP[line];
+    if (line < 26) localIdx = REV_LOOP[line];   // was: line < 10
 }
 ```
+
+**Sanity check**: `MAP_LOOP[]` has 20 entries, matching `TOTAL_POOL_LOOP = 20`
+and `POOL_OFFSETS_LOOP[]` having 21 entries (20 lines + 1 sentinel). `REV_LOOP[]`
+has 26 entries (covering global lines 0..25). All four pieces consistent.
 
 ### 7i. Extend `drawPool()` LOOP branch with 16 slot lines
 
@@ -1612,13 +1701,15 @@ Run the full test plan from spec §8 in order. Documenting each test below as a 
 | File | Changes |
 |---|---|
 | `platformio.ini` | `board_build.partitions = partitions_illpad.csv` |
-| `src/loop/LoopEngine.h` | `serializeToBuffer()`, `deserializeFromBuffer()` declarations |
-| `src/loop/LoopEngine.cpp` | Both methods implemented; quantize-snap on PLAYING; include `LoopSlotStore.h` |
+| `src/loop/LoopEngine.h` | `serializeToBuffer()`, `deserializeFromBuffer(..., float currentBPM)` declarations (B4); inline `getBaseVelocity()` / `getVelocityVariation()` getters (B5) |
+| `src/loop/LoopEngine.cpp` | Both methods implemented; quantize-snap on PLAYING uses `currentBPM` not `_recordBpm` (B4 fix); include `LoopSlotStore.h` |
 | `src/core/LedController.h` | 4 new ConfirmType values; `showSlotSaveRamp()` decl + `_slotRampPct/_showingSlotRamp` members |
 | `src/core/LedController.cpp` | `showSlotSaveRamp()` impl; expiry + rendering of 4 confirms; slot save ramp overlay in `renderNormalDisplay()` |
-| `src/main.cpp` | `s_loopSlotStore` instance; boot reorder (LittleFS step 1, LED hardware silent); `s_slotLastState/PressStart/Consumed/clearConsumedByCombo` statics + init; `handleLoopSlots()` function; pipeline call after `handleLoopControls()`; `handleLoopControls()` coordination via `s_clearConsumedByCombo`; `loadAll()` extra arg |
-| `src/setup/ToolPadRoles.h` | `ROLE_LOOP_SLOT_0..15` enum values; `_wkLoopSlotPads[16]`, `_loopSlotPads` member; `begin()` extra param |
-| `src/setup/ToolPadRoles.cpp` | Slot label tables; LOOP sub-page POOL_OFFSETS extension; `linearToPool/poolToLinear` slot mapping; `buildRoleMap` slot loop; `drawPool` 16 slot lines; `getRoleForPad/findPadWithRole/assignRole/clearRole/clearAllRoles/isPadOccupiedInContext/saveAll/run` slot extensions; `printRoleDescription` slot case; `poolItemLabel/poolLineSize` slot defaults; case 9 description text update |
+| `src/main.cpp` | `s_loopSlotStore` instance; boot reorder (LittleFS step 1 mounted at `/littlefs`, LED hardware silent — Q3); `s_slotLastState/PressStart/Consumed/clearConsumedByCombo` statics + init; `handleLoopSlots()` function with **`currentBPM = s_clockManager.getSmoothedBPMFloat()` retrieval and `loadSlot(..., currentBPM)` call (B4)**, **`slot.baseVelocity/variation` writeback from `eng->getBaseVelocity/Variation()` before `reloadPerBankParams` (B5 + Q2)**; pipeline call after `handleLoopControls()`; `handleLoopControls()` coordination via `s_clearConsumedByCombo`; `loadAll()` extra arg |
+| `src/loop/LoopSlotStore.h` | `loadSlot(..., float currentBPM)` signature (B4); `slotPath()` buffer size 24→32 to fit `/littlefs/loops/...` (Q3) |
+| `src/loop/LoopSlotStore.cpp` | `loadSlot()` body forwards `currentBPM` to `deserializeFromBuffer()` (B4); `LittleFS.begin(true, "/littlefs", 10, "loopfs")` and all path strings prefixed `/littlefs/loops/` (Q3); all `char path[24]` → `char path[32]` (Q3) |
+| `src/setup/ToolPadRoles.h` | `ROLE_LOOP_SLOT_0..15` enum values (REPLACE in place — A3); `_wkLoopSlotPads[16]`, `_loopSlotPads` member; `begin()` extra param |
+| `src/setup/ToolPadRoles.cpp` | Slot label tables; LOOP sub-page POOL_OFFSETS_LOOP / TOTAL_POOL_LOOP / MAP_LOOP / REV_LOOP **REPLACED in place** with the 20-line / 26-entry versions (A3 fix — do NOT duplicate from Phase 3); `linearToPool/poolToLinear` slot mapping; `buildRoleMap` slot loop; `drawPool` 16 slot lines; `getRoleForPad/findPadWithRole/assignRole/clearRole/clearAllRoles/isPadOccupiedInContext/saveAll/run` slot extensions; `printRoleDescription` slot case; `poolItemLabel/poolLineSize` slot defaults; case 9 description text update |
 | `src/setup/SetupManager.h` | `begin()` extra `loopSlotPads` param |
 | `src/setup/SetupManager.cpp` | Forward `loopSlotPads` to `_toolRoles.begin()` |
 | `src/managers/NvsManager.h` | `loadAll()` extra `loopSlotPads` param |

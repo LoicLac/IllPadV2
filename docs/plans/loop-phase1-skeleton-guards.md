@@ -93,12 +93,18 @@ static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds
 
 ## Step 2 — KeyboardData.h: LoopPadStore + LoopPotStore
 
+> **AUDIT FIX (C2, 2026-04-06)**: the original plan defined LoopPadStore twice
+> (8 bytes in Step 2b with `LOOPPAD_VERSION 1`, then 32 bytes in Step 7c-2 with
+> `LOOPPAD_VERSION 2`). This was a consolidation trap for implementers. The
+> sub-steps below now define the **final** version (32 bytes, version 2) in
+> one pass. Step 7c-2 below has been emptied accordingly.
+
 ### 2a. Add NVS namespace defines (after line 344, ARP_PAD_NVS_NAMESPACE)
 
 ```cpp
 #define LOOP_PAD_NVS_NAMESPACE  "illpad_lpad"
 #define LOOPPAD_NVS_KEY         "pads"
-#define LOOPPAD_VERSION         1
+#define LOOPPAD_VERSION         2   // slotPads[] included from the start (see Step 2b)
 
 #define LOOPPOT_NVS_NAMESPACE   "illpad_lpot"
 // Keys: "loop_0" through "loop_7" (per bank, raw blob, no magic/version)
@@ -106,18 +112,37 @@ static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds
 
 ### 2b. Add LoopPadStore struct (after ArpPadStore, line ~380)
 
+This is the **final** struct layout — 32 bytes, version 2. It includes the
+`slotPads[16]` array required by the Phase 6 slot drive. Defining it at 32
+bytes from Phase 1 avoids a second NVS bump and a struct rewrite in Phase 6.
+
 ```cpp
 struct LoopPadStore {
-  uint16_t magic;
-  uint8_t  version;
+  uint16_t magic;                       // EEPROM_MAGIC
+  uint8_t  version;                     // LOOPPAD_VERSION (=2)
   uint8_t  reserved;
-  uint8_t  recPad;         // 0xFF = unassigned
+  uint8_t  recPad;                      // 0xFF = unassigned
   uint8_t  playStopPad;
   uint8_t  clearPad;
-  uint8_t  _pad;           // alignment to 8 bytes
+  uint8_t  _pad;                        // alignment to 8 bytes
+  uint8_t  slotPads[LOOP_SLOT_COUNT];   // 16 bytes — 0xFF = slot unassigned
+  uint8_t  _pad2[8];                    // padding to 32 bytes (room for future fields)
 };
+static_assert(sizeof(LoopPadStore) == 32, "LoopPadStore must be 32 bytes");
 static_assert(sizeof(LoopPadStore) <= NVS_BLOB_MAX_SIZE, "LoopPadStore exceeds NVS blob max");
 ```
+
+**Why 32 bytes total**: 8 bytes (control pads + alignment) + 16 bytes
+(slotPads) + 8 bytes (future room) = 32. Aligned, well under the 128 byte
+NVS limit. Per the Zero Migration Policy, any NVS blob that existed before
+this struct definition is silently rejected at first boot (wrong size) and
+defaults apply.
+
+> **Note**: `LOOP_SLOT_COUNT` is defined in `HardwareConfig.h` in Step 4b below.
+> Step 2b depends on Step 4b's constant being visible; in the actual codebase
+> both files are included transitively via `KeyboardData.h → HardwareConfig.h`,
+> so the order at implementation time can be either "Step 4b first, then
+> Step 2b" or "both in the same edit pass".
 
 ### 2c. Add LoopPotStore struct (after ArpPotStore, line ~117)
 
@@ -138,11 +163,17 @@ static_assert(sizeof(LoopPotStore) == 8, "LoopPotStore must be 8 bytes");
 
 ### 3a. Add validateLoopPadStore (after validateArpPadStore, line ~515)
 
+> **AUDIT NOTE (2026-04-06)**: consolidated with the `slotPads[]` validation
+> that was previously in Step 7c-3. Final form below.
+
 ```cpp
 inline void validateLoopPadStore(LoopPadStore& s) {
-  if (s.recPad != 0xFF && s.recPad >= NUM_KEYS)      s.recPad = 0xFF;
-  if (s.playStopPad != 0xFF && s.playStopPad >= NUM_KEYS) s.playStopPad = 0xFF;
-  if (s.clearPad != 0xFF && s.clearPad >= NUM_KEYS)    s.clearPad = 0xFF;
+  if (s.recPad != 0xFF && s.recPad >= NUM_KEYS)             s.recPad      = 0xFF;
+  if (s.playStopPad != 0xFF && s.playStopPad >= NUM_KEYS)   s.playStopPad = 0xFF;
+  if (s.clearPad != 0xFF && s.clearPad >= NUM_KEYS)         s.clearPad    = 0xFF;
+  for (uint8_t i = 0; i < LOOP_SLOT_COUNT; i++) {
+    if (s.slotPads[i] != 0xFF && s.slotPads[i] >= NUM_KEYS) s.slotPads[i] = 0xFF;
+  }
 }
 ```
 
@@ -193,6 +224,76 @@ static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 5, 6, 7, 8, 11 };
 ```
 
 **Note**: NVS_DESCRIPTOR_COUNT is computed via sizeof — no manual update needed.
+
+### 3e. Extend `NvsManager` with `_loadedLoopQuantize[NUM_BANKS]` + getter/setter
+
+> **AUDIT FIX (A1, 2026-04-06)**: Phase 2 Step 4a references an undeclared
+> `s_bankTypeStore.loopQuantize[i]` static, which would be a compile error.
+> Instead, follow the existing `_loadedQuantize[NUM_BANKS]` + `getLoadedQuantizeMode(i)`
+> pattern used for `ArpStartMode`, and add a parallel `_loadedLoopQuantize`
+> for `LoopQuantMode`. This step extends the Phase 1 scope to touch NvsManager.h/.cpp.
+
+**In `src/managers/NvsManager.h`** — public section (around line 42, right after
+`getLoadedQuantizeMode`) :
+
+```cpp
+  // Access loaded quantize modes (per-bank, for ArpEngine init at boot)
+  uint8_t getLoadedQuantizeMode(uint8_t bank) const;
+  void    setLoadedQuantizeMode(uint8_t bank, uint8_t mode);
+
+  // Access loaded LOOP quantize modes (per-bank, for LoopEngine init at boot)
+  uint8_t getLoadedLoopQuantizeMode(uint8_t bank) const;            // <-- ADD
+  void    setLoadedLoopQuantizeMode(uint8_t bank, uint8_t mode);    // <-- ADD
+```
+
+**In `src/managers/NvsManager.h`** — private section (around line 102, right after
+`_loadedQuantize[NUM_BANKS]`) :
+
+```cpp
+  uint8_t     _loadedQuantize[NUM_BANKS];      // ArpStartMode per bank (loaded at boot)
+  uint8_t     _loadedLoopQuantize[NUM_BANKS];  // LoopQuantMode per bank (loaded at boot)  <-- ADD
+```
+
+**In `src/managers/NvsManager.cpp`** — constructor (search for the `memset(_loadedQuantize...)`
+line in the constructor body, around the field-init block) :
+
+```cpp
+  memset(_loadedQuantize, DEFAULT_ARP_START_MODE, NUM_BANKS);
+  memset(_loadedLoopQuantize, DEFAULT_LOOP_QUANT_MODE, NUM_BANKS);   // <-- ADD
+```
+
+**In `src/managers/NvsManager.cpp`** — inside `loadAll()`, in the BankTypeStore load
+section (look for `_loadedQuantize[i] = bts.quantize[i];`) :
+
+```cpp
+      for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        banks[i].type = (BankType)bts.types[i];
+        _loadedQuantize[i]     = bts.quantize[i];
+        _loadedLoopQuantize[i] = bts.loopQuantize[i];   // <-- ADD
+      }
+```
+
+> **Note**: the exact body of the BankTypeStore load block in `loadAll()` uses
+> `validateBankTypeStore(bts)` before the copy. Place the new line inside the
+> same `for` loop, immediately after `_loadedQuantize[i] = bts.quantize[i]`.
+
+**In `src/managers/NvsManager.cpp`** — getter/setter (near the existing
+`getLoadedQuantizeMode` / `setLoadedQuantizeMode` definitions, around line 783) :
+
+```cpp
+uint8_t NvsManager::getLoadedLoopQuantizeMode(uint8_t bank) const {
+  if (bank >= NUM_BANKS) return DEFAULT_LOOP_QUANT_MODE;
+  return _loadedLoopQuantize[bank];
+}
+
+void NvsManager::setLoadedLoopQuantizeMode(uint8_t bank, uint8_t mode) {
+  if (bank < NUM_BANKS) _loadedLoopQuantize[bank] = mode;
+}
+```
+
+**Phase 2 Step 4a** will then use `s_nvsManager.getLoadedLoopQuantizeMode(i)`
+instead of the bogus `s_bankTypeStore.loopQuantize[i]`. See Phase 2 plan for
+the corresponding fix.
 
 ---
 
@@ -261,26 +362,65 @@ static constexpr uint8_t  LED_WAIT_QUANT_INTENSITY = 90;   // blink "on" intensi
 
 ---
 
-## Step 4c — LedController.h: CONFIRM_LOOP_REC + showClearRamp stub
+## Step 4c — LedController.h/.cpp: CONFIRM_LOOP_REC + showClearRamp stub
 
 Phase 2 `handleLoopControls()` calls `triggerConfirm(CONFIRM_LOOP_REC)` and
 `showClearRamp()`. Both must exist for Phase 2 to compile. The real rendering
 logic comes in Phase 4 — here we add the minimal skeleton.
 
-### 4c-1. Add CONFIRM_LOOP_REC to ConfirmType enum (line 27, after CONFIRM_OCTAVE)
+> **AUDIT FIX (C1, 2026-04-06)**: the original plan only added the enum
+> value in Phase 1 but left the `renderConfirmation()` expiry case for
+> Phase 4. Between Phase 2 (which triggers the confirm) and Phase 4, the
+> `default:` branch in `renderConfirmation` silently clears the confirm
+> at the very first frame, making the feedback "disappear" during
+> intermediate testing. Fix : add the expiry case in Phase 1 (without
+> rendering). Phase 4 will add the actual overlay rendering.
+
+### 4c-1. Add CONFIRM_LOOP_REC to ConfirmType enum (LedController.h line 27, after CONFIRM_OCTAVE)
 
 ```cpp
   CONFIRM_OCTAVE       = 9,
   CONFIRM_LOOP_REC     = 10,  // LOOP record/overdub started — rendering in Phase 4
 ```
 
-### 4c-2. Add showClearRamp stub (LedController.h, public section)
+### 4c-2. Add expiry case in `renderConfirmation()` (LedController.cpp, in the switch)
+
+In `src/core/LedController.cpp`, locate `renderConfirmation()` (around line 357)
+and find the switch statement that handles per-type expiry. Add the new case
+**before** the final `default:` branch :
+
+```cpp
+    case CONFIRM_OCTAVE:
+      if (elapsed >= _octaveDurationMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+
+    case CONFIRM_LOOP_REC:                                          // <-- ADD
+      if (elapsed >= 200) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+
+    default:
+      _confirmType = CONFIRM_NONE;
+      return false;
+```
+
+**Why 200 ms**: matches the duration that Phase 4 Step 12a will use for
+rendering. Keeping the value in sync at Phase 1 prevents a mismatch when
+Phase 4 adds the overlay. 200 ms is also consistent with other instant
+confirmations (`CONFIRM_PLAY`, `CONFIRM_STOP`).
+
+**No rendering yet**: `renderNormalDisplay()` is NOT patched in Phase 1.
+Between Phase 2 and Phase 4, `triggerConfirm(CONFIRM_LOOP_REC)` will
+set `_confirmType = 10` and live for 200 ms without any visible overlay.
+Phase 4 Step 12b will add the visual rendering (double red blink on the
+current bank LED).
+
+### 4c-3. Add showClearRamp stub (LedController.h, public section)
 
 ```cpp
   void showClearRamp(uint8_t pct) { (void)pct; }  // Stub — Phase 4 adds real ramp rendering
 ```
 
-### 4c-3. Forward-declare LoopEngine (LedController.h, near top)
+### 4c-4. Forward-declare LoopEngine (LedController.h, near top)
 
 ```cpp
 class LoopEngine;  // Needed by Phase 4 renderBankLoop, declared early for clean includes
@@ -384,24 +524,50 @@ Find the call to `s_bankManager.begin(...)` in main.cpp setup() and add `&s_tran
 
 After the opening brace of `processScalePads()`, before the root pads loop:
 
+> **AUDIT FIX (B6, 2026-04-06)**: the original plan synced only 15
+> `_lastScaleKeys[]` entries (7 root + 7 mode + 1 chrom). Since the early
+> return skips the ARPEG-guarded hold/octave sections entirely, their
+> entries were left stale. On a subsequent LOOP → ARPEG bank switch with
+> the hold pad or an octave pad held, the first ARPEG frame would see a
+> phantom rising edge and toggle the hold or trigger an octave change.
+> Fix : also sync hold + octave entries in the early return.
+
 ```cpp
 void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot) {
 
   // LOOP banks bypass scale resolution — scale pads are no-op.
-  // Still sync _lastScaleKeys to prevent phantom edges on bank switch.
+  // Still sync _lastScaleKeys to prevent phantom edges on subsequent
+  // LOOP → ARPEG bank switch (scale, hold, and octave pads all matter).
   if (slot.type == BANK_LOOP) {
+    // Root / mode / chromatic
     for (uint8_t r = 0; r < 7; r++) {
       if (_rootPads[r] < NUM_KEYS) _lastScaleKeys[_rootPads[r]] = keyIsPressed[_rootPads[r]];
       if (_modePads[r] < NUM_KEYS) _lastScaleKeys[_modePads[r]] = keyIsPressed[_modePads[r]];
     }
     if (_chromaticPad < NUM_KEYS) _lastScaleKeys[_chromaticPad] = keyIsPressed[_chromaticPad];
-    return;  // Skip to hold/octave which are already BANK_ARPEG-guarded
+    // Hold + octave (ARPEG-only roles, same phantom-edge risk on switch)
+    if (_holdPad < NUM_KEYS) _lastScaleKeys[_holdPad] = keyIsPressed[_holdPad];
+    for (uint8_t o = 0; o < 4; o++) {
+      if (_octavePads[o] < NUM_KEYS) _lastScaleKeys[_octavePads[o]] = keyIsPressed[_octavePads[o]];
+    }
+    return;  // Skip root/mode/chrom processing AND hold/octave (already ARPEG-guarded below)
   }
 
   // --- Root pads (0-6) ---  (existing code continues unchanged)
 ```
 
-**Why early return, not a wrapper if?** The hold pad (line 190) and octave pads (line 207) are already guarded by `slot.type == BANK_ARPEG`. An early return for LOOP skips root/mode/chromatic AND hold/octave — which is correct because LOOP has no scale, no hold, no octave.
+**Why early return, not a wrapper if?** The hold pad (ScaleManager.cpp line 190) and octave
+pads (line 207) are already guarded by `slot.type == BANK_ARPEG`. An early return for LOOP
+skips root/mode/chromatic AND hold/octave processing — which is correct because LOOP has no
+scale, no hold, no octave. The manual sync of `_lastScaleKeys[]` for hold and octave pads
+in the early return replaces what the skipped ARPEG-guarded sections would have done
+(sync at the end of each section).
+
+**Related pre-existing issue (not in scope)**: the same phantom-edge bug technically exists
+for NORMAL → ARPEG transitions with hold or octave pads held. The `BANK_ARPEG` guard on
+those sections means `_lastScaleKeys[holdPad/octavePads[]]` is never synced on NORMAL
+banks either. Phase 1 only addresses the LOOP → ARPEG case; the NORMAL → ARPEG case
+remains pre-existing and out of scope.
 
 ---
 
@@ -473,46 +639,17 @@ static constexpr RGBW COL_LOOP_SLOT_DELETE = {255,   0,   0,   0};  // Delete OK
 static constexpr uint8_t LOOP_SLOT_COUNT = 16;
 ```
 
-### 7c-2. Bump `LOOPPAD_VERSION` to 2 and extend `LoopPadStore` with `slotPads[16]`
+### ~~7c-2~~ — CONSOLIDATED INTO Step 2b (AUDIT 2026-04-06)
 
-In `KeyboardData.h`, locate the `LoopPadStore` definition added in Step 2b and replace it:
+`LoopPadStore` is now defined in its final form (32 bytes, version 2) directly
+in Step 2b above. No rewrite needed here — Step 2b is the single source of
+truth for this struct. This sub-step is intentionally left empty for
+traceability.
 
-```cpp
-#define LOOP_PAD_NVS_NAMESPACE  "illpad_lpad"
-#define LOOPPAD_NVS_KEY         "pads"
-#define LOOPPAD_VERSION         2   // was 1 — bumped for slotPads[] addition
+### ~~7c-3~~ — CONSOLIDATED INTO Step 3a (AUDIT 2026-04-06)
 
-struct LoopPadStore {
-  uint16_t magic;          // EEPROM_MAGIC
-  uint8_t  version;        // LOOPPAD_VERSION (=2)
-  uint8_t  reserved;
-  uint8_t  recPad;         // 0xFF = unassigned
-  uint8_t  playStopPad;
-  uint8_t  clearPad;
-  uint8_t  _pad;           // alignment to 8 bytes
-  uint8_t  slotPads[LOOP_SLOT_COUNT];   // 16 bytes — 0xFF = slot unassigned
-  uint8_t  _pad2[8];                    // padding to 32 bytes (room for future fields)
-};
-static_assert(sizeof(LoopPadStore) == 32, "LoopPadStore must be 32 bytes");
-static_assert(sizeof(LoopPadStore) <= NVS_BLOB_MAX_SIZE, "LoopPadStore exceeds NVS blob max");
-```
-
-**Why 32 bytes total**: 8 bytes (existing) + 16 bytes (slotPads) + 8 bytes (future room) = 32. Aligned, well under the 128 byte NVS limit. Per the Zero Migration Policy, the size mismatch (12 → 32) is silently rejected at first boot and defaults apply.
-
-### 7c-3. Extend `validateLoopPadStore` for slotPads
-
-Replace the function added in Step 3a with:
-
-```cpp
-inline void validateLoopPadStore(LoopPadStore& s) {
-  if (s.recPad != 0xFF && s.recPad >= NUM_KEYS)             s.recPad      = 0xFF;
-  if (s.playStopPad != 0xFF && s.playStopPad >= NUM_KEYS)   s.playStopPad = 0xFF;
-  if (s.clearPad != 0xFF && s.clearPad >= NUM_KEYS)         s.clearPad    = 0xFF;
-  for (uint8_t i = 0; i < LOOP_SLOT_COUNT; i++) {
-    if (s.slotPads[i] != 0xFF && s.slotPads[i] >= NUM_KEYS) s.slotPads[i] = 0xFF;
-  }
-}
-```
+The full `validateLoopPadStore` (with `slotPads[]` validation) should be
+written directly in Step 3a below. See Step 3a for the final function.
 
 ### 7c-4. PadRoleCode enum extensions (deferred to Phase 3)
 
@@ -572,9 +709,12 @@ Expected: **clean build, zero warnings** related to LOOP. Possible warning about
 | `src/core/HardwareConfig.h` | LoopQuantMode enum, COL_LOOP_FREE/QUANTIZED/REC/OVD/DIM, LED_FG/BG_LOOP_* intensities, LED_TICK_BOOST_*, LED_TICK_DUR_*, LED_WAIT_QUANT_*, **LOOP_SLOT_LONG_PRESS_MS / LOAD_MIN_MS / RAMP_DURATION_MS, COL_LOOP_SLOT_LOAD/SAVE/REFUSE/DELETE, LOOP_SLOT_COUNT** |
 | `src/managers/BankManager.h` | MidiTransport forward-declare, _transport member, begin() signature |
 | `src/managers/BankManager.cpp` | begin() body, switchToBank() LOOP guards (stub), debug print 3-way |
-| `src/managers/ScaleManager.cpp` | processScalePads() LOOP early return with _lastScaleKeys sync |
+| `src/managers/ScaleManager.cpp` | processScalePads() LOOP early return with _lastScaleKeys sync (root/mode/chrom + hold + octave) |
+| `src/managers/NvsManager.h` | `_loadedLoopQuantize[NUM_BANKS]` member + `getLoadedLoopQuantizeMode()` / `setLoadedLoopQuantizeMode()` (Step 3e, A1 fix) |
+| `src/managers/NvsManager.cpp` | Constructor memset, loadAll() copies `bts.loopQuantize[i]`, getter/setter bodies (Step 3e, A1 fix) |
 | `src/main.cpp` | begin() call updated with &s_transport |
 | `src/core/LedController.h` | CONFIRM_LOOP_REC enum value, showClearRamp stub, LoopEngine forward-declare |
+| `src/core/LedController.cpp` | CONFIRM_LOOP_REC expiry case in renderConfirmation (C1 fix, Step 4c-1 below) |
 
 ## Files NOT Modified
 
@@ -605,6 +745,46 @@ Le size mismatch (36→52 octets) suffit à rejeter l'ancien blob. Pas de bump n
 
 ### GAP #5 — main.cpp init BankSlot snippet manquant (**FIXED above**)
 Le code actuel initialise chaque champ explicitement (pas de memset). Le `loopEngine = nullptr` doit être ajouté dans la boucle.
+
+---
+
+## Audit Notes (2026-04-06) — deep review cycle
+
+### C2 — LoopPadStore double-definition (**FIXED above**)
+Phase 1 définissait `LoopPadStore` deux fois : 8 bytes en Step 2b (version 1),
+puis 32 bytes en Step 7c-2 (version 2). Piège pour l'implémenteur qui lit
+linéairement. **Fix** : Step 2b contient directement la version finale à
+32 bytes, version 2. Step 7c-2 et 7c-3 sont émptiés (consolidated markers
+conservés pour traçabilité). Step 3a contient la validation complète avec
+`slotPads[]`. Plus de re-définition, un seul bloc de vérité.
+
+### A1 — `s_bankTypeStore` undeclared in Phase 2 (**FIXED in Step 3e above**)
+Phase 2 Step 4a référençait `s_bankTypeStore.loopQuantize[i]` qui n'existe
+nulle part comme static global — compile error garanti. **Fix** : nouveau
+Step 3e qui étend `NvsManager` avec `_loadedLoopQuantize[NUM_BANKS]` +
+`getLoadedLoopQuantizeMode(bank)`, suivant exactement le pattern existant
+de `_loadedQuantize` + `getLoadedQuantizeMode` pour `ArpStartMode`. Phase 2
+Step 4a utilisera `s_nvsManager.getLoadedLoopQuantizeMode(i)` à la place.
+Cette extension élargit le scope de Phase 1 vers `NvsManager.h/.cpp`, noté
+dans la table Files Modified.
+
+### C1 — CONFIRM_LOOP_REC silent clear between Phase 2 and Phase 4 (**FIXED in Step 4c-2 above**)
+Phase 1 ajoutait la valeur enum `CONFIRM_LOOP_REC = 10` mais ne touchait
+pas `renderConfirmation()`. Le `default:` branch existant clear
+silencieusement tout confirm non-connu au premier frame. Entre Phase 2
+(qui trigger) et Phase 4 (qui ajoute le rendering + expiry), le confirm
+était inaudible/invisible. **Fix** : ajouter le case d'expiry dans
+Phase 1 Step 4c-2 (200 ms, sans rendu). Le rendu overlay reste en Phase 4.
+Permet aux tests intermédiaires Phase 2/3 de ne pas être surpris.
+
+### B6 — `_lastScaleKeys` sync incomplete pour hold/octave pads (**FIXED in Step 6a above**)
+L'early return LOOP dans `processScalePads` ne synchronisait que les 15
+pads scale (root + mode + chrom), laissant les pads hold et octave non
+synchronisés. Au switch LOOP → ARPEG avec hold ou octave tenu, phantom
+edge possible. **Fix** : sync explicit de `_lastScaleKeys[holdPad]` et
+`_lastScaleKeys[octavePads[0..3]]` dans l'early return. 5 lignes
+supplémentaires. Note : le même problème latent existe pour NORMAL →
+ARPEG (pré-existant, hors scope).
 
 ### OBSERVATION #6 — LED intensités LOOP en compile-time
 Les `LED_FG_LOOP_*` sont des `constexpr` dans HardwareConfig.h. Les intensités ARPEG équivalentes sont dans LedSettingsStore (runtime, configurables via Tool 7). Cette incohérence est acceptée en Phase 1 mais devra être résolue quand Tool 7 intègre les paramètres LOOP (future phase).

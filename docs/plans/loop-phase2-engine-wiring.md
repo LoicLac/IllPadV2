@@ -57,6 +57,13 @@ void recordNoteOff(uint8_t padIndex);
 bool noteRefIncrement(uint8_t note);
 bool noteRefDecrement(uint8_t note);
 
+// Live-press tracking (per-pad, for idempotent cleanup — AUDIT FIX B1 2026-04-06)
+// processLoopMode calls setLiveNote() at rising edge (after noteRefIncrement),
+// releaseLivePad() at falling edge and at bank-hold release sweep. releaseLivePad
+// is idempotent: no-op if the pad has no live note attached.
+void setLiveNote(uint8_t padIndex, uint8_t note);
+void releaseLivePad(uint8_t padIndex, MidiTransport& transport);
+
 // Note mapping
 uint8_t padToNote(uint8_t padIndex) const;
 
@@ -147,6 +154,7 @@ with an unshuffled noteOff would shorten the gate — audible on sustained sound
 - `LoopEvent _events[MAX_LOOP_EVENTS]` — 8 KB (`MAX_LOOP_EVENTS = 1024`)
 - `LoopEvent _overdubBuf[MAX_OVERDUB_EVENTS]` — 1 KB (`MAX_OVERDUB_EVENTS = 128`)
 - `uint8_t _noteRefCount[128]` — per MIDI note
+- `uint8_t _liveNote[NUM_KEYS]` — **per-pad** live-press tracking (mirror of MidiEngine's `_lastResolvedNote[]`). `0xFF` = no live note. Set by `setLiveNote()` at rising edge, cleared by `releaseLivePad()`. Enables idempotent cleanup at hold-release and bank-switch without depending on `s_lastKeys` edge detection. Size 48 bytes per engine × MAX_LOOP_BANKS(2) = 96 bytes SRAM. **AUDIT FIX B1 2026-04-06.**
 - `PendingNote _pending[MAX_PENDING]` — **48 entries** (`MAX_PENDING = 48`) — handles both noteOn and noteOff events simultaneously. Sized generously: 48 × 8 bytes = 384 bytes per engine × `MAX_LOOP_BANKS`(2) = 768 bytes SRAM total. Budget philosophy: prefer safe over economical (see CLAUDE.md Budget Philosophy).
 - `bool _overdubActivePads[48]` — tracks which pads had a `recordNoteOn` during the current overdub session. Used by `flushHeldPadsToOverdub()` to only inject noteOff for pads actually recorded during the overdub, not for pads held since before. Reset in `startOverdub()`.
 - `PendingAction _pendingAction` — set by public methods when quantize is BEAT/BAR, executed in `tick()` at boundary
@@ -252,6 +260,7 @@ void LoopEngine::begin(uint8_t channel) {
     _padOrder       = nullptr;
     memset(_noteRefCount, 0, sizeof(_noteRefCount));
     memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
+    memset(_liveNote, 0xFF, sizeof(_liveNote));   // B1: no live notes at init
     for (uint8_t i = 0; i < MAX_PENDING; i++) _pending[i].active = false;
 }
 
@@ -270,6 +279,7 @@ void LoopEngine::clear(MidiTransport& transport) {
     _lastBeatIdx    = 0;
     _lastRecordBeatTick = 0xFFFFFFFF;
     memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
+    memset(_liveNote, 0xFF, sizeof(_liveNote));   // B1: any outstanding live notes are now gone
 }
 
 void LoopEngine::setLoopQuantizeMode(uint8_t mode) {
@@ -411,6 +421,12 @@ void LoopEngine::doStopRecording(const bool* keyIsPressed, const uint8_t* padOrd
     // 3. Bar-snap: round recorded duration to nearest integer bar count
     uint32_t barDurationUs = (uint32_t)(4.0f * 60000000.0f / _recordBpm);
     uint32_t recordedDurationUs = closeUs - _recordStartUs;
+    // AUDIT FIX B7 2026-04-06: defensive floor at 1 ms to prevent division
+    // by zero in the scale computation below. In normal operation, the REC
+    // pad rising-edge + falling-edge sequence guarantees at least a few ms,
+    // but a micros() wraparound or single-frame tap could theoretically
+    // produce a zero duration.
+    if (recordedDurationUs < 1000) recordedDurationUs = 1000;
     uint16_t bars = (recordedDurationUs + barDurationUs / 2) / barDurationUs;
     if (bars == 0) bars = 1;
     if (bars > 64) bars = 64;
@@ -692,21 +708,28 @@ void LoopEngine::flushActiveNotes(MidiTransport& transport, bool hard) {
 
 #### `recordNoteOn` / `recordNoteOff` — capture input during RECORDING or OVERDUBBING
 
+> **AUDIT FIX (B2, 2026-04-06)**: the original OVERDUBBING branch computed
+> `elapsedUs = (now - _playStartUs) % liveDurationUs` where `liveDurationUs`
+> was actually calculated from `_recordBpm` (misleading variable name) —
+> mixing LIVE and RECORD timebases. With a tempo change between recording
+> and playback, events ended up misaligned by tens of ms. **Fix**: read
+> `_lastPositionUs` (already in RECORD timebase, written by `tick()` at the
+> end of each frame). Latency ≤ 1 frame (~1 ms), musically imperceptible.
+
 ```cpp
 void LoopEngine::recordNoteOn(uint8_t padIndex, uint8_t velocity) {
     if (padIndex >= 48) return;
-    uint32_t offsetUs;
     if (_state == RECORDING) {
         if (_eventCount >= MAX_LOOP_EVENTS) return;
-        offsetUs = micros() - _recordStartUs;
+        uint32_t offsetUs = micros() - _recordStartUs;   // real-time during RECORDING
         _events[_eventCount++] = { offsetUs, padIndex, velocity, {0, 0} };
     } else if (_state == OVERDUBBING) {
         if (_overdubCount >= MAX_OVERDUB_EVENTS) return;
-        // Compute current loop position (recording timebase)
-        uint32_t now = micros();
-        uint32_t liveDurationUs = calcLoopDurationUs(_recordBpm);  // same timebase as events
-        uint32_t elapsedUs  = (now - _playStartUs) % liveDurationUs;
-        offsetUs = elapsedUs;  // loop already normalized to recording timebase
+        // B2 fix: use _lastPositionUs (written by tick() each frame) which is
+        // already in RECORD timebase. This is the same value tick() uses for
+        // the cursor scan, so overdub events are perfectly aligned with
+        // the main _events[] timebase regardless of live BPM divergence.
+        uint32_t offsetUs = _lastPositionUs;
         _overdubBuf[_overdubCount++] = { offsetUs, padIndex, velocity, {0, 0} };
         _overdubActivePads[padIndex] = true;
     }
@@ -714,17 +737,14 @@ void LoopEngine::recordNoteOn(uint8_t padIndex, uint8_t velocity) {
 
 void LoopEngine::recordNoteOff(uint8_t padIndex) {
     if (padIndex >= 48) return;
-    uint32_t offsetUs;
     if (_state == RECORDING) {
         if (_eventCount >= MAX_LOOP_EVENTS) return;
-        offsetUs = micros() - _recordStartUs;
+        uint32_t offsetUs = micros() - _recordStartUs;
         _events[_eventCount++] = { offsetUs, padIndex, 0, {0, 0} };
     } else if (_state == OVERDUBBING) {
         if (_overdubCount >= MAX_OVERDUB_EVENTS) return;
-        uint32_t now = micros();
-        uint32_t liveDurationUs = calcLoopDurationUs(_recordBpm);
-        uint32_t elapsedUs  = (now - _playStartUs) % liveDurationUs;
-        offsetUs = elapsedUs;
+        // B2 fix: use _lastPositionUs (see recordNoteOn above).
+        uint32_t offsetUs = _lastPositionUs;
         _overdubBuf[_overdubCount++] = { offsetUs, padIndex, 0, {0, 0} };
         // NOTE: We do NOT clear _overdubActivePads[padIndex] here. The bitmask
         // tracks "was this pad recordNoteOn'd during this overdub session", used
@@ -735,6 +755,14 @@ void LoopEngine::recordNoteOff(uint8_t padIndex) {
     }
 }
 ```
+
+**Pipeline ordering note**: in the main loop (see Phase 2 Step 8a-b),
+`handlePadInput` → `processLoopMode` → `recordNoteOn/Off` runs BEFORE
+the per-bank `loopEngine->tick()` loop. So within a given frame N,
+`recordNoteOn` reads `_lastPositionUs` written by tick() at the end of
+frame N-1. The 1-frame latency (~1 ms) is below the musical threshold
+and keeps the code simple (no need to pass `currentBPM` through the
+recording call chain).
 
 #### `sortEvents` — insertion sort, in place
 
@@ -792,19 +820,67 @@ void LoopEngine::mergeOverdub() {
 #### `flushLiveNotes` — bank switch cleanup
 
 ```cpp
-// Called by BankManager on bank switch, outgoing bank.
-// Sends CC123 (All Notes Off) on this engine's channel and zeroes refcounts.
-// Does NOT touch the pending queue — the engine keeps running in background
-// and its pending events will fire on the correct channel (still _channel).
+// Called by BankManager on bank switch (outgoing bank) and by midiPanic().
+// Sends CC123 (All Notes Off) on this engine's channel and zeroes refcounts +
+// live-note tracking. Does NOT touch the pending queue — the engine keeps
+// running in background and its pending events will fire on the correct
+// channel (still _channel).
 void LoopEngine::flushLiveNotes(MidiTransport& transport, uint8_t channel) {
     (void)channel;  // signature kept for symmetry; we always use our own _channel
     transport.sendAllNotesOff(_channel);
     memset(_noteRefCount, 0, sizeof(_noteRefCount));
+    memset(_liveNote, 0xFF, sizeof(_liveNote));   // B1: clear live-press tracking
     // Pending queue NOT cleared — trailing events will fire normally on _channel.
     // New live presses on the incoming bank (different channel) won't collide
     // because refcount is per-engine and only manages this engine's channel.
 }
 ```
+
+#### `setLiveNote` / `releaseLivePad` — per-pad live-press tracking (AUDIT FIX B1 2026-04-06)
+
+```cpp
+// Called by processLoopMode at rising edge, AFTER noteRefIncrement has sent
+// the MIDI noteOn. Tracks which MIDI note this pad currently holds live so
+// that releaseLivePad() can clean up later without re-resolving padToNote().
+// Since padOrder is runtime-immutable (setup tools are boot-only), the stored
+// note remains valid for the entire live-press lifetime.
+void LoopEngine::setLiveNote(uint8_t padIndex, uint8_t note) {
+    if (padIndex >= NUM_KEYS) return;
+    _liveNote[padIndex] = note;
+}
+
+// Idempotent per-pad noteOff: releases whatever live note was attached to
+// this pad. No-op if the pad has no live note (0xFF). Callers:
+//   1. processLoopMode at falling edge (replaces direct noteRefDecrement)
+//   2. handleLeftReleaseCleanup sweep on LOOP banks (replaces the obsolete
+//      s_lastKeys edge check — idempotent sweep pattern, parallel to
+//      MidiEngine::noteOff() for NORMAL banks)
+// Clears _liveNote[padIndex] BEFORE calling noteRefDecrement to prevent
+// re-entry if noteRefDecrement somehow triggers a callback (defensive).
+void LoopEngine::releaseLivePad(uint8_t padIndex, MidiTransport& transport) {
+    if (padIndex >= NUM_KEYS) return;
+    uint8_t note = _liveNote[padIndex];
+    if (note == 0xFF) return;                         // already released — idempotent no-op
+    _liveNote[padIndex] = 0xFF;                       // clear first (re-entry safety)
+    if (noteRefDecrement(note)) {
+        transport.sendNoteOn(_channel, note, 0);      // velocity 0 = noteOff
+    }
+}
+```
+
+**Why this pattern**: LoopEngine's `_noteRefCount[128]` is indexed by MIDI
+note, not by pad. Without `_liveNote[NUM_KEYS]`, a sweep that wants to
+release "whatever this pad was playing" has no way to know which note to
+decrement. Mirror of MidiEngine's `_lastResolvedNote[NUM_KEYS]` pattern,
+which enables the same idempotent sweep in `handleLeftReleaseCleanup`
+for NORMAL banks. Safe because `padOrder` (and therefore `padToNote(i)`)
+is runtime-immutable — setup tools require reboot to take effect.
+
+**Side effects list** (places where `_liveNote[]` must be cleared):
+- `begin()` — init to all 0xFF
+- `clear()` — any outstanding live notes are gone, reset
+- `flushLiveNotes()` — bank switch / panic cleanup, reset
+- `releaseLivePad()` — per-pad clear during normal processing
 
 #### Getters
 
@@ -909,17 +985,27 @@ memset(s_loopSlotPads, 0xFF, sizeof(s_loopSlotPads));
 
 ### 4a. Assign LoopEngines to LOOP banks (after ArpEngine assignment, line ~367)
 
+> **AUDIT FIX (A1, 2026-04-06)**: the original snippet referenced
+> `s_bankTypeStore.loopQuantize[i]` but `s_bankTypeStore` is not declared
+> anywhere in main.cpp (neither in the existing statics nor added by any
+> plan step). Compile error. **Fix**: use `s_nvsManager.getLoadedLoopQuantizeMode(i)`
+> via the NvsManager helper added in Phase 1 Step 3e (mirror of
+> `getLoadedQuantizeMode(i)` that already exists for `ArpStartMode`).
+
 ```cpp
 // --- Assign LoopEngines to LOOP banks ---
-// Reads BankTypeStore.loopQuantize[] (loaded by NvsManager::loadAll()) and
-// pushes it into each engine. If loadAll() was never called or the store is
-// fresh, loopQuantize[] is all zeros = LOOP_QUANT_FREE (default).
+// Reads the loop quantize mode from NvsManager (populated by loadAll() from
+// BankTypeStore.loopQuantize[]). If loadAll() never ran or the store was
+// fresh, the internal _loadedLoopQuantize[] defaults to LOOP_QUANT_FREE
+// (set by the NvsManager constructor — see Phase 1 Step 3e).
 uint8_t loopIdx = 0;
 for (uint8_t i = 0; i < NUM_BANKS && loopIdx < MAX_LOOP_BANKS; i++) {
     if (s_banks[i].type == BANK_LOOP) {
         s_loopEngines[loopIdx].begin(i);
         s_loopEngines[loopIdx].setPadOrder(s_padOrder);
-        s_loopEngines[loopIdx].setLoopQuantizeMode(s_bankTypeStore.loopQuantize[i]);
+        s_loopEngines[loopIdx].setLoopQuantizeMode(
+            s_nvsManager.getLoadedLoopQuantizeMode(i)
+        );
         s_banks[i].loopEngine = &s_loopEngines[loopIdx];
         loopIdx++;
     }
@@ -955,6 +1041,13 @@ Pad input dispatch for LOOP banks. Handles live play via refcount (so live press
 does not retrigger a loop note that is already sounding) and routes presses
 into the engine's record buffer when state is RECORDING or OVERDUBBING.
 
+> **AUDIT FIX (B1, 2026-04-06)**: original plan used direct
+> `noteRefIncrement` / `noteRefDecrement` + manual `sendNoteOn` calls.
+> Replaced with `setLiveNote()` (after refcount increment) and
+> `releaseLivePad()` (which handles refcount decrement + MIDI noteOff
+> internally). The release path becomes symmetric with the handleLeftReleaseCleanup
+> sweep, which now uses the same idempotent `releaseLivePad()`.
+
 ```cpp
 static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, uint32_t now) {
     LoopEngine* eng = slot.loopEngine;
@@ -971,7 +1064,7 @@ static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, ui
 
         if (pressed && !wasPressed) {
             uint8_t note = eng->padToNote(p);
-            if (note == 0xFF) continue;  // unmapped pad (BUG #4 fix)
+            if (note == 0xFF) continue;  // unmapped pad
             uint8_t vel  = slot.baseVelocity;
             if (slot.velocityVariation > 0) {
                 int16_t range = (int16_t)slot.velocityVariation * 127 / 200;
@@ -982,16 +1075,18 @@ static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, ui
             if (eng->noteRefIncrement(note)) {
                 s_transport.sendNoteOn(slot.channel, note, vel);  // (channel, note, vel)
             }
-            // Record during RECORDING or OVERDUBBING (BUG #2 fix — was OVERDUBBING only)
+            // B1 fix: track per-pad live note for idempotent cleanup at hold-release
+            // and bank-switch sweeps (mirrors MidiEngine._lastResolvedNote pattern).
+            eng->setLiveNote(p, note);
+            // Record during RECORDING or OVERDUBBING
             if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
                 eng->recordNoteOn(p, vel);
             }
         } else if (!pressed && wasPressed) {
-            uint8_t note = eng->padToNote(p);
-            if (note == 0xFF) continue;  // unmapped pad
-            if (eng->noteRefDecrement(note)) {
-                s_transport.sendNoteOn(slot.channel, note, 0);  // velocity 0 = noteOff
-            }
+            // B1 fix: releaseLivePad is idempotent — handles refcount decrement
+            // AND MIDI noteOff internally AND clears _liveNote[p]. No manual
+            // padToNote / noteRefDecrement / sendNoteOn needed here.
+            eng->releaseLivePad(p, s_transport);
             if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
                 eng->recordNoteOff(p);
             }
@@ -1002,9 +1097,10 @@ static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, ui
 
 **Key differences from processNormalMode**:
 - LOOP bypasses MidiEngine — uses `s_transport.sendNoteOn()` directly (no ScaleResolver)
-- `sendNoteOn(channel, note, 0)` for noteOff (MidiTransport has no sendNoteOff method)
+- Press path: manual refcount + sendNoteOn + `setLiveNote` for tracking
+- Release path: single call to `releaseLivePad()` — mirror of `MidiEngine::noteOff()`
 - Refcount prevents duplicate noteOn/premature noteOff when live play coincides with loop playback
-- `padToNote()` returns 0xFF for unmapped pads — must skip
+- `padToNote()` returns 0xFF for unmapped pads — must skip at press time (release path handles this internally via `_liveNote[p] == 0xFF`)
 
 ---
 
@@ -1293,7 +1389,17 @@ Phase 1 Step 5d left a commented stub. Replace with the real guard:
 
 When left button releases on a LOOP bank, pads pressed before the hold and
 released during it have their noteOff edge missed (processLoopMode is gated
-by `!isHolding()`). Without cleanup, these notes stay stuck.
+by `!isHolding()`). Without cleanup, these notes stay stuck in `_noteRefCount`.
+
+> **AUDIT FIX (B1, 2026-04-06)**: the original plan used
+> `s_lastKeys[i] && !state.keyIsPressed[i]` (edge check), but `s_lastKeys`
+> is synchronized every frame at main.cpp:967-969 including during hold,
+> so by the time the sweep runs, edges have been absorbed and no pad matches
+> the condition. Refcount is stuck at >0, loop effectively silent on that
+> note. **Fix**: use the idempotent `releaseLivePad()` pattern — sweep every
+> unpressed pad, let LoopEngine decide if there's anything to release based
+> on its per-pad `_liveNote[]` tracking. This mirrors the NORMAL sweep which
+> uses the idempotent `MidiEngine::noteOff(i)` (via `_lastResolvedNote[]`).
 
 Find the existing switch in `handleLeftReleaseCleanup()` and add after the
 BANK_ARPEG case:
@@ -1301,17 +1407,29 @@ BANK_ARPEG case:
 ```cpp
   case BANK_LOOP:
     if (slot.loopEngine) {
+      // Idempotent sweep — releaseLivePad is a no-op for pads that have no
+      // live note attached (_liveNote[i] == 0xFF). Pads that were pressed
+      // before the hold and released during it will still have their live
+      // note stored, and this sweep will clean them up.
       for (int i = 0; i < NUM_KEYS; i++) {
-        if (s_lastKeys[i] && !state.keyIsPressed[i]) {
-          uint8_t note = slot.loopEngine->padToNote(i);
-          if (note != 0xFF && slot.loopEngine->noteRefDecrement(note)) {
-            s_transport.sendNoteOn(slot.channel, note, 0);  // noteOff
-          }
+        if (!state.keyIsPressed[i]) {
+          slot.loopEngine->releaseLivePad(i, s_transport);
         }
       }
     }
     break;
 ```
+
+**Why this works vs. the old edge check**: `_liveNote[i]` is set at rising
+edge (in `processLoopMode`) and cleared at falling edge OR by this sweep.
+During a hold, `processLoopMode` is NOT called, so `_liveNote[i]` remains
+valid for any pad that was pressed before the hold. When the hold releases,
+the sweep finds those pads (state = false) and releases them via
+`releaseLivePad()`. Pads that were released during the hold have their
+`_liveNote[i]` still set — the sweep also catches them. Pads that were
+pressed during the hold and released during the hold have `_liveNote[i]`
+still 0xFF (no press edge ever recorded) — the sweep no-ops on them.
+All four scenarios handled correctly.
 
 ---
 
@@ -1325,18 +1443,61 @@ The RECORDING + OVERDUBBING check is now directly in Step 5a's code. No separate
 
 ### 11a. Find midiPanic() (around line 130) and add LOOP flush
 
+> **AUDIT FIX (A4 + Q1, 2026-04-06)**: the original plan had two problems
+> in this snippet:
+> 1. It misquoted the existing code as `arpEngine->clearAllNotes(s_transport)`
+>    — the real code at `main.cpp:131` uses `flushPendingNoteOffs(s_transport)`,
+>    which has different (gentler) semantics. An implementer who trusted
+>    the plan might accidentally change the arp panic behavior.
+> 2. The added LOOP branch called `loopEngine->stop(s_transport)`, which has
+>    an internal `if (_state != PLAYING) return;` guard — it's a no-op when
+>    a LoopEngine is in RECORDING or OVERDUBBING state, leaving `_noteRefCount`
+>    non-zero and the loop silently broken after panic.
+>
+> **Fix**: preserve the existing `flushPendingNoteOffs` call for ARPEG,
+> and use `flushLiveNotes(transport, channel)` for LOOP. `flushLiveNotes`
+> works regardless of the engine's state (sends CC123 + zeros refcount +
+> clears `_liveNote[]`), matching the Q1 design decision: panic clears
+> stuck notes without modifying state.
+
+Locate `midiPanic()` in `main.cpp` (currently around line 127). The existing
+body loops ARPEG engines and calls `flushPendingNoteOffs`, then calls
+`s_midiEngine.allNotesOff()`, then sends CC123 on all 8 channels. Extend
+the first loop to also handle LOOP engines:
+
 ```cpp
-  // Existing: flush arp engines
+static void midiPanic() {
+  // Phase 1: flush all arp engines' pending noteOffs AND LOOP engines' live notes
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
-      if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine) {
-          s_banks[i].arpEngine->clearAllNotes(s_transport);
-      }
-      // ADD: flush LOOP engines
-      if (s_banks[i].type == BANK_LOOP && s_banks[i].loopEngine) {
-          s_banks[i].loopEngine->stop(s_transport);
-      }
+    // Existing ARPEG path — DO NOT change: uses flushPendingNoteOffs (gentle flush,
+    // keeps arp pile intact so playback resumes correctly after panic).
+    if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine) {
+      s_banks[i].arpEngine->flushPendingNoteOffs(s_transport);
+    }
+    // NEW (Phase 2): LOOP path — uses flushLiveNotes (CC123 + zero refcount +
+    // clear _liveNote[]). Works in any state (PLAYING, STOPPED, RECORDING,
+    // OVERDUBBING). Does NOT touch _events[] or _pendingAction — the loop keeps
+    // running after panic, it just no longer has stuck live refcounts.
+    if (s_banks[i].type == BANK_LOOP && s_banks[i].loopEngine) {
+      s_banks[i].loopEngine->flushLiveNotes(s_transport, s_banks[i].channel);
+    }
   }
+  // Phase 2: clear MidiEngine tracked notes (NORMAL mode) — unchanged
+  s_midiEngine.allNotesOff();
+  // Phase 3: CC 123 on all 8 channels (catches anything we missed) — unchanged
+  for (uint8_t ch = 0; ch < NUM_BANKS; ch++) {
+      s_transport.sendAllNotesOff(ch);
+  }
+  #if DEBUG_SERIAL
+  Serial.println("[PANIC] All notes off on all channels");
+  #endif
+}
 ```
+
+**Note**: the `flushLiveNotes(transport, channel)` signature takes `channel`
+as a parameter but the implementation ignores it and uses its own `_channel`
+member (see the implementation in the `flushLiveNotes` section above). The
+parameter is kept for symmetry and possible future cross-channel panic.
 
 ---
 

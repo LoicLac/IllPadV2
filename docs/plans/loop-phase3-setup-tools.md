@@ -115,7 +115,42 @@ All existing call sites of `saveConfig()` inside `run()` must pass the new argum
           memcpy(savedLoopQuantize, wkLoopQuantize, sizeof(savedLoopQuantize));
 ```
 
-Similarly the revert-on-cancel path must restore `wkLoopQuantize[cursor]` from `savedLoopQuantize[cursor]`.
+> **AUDIT FIX (A2.1, 2026-04-06)**: the **defaults confirmation path** at
+> line ~152-163 of the current ToolBankConfig.cpp resets `wkTypes[i]` and
+> `wkQuantize[i]` but must ALSO reset `wkLoopQuantize[i]` to the default.
+> Otherwise a "reset to defaults" keeps stale loop quantize values and
+> silently saves them with the new NORMAL/ARPEG types. The patched block:
+>
+> ```cpp
+>   if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+>     for (uint8_t i = 0; i < NUM_BANKS; i++) {
+>       wkTypes[i] = (i < 4) ? BANK_NORMAL : BANK_ARPEG;
+>       wkQuantize[i] = ARP_START_IMMEDIATE;
+>       wkLoopQuantize[i] = DEFAULT_LOOP_QUANT_MODE;   // <-- ADD
+>     }
+>     if (saveConfig(wkTypes, wkQuantize, wkLoopQuantize)) {
+>       memcpy(savedTypes,        wkTypes,        sizeof(savedTypes));
+>       memcpy(savedQuantize,     wkQuantize,     sizeof(savedQuantize));
+>       memcpy(savedLoopQuantize, wkLoopQuantize, sizeof(savedLoopQuantize));
+>       ...
+>   }
+> ```
+
+> **AUDIT FIX (A2.2, 2026-04-06)**: the **revert-on-cancel path** at line
+> ~176-188 of the current ToolBankConfig.cpp restores `wkTypes[cursor]` and
+> `wkQuantize[cursor]` when NAV_QUIT is pressed during editing. It must
+> also restore `wkLoopQuantize[cursor]`. Explicit patch:
+>
+> ```cpp
+>   if (ev.type == NAV_QUIT) {
+>     if (editing) {
+>       wkTypes[cursor] = savedTypes[cursor];
+>       wkQuantize[cursor] = savedQuantize[cursor];
+>       wkLoopQuantize[cursor] = savedLoopQuantize[cursor];   // <-- ADD
+>       editing = false;
+>       ...
+>   }
+> ```
 
 ### 1c. Replace NAV_RIGHT/LEFT cycle (lines 216-269)
 
@@ -974,23 +1009,31 @@ New lines:
 - **Line 8 (Loop P/S)**: offset 31, size 1
 - **Line 9 (Loop Clear)**: offset 32, size 1
 
-### 2e. Update pool navigation bounds
+### ~~2e~~ — SUPERSEDED BY Step 2-pre-8 (AUDIT 2026-04-06)
 
-**POOL_LINE_COUNT** (ToolPadRoles.h line 107) — keyboard navigation wraps at this value:
-```cpp
-  static const uint8_t POOL_LINE_COUNT = 10;  // was 7 — now 0=clear, 1-9=categories
-```
-Without this, UP/DOWN keys wrap between 0-6 and lines 7/8/9 (Loop Rec/P-S/Clear) are unreachable.
+> **C3 AUDIT FIX**: this sub-step is **entirely superseded** by the b1
+> contextual refactor introduced in Step 2-pre-8 above. Do NOT apply any
+> of the changes shown in the original Step 2e text. Specifically:
+>
+> - **`POOL_LINE_COUNT`** — **DELETE** this constant entirely from
+>   `ToolPadRoles.h`. Line counts are now per-sub-page and computed via
+>   `poolOffsetsForContext(subPage, lineCount, total)` (Step 2-pre-8).
+>   Any lingering usage should be replaced by reading `lineCount` from
+>   that helper.
+> - **`linearToPool` loop bound** — the function itself has been rewritten
+>   in Step 2-pre-8 to take a `subPage` parameter and iterate over the
+>   per-sub-page offsets table. No flat "< 10" bound exists anymore.
+> - **`poolToLinear` guard** — same as above. The function was rewritten
+>   to use per-sub-page reverse mapping tables. No flat "< 10" guard exists.
+>
+> If an implementer reads linearly and reaches this sub-step after having
+> already applied Step 2-pre-8, they should skip this entirely. Keeping
+> this sub-step marker (with the ~~strikethrough~~ heading) preserves the
+> step numbering for cross-reference and makes the transition explicit.
 
-**linearToPool** loop bound (ToolPadRoles.cpp line ~24):
-```cpp
-  for (uint8_t i = 0; i < 10; i++) {  // was 7
-```
-
-**poolToLinear** guard:
-```cpp
-  if (line >= 10) return TOTAL_POOL_ITEMS - 1;  // was 7
-```
+*(The original Step 2e text is intentionally removed to prevent accidental
+re-application. See the Transition note at the top of Step 2 and the body
+of Step 2-pre-8 for the replacement mechanism.)*
 
 ### 2f. Add to poolLineSize() (line ~134)
 
@@ -1320,8 +1363,8 @@ void loadAll(BankSlot* banks, uint8_t& currentBank, uint8_t* padOrder,
 
 | File | Changes |
 |---|---|
-| `src/setup/ToolBankConfig.h` | Replace _potComboState with _potTypeIdx, drawDescription signature change |
-| `src/setup/ToolBankConfig.cpp` | 2-axis cycle, countType helper, 3-way rendering, drawDescription 3-way, generic error |
+| `src/setup/ToolBankConfig.h` | Replace `_potComboState` with `_potTypeIdx`, **`saveConfig()` signature extended to 3 args (types, quantize, loopQuantize)**, `drawDescription()` signature change (`bool isArpeg` → `BankType type`) |
+| `src/setup/ToolBankConfig.cpp` | 2-axis cycle, `countType` helper, 3-way rendering, `drawDescription` 3-way, generic error message, **`wkLoopQuantize[NUM_BANKS]` working copy + `savedLoopQuantize[]` snapshot**, **A2.1 fix: defaults path resets `wkLoopQuantize[i]`**, **A2.2 fix: revert-on-cancel path restores `wkLoopQuantize[cursor]`**, `saveConfig()` body writes `bts.loopQuantize[]` |
 | `src/setup/ToolPadRoles.h` | **b1 contextual refactor**: PadRoleCode enum (ROLE_ARPEG_PLAYSTOP rename + ROLE_LOOP_REC/PS/CLR add), `_activeSubPage` member, `currentContext()` helper, `getRoleForPad(pad, BankType context)` signature, `isPadOccupiedInContext()` helper, `_wkArpPlayStopPad` rename, `_wkLoopRec/PS/Clr` arrays, `_loopRec/PS/Clr` pointers, **POOL_LINE_COUNT removed** (now per-sub-page) |
 | `src/setup/ToolPadRoles.cpp` | **b1 contextual refactor**: `currentContext()` impl, per-sub-page POOL_OFFSETS_BANKS/ARPEG/LOOP tables, `linearToPool(linear, subPage, line, idx)` and `poolToLinear(line, idx, subPage)` helpers, `[t]` toggle key, context-aware `buildRoleMap` / `drawPool` / `clearRole` / `clearAllRoles` / `resetToDefaults` / `saveAll` (with LoopPadStore), `printRoleDescription` cases, `printPadDescription` context arg, header sub-page label, run() live-to-wk copy for LOOP fields |
 | `src/setup/SetupManager.h` | begin() signature: add recPad, loopPlayPad, clearPad params |
