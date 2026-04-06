@@ -606,6 +606,12 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   // --- Tempo ---
   if (prefs.begin(TEMPO_NVS_NAMESPACE, true)) {
     _pendingTempo = prefs.getUShort(TEMPO_NVS_KEY, TEMPO_BPM_DEFAULT);
+    // Defensive clamp (B-CODE-4 fix): NVS-stored tempo could be 0 or out of
+    // range. Without this, ClockManager::setInternalBPM(0) → _pllTickInterval
+    // = inf → cast to uint32_t is UB. The downstream interval==0 check at
+    // generateTicks() L185 mitigates the consequence but the cast is undefined.
+    if (_pendingTempo < TEMPO_BPM_MIN || _pendingTempo > TEMPO_BPM_MAX)
+      _pendingTempo = TEMPO_BPM_DEFAULT;
     prefs.end();
     #if DEBUG_SERIAL
     Serial.printf("[NVS] Tempo: %d BPM\n", _pendingTempo);
@@ -639,6 +645,12 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   // --- Pad sensitivity ---
   if (prefs.begin(SENSITIVITY_NVS_NAMESPACE, true)) {
     _pendingPadSens = prefs.getUChar(SENSITIVITY_NVS_KEY, PAD_SENSITIVITY_DEFAULT);
+    // Defensive clamp (B-CODE-5 fix): CapacitiveKeyboard::setPadSensitivity()
+    // clamps in aval, but PotRouter::seedCatchValues() reads it BEFORE that
+    // clamp can apply (computes (val - MIN) / (MAX - MIN) which wraps if val
+    // is out of range), producing a wrong catch storedValue at boot.
+    if (_pendingPadSens < PAD_SENSITIVITY_MIN || _pendingPadSens > PAD_SENSITIVITY_MAX)
+      _pendingPadSens = PAD_SENSITIVITY_DEFAULT;
     prefs.end();
     #if DEBUG_SERIAL
     Serial.printf("[NVS] Pad sensitivity: %d\n", _pendingPadSens);
@@ -721,8 +733,17 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   #endif
 
   // --- LED settings (Tool 7) ---
-  loadBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
-                     EEPROM_MAGIC, LED_SETTINGS_VERSION, &_ledSettings, sizeof(_ledSettings));
+  // B-CODE-3 fix: validate after load. Without this, a NVS blob with valid
+  // magic+version but corrupt blink fields (e.g. 0) would cause runtime
+  // division by zero in LedController::renderConfirmation/renderNormalDisplay
+  // for scaleRoot/scaleMode/scaleChrom/octave blink unitMs. The bankBlinks/
+  // playBlinks/stopBlinks have ad-hoc fallbacks in LedController::loadLedSettings
+  // but the others do not.
+  if (loadBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
+               EEPROM_MAGIC, LED_SETTINGS_VERSION, &_ledSettings, sizeof(_ledSettings))) {
+    validateLedSettingsStore(_ledSettings);
+  }
+  // ColorSlotStore has no validate function — defensive validation deferred.
   loadBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
                      COLOR_SLOT_MAGIC, COLOR_SLOT_VERSION, &_colorSlots, sizeof(_colorSlots));
   #if DEBUG_SERIAL
