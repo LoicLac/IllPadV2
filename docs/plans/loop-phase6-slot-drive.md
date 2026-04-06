@@ -207,6 +207,22 @@ void LoopSlotStore::slotPath(uint8_t slotIdx, bool tmp, char out[32]) {
   // AUDIT FIX (Q3, 2026-04-06): mount at /littlefs, not /. Prevents future
   // collision if SPIFFS (or any other FS) is mounted at /. Matches the
   // ESP32-Arduino convention. Path format: "/littlefs/loops/slotNN.lpb"
+  //
+  // VERIFY ON BUILD (Q1, 2026-04-06 pass 2): the LittleFS API on espressif32
+  // platforms may interpret file paths in two different ways depending on the
+  // version installed:
+  //   - Some versions use the basePath prefix (this code: "/littlefs/loops/...")
+  //   - Other versions use paths relative to the partition root ("/loops/...")
+  // If the FIRST hardware test of saveSlot/loadSlot/exists fails with "file
+  // not found" or "open failed" despite the partition being mounted, the most
+  // likely cause is that this version of the platform expects the relative
+  // form. In that case, change the format string here from
+  //   "/littlefs/loops/slot%02u.%s"
+  // to
+  //   "/loops/slot%02u.%s"
+  // and update the corresponding `LittleFS.exists("/littlefs/loops")` /
+  // `LittleFS.mkdir("/littlefs/loops")` calls in begin() to drop the prefix.
+  // Test on the actual installed espressif32 version before assuming.
   snprintf(out, 32, "/littlefs/loops/slot%02u.%s", slotIdx, tmp ? "tmp" : "lpb");
 }
 
@@ -491,6 +507,21 @@ bool LoopEngine::deserializeFromBuffer(const uint8_t* buf, size_t bufSize,
                                         MidiTransport& transport,
                                         uint32_t globalTick,
                                         float currentBPM) {
+  // Defense in depth: refuse to deserialize while a recording session is in
+  // progress. The current sole caller (handleLoopSlots) already enforces this
+  // via its `recording` early-return guard, but a future caller (debug, web UI,
+  // MIDI sysex import) might not. Without this guard, deserialize would
+  // hard-flush the active notes and replace the events buffer mid-recording,
+  // silently corrupting the session and orphaning held pads (their _liveNote[]
+  // entries would still point to MIDI notes that no longer exist in any
+  // playing buffer). AUDIT FIX B2 2026-04-06 pass 2.
+  if (_state == RECORDING || _state == OVERDUBBING) {
+    #if DEBUG_SERIAL
+    Serial.println("[LOOP] deserializeFromBuffer refused: recording in progress");
+    #endif
+    return false;
+  }
+
   // Validate header presence
   if (bufSize < sizeof(LoopSlotHeader)) return false;
 
@@ -926,16 +957,19 @@ static void handleLoopSlots(const SharedKeyboardState& state, bool leftHeld, uin
                             // the engine to BankSlot BEFORE reloadPerBankParams,
                             // so PotRouter is seeded with the loaded values
                             // (preset complet semantics — see Q2 audit decision).
-                            BankSlot& curSlot = s_bankManager.getCurrentSlot();
-                            curSlot.baseVelocity      = eng->getBaseVelocity();
-                            curSlot.velocityVariation = eng->getVelocityVariation();
+                            // F2 fix (2026-04-06 pass 2): reuse the `slot` reference
+                            // already declared at the top of handleLoopSlots — both
+                            // point to the same BankSlot, no need to call
+                            // s_bankManager.getCurrentSlot() again.
+                            slot.baseVelocity      = eng->getBaseVelocity();
+                            slot.velocityVariation = eng->getVelocityVariation();
                             // Re-arm the catch system on PotRouter for per-bank LOOP
                             // params via the existing reloadPerBankParams() helper
                             // (same path as a bank switch). It reads BankSlot
                             // (now with loaded velocity values) and the engine's
                             // shuffle/template/etc, pushes them into PotRouter,
                             // then calls seedCatchValues + resetPerBankCatch.
-                            reloadPerBankParams(curSlot);
+                            reloadPerBankParams(slot);
                             s_leds.triggerConfirm(CONFIRM_LOOP_SLOT_LOAD);
                         } else {
                             // Load failed (corrupt) — bitmask was already updated

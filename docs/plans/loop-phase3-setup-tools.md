@@ -86,6 +86,18 @@ Alongside the existing `wkTypes[]` and `wkQuantize[]` stack arrays in `run()`, a
 
 And in `saveConfig()`, both fields are written to `BankTypeStore`:
 
+> **AUDIT NOTE (A2 reclassified, 2026-04-06 pass 2)**: the original `saveConfig`
+> in `src/setup/ToolBankConfig.cpp:25-41` had a post-save loop updating
+> `_banks[i].type` and `_nvs->setLoadedQuantizeMode(i, quantize[i])` to keep the
+> live runtime state synchronized with NVS. The patched version below
+> **intentionally drops** this loop because **the only exit path from any setup
+> Tool is `Tool 0 → reboot`** — every Tool save is followed by a full reboot
+> before any runtime use. The loop was effectively dead code from the runtime
+> perspective. Removing it simplifies the function and removes the risk of
+> forgetting to add a parallel `setLoadedLoopQuantizeMode()` call. **DO NOT
+> reintroduce this loop without first reconsidering the reboot-on-exit
+> guarantee.**
+
 ```cpp
 bool ToolBankConfig::saveConfig(const BankType* types,
                                 const uint8_t*  quantize,
@@ -101,6 +113,8 @@ bool ToolBankConfig::saveConfig(const BankType* types,
     }
     return NvsManager::saveBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
                                  &bts, sizeof(bts));
+    // No live update loop — see AUDIT NOTE above (Tool 0 reboot guarantees
+    // NVS reload on next boot, which reconstructs all runtime state).
 }
 ```
 
@@ -1234,13 +1248,24 @@ The loop in setup() that assigns LoopEngines to BANK_LOOP banks is already in pl
 The call chain is: `main.cpp` → `SetupManager::begin()` → `_toolRoles.begin()`.
 All 3 must be updated.
 
+> **AUDIT FIX (C1, 2026-04-06 pass 2)**: the original draft of Step 3e showed
+> the begin() signatures with `playStopPad` (the existing param name) while
+> Step 2-pre-1 had explicitly required renaming the param to `arpPlayStopPad`
+> to disambiguate from the LOOP playstop. Phase 6 Step 7c also uses
+> `arpPlayStopPad`. The two parts of the same plan disagreed. **Fix**: align
+> Step 3e on Step 2-pre-1 — the param name in both signatures is now
+> `arpPlayStopPad`. The variable in `main.cpp` (`s_playStopPad`) stays as is
+> per the Step 2-pre-1 scope decision (only ToolPadRoles internals + the
+> begin() param signatures change). The caller passes the same `s_playStopPad`
+> variable which binds to the renamed reference param.
+
 **SetupManager.h** (line 24-29) — extend `begin()` signature:
 ```cpp
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
              NvsManager* nvs, BankSlot* banks,
              uint8_t* padOrder, uint8_t* bankPads,
              uint8_t* rootPads, uint8_t* modePads,
-             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
+             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& arpPlayStopPad,  // <-- RENAMED (C1)
              uint8_t* octavePads, PotRouter* potRouter,
              uint8_t& recPad, uint8_t& loopPlayPad, uint8_t& clearPad);  // <-- ADD
 ```
@@ -1249,7 +1274,7 @@ All 3 must be updated.
 ```cpp
   _toolRoles.begin(keyboard, leds, &_ui,
                    bankPads, rootPads, modePads,
-                   chromaticPad, holdPad, playStopPad,
+                   chromaticPad, holdPad, arpPlayStopPad,                       // <-- RENAMED (C1)
                    octavePads,
                    recPad, loopPlayPad, clearPad);  // <-- ADD
 ```
@@ -1258,24 +1283,27 @@ All 3 must be updated.
 ```cpp
   void begin(CapacitiveKeyboard* keyboard, LedController* leds, SetupUI* ui,
              uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
-             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
+             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& arpPlayStopPad,  // <-- RENAMED (C1)
              uint8_t* octavePads,
              uint8_t& recPad, uint8_t& loopPlayPad, uint8_t& clearPad);  // <-- ADD
 ```
 
-**ToolPadRoles.cpp** — store pointers in `begin()` body:
+**ToolPadRoles.cpp** — store pointers in `begin()` body (use the renamed param):
 ```cpp
+  _arpPlayStopPad  = &arpPlayStopPad;   // <-- RENAMED member (Step 2-pre-1) + param (C1)
   _loopRecPad      = &recPad;
   _loopPlayStopPad = &loopPlayPad;
   _loopClearPad    = &clearPad;
 ```
 
-**main.cpp** (line 270-274) — pass LOOP pad statics:
+**main.cpp** (line 270-274) — pass LOOP pad statics. The variable name
+`s_playStopPad` is **NOT** renamed at the main.cpp level (per Step 2-pre-1
+decision). It binds to the renamed `arpPlayStopPad` reference parameter:
 ```cpp
   s_setupManager.begin(&s_keyboard, &s_leds, &s_nvsManager,
                        s_banks, s_padOrder, bankPads,
                        rootPads, modePads, chromaticPad,
-                       holdPad, s_playStopPad, octavePads,
+                       holdPad, s_playStopPad, octavePads,   // s_playStopPad → arpPlayStopPad ref param
                        &s_potRouter,
                        s_recPad, s_loopPlayPad, s_clearPad);  // <-- ADD
 ```

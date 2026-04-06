@@ -400,6 +400,24 @@ Verify `class LoopEngine;` exists near top of LedController.h. No action needed.
   case BANK_LOOP:  renderBankLoop(i, isFg, now); break;
 ```
 
+#### 9b-bis. Add `LoopEngine.h` include in LedController.cpp
+
+> **AUDIT FIX (A1, 2026-04-06 pass 2)**: Phase 1 Step 4c-4 added a forward
+> declaration `class LoopEngine;` to LedController.h, which is sufficient to
+> declare a `LoopEngine*` member or parameter. But the `renderBankLoop()`
+> implementation in 9c calls **methods** on the engine pointer (`getState()`,
+> `getEventCount()`, `consumeBeatFlash()`, etc.) which require the **full
+> class definition**. The same pattern already exists for ArpEngine — see
+> `LedController.cpp:4` (`#include "../arp/ArpEngine.h"`). Without the
+> equivalent include for LoopEngine, the file fails to compile in Phase 4.
+
+In `src/core/LedController.cpp`, near the existing `#include "../arp/ArpEngine.h"`
+(line 4), add:
+
+```cpp
+#include "../loop/LoopEngine.h"   // Phase 4: needed by renderBankLoop method calls
+```
+
 #### 9c. Implement renderBankLoop() (after renderBankArpeg, line ~466)
 
 **Design goals** (per user decisions 2026-04-06):
@@ -445,18 +463,16 @@ void LedController::renderBankLoop(uint8_t led, bool isFg, unsigned long now) {
     LoopEngine::State ls = eng->getState();
     bool hasEvents = eng->getEventCount() > 0;
 
-    // ---- 1. Consume tick flash flags → update timers ----
-    if (eng->consumeBeatFlash()) _beatFlashStart[led] = (now == 0) ? 1 : now;
-    if (eng->consumeBarFlash())  _barFlashStart[led]  = (now == 0) ? 1 : now;
-    if (eng->consumeWrapFlash()) _wrapFlashStart[led] = (now == 0) ? 1 : now;
-
-    // Clear expired timers
-    if (_beatFlashStart[led] && (now - _beatFlashStart[led]) >= LED_TICK_DUR_BEAT_MS) _beatFlashStart[led] = 0;
-    if (_barFlashStart[led]  && (now - _barFlashStart[led])  >= LED_TICK_DUR_BAR_MS)  _barFlashStart[led]  = 0;
-    if (_wrapFlashStart[led] && (now - _wrapFlashStart[led]) >= LED_TICK_DUR_WRAP_MS) _wrapFlashStart[led] = 0;
-
-    // ---- 2. Waiting quantize blink (overrides everything when active) ----
+    // ---- 1. Waiting quantize blink (overrides everything when active) ----
     // Visible only on FG bank — BG has no pending action (guard denied).
+    //
+    // AUDIT FIX (B3, 2026-04-06 pass 2): consume tick flash flags AFTER this
+    // early-return, not before. The flags are consume-on-read — consuming them
+    // before the early-return would silently lose them whenever a pending
+    // action is active, and the very first beat after the action completes
+    // would not flash. Letting the flags survive across waiting-quantize frames
+    // means they will be consumed (and rendered) on the first frame where
+    // hasPendingAction() returns false again.
     if (isFg && eng->hasPendingAction()) {
         bool blinkOn = ((now / LED_WAIT_QUANT_PERIOD_MS) % 2 == 0);
         // Color depends on the action type. Red for destructive (rec/stop
@@ -468,6 +484,16 @@ void LedController::renderBankLoop(uint8_t led, bool isFg, unsigned long now) {
         setPixel(led, blinkCol, blinkOn ? LED_WAIT_QUANT_INTENSITY : LED_FG_LOOP_IDLE);
         return;
     }
+
+    // ---- 2. Consume tick flash flags → update timers (B3 fix: AFTER early-return) ----
+    if (eng->consumeBeatFlash()) _beatFlashStart[led] = (now == 0) ? 1 : now;
+    if (eng->consumeBarFlash())  _barFlashStart[led]  = (now == 0) ? 1 : now;
+    if (eng->consumeWrapFlash()) _wrapFlashStart[led] = (now == 0) ? 1 : now;
+
+    // Clear expired timers
+    if (_beatFlashStart[led] && (now - _beatFlashStart[led]) >= LED_TICK_DUR_BEAT_MS) _beatFlashStart[led] = 0;
+    if (_barFlashStart[led]  && (now - _barFlashStart[led])  >= LED_TICK_DUR_BAR_MS)  _barFlashStart[led]  = 0;
+    if (_wrapFlashStart[led] && (now - _wrapFlashStart[led]) >= LED_TICK_DUR_WRAP_MS) _wrapFlashStart[led] = 0;
 
     // ---- 3. Select base color based on quantize mode and state ----
     RGBW baseCol;
@@ -524,19 +550,15 @@ void LedController::renderBankLoop(uint8_t led, bool isFg, unsigned long now) {
     uint8_t boost = 0;
     if (baseIntensity > 0) {
         if (isFg) {
-            // FG: full hierarchy — max(wrap, bar, beat/beat1)
+            // FG: full hierarchy — max(wrap, bar, beat). Beat 1 of a bar gets
+            // both _barFlashStart AND _beatFlashStart, the bar boost wins via
+            // priority order. (LED_TICK_BOOST_BEAT1 was removed in 2026-04-06
+            // pass-2 audit per F1 / YAGNI — see Phase 1 Step 4b note.)
             if (_wrapFlashStart[led]) {
                 boost = LED_TICK_BOOST_WRAP;
             } else if (_barFlashStart[led]) {
                 boost = LED_TICK_BOOST_BAR;
             } else if (_beatFlashStart[led]) {
-                // No way to distinguish beat 1 from beat 2/3/4 after the flash fires,
-                // because _barFlashStart is checked first. The beat1 boost kicks in
-                // implicitly: when beat 1 of a bar fires, _barFlashStart is set AND
-                // _beatFlashStart is set — _barFlashStart wins (higher boost). So
-                // LED_TICK_BOOST_BEAT1 is only used when a downbeat occurs OUTSIDE
-                // a bar boundary, which in practice never happens. Left in the
-                // constants for Tool 7 configurability but unused at runtime.
                 boost = LED_TICK_BOOST_BEAT;
             }
         } else {
@@ -689,5 +711,5 @@ Without this, the `default:` branch kills CONFIRM_LOOP_REC immediately
 | `src/managers/NvsManager.h` | _loopPotDirty[8], _pendingLoopPot[8], queueLoopPotWrite(), getLoadedLoopParams() |
 | `src/managers/NvsManager.cpp` | Constructor init, tickPotDebounce BANK_LOOP branch, queueLoopPotWrite, commitAll batch, loadAll section, getLoadedLoopParams |
 | `src/core/LedController.h` | CONFIRM_LOOP_REC, LoopEngine forward-declare, renderBankLoop decl, `_beatFlashStart[]`/`_barFlashStart[]`/`_wrapFlashStart[]` members, showClearRamp, _clearRampPct |
-| `src/core/LedController.cpp` | renderBankLoop (FREE solid / QUANTIZED tick hierarchy / BG beat only / waiting quantize blink), renderConfirmation LOOP_REC expiry, renderNormalDisplay LOOP_REC overlay, bargraph 3-way color, showClearRamp |
+| `src/core/LedController.cpp` | **`#include "../loop/LoopEngine.h"` (A1 fix)**, renderBankLoop (FREE solid / QUANTIZED tick hierarchy / BG beat only / waiting quantize blink), renderConfirmation LOOP_REC expiry, renderNormalDisplay LOOP_REC overlay, bargraph 3-way color, showClearRamp |
 | `src/main.cpp` | reloadPerBankParams complete, pushParamsToLoop complete |

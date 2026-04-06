@@ -162,10 +162,12 @@ with an unshuffled noteOff would shorten the gate — audible on sustained sound
 - `uint16_t _loopLengthBars` — set in `stopRecording()` via bar-snap
 - `uint32_t _recordStartUs, _playStartUs, _lastPositionUs` — timing anchors
 - `float _recordBpm` — BPM latched at `stopRecording()` for proportional playback
+- `uint8_t _baseVelocity, _velocityVariation` — per-engine copies of the BankSlot velocity params (set via `setBaseVelocity()` / `setVelocityVariation()`, exposed via getters added in Phase 6 Step 3a for slot-load writeback). **Documentation only — these were implicit in the original plan via setters with no matching member declaration.**
 - `uint16_t _eventCount, _overdubCount, _cursorIdx`
 - `bool _beatFlash, _barFlash, _wrapFlash` — consumed once per frame by LedController (hierarchy: beat < bar < wrap)
 - `uint32_t _lastBeatIdx` — last beat index detected in PLAYING/OVERDUBBING (from positionUs)
 - `uint32_t _lastRecordBeatTick` — last globalTick modulo 24 checkpoint during RECORDING (for beat flash detection when no loop structure exists yet)
+- `uint32_t _lastDispatchedGlobalTick` — last globalTick value at which the pending action dispatcher fired (or `0xFFFFFFFF` if never). Used to detect a quantize boundary CROSSING rather than exact landing. **AUDIT FIX B1 2026-04-06 pass 2** — without this, `globalTick % boundary == 0` could miss a boundary when `ClockManager::generateTicks()` catches up multiple ticks in one call (up to 4 — see `ClockManager.cpp:181-203`). See also `docs/reference/known-bugs.md` for the parallel pre-existing bug in ArpEngine.
 
 ### 1b. Create `src/loop/LoopEngine.cpp`
 
@@ -256,7 +258,8 @@ void LoopEngine::begin(uint8_t channel) {
     _barFlash       = false;
     _wrapFlash      = false;
     _lastBeatIdx    = 0;
-    _lastRecordBeatTick = 0xFFFFFFFF;
+    _lastRecordBeatTick       = 0xFFFFFFFF;
+    _lastDispatchedGlobalTick = 0xFFFFFFFF;   // B1 pass 2: sentinel "never dispatched"
     _padOrder       = nullptr;
     memset(_noteRefCount, 0, sizeof(_noteRefCount));
     memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
@@ -509,13 +512,30 @@ void LoopEngine::doStop(MidiTransport& transport) {
 
 #### `tick()` — pending action dispatcher + proportional playback
 
+> **AUDIT FIX (B1, 2026-04-06 pass 2)**: the original draft used
+> `globalTick % boundary == 0` for the boundary check. That fails when
+> `ClockManager::generateTicks()` catches up multiple ticks in one `update()`
+> call (up to 4 — see `src/midi/ClockManager.cpp:181-203`). Example: at 120 BPM
+> with a momentarily slow loop iteration, globalTick can advance from 23 to 25
+> in a single frame, skipping 24. The exact-equality check would miss the BEAT
+> boundary entirely and the pending action would wait an extra full beat
+> (480ms at 120 BPM) for the next opportunity. **Fix**: track the last
+> dispatched globalTick and detect a boundary CROSSING via integer division.
+> The same bug exists in `ArpEngine.cpp:284` (pre-existing) — tracked in
+> `docs/reference/known-bugs.md` for separate treatment.
+
 ```cpp
 void LoopEngine::tick(MidiTransport& transport, float currentBPM, uint32_t globalTick) {
-    // ---- 1. Pending action dispatcher (quantize boundary check) ----
+    // ---- 1. Pending action dispatcher (quantize boundary CROSSING check) ----
     if (_pendingAction != PENDING_NONE) {
         uint16_t boundary = (_quantizeMode == LOOP_QUANT_BAR) ? TICKS_PER_BAR : TICKS_PER_BEAT;
-        if (globalTick % boundary == 0) {
-            // Boundary reached — execute and clear
+        // Crossing detection: a boundary is crossed when (globalTick / boundary)
+        // strictly increases vs the last dispatched value. First tick after pending
+        // is set always crosses (sentinel 0xFFFFFFFF / boundary > any valid value).
+        bool crossed = (_lastDispatchedGlobalTick == 0xFFFFFFFF)
+                     || ((globalTick / boundary) > (_lastDispatchedGlobalTick / boundary));
+        if (crossed) {
+            // Boundary crossed — execute and clear
             switch (_pendingAction) {
                 case PENDING_START_RECORDING:
                     doStartRecording();
@@ -538,6 +558,7 @@ void LoopEngine::tick(MidiTransport& transport, float currentBPM, uint32_t globa
                 default: break;
             }
             _pendingAction = PENDING_NONE;
+            _lastDispatchedGlobalTick = globalTick;
         }
         // Fall through to playback logic — loop continues running while PENDING_STOP
         // waits for boundary, and PENDING_START_OVERDUB plays back normally while waiting.
@@ -1401,23 +1422,30 @@ by `!isHolding()`). Without cleanup, these notes stay stuck in `_noteRefCount`.
 > on its per-pad `_liveNote[]` tracking. This mirrors the NORMAL sweep which
 > uses the idempotent `MidiEngine::noteOff(i)` (via `_lastResolvedNote[]`).
 
-Find the existing switch in `handleLeftReleaseCleanup()` and add after the
-BANK_ARPEG case:
+> **AUDIT FIX (D1/V1, 2026-04-06 pass 2)**: the original snippet below used
+> `case BANK_LOOP: ... break;` syntax, implying `handleLeftReleaseCleanup()`
+> contains a `switch` statement. **It does not.** The actual code at
+> `src/main.cpp:555-577` is an `if (relSlot.type == BANK_NORMAL) { ... } else
+> if (relSlot.type == BANK_ARPEG ...) { ... }` chain. The variable name is
+> `relSlot`, not `slot`. The patched snippet now matches the real code. Do
+> NOT confuse this with `handlePadInput()` (`src/main.cpp:579-594`) which DOES
+> use a real `switch (slot.type)` — that is the function patched by Step 7a.
+
+Find the existing `if/else if` chain in `handleLeftReleaseCleanup()` and add
+a third branch after the `BANK_ARPEG` else-if:
 
 ```cpp
-  case BANK_LOOP:
-    if (slot.loopEngine) {
-      // Idempotent sweep — releaseLivePad is a no-op for pads that have no
-      // live note attached (_liveNote[i] == 0xFF). Pads that were pressed
-      // before the hold and released during it will still have their live
-      // note stored, and this sweep will clean them up.
-      for (int i = 0; i < NUM_KEYS; i++) {
-        if (!state.keyIsPressed[i]) {
-          slot.loopEngine->releaseLivePad(i, s_transport);
-        }
+  } else if (relSlot.type == BANK_LOOP && relSlot.loopEngine) {
+    // Idempotent sweep — releaseLivePad is a no-op for pads that have no
+    // live note attached (_liveNote[i] == 0xFF). Pads that were pressed
+    // before the hold and released during it will still have their live
+    // note stored, and this sweep will clean them up.
+    for (int i = 0; i < NUM_KEYS; i++) {
+      if (!state.keyIsPressed[i]) {
+        relSlot.loopEngine->releaseLivePad(i, s_transport);
       }
     }
-    break;
+  }
 ```
 
 **Why this works vs. the old edge check**: `_liveNote[i]` is set at rising

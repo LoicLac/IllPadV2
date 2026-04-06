@@ -138,11 +138,11 @@ NVS limit. Per the Zero Migration Policy, any NVS blob that existed before
 this struct definition is silently rejected at first boot (wrong size) and
 defaults apply.
 
-> **Note**: `LOOP_SLOT_COUNT` is defined in `HardwareConfig.h` in Step 4b below.
-> Step 2b depends on Step 4b's constant being visible; in the actual codebase
-> both files are included transitively via `KeyboardData.h → HardwareConfig.h`,
-> so the order at implementation time can be either "Step 4b first, then
-> Step 2b" or "both in the same edit pass".
+> **Note**: `LOOP_SLOT_COUNT` is defined in `HardwareConfig.h` in Step 7c-1 below
+> (the slot drive prerequisites section). Step 2b depends on that constant being
+> visible; in the actual codebase both files are included transitively via
+> `KeyboardData.h → HardwareConfig.h`, so the order at implementation time can
+> be either "Step 7c-1 first, then Step 2b" or "both in the same edit pass".
 
 ### 2c. Add LoopPotStore struct (after ArpPotStore, line ~117)
 
@@ -345,13 +345,20 @@ static constexpr uint8_t LED_BG_LOOP_PLAY       = 8;    // BG PLAYING — solid 
 // Boost = additive percentage points on top of base intensity, clamped to 100.
 // Set a boost to 0 to disable the corresponding flash entirely.
 // Hierarchy: max(active flash boosts) wins when multiple flashes overlap.
+//
+// AUDIT FIX (F1, 2026-04-06 pass 2): the original draft included a separate
+// LED_TICK_BOOST_BEAT1 = 25 constant for "downbeat (beat 1)". In practice it
+// was never used at runtime — when beat 1 of a bar fires, both _beatFlashStart
+// and _barFlashStart are set, and the bar boost (40) wins via the hierarchy.
+// The constant was kept "for future Tool 7 configurability" which violates the
+// YAGNI rule in CLAUDE.md. Removed. Will be reintroduced if/when Tool 7 adds
+// runtime configuration of LOOP LED constants.
 static constexpr uint8_t LED_TICK_BOOST_BEAT    = 10;   // Normal beat (beats 2/3/4 of a bar)
-static constexpr uint8_t LED_TICK_BOOST_BEAT1   = 25;   // Downbeat (beat 1, NOT the bar boost — bar is separate)
 static constexpr uint8_t LED_TICK_BOOST_BAR     = 40;   // Bar boundary (beat 1 of a new bar)
 static constexpr uint8_t LED_TICK_BOOST_WRAP    = 60;   // Loop wrap (end-of-cycle, hardest flash)
 static constexpr uint8_t LED_TICK_BOOST_BEAT_BG = 5;    // BG simple beat tick (same color as BG base)
 
-static constexpr uint16_t LED_TICK_DUR_BEAT_MS  = 20;   // Beat/beat1 flash hold time
+static constexpr uint16_t LED_TICK_DUR_BEAT_MS  = 20;   // Beat flash hold time
 static constexpr uint16_t LED_TICK_DUR_BAR_MS   = 40;   // Bar flash hold time
 static constexpr uint16_t LED_TICK_DUR_WRAP_MS  = 60;   // Wrap flash hold time
 
