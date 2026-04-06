@@ -233,7 +233,7 @@ const uint8_t  AT_RATE_MIN             = 10;
 const uint8_t  AT_RATE_MAX             = 100;
 const uint8_t  AT_RATE_DEFAULT         = 25;   // = AFTERTOUCH_UPDATE_INTERVAL_MS
 const uint16_t AT_DEADZONE_MIN         = 0;
-const uint16_t AT_DEADZONE_MAX         = 250;  // = AFTERTOUCH_DEADZONE_MAX_OFFSET
+const uint16_t AT_DEADZONE_MAX         = 120;  // pressure max = 127, leave ≥7 units for AT range
 const uint16_t AT_DEADZONE_DEFAULT     = 0;
 
 // --- BLE Connection Interval Presets ---

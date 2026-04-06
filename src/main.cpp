@@ -492,12 +492,12 @@ static void processNormalMode(const SharedKeyboardState& state, BankSlot& slot) 
 
     if (pressed) {
       uint8_t p = state.pressure[i];
-      uint8_t dz = (uint8_t)s_potRouter.getAtDeadzone();
+      uint8_t dz = (uint8_t)min((uint16_t)126, s_potRouter.getAtDeadzone());
       if (p > dz) {
-        uint8_t range = 255 - dz;
+        uint8_t range = 127 - dz;
         uint8_t scaled = (range > 0)
           ? (uint8_t)((uint16_t)(p - dz) * 127 / range)
-          : p;
+          : 127;
         s_midiEngine.updateAftertouch(i, scaled);
       } else {
         s_midiEngine.updateAftertouch(i, 0);
