@@ -340,9 +340,597 @@ Call site (.cpp line 357) — change from bool to BankType:
 
 ---
 
-## Step 2 — ToolPadRoles: 4th category LOOP
+## Step 2 — ToolPadRoles: refactor to b1 contextual architecture + LOOP roles
 
-### 2a. Add ROLE_LOOP to enum (ToolPadRoles.h, line ~22)
+> **DESIGN REF**: see `docs/superpowers/specs/2026-04-06-loop-slot-drive-design.md` §1.4 (architecture des rôles), §2.6 (modifications composants existants). The Tool 3 refactor toward a contextual b1 architecture is a **prerequisite** for the LOOP slot drive (Phase 6) but is implemented here in Phase 3 because it costs no more effort than adding the LOOP control roles to a flat-list Tool 3 — and avoids a second refactor pass later.
+
+### Step 2-pre — Architecture refactor (b1 contextual roles)
+
+The current Tool 3 is a flat list of roles ; one pad → one role across all bank types. The new architecture splits roles into **3 contextual sub-pages** (Banks / Arpeg / Loop), with collision rules:
+
+- **Bank pads** ⊥ all (forbidden in any context)
+- **Arpeg roles** ⊥ Arpeg roles (forbidden inside Arpeg sub-page)
+- **Loop roles** ⊥ Loop roles (forbidden inside Loop sub-page)
+- **Arpeg roles** ⊥ **Loop roles** = **ALLOWED** (a single physical pad may be Root C in Arpeg AND Loop Rec in Loop, since both contexts are mutually exclusive at runtime)
+
+The 3 sub-pages share the same 4×12 grid view of the 48 physical pads. Switching sub-page is a `[t]` keyboard toggle (or `[Tab]`). The header shows which context is active.
+
+Phase 3 adds: ARPEG playstop role (separate from LOOP playstop), 3 LOOP control roles (rec, playstop, clear), and the 3-context infrastructure. The 16 LOOP slot pads are deferred to Phase 6.
+
+#### Step 2-pre-1 — Add `BankType context` parameter to `getRoleForPad`
+
+The current `getRoleForPad(pad)` returns the unique role of a pad. The new signature is `getRoleForPad(pad, BankType context)` and only inspects roles relevant to the given context (plus the global bank pads which are visible in all contexts).
+
+In `src/setup/ToolPadRoles.h`, replace line 92:
+
+```cpp
+PadRole getRoleForPad(uint8_t pad, BankType context) const;
+```
+
+In `src/setup/ToolPadRoles.cpp`, rewrite `getRoleForPad`:
+
+```cpp
+PadRole ToolPadRoles::getRoleForPad(uint8_t pad, BankType context) const {
+  if (pad >= NUM_KEYS) return {0, 0};
+
+  // === Globals (visible in all contexts) ===
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (_wkBankPads[i] == pad) return {1, i};
+  }
+
+  // === Arpeg context ===
+  if (context == BANK_ARPEG) {
+    for (uint8_t i = 0; i < 7; i++) {
+      if (_wkRootPads[i] == pad) return {2, i};
+    }
+    for (uint8_t i = 0; i < 7; i++) {
+      if (_wkModePads[i] == pad) return {3, i};
+    }
+    if (_wkChromPad == pad) return {3, 7};
+    for (uint8_t i = 0; i < 4; i++) {
+      if (_wkOctavePads[i] == pad) return {4, i};
+    }
+    if (_wkHoldPad == pad)         return {5, 0};
+    if (_wkArpPlayStopPad == pad)  return {6, 0};   // ARPEG playstop (renamed from generic playstop)
+  }
+
+  // === Loop context ===
+  if (context == BANK_LOOP) {
+    if (_wkLoopRecPad == pad)      return {7, 0};
+    if (_wkLoopPlayStopPad == pad) return {8, 0};
+    if (_wkLoopClearPad == pad)    return {9, 0};
+    // Phase 6: ROLE_LOOP_SLOT_0..15 added here
+  }
+
+  return {0, 0};
+}
+```
+
+**Note**: the existing `_wkPlayStopPad` is renamed to `_wkArpPlayStopPad` to distinguish it from the new `_wkLoopPlayStopPad`. All references in the file must be updated. The renamed member is added to the `_wk*` arrays section in 2b below.
+
+#### Step 2-pre-2 — Update all callers of `getRoleForPad`
+
+The current callers in `ToolPadRoles.cpp` pass no context. They must now pass the **active sub-page context**. There are 3 main call sites:
+
+1. **`drawInfoPanel()` line ~529** — uses the grid cursor position to fetch a role. Must pass the current sub-page context:
+   ```cpp
+   uint8_t pad = _gridRow * 12 + _gridCol;
+   BankType ctx = currentContext();   // returns BANK_NORMAL/ARPEG/LOOP based on _activeSubPage
+   PadRole role = getRoleForPad(pad, ctx);
+   ```
+
+2. **`printPadDescription()` line ~491** — same fix:
+   ```cpp
+   void ToolPadRoles::printPadDescription(uint8_t pad) {
+     PadRole role = getRoleForPad(pad, currentContext());
+     // ... rest unchanged
+   }
+   ```
+
+3. **Any other reference** — search the file for `getRoleForPad` and add the `currentContext()` argument.
+
+The new helper `BankType currentContext() const` returns:
+- `BANK_NORMAL` if `_activeSubPage == 0` (Banks sub-page — globals only, no contextual roles)
+- `BANK_ARPEG` if `_activeSubPage == 1`
+- `BANK_LOOP` if `_activeSubPage == 2`
+
+Add to the private section of `ToolPadRoles.h`:
+
+```cpp
+  BankType currentContext() const;
+  uint8_t  _activeSubPage = 0;   // 0=Banks, 1=Arpeg, 2=Loop
+```
+
+And the implementation in `ToolPadRoles.cpp` (near the top, after constructor):
+
+```cpp
+BankType ToolPadRoles::currentContext() const {
+  switch (_activeSubPage) {
+    case 1: return BANK_ARPEG;
+    case 2: return BANK_LOOP;
+    default: return BANK_NORMAL;
+  }
+}
+```
+
+#### Step 2-pre-3 — Restructure `buildRoleMap` for context-aware rendering
+
+The current `buildRoleMap` paints every assigned pad regardless of context. The new version paints only the roles **relevant to the active sub-page** plus the always-visible bank pads.
+
+Replace the body:
+
+```cpp
+void ToolPadRoles::buildRoleMap() {
+  memset(_roleMap, ROLE_NONE, NUM_KEYS);
+  for (int i = 0; i < NUM_KEYS; i++) {
+    memcpy(_roleLabels[i], " -- ", 5);
+  }
+
+  auto setRole = [&](uint8_t pad, uint8_t role, const char* label) {
+    if (pad >= NUM_KEYS) return;
+    if (_roleMap[pad] != ROLE_NONE) {
+      _roleMap[pad] = ROLE_COLLISION;
+      snprintf(_roleLabels[pad], 6, " !! ");
+    } else {
+      _roleMap[pad] = role;
+      snprintf(_roleLabels[pad], 6, "%s", label);
+    }
+  };
+
+  // === Globals (always shown) ===
+  for (int i = 0; i < NUM_BANKS; i++)
+    setRole(_wkBankPads[i], ROLE_BANK, GRID_BANK_LABELS[i]);
+
+  // === Arpeg context ===
+  if (_activeSubPage == 1) {
+    for (int i = 0; i < 7; i++)
+      setRole(_wkRootPads[i], ROLE_ROOT, GRID_ROOT_LABELS[i]);
+    for (int i = 0; i < 7; i++)
+      setRole(_wkModePads[i], ROLE_MODE, GRID_MODE_LABELS[i]);
+    setRole(_wkChromPad, ROLE_MODE, GRID_MODE_LABELS[7]);
+    setRole(_wkHoldPad, ROLE_HOLD, GRID_HOLD_LABELS[0]);
+    setRole(_wkArpPlayStopPad, ROLE_ARPEG_PLAYSTOP, GRID_ARPEG_PS_LABELS[0]);
+    for (int i = 0; i < 4; i++)
+      setRole(_wkOctavePads[i], ROLE_OCTAVE, GRID_OCTAVE_LABELS[i]);
+  }
+
+  // === Loop context ===
+  if (_activeSubPage == 2) {
+    setRole(_wkLoopRecPad,      ROLE_LOOP_REC, GRID_LOOP_REC_LABELS[0]);
+    setRole(_wkLoopPlayStopPad, ROLE_LOOP_PS,  GRID_LOOP_PS_LABELS[0]);
+    setRole(_wkLoopClearPad,    ROLE_LOOP_CLR, GRID_LOOP_CLR_LABELS[0]);
+    // Phase 6: setRole for ROLE_LOOP_SLOT_0..15 added here
+  }
+
+  // === Banks sub-page (active sub-page 0): only the bank pads above are shown ===
+}
+```
+
+**Why bank pads are always painted**: in the Banks sub-page they are the only thing shown (and the user edits them). In the Arpeg/Loop sub-pages they are still shown (in their bank color) so the user knows which pads are reserved. Collisions of bank pads with arpeg/loop roles are still detected by the `setRole` lambda — they would set `ROLE_COLLISION`, but since bank pads are written first, they always "win" and any subsequent attempt to assign a bank pad as something else triggers the collision marker.
+
+#### Step 2-pre-4 — Restructure `assignRole` and `clearRole` for contextual writes
+
+The new `assignRole(pad, line, index)` is called from the pool selector. It already knows which line (1-9) it is writing to, so the context is implicit in the line number. **No signature change needed** — the function just writes to the right `_wk*` field.
+
+But `clearRole(pad)` currently scans **all** `_wk*` arrays. The new version only scans the arrays relevant to the **active sub-page** (so clearing a pad in the Loop sub-page does NOT also wipe its Arpeg role on the same pad).
+
+```cpp
+void ToolPadRoles::clearRole(uint8_t pad) {
+  if (pad >= NUM_KEYS) return;
+
+  // Globals: a bank pad can be cleared from any sub-page (it is global)
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (_wkBankPads[i] == pad) _wkBankPads[i] = 0xFF;
+  }
+
+  // Contextual: only clear in the active sub-page
+  if (_activeSubPage == 1) {
+    for (uint8_t i = 0; i < 7; i++) {
+      if (_wkRootPads[i] == pad) _wkRootPads[i] = 0xFF;
+    }
+    for (uint8_t i = 0; i < 7; i++) {
+      if (_wkModePads[i] == pad) _wkModePads[i] = 0xFF;
+    }
+    if (_wkChromPad == pad)        _wkChromPad        = 0xFF;
+    if (_wkHoldPad == pad)         _wkHoldPad         = 0xFF;
+    if (_wkArpPlayStopPad == pad)  _wkArpPlayStopPad  = 0xFF;
+    for (uint8_t i = 0; i < 4; i++) {
+      if (_wkOctavePads[i] == pad) _wkOctavePads[i] = 0xFF;
+    }
+  }
+
+  if (_activeSubPage == 2) {
+    if (_wkLoopRecPad == pad)      _wkLoopRecPad      = 0xFF;
+    if (_wkLoopPlayStopPad == pad) _wkLoopPlayStopPad = 0xFF;
+    if (_wkLoopClearPad == pad)    _wkLoopClearPad    = 0xFF;
+  }
+}
+```
+
+#### Step 2-pre-5 — Add sub-page navigation key (`[t]` toggle)
+
+In `ToolPadRoles::run()`, the keyboard input loop must handle a new key `t` that cycles `_activeSubPage` 0 → 1 → 2 → 0. Find the `if (ev.type == NAV_CHAR && ev.ch == 'q')` block and add:
+
+```cpp
+      else if (ev.type == NAV_CHAR && ev.ch == 't') {
+        _activeSubPage = (_activeSubPage + 1) % 3;
+        // Reset pool cursor to "clear" line — the new sub-page has different lines
+        _poolLine = 0;
+        _poolIdx  = 0;
+        _editing  = false;
+        screenDirty = true;
+      }
+```
+
+The control bar must also advertise `[t] CTX` for visibility. Update `drawControlBar()`:
+
+```cpp
+  if (_editing) {
+    _ui->drawControlBar(VT_DIM "[^v<>] browse  [t] CTX  [P1] scroll  [RET] assign  [q] cancel" VT_RESET);
+  } else {
+    _ui->drawControlBar(VT_DIM "[^v<>] NAV  [t] CTX  [P1] scroll  [RET] EDIT  [TOUCH] JUMP  [d] DFLT  [r] CLEAR  [q] EXIT" VT_RESET);
+  }
+```
+
+#### Step 2-pre-6 — Adapt `drawPool()` to show only the active sub-page lines
+
+The current `drawPool()` always draws 6 category lines + clear. The new version draws different lines based on `_activeSubPage`:
+
+- **Sub-page 0 (Banks)**: only the Bank line (and clear)
+- **Sub-page 1 (Arpeg)**: Root / Mode / Octave / Hold / Arpeg P/S lines (5 lines + clear)
+- **Sub-page 2 (Loop)**: Loop Rec / Loop P/S / Loop Clr lines (3 lines + clear) — Phase 6 will append the 16 slot lines
+
+Replace the body of `drawPool()`:
+
+```cpp
+void ToolPadRoles::drawPool() {
+  int selectedPad = _gridRow * 12 + _gridCol;
+
+  auto drawPoolLine = [&](uint8_t lineNum, const char* label,
+                          const char* const* labels, uint8_t count,
+                          const char* lineColor) {
+    // ... existing lambda body unchanged ...
+  };
+
+  // === Active sub-page lines ===
+  if (_activeSubPage == 0) {
+    // Banks sub-page
+    drawPoolLine(1, "Bank:", POOL_BANK_LABELS, POOL_BANK_COUNT, VT_BLUE);
+  }
+  else if (_activeSubPage == 1) {
+    // Arpeg sub-page
+    drawPoolLine(2, "Root:",      POOL_ROOT_LABELS,     POOL_ROOT_COUNT,     VT_GREEN);
+    drawPoolLine(3, "Mode:",      POOL_MODE_LABELS,     POOL_MODE_COUNT,     VT_CYAN);
+    drawPoolLine(4, "Octave:",    POOL_OCTAVE_LABELS,   POOL_OCTAVE_COUNT,   VT_YELLOW);
+    drawPoolLine(5, "Hold:",      POOL_HOLD_LABELS,     POOL_HOLD_COUNT,     VT_MAGENTA);
+    drawPoolLine(6, "Arp P/S:",   POOL_ARPEG_PS_LABELS, POOL_ARPEG_PS_COUNT, VT_BRIGHT_RED);
+  }
+  else if (_activeSubPage == 2) {
+    // Loop sub-page
+    drawPoolLine(7, "Loop Rec:",  POOL_LOOP_REC_LABELS, POOL_LOOP_REC_COUNT, VT_BRIGHT_RED);
+    drawPoolLine(8, "Loop P/S:",  POOL_LOOP_PS_LABELS,  POOL_LOOP_PS_COUNT,  VT_BRIGHT_RED);
+    drawPoolLine(9, "Loop Clr:",  POOL_LOOP_CLR_LABELS, POOL_LOOP_CLR_COUNT, VT_BRIGHT_RED);
+    // Phase 6: 16 slot pad lines added here
+  }
+
+  // Clear action at the bottom (always visible)
+  {
+    bool isSelectedLine = _editing && (_poolLine == 0);
+    if (isSelectedLine) {
+      _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET VT_DIM "[---] clear role" VT_RESET);
+    } else {
+      _ui->drawFrameLine("  " VT_DIM "[---] clear role" VT_RESET);
+    }
+  }
+}
+```
+
+#### Step 2-pre-7 — Adapt header to show active context
+
+In `drawScreen()`, the console header must show the active sub-page:
+
+```cpp
+  const char* ctxName;
+  switch (_activeSubPage) {
+    case 1:  ctxName = "ARPEG ROLES"; break;
+    case 2:  ctxName = "LOOP ROLES"; break;
+    default: ctxName = "BANKS"; break;
+  }
+  char headerTitle[48];
+  snprintf(headerTitle, sizeof(headerTitle), "TOOL 3: %s", ctxName);
+  _ui->drawConsoleHeader(headerTitle, _nvsSaved);
+```
+
+#### Step 2-pre-8 — Pool linearization for pot navigation (per sub-page)
+
+The current `POOL_OFFSETS[]` linearizes a single flat pool. With 3 sub-pages, each sub-page has its own pool layout. The pot navigation linearization must use a different table per sub-page.
+
+Replace the static `POOL_OFFSETS[]` and `TOTAL_POOL_ITEMS` declarations with:
+
+```cpp
+// Per-sub-page pool linearization
+// Sub-page 0 (Banks):  Clear(1) + Bank(8) = 9
+// Sub-page 1 (Arpeg):  Clear(1) + Root(7) + Mode(8) + Octave(4) + Hold(1) + ArpPS(1) = 22
+// Sub-page 2 (Loop):   Clear(1) + LoopRec(1) + LoopPS(1) + LoopClr(1) = 4
+//                      Phase 6 will append 16 slot lines = 20 total
+
+static const uint8_t POOL_OFFSETS_BANKS[]  = {0, 1, 9};                       // total=9
+static const uint8_t POOL_OFFSETS_ARPEG[]  = {0, 1, 8, 16, 20, 21, 22};       // total=22
+static const uint8_t POOL_OFFSETS_LOOP[]   = {0, 1, 2, 3, 4};                 // total=4 (Phase 3)
+
+static const uint8_t TOTAL_POOL_BANKS = 9;
+static const uint8_t TOTAL_POOL_ARPEG = 22;
+static const uint8_t TOTAL_POOL_LOOP  = 4;   // Phase 6 → 20
+
+// Returns the offsets table + line count for the active sub-page.
+// linesOut: how many lines (sentinel-terminated implies +1 in array size)
+static const uint8_t* poolOffsetsForContext(uint8_t subPage,
+                                             uint8_t& linesOut,
+                                             uint8_t& totalOut) {
+  switch (subPage) {
+    case 1:
+      linesOut = 6;   // 0=clear, 1-5=arpeg category lines (mapped to internal lines 2-6)
+      totalOut = TOTAL_POOL_ARPEG;
+      return POOL_OFFSETS_ARPEG;
+    case 2:
+      linesOut = 4;   // 0=clear, 1-3=loop category lines (mapped to internal lines 7-9)
+      totalOut = TOTAL_POOL_LOOP;
+      return POOL_OFFSETS_LOOP;
+    default:
+      linesOut = 2;   // 0=clear, 1=bank
+      totalOut = TOTAL_POOL_BANKS;
+      return POOL_OFFSETS_BANKS;
+  }
+}
+```
+
+The linearization helpers `linearToPool` and `poolToLinear` must take the active sub-page into account. Update the file-scope helpers (and pass `_activeSubPage` from the call sites):
+
+```cpp
+static void linearToPool(int32_t linear, uint8_t subPage, uint8_t& line, uint8_t& idx) {
+  uint8_t lineCount, total;
+  const uint8_t* offsets = poolOffsetsForContext(subPage, lineCount, total);
+  for (uint8_t i = 0; i < lineCount; i++) {
+    if (linear < offsets[i + 1]) {
+      // Map sub-page-local line index back to global pool line number
+      // Sub-page 0: 0=clear, 1=bank
+      // Sub-page 1: 0=clear, 1=root(2), 2=mode(3), 3=octave(4), 4=hold(5), 5=arpPS(6)
+      // Sub-page 2: 0=clear, 1=loopRec(7), 2=loopPS(8), 3=loopClr(9)
+      static const uint8_t MAP_BANKS[]  = {0, 1};
+      static const uint8_t MAP_ARPEG[]  = {0, 2, 3, 4, 5, 6};
+      static const uint8_t MAP_LOOP[]   = {0, 7, 8, 9};
+      const uint8_t* map = (subPage == 1) ? MAP_ARPEG :
+                           (subPage == 2) ? MAP_LOOP : MAP_BANKS;
+      line = map[i];
+      idx  = (uint8_t)(linear - offsets[i]);
+      return;
+    }
+  }
+  line = 0; idx = 0;
+}
+
+static int32_t poolToLinear(uint8_t line, uint8_t idx, uint8_t subPage) {
+  uint8_t lineCount, total;
+  const uint8_t* offsets = poolOffsetsForContext(subPage, lineCount, total);
+  // Reverse-map global line → local index in this sub-page
+  uint8_t localIdx = 0xFF;
+  if (subPage == 0) {
+    if (line == 0) localIdx = 0;
+    else if (line == 1) localIdx = 1;
+  } else if (subPage == 1) {
+    static const uint8_t REV_ARPEG[] = {0, 0xFF, 1, 2, 3, 4, 5};  // global line -> local
+    if (line < 7) localIdx = REV_ARPEG[line];
+  } else if (subPage == 2) {
+    static const uint8_t REV_LOOP[] = {0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 1, 2, 3};
+    if (line < 10) localIdx = REV_LOOP[line];
+  }
+  if (localIdx == 0xFF) return 0;
+  return offsets[localIdx] + idx;
+}
+```
+
+All call sites of `linearToPool` and `poolToLinear` (3 in `ToolPadRoles.cpp`) must pass `_activeSubPage` as a new argument.
+
+> **AUDIT NOTE**: this is the most invasive part of the refactor. Search the file for `linearToPool(` and `poolToLinear(` and update each call site. The pot navigation `_potPoolLinear` is now scoped per sub-page — switching sub-page resets it to 0 (already handled in Step 2-pre-5 with `_poolLine = 0; _poolIdx = 0`).
+
+#### Step 2-pre-9 — Collision validation must be context-scoped
+
+In the run() pool selector, when the user presses ENTER on a pool item, the existing code checks if another pad already owns that role and offers a steal. The steal check only fires if the **same role** is already assigned.
+
+With contextual roles, we ALSO need to detect: "the target pad already has a global (bank) role, which is forbidden in any context". The check must scan only the **active context's** roles + the **globals**.
+
+Add a new helper `bool isPadOccupiedInContext(uint8_t pad)`:
+
+```cpp
+bool ToolPadRoles::isPadOccupiedInContext(uint8_t pad) const {
+  if (pad >= NUM_KEYS) return false;
+  // Globals are always blocking
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (_wkBankPads[i] == pad) return true;
+  }
+  // Contextual: only the active sub-page
+  if (_activeSubPage == 1) {
+    for (uint8_t i = 0; i < 7; i++) if (_wkRootPads[i] == pad) return true;
+    for (uint8_t i = 0; i < 7; i++) if (_wkModePads[i] == pad) return true;
+    if (_wkChromPad == pad) return true;
+    if (_wkHoldPad == pad) return true;
+    if (_wkArpPlayStopPad == pad) return true;
+    for (uint8_t i = 0; i < 4; i++) if (_wkOctavePads[i] == pad) return true;
+  } else if (_activeSubPage == 2) {
+    if (_wkLoopRecPad == pad) return true;
+    if (_wkLoopPlayStopPad == pad) return true;
+    if (_wkLoopClearPad == pad) return true;
+  }
+  return false;
+}
+```
+
+Add the declaration to `ToolPadRoles.h` private section:
+
+```cpp
+  bool isPadOccupiedInContext(uint8_t pad) const;
+```
+
+This helper is what the steal-confirmation logic should use instead of the current any-collision check. Find the call site in `run()` (around the ENTER handler) and replace any collision check with `isPadOccupiedInContext(targetPad)`. The exact line varies — search for `_confirmSteal = true`.
+
+#### Step 2-pre-10 — `clearAllRoles()` must be context-scoped
+
+The current `clearAllRoles()` wipes everything. The new version wipes only the **active sub-page's** roles. Replace:
+
+```cpp
+void ToolPadRoles::clearAllRoles() {
+  // Globals: only wipe in Banks sub-page
+  if (_activeSubPage == 0) {
+    memset(_wkBankPads, 0xFF, sizeof(_wkBankPads));
+    return;
+  }
+
+  // Arpeg sub-page
+  if (_activeSubPage == 1) {
+    memset(_wkRootPads, 0xFF, sizeof(_wkRootPads));
+    memset(_wkModePads, 0xFF, sizeof(_wkModePads));
+    _wkChromPad        = 0xFF;
+    _wkHoldPad         = 0xFF;
+    _wkArpPlayStopPad  = 0xFF;
+    memset(_wkOctavePads, 0xFF, sizeof(_wkOctavePads));
+  }
+
+  // Loop sub-page
+  if (_activeSubPage == 2) {
+    _wkLoopRecPad      = 0xFF;
+    _wkLoopPlayStopPad = 0xFF;
+    _wkLoopClearPad    = 0xFF;
+    // Phase 6: also wipe slot pads
+  }
+}
+```
+
+Update the confirmation prompt in `drawInfoPanel()` to mention the context:
+```cpp
+  if (_confirmClearAll) {
+    const char* ctx = (_activeSubPage == 0) ? "BANKS" :
+                       (_activeSubPage == 1) ? "ARPEG" : "LOOP";
+    _ui->drawFrameLine(VT_YELLOW "Clear ALL %s roles? (y/n)" VT_RESET, ctx);
+    return;
+  }
+```
+
+#### Step 2-pre-11 — `resetToDefaults()` must populate all 3 contexts
+
+`resetToDefaults()` is unchanged in scope (it always resets everything to factory defaults regardless of sub-page), but it must now also set the new fields:
+
+```cpp
+void ToolPadRoles::resetToDefaults() {
+  // Globals
+  for (uint8_t i = 0; i < NUM_BANKS; i++) _wkBankPads[i] = i;
+
+  // Arpeg context defaults
+  for (uint8_t i = 0; i < 7; i++) _wkRootPads[i] = 8 + i;
+  for (uint8_t i = 0; i < 7; i++) _wkModePads[i] = 15 + i;
+  _wkChromPad        = 22;
+  _wkHoldPad         = 23;
+  _wkArpPlayStopPad  = 24;
+  _wkOctavePads[0] = 25;
+  _wkOctavePads[1] = 26;
+  _wkOctavePads[2] = 27;
+  _wkOctavePads[3] = 28;
+
+  // Loop context defaults — leave unassigned; user must opt in via Tool 3
+  _wkLoopRecPad      = 0xFF;
+  _wkLoopPlayStopPad = 0xFF;
+  _wkLoopClearPad    = 0xFF;
+  // Phase 6: slot pads also default to 0xFF
+}
+```
+
+#### Step 2-pre-12 — `saveAll()` must save the new fields
+
+`saveAll()` already saves `BankPadStore`, `ScalePadStore`, `ArpPadStore`. Add a 4th save block for `LoopPadStore` (which now contains the 3 LOOP control pads + the slot pads array, even though slot pads are still all 0xFF in Phase 3):
+
+```cpp
+  // 4. LoopPadStore (Phase 3: only 3 LOOP control pads, slot pads all 0xFF)
+  LoopPadStore lps;
+  memset(&lps, 0, sizeof(lps));
+  lps.magic       = EEPROM_MAGIC;
+  lps.version     = LOOPPAD_VERSION;   // = 2 per Phase 1
+  lps.recPad      = _wkLoopRecPad;
+  lps.playStopPad = _wkLoopPlayStopPad;
+  lps.clearPad    = _wkLoopClearPad;
+  // slotPads[16] all default 0xFF — Phase 6 will populate them
+  memset(lps.slotPads, 0xFF, sizeof(lps.slotPads));
+  if (NvsManager::saveBlob(LOOP_PAD_NVS_NAMESPACE, LOOPPAD_NVS_KEY, &lps, sizeof(lps))) {
+    *_loopRecPad      = _wkLoopRecPad;
+    *_loopPlayStopPad = _wkLoopPlayStopPad;
+    *_loopClearPad    = _wkLoopClearPad;
+  } else {
+    allOk = false;
+  }
+```
+
+> **AUDIT NOTE — `_nvsSaved` flag**: do NOT include `lpOk` in the boolean conjunction for `_nvsSaved` (to avoid the BUG #3 of the Phase 3 audit). The `_nvsSaved` flag remains `bpOk && spOk && apOk`. Once the LOOP store is successfully written for the first time, future loads will succeed and the badge will reflect reality.
+
+> **AUDIT NOTE — load path**: the `LoopPadStore` load logic in `run()` (entry section, around line ~599) must be added. See sub-step 2m below for the exact code (still applicable, just updated for the new fields).
+
+---
+
+### 2a. Add new role enum values (ToolPadRoles.h, line ~22)
+
+> **CHANGED FROM ORIGINAL PLAN**: the original plan added 3 LOOP roles to a flat enum. The new b1 architecture also requires `ROLE_ARPEG_PLAYSTOP` (separate from a generic playstop), and the `ROLE_PLAYSTOP` value is renamed.
+
+Replace the enum with:
+
+```cpp
+enum PadRoleCode : uint8_t {
+  ROLE_NONE            = 0,
+  ROLE_BANK            = 1,
+  ROLE_ROOT            = 2,
+  ROLE_MODE            = 3,
+  ROLE_OCTAVE          = 4,
+  ROLE_HOLD            = 5,
+  ROLE_ARPEG_PLAYSTOP  = 6,    // <-- RENAMED from ROLE_PLAYSTOP (was generic)
+  ROLE_LOOP_REC        = 7,    // <-- ADD
+  ROLE_LOOP_PS         = 8,    // <-- ADD  (LOOP play/stop)
+  ROLE_LOOP_CLR        = 9,    // <-- ADD  (LOOP clear)
+  // Phase 6: ROLE_LOOP_SLOT_0..15 = 10..25
+  ROLE_COLLISION       = 0xFF
+};
+```
+
+**Audit note**: search the file for any use of the old `ROLE_PLAYSTOP` constant and replace with `ROLE_ARPEG_PLAYSTOP`. There should be ~3 references.
+
+### Original Step 2a (legacy reference, superseded)
+
+The original Step 2a addition remains documented below for traceability but is **superseded by the new enum above**:
+
+```cpp
+  ROLE_PLAYSTOP  = 6,
+  ROLE_LOOP_REC  = 7,     // <-- ADD
+  ROLE_LOOP_PS   = 8,     // <-- ADD  (LOOP play/stop)
+  ROLE_LOOP_CLR  = 9,     // <-- ADD  (LOOP clear)
+  ROLE_COLLISION = 0xFF
+};
+```
+
+---
+
+### Transition note for sub-sections 2b through 2t
+
+The remaining sub-sections (2b–2t) describe the addition of fields, members, labels, save/load logic, and pool handlers for the 3 new LOOP control roles. These sub-sections **remain valid in the b1 architecture** but require the following adaptations applied while implementing them:
+
+1. **Rename `_wkPlayStopPad` → `_wkArpPlayStopPad`** everywhere it appears (Step 2-pre-1 already documented this). Apply globally with a search/replace before working through 2b–2t.
+2. **Rename `_playStopPad` (live pointer) → `_arpPlayStopPad`** in the same files. The corresponding pointer in `main.cpp` (`s_playStopPad`) is **NOT renamed** at the main.cpp level — only the ToolPadRoles internals change. The `begin()` pointer parameter must be updated accordingly.
+3. **Pool linearization changes (Step 2-pre-8)** override the simple POOL_OFFSETS update in original Step 2d. Apply the per-sub-page tables instead of the flat one.
+4. **`POOL_LINE_COUNT = 10`** in Step 2e is **superseded** — line counts are per-sub-page now. Delete the `POOL_LINE_COUNT` constant; instead, the active count is fetched via `poolOffsetsForContext(_activeSubPage, lineCount, total)`.
+5. **`drawPool()` modifications in Step 2i** are **superseded** — the new `drawPool()` body is in Step 2-pre-6. The original Step 2i `drawPoolLine` calls are subsumed into the sub-page 2 branch of the new function.
+6. **`buildRoleMap()` modifications in Step 2h** are **superseded** — the new body is in Step 2-pre-3. The original Step 2h calls are subsumed into the `_activeSubPage == 2` branch.
+7. **`saveAll()` LoopPadStore section in Step 2l** is **superseded** — the new save block is in Step 2-pre-12. The original Step 2l snippet is correct in spirit but does not include the `slotPads[16]` field that Phase 1 added to the struct.
+8. **`getRoleForPad` modifications in Step 2p** are **superseded** — the new function (taking a `BankType context` parameter) is in Step 2-pre-1.
+9. **`clearRole` modifications in Step 2q** are **superseded** — the new function (context-scoped) is in Step 2-pre-4.
+10. **`clearAllRoles` modifications in Step 2o** are **superseded** — the new function (context-scoped) is in Step 2-pre-10.
+
+**Sub-sections 2b, 2c, 2f, 2g, 2j, 2k, 2m, 2n, 2r, 2s, 2t remain unchanged** (they add `_wk*` members, labels, helper switches, save logic, NVS load logic, default reset, getRoleForPad case branches, clearRole case branches, poolItemLabel case branches, printRoleDescription case branches, and run() live-to-wk copy — all of which are still needed in the b1 architecture, just integrated into the new context-aware structure).
+
+---
 
 ```cpp
   ROLE_PLAYSTOP  = 6,
@@ -657,6 +1245,46 @@ All 3 must be updated.
 
 Follow the ArpPadStore pattern. Load from `illpad_lpad`, validate, and populate the statics in main.cpp (via pointers passed at begin()).
 
+**Signature change** — extend `NvsManager::loadAll()` with 3 new reference parameters for the LOOP control pads:
+
+```cpp
+// NvsManager.h
+void loadAll(BankSlot* banks, uint8_t& currentBank, uint8_t* padOrder,
+             uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
+             uint8_t& chromaticPad, uint8_t& holdPad,
+             uint8_t& playStopPad, uint8_t* octavePads,
+             PotRouter& potRouter, SettingsStore& outSettings,
+             uint8_t& recPad, uint8_t& loopPlayPad, uint8_t& clearPad);  // <-- ADD
+```
+
+**Implementation** (in `NvsManager.cpp`, after the `ArpPadStore` load block):
+
+```cpp
+  // LoopPadStore — pad assignments for LOOP control (rec, play/stop, clear)
+  // Phase 6 will extend this to also load slotPads[16]
+  {
+    LoopPadStore lps;
+    if (loadBlob(LOOP_PAD_NVS_NAMESPACE, LOOPPAD_NVS_KEY,
+                 EEPROM_MAGIC, LOOPPAD_VERSION, &lps, sizeof(lps))) {
+      validateLoopPadStore(lps);
+      recPad      = lps.recPad;
+      loopPlayPad = lps.playStopPad;
+      clearPad    = lps.clearPad;
+      // slotPads[16] ignored in Phase 3 (Phase 6 will populate the s_loopSlotPads array)
+    }
+    // No else: defaults (0xFF) already in place from main.cpp init
+  }
+```
+
+**Caller update** in `main.cpp setup()` — find the existing `s_nvsManager.loadAll(...)` call and add the 3 new arguments:
+
+```cpp
+  s_nvsManager.loadAll(s_banks, currentBank, s_padOrder, bankPads,
+                        rootPads, modePads, chromaticPad, holdPad,
+                        s_playStopPad, octavePads, s_potRouter, s_settings,
+                        s_recPad, s_loopPlayPad, s_clearPad);   // <-- ADD
+```
+
 **Note**: LoopPotStore load/save is Phase 4 — not needed here because effects aren't implemented yet.
 
 ---
@@ -694,8 +1322,8 @@ Follow the ArpPadStore pattern. Load from `illpad_lpad`, validate, and populate 
 |---|---|
 | `src/setup/ToolBankConfig.h` | Replace _potComboState with _potTypeIdx, drawDescription signature change |
 | `src/setup/ToolBankConfig.cpp` | 2-axis cycle, countType helper, 3-way rendering, drawDescription 3-way, generic error |
-| `src/setup/ToolPadRoles.h` | ROLE_LOOP_REC/PS/CLR enum, _wkLoop* arrays, _loopRec/PS/Clr pointers, POOL_LINE_COUNT=10 |
-| `src/setup/ToolPadRoles.cpp` | Pool constants, linearization, labels, buildRoleMap, draw, find/assign/clear/clearAll, getRoleForPad, poolItemLabel, printRoleDescription, save/load, run() live-to-wk copy |
+| `src/setup/ToolPadRoles.h` | **b1 contextual refactor**: PadRoleCode enum (ROLE_ARPEG_PLAYSTOP rename + ROLE_LOOP_REC/PS/CLR add), `_activeSubPage` member, `currentContext()` helper, `getRoleForPad(pad, BankType context)` signature, `isPadOccupiedInContext()` helper, `_wkArpPlayStopPad` rename, `_wkLoopRec/PS/Clr` arrays, `_loopRec/PS/Clr` pointers, **POOL_LINE_COUNT removed** (now per-sub-page) |
+| `src/setup/ToolPadRoles.cpp` | **b1 contextual refactor**: `currentContext()` impl, per-sub-page POOL_OFFSETS_BANKS/ARPEG/LOOP tables, `linearToPool(linear, subPage, line, idx)` and `poolToLinear(line, idx, subPage)` helpers, `[t]` toggle key, context-aware `buildRoleMap` / `drawPool` / `clearRole` / `clearAllRoles` / `resetToDefaults` / `saveAll` (with LoopPadStore), `printRoleDescription` cases, `printPadDescription` context arg, header sub-page label, run() live-to-wk copy for LOOP fields |
 | `src/setup/SetupManager.h` | begin() signature: add recPad, loopPlayPad, clearPad params |
 | `src/setup/SetupManager.cpp` | Forward LOOP pad refs to _toolRoles.begin() |
 | `src/main.cpp` | Remove test config, pass LOOP pad statics to SetupManager::begin() |

@@ -880,17 +880,27 @@ static LoopEngine s_loopEngines[MAX_LOOP_BANKS];  // 2 engines, ~18.8 KB
 
 ### 3c. Add LOOP control pad statics (after s_playStopPad/s_lastPlayStopState, line ~76)
 
+> **DESIGN REF (Slot Drive prereq)**: see `docs/superpowers/specs/2026-04-06-loop-slot-drive-design.md` §2.4. The `s_loopSlotPads[LOOP_SLOT_COUNT]` array is declared here in Phase 2 even though it is unused until Phase 6. Phase 1 Step 7c-5 documents this cross-phase dependency. Initialised to 0xFF in setup() (Step 4 below).
+
 ```cpp
 // LOOP control pads (from LoopPadStore NVS or test config)
-static uint8_t  s_recPad           = 0xFF;
-static uint8_t  s_loopPlayPad      = 0xFF;
-static uint8_t  s_clearPad         = 0xFF;
-static bool     s_lastRecState     = false;
-static bool     s_lastLoopPlayState = false;
-static bool     s_lastClearState   = false;
-static uint32_t s_clearPressStart  = 0;
-static bool     s_clearFired       = false;
+static uint8_t  s_recPad             = 0xFF;
+static uint8_t  s_loopPlayPad        = 0xFF;
+static uint8_t  s_clearPad           = 0xFF;
+static uint8_t  s_loopSlotPads[LOOP_SLOT_COUNT];  // Phase 6 — initialised 0xFF below
+static bool     s_lastRecState       = false;
+static bool     s_lastLoopPlayState  = false;
+static bool     s_lastClearState     = false;
+static uint32_t s_clearPressStart    = 0;
+static bool     s_clearFired         = false;
 static const uint32_t CLEAR_LONG_PRESS_MS = 500;
+```
+
+Add the corresponding `memset` in setup(), in the Phase 2 Step 4 wiring section, right after the `BankSlot` init loop:
+
+```cpp
+// LOOP slot pads default unassigned (Phase 6 will populate from LoopPadStore)
+memset(s_loopSlotPads, 0xFF, sizeof(s_loopSlotPads));
 ```
 
 ---

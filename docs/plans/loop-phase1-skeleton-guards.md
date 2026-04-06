@@ -441,6 +441,112 @@ struct PotMappingStore {
 
 ---
 
+## Step 7c — Slot Drive prerequisites (forward-compatible additions)
+
+> **DESIGN REF**: see `docs/superpowers/specs/2026-04-06-loop-slot-drive-design.md` §1.4
+> (architecture des rôles), §2.6 (modifications composants existants), §1.6 (gestes
+> utilisateur). The slot drive itself is implemented in Phase 6 ; this step adds the
+> structural extensions that must exist from Phase 1 to avoid double NVS version bumps
+> later. **No runtime behavior changes from these additions** — the new fields default
+> to 0xFF (unassigned) and the new constants are unused at this stage.
+
+### 7c-1. Add LOOP slot constants in HardwareConfig.h
+
+Add after the LOOP color constants (around line 220, after `COL_LOOP_DIM`):
+
+```cpp
+// --- LOOP Slot Drive (Phase 6) ---
+// Long-press threshold for save action (release before this = load attempt)
+static constexpr uint16_t LOOP_SLOT_LONG_PRESS_MS = 1000;
+// Minimum press duration to count as a load (release below this = silent cancel)
+static constexpr uint16_t LOOP_SLOT_LOAD_MIN_MS   = 300;
+// LED ramp duration during save hold (matches LONG_PRESS_MS by definition)
+static constexpr uint16_t LOOP_SLOT_RAMP_DURATION_MS = 1000;
+
+// Slot drive LED colors (red/white/green family) — W=0 for pure chromatic
+static constexpr RGBW COL_LOOP_SLOT_LOAD   = {  0, 255,   0,   0};  // Load OK — green
+static constexpr RGBW COL_LOOP_SLOT_SAVE   = {  0,   0,   0, 255};  // Save OK — white
+static constexpr RGBW COL_LOOP_SLOT_REFUSE = {255,   0,   0,   0};  // Refus — red
+static constexpr RGBW COL_LOOP_SLOT_DELETE = {255,   0,   0,   0};  // Delete OK — red (rendered as double blink)
+
+// Number of slot pads (= number of slots in the drive)
+static constexpr uint8_t LOOP_SLOT_COUNT = 16;
+```
+
+### 7c-2. Bump `LOOPPAD_VERSION` to 2 and extend `LoopPadStore` with `slotPads[16]`
+
+In `KeyboardData.h`, locate the `LoopPadStore` definition added in Step 2b and replace it:
+
+```cpp
+#define LOOP_PAD_NVS_NAMESPACE  "illpad_lpad"
+#define LOOPPAD_NVS_KEY         "pads"
+#define LOOPPAD_VERSION         2   // was 1 — bumped for slotPads[] addition
+
+struct LoopPadStore {
+  uint16_t magic;          // EEPROM_MAGIC
+  uint8_t  version;        // LOOPPAD_VERSION (=2)
+  uint8_t  reserved;
+  uint8_t  recPad;         // 0xFF = unassigned
+  uint8_t  playStopPad;
+  uint8_t  clearPad;
+  uint8_t  _pad;           // alignment to 8 bytes
+  uint8_t  slotPads[LOOP_SLOT_COUNT];   // 16 bytes — 0xFF = slot unassigned
+  uint8_t  _pad2[8];                    // padding to 32 bytes (room for future fields)
+};
+static_assert(sizeof(LoopPadStore) == 32, "LoopPadStore must be 32 bytes");
+static_assert(sizeof(LoopPadStore) <= NVS_BLOB_MAX_SIZE, "LoopPadStore exceeds NVS blob max");
+```
+
+**Why 32 bytes total**: 8 bytes (existing) + 16 bytes (slotPads) + 8 bytes (future room) = 32. Aligned, well under the 128 byte NVS limit. Per the Zero Migration Policy, the size mismatch (12 → 32) is silently rejected at first boot and defaults apply.
+
+### 7c-3. Extend `validateLoopPadStore` for slotPads
+
+Replace the function added in Step 3a with:
+
+```cpp
+inline void validateLoopPadStore(LoopPadStore& s) {
+  if (s.recPad != 0xFF && s.recPad >= NUM_KEYS)             s.recPad      = 0xFF;
+  if (s.playStopPad != 0xFF && s.playStopPad >= NUM_KEYS)   s.playStopPad = 0xFF;
+  if (s.clearPad != 0xFF && s.clearPad >= NUM_KEYS)         s.clearPad    = 0xFF;
+  for (uint8_t i = 0; i < LOOP_SLOT_COUNT; i++) {
+    if (s.slotPads[i] != 0xFF && s.slotPads[i] >= NUM_KEYS) s.slotPads[i] = 0xFF;
+  }
+}
+```
+
+### 7c-4. PadRoleCode enum extensions (deferred to Phase 3)
+
+The new enum values `ROLE_ARPEG_PLAYSTOP` and `ROLE_LOOP_SLOT_0..15` are NOT added in Phase 1. They belong to the Phase 3 refactor of Tool 3 (which restructures the entire role system to the contextual b1 architecture). Phase 1 is documentation only.
+
+> **AUDIT NOTE**: in the current codebase `PadRoleCode` is defined in `src/setup/ToolPadRoles.h` (lines 14-23). Phase 3 will refactor it; Phase 1 leaves the file untouched.
+
+### 7c-5. Forward declaration of `s_loopSlotPads[16]` in Phase 2 step 3c
+
+This sub-step is a forward-edit to Phase 2's snippet. When Phase 2 lands, the LOOP control pads section in main.cpp must already declare a `s_loopSlotPads[16]` array, even though Phase 2 doesn't use it. The Phase 2 plan (Step 3c) is updated to include this declaration. The Phase 1 task here is to **acknowledge the cross-phase dependency** — no Phase 1 code change.
+
+Reference: see `docs/plans/loop-phase2-engine-wiring.md` Step 3c, which now includes:
+
+```cpp
+static uint8_t  s_loopSlotPads[LOOP_SLOT_COUNT];   // initialized to 0xFF in setup()
+```
+
+And the corresponding `memset` in setup() (Step 4 of Phase 2).
+
+### Build verification for Step 7c
+
+```bash
+~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1
+```
+
+Expected: clean build. The new constants are defined but unused at this stage (no warnings expected from `-Wunused-variable` since they are `constexpr` at namespace scope, which the compiler tolerates).
+
+### Test verification for Step 7c
+
+1. Flash firmware. NVS layout has changed (`LoopPadStore` 12 → 32 bytes) but Phase 1 doesn't load this store yet, so no observable change.
+2. All NORMAL/ARPEG behavior identical to baseline.
+
+---
+
 ## Build Verification
 
 ```bash
@@ -462,8 +568,8 @@ Expected: **clean build, zero warnings** related to LOOP. Possible warning about
 
 | File | Changes |
 |---|---|
-| `src/core/KeyboardData.h` | BANK_LOOP enum, LoopEngine forward-declare, BankSlot.loopEngine, MAX_LOOP_BANKS, LoopPadStore, LoopPotStore, validateLoopPadStore, fix validateBankTypeStore, PotMappingStore.loopMap, NVS defines, NVS_DESCRIPTORS, TOOL_NVS indices |
-| `src/core/HardwareConfig.h` | LoopQuantMode enum, COL_LOOP_FREE/QUANTIZED/REC/OVD/DIM, LED_FG/BG_LOOP_* intensities, LED_TICK_BOOST_*, LED_TICK_DUR_*, LED_WAIT_QUANT_* |
+| `src/core/KeyboardData.h` | BANK_LOOP enum, LoopEngine forward-declare, BankSlot.loopEngine, MAX_LOOP_BANKS, LoopPadStore (with slotPads[16]), LOOPPAD_VERSION=2, LoopPotStore, validateLoopPadStore (with slot validation), fix validateBankTypeStore, PotMappingStore.loopMap, NVS defines, NVS_DESCRIPTORS, TOOL_NVS indices |
+| `src/core/HardwareConfig.h` | LoopQuantMode enum, COL_LOOP_FREE/QUANTIZED/REC/OVD/DIM, LED_FG/BG_LOOP_* intensities, LED_TICK_BOOST_*, LED_TICK_DUR_*, LED_WAIT_QUANT_*, **LOOP_SLOT_LONG_PRESS_MS / LOAD_MIN_MS / RAMP_DURATION_MS, COL_LOOP_SLOT_LOAD/SAVE/REFUSE/DELETE, LOOP_SLOT_COUNT** |
 | `src/managers/BankManager.h` | MidiTransport forward-declare, _transport member, begin() signature |
 | `src/managers/BankManager.cpp` | begin() body, switchToBank() LOOP guards (stub), debug print 3-way |
 | `src/managers/ScaleManager.cpp` | processScalePads() LOOP early return with _lastScaleKeys sync |
