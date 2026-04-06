@@ -13,6 +13,8 @@ Three changes:
 2. **ToolPadRoles extension** — 4th category LOOP (3 pads)
 3. **NVS + main.cpp** — LoopPadStore load, remove test config, dynamic LoopEngine assignment
 
+**LOOP quantize is a separate NVS field.** Phase 1 added `loopQuantize[NUM_BANKS]` to `BankTypeStore` alongside the existing `quantize[NUM_BANKS]`. ARPEG banks read/write `quantize[]` (`ArpStartMode`), LOOP banks read/write `loopQuantize[]` (`LoopQuantMode`). Tool 4's Up/Down axis dispatches to the correct field based on the current bank type.
+
 ---
 
 ## Step 1 — ToolBankConfig: 2-axis rewrite
@@ -20,8 +22,12 @@ Three changes:
 The current flat cycle (NORMAL→ARPEG-Imm→ARPEG-Beat→ARPEG-Bar) doesn't scale to 3 types. Replace with:
 
 ```
-Left/Right : cycle TYPE   (NORMAL → ARPEG → LOOP → NORMAL)
-Up/Down    : cycle QUANTIZE (Immediate → Beat → Bar) — only for ARPEG + LOOP
+Left/Right : cycle TYPE      (NORMAL → ARPEG → LOOP → NORMAL)
+Up/Down    : cycle QUANTIZE  (ARPEG: Immediate → Beat → Bar)
+                               (LOOP:  Free      → Beat → Bar)
+             — ARPEG banks edit quantize[] (ArpStartMode)
+             — LOOP  banks edit loopQuantize[] (LoopQuantMode)
+             — NORMAL: Up/Down ignored
 ```
 
 ### 1a. Remove _potComboState (ToolBankConfig.h, line ~32)
@@ -44,6 +50,72 @@ static uint8_t countType(const BankType* types, BankType target) {
     return count;
 }
 ```
+
+### 1b-bis. Extend run() working copies with wkLoopQuantize
+
+Alongside the existing `wkTypes[]` and `wkQuantize[]` stack arrays in `run()`, add a third working copy for the LOOP quantize field. Initialize from `BankTypeStore.loopQuantize[]` (loaded via `NvsManager::loadBlob()`). If load fails, default every entry to `LOOP_QUANT_FREE`.
+
+```cpp
+  BankType wkTypes[NUM_BANKS];
+  uint8_t  wkQuantize[NUM_BANKS];
+  uint8_t  wkLoopQuantize[NUM_BANKS];      // <-- ADD
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+      wkTypes[i]         = _banks[i].type;
+      wkQuantize[i]      = _nvs ? _nvs->getLoadedQuantizeMode(i) : DEFAULT_ARP_START_MODE;
+      wkLoopQuantize[i]  = DEFAULT_LOOP_QUANT_MODE;  // populated from NVS below
+  }
+
+  // When reloading from NVS after validateBankTypeStore():
+  {
+    BankTypeStore bts;
+    if (NvsManager::loadBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
+                             EEPROM_MAGIC, BANKTYPE_VERSION, &bts, sizeof(bts))) {
+        validateBankTypeStore(bts);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) {
+            wkTypes[i]         = (BankType)bts.types[i];
+            wkQuantize[i]      = bts.quantize[i];
+            wkLoopQuantize[i]  = bts.loopQuantize[i];   // <-- ADD
+        }
+    }
+  }
+
+  // Also add a saved snapshot for revert-on-cancel:
+  uint8_t savedLoopQuantize[NUM_BANKS];
+  memcpy(savedLoopQuantize, wkLoopQuantize, sizeof(savedLoopQuantize));
+```
+
+And in `saveConfig()`, both fields are written to `BankTypeStore`:
+
+```cpp
+bool ToolBankConfig::saveConfig(const BankType* types,
+                                const uint8_t*  quantize,
+                                const uint8_t*  loopQuantize) {   // <-- ADD param
+    BankTypeStore bts;
+    memset(&bts, 0, sizeof(bts));
+    bts.magic   = EEPROM_MAGIC;
+    bts.version = BANKTYPE_VERSION;  // = 2 per Phase 1
+    for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        bts.types[i]         = (uint8_t)types[i];
+        bts.quantize[i]      = quantize[i];
+        bts.loopQuantize[i]  = loopQuantize[i];
+    }
+    return NvsManager::saveBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
+                                 &bts, sizeof(bts));
+}
+```
+
+Update the header declaration accordingly: `bool saveConfig(const BankType*, const uint8_t*, const uint8_t*);`
+
+All existing call sites of `saveConfig()` inside `run()` must pass the new argument. There are currently two of them (around lines 158 and 271 of the existing `ToolBankConfig.cpp`) — both called after a savepoint swap, and both followed by a `memcpy(savedQuantize, wkQuantize, ...)`. Both must become:
+
+```cpp
+        if (saveConfig(wkTypes, wkQuantize, wkLoopQuantize)) {
+          memcpy(savedTypes,        wkTypes,        sizeof(savedTypes));
+          memcpy(savedQuantize,     wkQuantize,     sizeof(savedQuantize));
+          memcpy(savedLoopQuantize, wkLoopQuantize, sizeof(savedLoopQuantize));
+```
+
+Similarly the revert-on-cancel path must restore `wkLoopQuantize[cursor]` from `savedLoopQuantize[cursor]`.
 
 ### 1c. Replace NAV_RIGHT/LEFT cycle (lines 216-269)
 
@@ -81,9 +153,12 @@ Replace the entire `if (ev.type == NAV_RIGHT)` + `else if (ev.type == NAV_LEFT)`
 
           if (allowed && next != cur) {
               wkTypes[cursor] = next;
-              // Reset quantize to Immediate when changing type
-              if (next != BANK_NORMAL)
+              // Reset the appropriate quantize field when changing type
+              if (next == BANK_ARPEG) {
                   wkQuantize[cursor] = ARP_START_IMMEDIATE;
+              } else if (next == BANK_LOOP) {
+                  wkLoopQuantize[cursor] = LOOP_QUANT_FREE;
+              }
               errorShown = false;
           } else if (!allowed) {
               errorShown = true;
@@ -92,16 +167,23 @@ Replace the entire `if (ev.type == NAV_RIGHT)` + `else if (ev.type == NAV_LEFT)`
           screenDirty = true;
       }
 
-      // --- Quantize axis: Up/Down (ARPEG + LOOP only) ---
+      // --- Quantize axis: Up/Down (dispatches to quantize[] or loopQuantize[]) ---
       else if (ev.type == NAV_UP || ev.type == NAV_DOWN) {
-          if (wkTypes[cursor] == BANK_ARPEG || wkTypes[cursor] == BANK_LOOP) {
-              int8_t dir = (ev.type == NAV_DOWN) ? 1 : -1;
+          int8_t dir = (ev.type == NAV_DOWN) ? 1 : -1;
+          if (wkTypes[cursor] == BANK_ARPEG) {
               int8_t q = (int8_t)wkQuantize[cursor] + dir;
               if (q >= 0 && q < NUM_ARP_START_MODES) {
                   wkQuantize[cursor] = (uint8_t)q;
               }
               screenDirty = true;
+          } else if (wkTypes[cursor] == BANK_LOOP) {
+              int8_t q = (int8_t)wkLoopQuantize[cursor] + dir;
+              if (q >= 0 && q < NUM_LOOP_QUANT_MODES) {
+                  wkLoopQuantize[cursor] = (uint8_t)q;
+              }
+              screenDirty = true;
           }
+          // NORMAL: Up/Down ignored
       }
 ```
 
@@ -131,7 +213,12 @@ In the pot event handling (if pot changes _potTypeIdx in edit mode), map back:
               if (potType == BANK_LOOP && countType(wkTypes, BANK_LOOP) >= MAX_LOOP_BANKS) allowed = false;
               if (allowed) {
                   wkTypes[cursor] = potType;
-                  if (potType != BANK_NORMAL) wkQuantize[cursor] = ARP_START_IMMEDIATE;
+                  // Reset the appropriate quantize field on type change
+                  if (potType == BANK_ARPEG) {
+                      wkQuantize[cursor] = ARP_START_IMMEDIATE;
+                  } else if (potType == BANK_LOOP) {
+                      wkLoopQuantize[cursor] = LOOP_QUANT_FREE;
+                  }
                   screenDirty = true;
               } else {
                   _potTypeIdx = (int32_t)wkTypes[cursor]; // snap back
@@ -153,30 +240,52 @@ In the pot event handling (if pot changes _potTypeIdx in edit mode), map back:
                arpCount, MAX_ARP_BANKS, loopCount, MAX_LOOP_BANKS);
 ```
 
-**Bank line** (lines ~305-344): Replace `bool isArpeg` with 3-way:
+**Bank line** (lines ~305-344): Replace `bool isArpeg` with 3-way. The quantize mode is read from `wkQuantize[]` (ARPEG) or `wkLoopQuantize[]` (LOOP) and displayed via **two distinct name tables**: ARPEG uses `QUANTIZE_NAMES[]` ("Immediate"/"Beat"/"Bar"), LOOP uses a new `LOOP_QUANTIZE_NAMES[]` ("Free"/"Beat"/"Bar"). The "Free" terminology is player-facing, matching the visual manual and the engine's `LOOP_QUANT_FREE` enum.
+
+Add the LOOP name table alongside the existing ARPEG one:
+
+```cpp
+// ToolBankConfig.cpp, near the existing QUANTIZE_NAMES definition:
+static const char* LOOP_QUANTIZE_NAMES[NUM_LOOP_QUANT_MODES] = {
+    "Free",   // LOOP_QUANT_FREE  — no snap, instant transitions
+    "Beat",   // LOOP_QUANT_BEAT  — snap to next beat (24 ticks)
+    "Bar"     // LOOP_QUANT_BAR   — snap to next bar  (96 ticks)
+};
+```
+
+Then in the bank line rendering:
+
 ```cpp
       const char* typeName;
       const char* typeColor;
-      if (wkTypes[i] == BANK_ARPEG)      { typeName = "ARPEG";  typeColor = VT_CYAN; }
-      else if (wkTypes[i] == BANK_LOOP)   { typeName = "LOOP";   typeColor = VT_MAGENTA; }
-      else                                 { typeName = "NORMAL"; typeColor = ""; }
+      const char* qname = nullptr;
+      if (wkTypes[i] == BANK_ARPEG) {
+          typeName = "ARPEG";  typeColor = VT_CYAN;
+          qname = QUANTIZE_NAMES[wkQuantize[i]];
+      } else if (wkTypes[i] == BANK_LOOP) {
+          typeName = "LOOP";   typeColor = VT_MAGENTA;
+          qname = LOOP_QUANTIZE_NAMES[wkLoopQuantize[i]];
+      } else {
+          typeName = "NORMAL"; typeColor = "";
+      }
 
       if (isEditing) {
           pos += snprintf(line + pos, sizeof(line) - pos,
                           "%s" VT_BOLD "[%s", typeColor, typeName);
-          if (wkTypes[i] != BANK_NORMAL)
-              pos += snprintf(line + pos, sizeof(line) - pos,
-                              " - %s", QUANTIZE_NAMES[wkQuantize[i]]);
+          if (qname)
+              pos += snprintf(line + pos, sizeof(line) - pos, " - %s", qname);
           pos += snprintf(line + pos, sizeof(line) - pos, "]" VT_RESET);
       } else {
           pos += snprintf(line + pos, sizeof(line) - pos,
                           selected ? "%s%s" VT_RESET "  " : "%s  ",
                           selected ? typeColor : "", typeName);
-          if (wkTypes[i] != BANK_NORMAL)
+          if (qname)
               pos += snprintf(line + pos, sizeof(line) - pos,
-                              "    Quantize: %s", QUANTIZE_NAMES[wkQuantize[i]]);
+                              "    Quantize: %s", qname);
       }
 ```
+
+**Why two distinct tables**: ARPEG keeps "Immediate" because that terminology is established in the arp UI (and matches `ARP_START_IMMEDIATE`). LOOP uses "Free" because the musical feel is different — a FREE loop is not "immediate fire, then nothing special", it's "the whole session is free-feel, no snap anywhere". The word "Free" better communicates this to the player.
 
 **Quantize description** (line ~360): Extend guard:
 ```cpp
@@ -449,7 +558,7 @@ Add cases after case 6 (Play/Stop):
       break;
     case 8:  // Loop Play/Stop
       _ui->drawFrameLine(VT_BRIGHT_RED "Loop Play/Stop" VT_RESET "  " VT_DIM "--  LOOP banks only" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Tap to toggle playback. Supports quantized start (Immediate/Beat/Bar)." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Tap to toggle playback. Supports quantized start (Free/Beat/Bar)." VT_RESET);
       _ui->drawFrameLine(VT_DIM "On NORMAL/ARPEG banks, this pad plays as a regular music pad." VT_RESET);
       break;
     case 9:  // Loop Clear
@@ -564,7 +673,8 @@ Follow the ArpPadStore pattern. Load from `illpad_lpad`, validate, and populate 
 2. **Tool 4**: navigate to bank 7 or 8
    - Press Right → type cycles NORMAL → ARPEG → LOOP → NORMAL
    - Press Left → reverse cycle
-   - On ARPEG or LOOP: press Down → Immediate → Beat → Bar
+   - On ARPEG: press Down → Immediate → Beat → Bar
+   - On LOOP:  press Down → Free → Beat → Bar
    - Header shows `2A/4 0L/2` (or similar counts)
    - Try to exceed max 4 ARPEG or max 2 LOOP → error message
    - ENTER saves, reboot → config persists

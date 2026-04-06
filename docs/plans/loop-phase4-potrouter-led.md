@@ -402,9 +402,35 @@ Verify `class LoopEngine;` exists near top of LedController.h. No action needed.
 
 #### 9c. Implement renderBankLoop() (after renderBankArpeg, line ~466)
 
-Follows renderBankArpeg pattern exactly — same structure, same sine math, different colors.
-Sine pulse ONLY on "FG stopped + events loaded" (equivalent of arp "FG stopped + hasNotes").
-All other states are solid. Recording/Overdubbing get a fast blink (unique to LOOP, no arp equivalent).
+**Design goals** (per user decisions 2026-04-06):
+1. FREE mode during PLAYING = solid color, no tick flashes (no internal beat grid to show)
+2. QUANTIZED (BEAT/BAR) during PLAYING/OVERDUBBING = solid base + hierarchical tick boosts (beat < bar < wrap)
+3. RECORDING in both modes = red blink + same hierarchy (beat flashes come from globalTick via LoopEngine)
+4. OVERDUBBING = magenta blink (same pattern as RECORDING but different color)
+5. Waiting quantize (`hasPendingAction()`) = rapid blink in action color, overrides base render
+6. Background LOOP bank = same base color (dimmed) + simple beat tick only (no bar/wrap distinction)
+7. All ticks are OVERLAY-style — base color always lisible through the boost
+8. Boosts are additive percentage points, max() wins when multiple active, 0 = disabled
+
+**Tick flash state tracking** — three independent timers per LED (beat / bar / wrap):
+The pattern reuses `_flashStartTime[led]` concept but needs three parallel timers
+because a bar can happen while a beat is still flashing (wrap can happen while bar
+is still flashing). Add to LedController.h private members:
+
+```cpp
+  unsigned long _beatFlashStart[NUM_LEDS] = {0};
+  unsigned long _barFlashStart[NUM_LEDS]  = {0};
+  unsigned long _wrapFlashStart[NUM_LEDS] = {0};
+```
+
+**Waiting quantize blink state** — no per-LED memory needed, derived from `now`:
+
+```cpp
+  // In renderBankLoop, when hasPendingAction():
+  bool blinkOn = ((now / LED_WAIT_QUANT_PERIOD_MS) % 2 == 0);
+```
+
+**Main implementation**:
 
 ```cpp
 void LedController::renderBankLoop(uint8_t led, bool isFg, unsigned long now) {
@@ -415,65 +441,126 @@ void LedController::renderBankLoop(uint8_t led, bool isFg, unsigned long now) {
         return;
     }
 
-    LoopEngine::State ls = slot.loopEngine->getState();
-    bool playing  = (ls == LoopEngine::PLAYING || ls == LoopEngine::OVERDUBBING);
-    bool hasEvents = slot.loopEngine->getEventCount() > 0;
+    LoopEngine* eng = slot.loopEngine;
+    LoopEngine::State ls = eng->getState();
+    bool hasEvents = eng->getEventCount() > 0;
 
-    // Tick flash (wrap): consume flag, track timer — same pattern as arp
-    if (slot.loopEngine->consumeTickFlash()) {
-        _flashStartTime[led] = now;
-    }
-    bool flashing = false;
-    if (_flashStartTime[led] != 0) {
-        if ((now - _flashStartTime[led]) < _tickFlashDurationMs) {
-            flashing = true;
-        } else {
-            _flashStartTime[led] = 0;
-        }
-    }
+    // ---- 1. Consume tick flash flags → update timers ----
+    if (eng->consumeBeatFlash()) _beatFlashStart[led] = (now == 0) ? 1 : now;
+    if (eng->consumeBarFlash())  _barFlashStart[led]  = (now == 0) ? 1 : now;
+    if (eng->consumeWrapFlash()) _wrapFlashStart[led] = (now == 0) ? 1 : now;
 
-    // --- Recording/Overdubbing: fast blink (LOOP-specific, no arp equivalent) ---
-    if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
-        // Only visible when FG (bank switch denied during rec/overdub, but defensive)
-        bool on = ((now / 150) % 2 == 0);
-        setPixel(led, COL_LOOP_REC, on ? 100 : 0);
+    // Clear expired timers
+    if (_beatFlashStart[led] && (now - _beatFlashStart[led]) >= LED_TICK_DUR_BEAT_MS) _beatFlashStart[led] = 0;
+    if (_barFlashStart[led]  && (now - _barFlashStart[led])  >= LED_TICK_DUR_BAR_MS)  _barFlashStart[led]  = 0;
+    if (_wrapFlashStart[led] && (now - _wrapFlashStart[led]) >= LED_TICK_DUR_WRAP_MS) _wrapFlashStart[led] = 0;
+
+    // ---- 2. Waiting quantize blink (overrides everything when active) ----
+    // Visible only on FG bank — BG has no pending action (guard denied).
+    if (isFg && eng->hasPendingAction()) {
+        bool blinkOn = ((now / LED_WAIT_QUANT_PERIOD_MS) % 2 == 0);
+        // Color depends on the action type. Red for destructive (rec/stop
+        // transitions), green for play. Overlay over dim base so the base
+        // state color is still hinted.
+        RGBW blinkCol = COL_LOOP_REC;  // default red
+        // Simple heuristic: STOPPED → PLAYING is green, everything else red
+        if (ls == LoopEngine::STOPPED) blinkCol = COL_LOOP_FREE;  // pending PLAY
+        setPixel(led, blinkCol, blinkOn ? LED_WAIT_QUANT_INTENSITY : LED_FG_LOOP_IDLE);
         return;
     }
 
-    // --- From here: EMPTY, STOPPED, or PLAYING — mirrors arp exactly ---
-    const RGBW& col = COL_LOOP;  // arp uses _colArpFg/_colArpBg; LOOP uses single COL_LOOP
+    // ---- 3. Select base color based on quantize mode and state ----
+    RGBW baseCol;
+    switch (ls) {
+        case LoopEngine::RECORDING:
+            baseCol = COL_LOOP_REC;
+            break;
+        case LoopEngine::OVERDUBBING:
+            baseCol = COL_LOOP_OVD;
+            break;
+        case LoopEngine::PLAYING:
+        case LoopEngine::STOPPED:
+            // FREE vs QUANTIZED distinction only affects color, not structure
+            baseCol = (eng->getLoopQuantizeMode() == LOOP_QUANT_FREE)
+                    ? COL_LOOP_FREE : COL_LOOP_QUANTIZED;
+            break;
+        case LoopEngine::EMPTY:
+        default:
+            baseCol = COL_LOOP_DIM;
+            break;
+    }
 
-    if (flashing && playing) {
-        // Wrap flash overrides during playback
-        setPixel(led, _colTickFlash, isFg ? LED_FG_LOOP_FLASH : LED_BG_LOOP_FLASH);
-    } else if (playing) {
-        // Playing: solid bright (FG) or solid dim (BG) — no pulse
-        setPixel(led, col, isFg ? LED_FG_LOOP_PLAY : LED_BG_LOOP_PLAY);
-    } else if (isFg && hasEvents) {
-        // FG stopped with events loaded: slow sine pulse (the ONLY pulse in LOOP)
+    // ---- 4. Rec/Overdub blink base intensity ----
+    // Simple 2 Hz blink (150 ms on/off). Hierarchy boosts still layered on top.
+    bool isRecOrOvd = (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING);
+    uint8_t baseIntensity;
+    if (isRecOrOvd) {
+        bool blinkOn = ((now / 150) % 2 == 0);
+        baseIntensity = blinkOn ? LED_FG_LOOP_REC : 0;
+    } else if (ls == LoopEngine::PLAYING) {
+        baseIntensity = isFg ? LED_FG_LOOP_PLAY : LED_BG_LOOP_PLAY;
+    } else if (ls == LoopEngine::STOPPED && hasEvents && isFg) {
+        // FG STOPPED + events: slow sine pulse (the ONLY pulse in non-playing state)
         uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
         uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
         uint8_t  idx   = phase >> 8;
         uint8_t  frac  = phase & 0xFF;
         uint16_t sine16 = (uint16_t)LED_SINE_LUT[idx] * (256 - frac)
                         + (uint16_t)LED_SINE_LUT[(idx + 1) & 0xFF] * frac;
-        uint8_t intensity = LED_FG_LOOP_STOP_MIN
-                          + (uint8_t)((uint32_t)sine16 * (LED_FG_LOOP_STOP_MAX - LED_FG_LOOP_STOP_MIN) / 65280);
-        setPixel(led, col, intensity);
+        baseIntensity = LED_FG_LOOP_STOP_MIN
+                      + (uint8_t)((uint32_t)sine16 * (LED_FG_LOOP_STOP_MAX - LED_FG_LOOP_STOP_MIN) / 65280);
     } else {
-        // BG (all states) or FG idle (no events): solid dim
-        setPixel(led, col, isFg ? LED_FG_LOOP_IDLE : LED_BG_LOOP_DIM);
+        // EMPTY, STOPPED idle, or BG fallback
+        baseIntensity = isFg ? LED_FG_LOOP_IDLE : LED_BG_LOOP_DIM;
     }
+
+    // ---- 5. Tick hierarchy boost (max wins) ----
+    // Skipped when the LED is OFF (rec blink in "off" half, EMPTY, etc.) —
+    // no flash visible on a dark pixel.
+    // Only applies when:
+    //   a) FG in QUANTIZED mode during PLAYING/OVERDUBBING (positionUs-derived flags)
+    //   b) FG during RECORDING (globalTick-derived flags, both FREE and QUANTIZED)
+    //   c) BG during PLAYING/OVERDUBBING → beat tick ONLY, no bar/wrap
+    uint8_t boost = 0;
+    if (baseIntensity > 0) {
+        if (isFg) {
+            // FG: full hierarchy — max(wrap, bar, beat/beat1)
+            if (_wrapFlashStart[led]) {
+                boost = LED_TICK_BOOST_WRAP;
+            } else if (_barFlashStart[led]) {
+                boost = LED_TICK_BOOST_BAR;
+            } else if (_beatFlashStart[led]) {
+                // No way to distinguish beat 1 from beat 2/3/4 after the flash fires,
+                // because _barFlashStart is checked first. The beat1 boost kicks in
+                // implicitly: when beat 1 of a bar fires, _barFlashStart is set AND
+                // _beatFlashStart is set — _barFlashStart wins (higher boost). So
+                // LED_TICK_BOOST_BEAT1 is only used when a downbeat occurs OUTSIDE
+                // a bar boundary, which in practice never happens. Left in the
+                // constants for Tool 7 configurability but unused at runtime.
+                boost = LED_TICK_BOOST_BEAT;
+            }
+        } else {
+            // BG: simple beat tick only, same base color (no special color)
+            if (_beatFlashStart[led]) {
+                boost = LED_TICK_BOOST_BEAT_BG;
+            }
+        }
+    }
+
+    // ---- 6. Apply boost, clamp, render ----
+    uint16_t finalIntensity = (uint16_t)baseIntensity + boost;
+    if (finalIntensity > 100) finalIntensity = 100;
+    setPixel(led, baseCol, (uint8_t)finalIntensity);
 }
 ```
 
-**Compared to renderBankArpeg line-by-line:**
-- Tick flash setup: identical pattern (lines 431-441 → same)
-- Recording blink: NEW (arp has no equivalent — arp never "records")
-- flash + playing → wrap flash with `_colTickFlash` (identical)
-- playing → solid `LED_FG_LOOP_PLAY` / `LED_BG_LOOP_PLAY` (arp uses `_fgArpPlayMax` / `_bgArpPlayMin`)
-- FG stopped + events → sine pulse `STOP_MIN↔STOP_MAX` (arp uses `_fgArpStopMin↔Max`)
-- else → solid dim (identical structure)
+**Notes**:
+- The `LedController` needs access to `eng->getLoopQuantizeMode()`. Add a getter in LoopEngine.h:
+  ```cpp
+  uint8_t getLoopQuantizeMode() const { return _quantizeMode; }
+  ```
+- Beat 1 boost vs bar boost: in practice `_barFlashStart` is set whenever the first beat of a bar fires (see Phase 2 tick() logic), so the bar boost always wins on beat 1. The separate `LED_TICK_BOOST_BEAT1` constant exists for future tweaks (when Tool 7 will let the user assign independent values) but is not used directly at runtime today.
+- Confirmations (CONFIRM_LOOP_REC, CONFIRM_STOP) are rendered by the existing `renderConfirmation()` overlay system, which runs AFTER this function. They overlay on top naturally.
 
 ---
 
@@ -486,7 +573,9 @@ Replace the ternary with 3-way:
 ```cpp
   RGBW barColor, barDim;
   if (_slots && _slots[_currentBank].type == BANK_LOOP) {
-      barColor = COL_LOOP;     barDim = COL_LOOP_DIM;
+      // LOOP bargraph uses the same base color family regardless of FREE/QUANTIZED —
+      // the bargraph is a value visualization, not a state indicator.
+      barColor = COL_LOOP_QUANTIZED;  barDim = COL_LOOP_DIM;
   } else if (_slots && _slots[_currentBank].type == BANK_ARPEG) {
       barColor = _colArpFg;    barDim = _colArpBg;
   } else {
@@ -599,6 +688,6 @@ Without this, the `default:` branch kills CONFIRM_LOOP_REC immediately
 | `src/managers/PotRouter.cpp` | applyBinding, isPerBank, getRange, getDiscrete, seedCatch, rebuildBindings 3-ctx, DEFAULT_MAPPING loopMap, loadStoredPerBankLoop |
 | `src/managers/NvsManager.h` | _loopPotDirty[8], _pendingLoopPot[8], queueLoopPotWrite(), getLoadedLoopParams() |
 | `src/managers/NvsManager.cpp` | Constructor init, tickPotDebounce BANK_LOOP branch, queueLoopPotWrite, commitAll batch, loadAll section, getLoadedLoopParams |
-| `src/core/LedController.h` | CONFIRM_LOOP_REC, LoopEngine forward-declare, renderBankLoop decl, showClearRamp, _clearRampPct |
-| `src/core/LedController.cpp` | renderBankLoop (arp-pattern), renderConfirmation LOOP_REC expiry, renderNormalDisplay LOOP_REC overlay, bargraph 3-way color, showClearRamp |
+| `src/core/LedController.h` | CONFIRM_LOOP_REC, LoopEngine forward-declare, renderBankLoop decl, `_beatFlashStart[]`/`_barFlashStart[]`/`_wrapFlashStart[]` members, showClearRamp, _clearRampPct |
+| `src/core/LedController.cpp` | renderBankLoop (FREE solid / QUANTIZED tick hierarchy / BG beat only / waiting quantize blink), renderConfirmation LOOP_REC expiry, renderNormalDisplay LOOP_REC overlay, bargraph 3-way color, showClearRamp |
 | `src/main.cpp` | reloadPerBankParams complete, pushParamsToLoop complete |

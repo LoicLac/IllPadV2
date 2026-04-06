@@ -9,10 +9,10 @@
 ## Overview
 
 This phase creates two things:
-1. **LoopEngine** — self-contained class: state machine, recording, proportional playback, bar-snap, overdub merge, refcount, pending events
+1. **LoopEngine** — self-contained class: state machine, recording, proportional playback, bar-snap, overdub merge, refcount, pending events, quantized transitions
 2. **main.cpp wiring** — static instances, `processLoopMode()`, `handleLoopControls()`, tick/processEvents in loop order
 
-The design doc (`docs/drafts/loop-mode-design.md`) contains the full implementation code. This plan references it by section and adds integration specifics.
+**This plan is the source of truth.** All method implementations are inline below. No external reference needed.
 
 ---
 
@@ -20,43 +20,47 @@ The design doc (`docs/drafts/loop-mode-design.md`) contains the full implementat
 
 ### 1a. Create `src/loop/LoopEngine.h`
 
-Class definition. Reference: design doc sections "Data Structures > LoopEngine" and "Playback Engine".
+Class definition — mirrors ArpEngine patterns where applicable (refcount, pending queue, per-bank lifecycle).
 
-**Public API** (mirror ArpEngine patterns where applicable):
+**Public API**:
 
-```
+```cpp
 // Config
 void begin(uint8_t channel);
-void clear(MidiTransport& transport);
+void clear(MidiTransport& transport);          // Hard flush — vides tout (refcount + pending + events + overdub)
 void setPadOrder(const uint8_t* padOrder);
-void setQuantizeMode(uint8_t mode);
+void setLoopQuantizeMode(uint8_t mode);         // LoopQuantMode: FREE/BEAT/BAR
 void setChannel(uint8_t ch);
 
-// State transitions
+// State transitions — each may be quantized based on _quantizeMode
+// FREE: executes synchronously (no snap)
+// BEAT/BAR: sets _pendingAction, actual execution deferred until tick() reaches boundary
 void startRecording();
 void stopRecording(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM);
 void startOverdub();
 void stopOverdub(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM);
-void play(const ClockManager& clock, float currentBPM);
-void stop(MidiTransport& transport);
+void play(float currentBPM);
+void stop(MidiTransport& transport);            // PLAYING->STOPPED: soft flush (trailing pending ok)
+void abortOverdub(MidiTransport& transport);    // OVERDUBBING->STOPPED: ALWAYS immediate, hard flush
+void cancelOverdub();                           // OVERDUBBING->PLAYING: discard current overdub pass, keep the loop
 void flushLiveNotes(MidiTransport& transport, uint8_t channel);
 
-// Core playback (called every loop iteration)
-void tick(MidiTransport& transport, float currentBPM);
+// Core playback (called every loop iteration, from main.cpp)
+void tick(MidiTransport& transport, float currentBPM, uint32_t globalTick);
 void processEvents(MidiTransport& transport);
 
-// Recording input
+// Recording input (called by processLoopMode when state == RECORDING || OVERDUBBING)
 void recordNoteOn(uint8_t padIndex, uint8_t velocity);
 void recordNoteOff(uint8_t padIndex);
 
-// Refcount helpers (called by processLoopMode)
+// Refcount helpers (called by processLoopMode for live-play deduplication)
 bool noteRefIncrement(uint8_t note);
 bool noteRefDecrement(uint8_t note);
 
 // Note mapping
 uint8_t padToNote(uint8_t padIndex) const;
 
-// Setters for params (stubs — no effects in Phase 2)
+// Setters for params (stubs — filled in Phase 5)
 void setShuffleDepth(float depth);
 void setShuffleTemplate(uint8_t tmpl);
 void setChaosAmount(float amount);
@@ -69,8 +73,23 @@ void setVelocityVariation(uint8_t pct);
 State    getState() const;
 bool     isPlaying() const;
 bool     isRecording() const;  // RECORDING or OVERDUBBING
+bool     hasPendingAction() const;     // for LED feedback: waiting quantize visual
+uint8_t  getLoopQuantizeMode() const;   // for LED feedback: FREE vs QUANTIZED color
 uint16_t getEventCount() const;
-bool     consumeTickFlash();
+
+// Tick flash flags — consumed once by LedController per frame.
+// Three separate flags let the LED hierarchy render beat / bar / wrap distinctly.
+// Detection source:
+//   PLAYING or OVERDUBBING → derived from positionUs + _loopLengthBars
+//   RECORDING              → derived from globalTick (no loop structure yet)
+//   EMPTY / STOPPED        → never set
+// In FREE quantize mode, during PLAYING/OVERDUBBING, NONE of these flags are
+// set (the loop has no master-clock-aligned grid — solid render only).
+// During RECORDING the flags ARE set in FREE mode (using globalTick).
+bool     consumeBeatFlash();   // any beat crossing (including beat 1)
+bool     consumeBarFlash();    // bar boundary (beat 1 of a new bar)
+bool     consumeWrapFlash();   // loop wrap (end of cycle)
+
 float    getShuffleDepth() const;
 uint8_t  getShuffleTemplate() const;
 float    getChaosAmount() const;
@@ -81,6 +100,19 @@ float    getVelPatternDepth() const;
 **State enum**:
 ```cpp
 enum State : uint8_t { EMPTY, RECORDING, PLAYING, OVERDUBBING, STOPPED };
+```
+
+**PendingAction enum** (quantized transitions — set by public methods, executed in `tick()` when boundary reached):
+```cpp
+enum PendingAction : uint8_t {
+    PENDING_NONE             = 0,
+    PENDING_START_RECORDING  = 1,   // EMPTY → RECORDING
+    PENDING_STOP_RECORDING   = 2,   // RECORDING → PLAYING (close + bar-snap + enchaîne playback)
+    PENDING_START_OVERDUB    = 3,   // PLAYING → OVERDUBBING
+    PENDING_STOP_OVERDUB     = 4,   // OVERDUBBING → PLAYING (close + merge)
+    PENDING_PLAY             = 5,   // STOPPED → PLAYING
+    PENDING_STOP             = 6    // PLAYING → STOPPED (playback continues until boundary, then soft flush)
+};
 ```
 
 **LoopEvent struct** (define in LoopEngine.h, before the class):
@@ -111,68 +143,84 @@ NoteOff events go through the same pending queue as noteOn. This ensures shuffle
 offsets are applied to BOTH, preserving gate length. Without this, a shuffled noteOn
 with an unshuffled noteOff would shorten the gate — audible on sustained sounds (bass, pads).
 
-**Private members — key buffers**:
-- `LoopEvent _events[MAX_LOOP_EVENTS]` — 8 KB (MAX_LOOP_EVENTS = 1024)
-- `LoopEvent _overdubBuf[MAX_OVERDUB_EVENTS]` — 1 KB (MAX_OVERDUB_EVENTS = 128)
+**Private members — key buffers and state**:
+- `LoopEvent _events[MAX_LOOP_EVENTS]` — 8 KB (`MAX_LOOP_EVENTS = 1024`)
+- `LoopEvent _overdubBuf[MAX_OVERDUB_EVENTS]` — 1 KB (`MAX_OVERDUB_EVENTS = 128`)
 - `uint8_t _noteRefCount[128]` — per MIDI note
-- `PendingNote _pending[MAX_PENDING]` — 16 entries (MAX_PENDING = 16, handles both noteOn and noteOff)
+- `PendingNote _pending[MAX_PENDING]` — **48 entries** (`MAX_PENDING = 48`) — handles both noteOn and noteOff events simultaneously. Sized generously: 48 × 8 bytes = 384 bytes per engine × `MAX_LOOP_BANKS`(2) = 768 bytes SRAM total. Budget philosophy: prefer safe over economical (see CLAUDE.md Budget Philosophy).
+- `bool _overdubActivePads[48]` — tracks which pads had a `recordNoteOn` during the current overdub session. Used by `flushHeldPadsToOverdub()` to only inject noteOff for pads actually recorded during the overdub, not for pads held since before. Reset in `startOverdub()`.
+- `PendingAction _pendingAction` — set by public methods when quantize is BEAT/BAR, executed in `tick()` at boundary
+- `uint8_t _quantizeMode` — `LoopQuantMode` value, set by `setLoopQuantizeMode()` from per-bank config
+- `uint16_t _loopLengthBars` — set in `stopRecording()` via bar-snap
+- `uint32_t _recordStartUs, _playStartUs, _lastPositionUs` — timing anchors
+- `float _recordBpm` — BPM latched at `stopRecording()` for proportional playback
+- `uint16_t _eventCount, _overdubCount, _cursorIdx`
+- `bool _beatFlash, _barFlash, _wrapFlash` — consumed once per frame by LedController (hierarchy: beat < bar < wrap)
+- `uint32_t _lastBeatIdx` — last beat index detected in PLAYING/OVERDUBBING (from positionUs)
+- `uint32_t _lastRecordBeatTick` — last globalTick modulo 24 checkpoint during RECORDING (for beat flash detection when no loop structure exists yet)
 
 ### 1b. Create `src/loop/LoopEngine.cpp`
 
-Implementation. Reference design doc sections by name:
+Full implementation. All code inline below. No external reference needed.
 
-| Method | Design doc section | Key logic |
-|---|---|---|
-| `begin()` | Data Structures | Zero buffers, set channel |
-| `clear()` | State Machine | Flush all notes, reset to EMPTY |
-| `startRecording()` | Recording flow | Set RECORDING, `_waitingForFirstHit = true` |
-| `stopRecording()` | Recording flow + Bar snap | Flush held pads, latch `_recordBpm`, bar-snap, sort, → PLAYING |
-| `startOverdub()` | Recording flow | Reset overdub count, → OVERDUBBING |
-| `stopOverdub()` | Recording flow | `flushHeldPadsToOverdub()`, `mergeOverdub()`, → PLAYING |
-| `play()` | Playback start quantize | Compute `_playStartUs` with quantize delay |
-| `stop()` | State Machine | Flush active notes, discard overdub (`_overdubCount = 0`), → STOPPED |
-| `tick()` | Playback Engine Phase 1 | Proportional position: `elapsedUs = (micros() - _playStartUs) % liveDurationUs; positionUs = elapsedUs * recordDurationUs / liveDurationUs;` Wrap when `positionUs < _lastPositionUs` → flushActiveNotes + cursor=0 + tickFlash. Quantize guard: `if ((int32_t)(now - _playStartUs) < 0) return;` **Both noteOn AND noteOff go through schedulePending** — shuffle/chaos applied to all events so gate length is preserved (mirrors ArpEngine pending pattern). |
-| `processEvents()` | Playback Engine Phase 2 | Fire pending notes via refcount — velocity > 0 = noteOn (increment), velocity == 0 = noteOff (decrement). Mirrors ArpEngine.processEvents (line 443-447). |
-| `recordNoteOn/Off()` | Record methods | Buffer overflow guard, store in events or overdubBuf |
-| `mergeOverdub()` | Overdub merge | Sort overdub buf, reverse merge O(n+m) |
-| `flushHeldPadsToOverdub()` | Recording flow | Inject noteOff for held pads at current position |
-| `flushLiveNotes()` | Bank switch | CC123 + zero refcount |
-| `padToNote()` | Note mapping | Returns `_padOrder[padIndex] + 36` (GM kick), or `0xFF` if pad unmapped — callers MUST check for 0xFF |
-
-**Critical helper implementations** (must be exactly right for MIDI safety):
+#### Constants
 
 ```cpp
-// padToNote — guard unmapped pads (0xFF + 36 would overflow to 35 = wrong note)
-static const uint8_t LOOP_NOTE_OFFSET = 36;  // GM kick drum
+static const uint8_t  LOOP_NOTE_OFFSET     = 36;   // GM kick drum
+static const uint16_t MAX_LOOP_EVENTS      = 1024; // Main event buffer
+static const uint8_t  MAX_OVERDUB_EVENTS   = 128;  // Overdub buffer
+static const uint8_t  MAX_PENDING          = 48;   // Pending note queue (shuffle/chaos scheduling)
+static const uint16_t TICKS_PER_BEAT       = 24;   // MIDI PPQN standard
+static const uint16_t TICKS_PER_BAR        = 96;   // 4/4 assumption
+```
+
+#### Helper: `padToNote` — unmapped pad guard
+
+```cpp
+// Returns 0xFF for unmapped pads (padOrder[i] == 0xFF).
+// WITHOUT this guard: 0xFF + 36 = 35 (uint8_t overflow), wrong MIDI note.
 uint8_t LoopEngine::padToNote(uint8_t padIndex) const {
     uint8_t order = _padOrder[padIndex];
-    if (order == 0xFF) return 0xFF;  // unmapped
+    if (order == 0xFF) return 0xFF;
     return order + LOOP_NOTE_OFFSET;
 }
+```
 
-// noteRefIncrement — returns true on 0→1 (caller sends MIDI noteOn)
+#### Helpers: refcount
+
+```cpp
+// noteRefIncrement — returns true on 0→1 transition (caller sends MIDI noteOn)
 bool LoopEngine::noteRefIncrement(uint8_t note) {
+    if (note >= 128) return false;  // guard against 0xFF or any invalid note
     return (_noteRefCount[note]++ == 0);
 }
 
 // noteRefDecrement — returns true on 1→0 (caller sends MIDI noteOff)
-// MUST guard refcount==0 to prevent underflow (stop() zeros all refcounts,
-// then pad release calls this — without guard, would underflow to 255)
+// MUST guard refcount==0: flushActiveNotes(hard) zeros all refcounts,
+// then a subsequent pad release would underflow to 255 without the guard.
 bool LoopEngine::noteRefDecrement(uint8_t note) {
+    if (note >= 128) return false;
     if (_noteRefCount[note] > 0) {
         return (--_noteRefCount[note] == 0);
     }
     return false;
 }
+```
 
-// calcLoopDurationUs — guard BPM==0 (ClockManager can briefly return 0 in edge case)
+#### Helper: `calcLoopDurationUs`
+
+```cpp
+// Duration in us for the current loop length at a given BPM.
+// Guard clamps bpm to 10.0f minimum (matches pot range) — prevents
+// both division by zero AND uint32_t overflow on long loops at very low BPM.
+// At bpm=10, 64 bars = 1,536,000,000 us (~25 min) — fits uint32_t.
 uint32_t LoopEngine::calcLoopDurationUs(float bpm) const {
-    if (bpm < 1.0f) bpm = 1.0f;  // safety clamp — prevents division by zero
+    if (bpm < 10.0f) bpm = 10.0f;
     return (uint32_t)(_loopLengthBars * 4.0f * 60000000.0f / bpm);
 }
 ```
 
-**Phase 2 simplification — NO EFFECTS**: `calcShuffleOffsetUs()`, `calcChaosOffsetUs()`, `applyVelocityPattern()` return 0 / identity. The method bodies exist but are stubs:
+#### Phase 2 effect stubs (filled in Phase 5)
 
 ```cpp
 int32_t LoopEngine::calcShuffleOffsetUs(uint32_t, uint32_t) { return 0; }
@@ -180,7 +228,615 @@ int32_t LoopEngine::calcChaosOffsetUs(uint32_t) { return 0; }
 uint8_t LoopEngine::applyVelocityPattern(uint8_t origVel, uint32_t, uint32_t) { return origVel; }
 ```
 
-These stubs will be filled in Phase 5.
+#### `begin`, `clear`, `setLoopQuantizeMode`
+
+```cpp
+void LoopEngine::begin(uint8_t channel) {
+    _channel        = channel;
+    _state          = EMPTY;
+    _pendingAction  = PENDING_NONE;
+    _quantizeMode   = LOOP_QUANT_FREE;
+    _eventCount     = 0;
+    _overdubCount   = 0;
+    _cursorIdx      = 0;
+    _loopLengthBars = 0;
+    _recordStartUs  = 0;
+    _playStartUs    = 0;
+    _lastPositionUs = 0;
+    _recordBpm      = 120.0f;
+    _beatFlash      = false;
+    _barFlash       = false;
+    _wrapFlash      = false;
+    _lastBeatIdx    = 0;
+    _lastRecordBeatTick = 0xFFFFFFFF;
+    _padOrder       = nullptr;
+    memset(_noteRefCount, 0, sizeof(_noteRefCount));
+    memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
+    for (uint8_t i = 0; i < MAX_PENDING; i++) _pending[i].active = false;
+}
+
+void LoopEngine::clear(MidiTransport& transport) {
+    flushActiveNotes(transport, /*hard=*/true);  // noteOff + vide pending
+    _state          = EMPTY;
+    _pendingAction  = PENDING_NONE;
+    _eventCount     = 0;
+    _overdubCount   = 0;
+    _cursorIdx      = 0;
+    _loopLengthBars = 0;
+    _lastPositionUs = 0;
+    _beatFlash      = false;
+    _barFlash       = false;
+    _wrapFlash      = false;
+    _lastBeatIdx    = 0;
+    _lastRecordBeatTick = 0xFFFFFFFF;
+    memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
+}
+
+void LoopEngine::setLoopQuantizeMode(uint8_t mode) {
+    if (mode >= NUM_LOOP_QUANT_MODES) mode = DEFAULT_LOOP_QUANT_MODE;
+    _quantizeMode = mode;
+    // If mode drops to FREE while a pending action is waiting,
+    // leave the pending intact — the boundary check in tick() will fire on the
+    // very next tick (globalTick % 24 is cheap and harmless).
+}
+```
+
+#### State transitions — public API with quantize gating
+
+Each public transition checks `_quantizeMode`. If FREE, execute now (private `doXxx()`). If BEAT/BAR, set `_pendingAction` and return — `tick()` will dispatch when the boundary arrives.
+
+```cpp
+void LoopEngine::startRecording() {
+    if (_state != EMPTY) return;
+    if (_quantizeMode == LOOP_QUANT_FREE) {
+        doStartRecording();
+    } else {
+        _pendingAction = PENDING_START_RECORDING;
+    }
+}
+
+void LoopEngine::stopRecording(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
+    if (_state != RECORDING) return;
+    if (_quantizeMode == LOOP_QUANT_FREE) {
+        doStopRecording(keyIsPressed, padOrder, currentBPM);
+    } else {
+        // Stash the args we need later — kept in members because the pending
+        // dispatcher has no access to the caller's stack state.
+        _pendingKeyIsPressed = keyIsPressed;
+        _pendingPadOrder     = padOrder;
+        _pendingBpm          = currentBPM;
+        _pendingAction       = PENDING_STOP_RECORDING;
+    }
+}
+
+void LoopEngine::startOverdub() {
+    if (_state != PLAYING) return;
+    if (_quantizeMode == LOOP_QUANT_FREE) {
+        doStartOverdub();
+    } else {
+        _pendingAction = PENDING_START_OVERDUB;
+    }
+}
+
+void LoopEngine::stopOverdub(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
+    if (_state != OVERDUBBING) return;
+    if (_quantizeMode == LOOP_QUANT_FREE) {
+        doStopOverdub(keyIsPressed, padOrder, currentBPM);
+    } else {
+        _pendingKeyIsPressed = keyIsPressed;
+        _pendingPadOrder     = padOrder;
+        _pendingBpm          = currentBPM;
+        _pendingAction       = PENDING_STOP_OVERDUB;
+    }
+}
+
+void LoopEngine::play(float currentBPM) {
+    if (_state != STOPPED) return;
+    if (_quantizeMode == LOOP_QUANT_FREE) {
+        doPlay(currentBPM);
+    } else {
+        _pendingBpm    = currentBPM;
+        _pendingAction = PENDING_PLAY;
+    }
+}
+
+void LoopEngine::stop(MidiTransport& transport) {
+    if (_state != PLAYING) return;
+    if (_quantizeMode == LOOP_QUANT_FREE) {
+        doStop(transport);
+    } else {
+        _pendingAction = PENDING_STOP;
+        // Playback continues until boundary — visible to LedController via hasPendingAction()
+    }
+}
+
+// Abort overdub (PLAY/STOP pad during OVERDUBBING): ALWAYS immediate, hard flush.
+// Quantize mode is ignored — abort means "stop now, throw away overdub".
+void LoopEngine::abortOverdub(MidiTransport& transport) {
+    if (_state != OVERDUBBING) return;
+    _overdubCount = 0;
+    memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
+    flushActiveNotes(transport, /*hard=*/true);
+    _state         = STOPPED;
+    _pendingAction = PENDING_NONE;
+}
+
+// Cancel overdub (CLEAR long-press during OVERDUBBING): discard only the
+// events captured during the current overdub pass, keep the loop playing
+// with its previous content. This is the "undo overdub" path — the user
+// made a mistake during overdub and wants to try again without losing the
+// underlying loop.
+//
+// ALWAYS immediate (the 500ms long-press IS the "human quantize"). No flush
+// of active notes: the main loop keeps running via _events[] and the
+// pending queue continues firing naturally. Any live pad the user is still
+// holding will release normally via processLoopMode on the next frame.
+void LoopEngine::cancelOverdub() {
+    if (_state != OVERDUBBING) return;
+    _overdubCount = 0;
+    memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
+    _state         = PLAYING;
+    _pendingAction = PENDING_NONE;
+    // _playStartUs, _cursorIdx, _lastPositionUs untouched → loop continues
+    // exactly where it was. No audible gap, no retrigger.
+}
+```
+
+#### Private transition implementations (the real work)
+
+```cpp
+void LoopEngine::doStartRecording() {
+    _eventCount    = 0;
+    _recordStartUs = micros();
+    _lastRecordBeatTick = 0xFFFFFFFF;  // force first beat flash at first tick
+    _state         = RECORDING;
+}
+
+void LoopEngine::doStopRecording(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
+    // 1. Flush held pads (inject noteOff for pads still pressed) — but we haven't
+    //    tracked "recorded pads" during first recording, so we inject noteOff for
+    //    every pressed pad. The semantic is correct: any note held at close must
+    //    end at close time (otherwise the note is orphan).
+    uint32_t closeUs   = micros();
+    uint32_t positionUs = closeUs - _recordStartUs;
+    for (uint8_t i = 0; i < 48; i++) {
+        if (keyIsPressed[i] && _eventCount < MAX_LOOP_EVENTS) {
+            _events[_eventCount++] = { positionUs, i, 0, {0, 0} };
+        }
+    }
+
+    // 2. Latch recording BPM for proportional playback
+    _recordBpm = (currentBPM < 10.0f) ? 10.0f : currentBPM;
+
+    // 3. Bar-snap: round recorded duration to nearest integer bar count
+    uint32_t barDurationUs = (uint32_t)(4.0f * 60000000.0f / _recordBpm);
+    uint32_t recordedDurationUs = closeUs - _recordStartUs;
+    uint16_t bars = (recordedDurationUs + barDurationUs / 2) / barDurationUs;
+    if (bars == 0) bars = 1;
+    if (bars > 64) bars = 64;
+    _loopLengthBars = bars;
+
+    // 4. Normalize event offsets to [0, bars * barDurationUs) via proportional scale
+    float scale = (float)(bars * barDurationUs) / (float)recordedDurationUs;
+    for (uint16_t i = 0; i < _eventCount; i++) {
+        _events[i].offsetUs = (uint32_t)((float)_events[i].offsetUs * scale);
+    }
+
+    // 5. Sort events by offsetUs (insertion sort — N < 128 typical, cheap enough)
+    sortEvents(_events, _eventCount);
+
+    // 6. Initialize playback state — we transition directly to PLAYING.
+    //    No call to play() — we're already at the boundary (pending dispatcher
+    //    guarantees it) or in FREE mode where no snap is needed.
+    _playStartUs    = micros();
+    _cursorIdx      = 0;
+    _lastPositionUs = 0;
+    _lastBeatIdx    = 0xFFFFFFFF;  // force beat flash at first beat of playback
+    _state          = PLAYING;
+}
+
+void LoopEngine::doStartOverdub() {
+    _overdubCount = 0;
+    memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
+    _state        = OVERDUBBING;
+}
+
+void LoopEngine::doStopOverdub(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
+    (void)padOrder;  // unused — kept for signature symmetry with stopRecording
+    (void)currentBPM;
+
+    // 1. Flush held pads — but ONLY pads that had a recordNoteOn during this
+    //    overdub session (tracked via _overdubActivePads). Pads held from before
+    //    the overdub must NOT receive an injected noteOff (would be orphan).
+    uint32_t closeUs = micros();
+    // Compute current loop position in recording timebase
+    uint32_t liveDurationUs = calcLoopDurationUs(currentBPM);
+    uint32_t recordDurationUs = calcLoopDurationUs(_recordBpm);
+    uint32_t elapsedUs = (closeUs - _playStartUs) % liveDurationUs;
+    uint32_t positionUs = (uint32_t)((float)elapsedUs * (float)recordDurationUs / (float)liveDurationUs);
+
+    for (uint8_t i = 0; i < 48; i++) {
+        if (_overdubActivePads[i] && keyIsPressed[i] && _overdubCount < MAX_OVERDUB_EVENTS) {
+            _overdubBuf[_overdubCount++] = { positionUs, i, 0, {0, 0} };
+        }
+    }
+    memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
+
+    // 2. Sort overdub buffer by offsetUs
+    sortEvents(_overdubBuf, _overdubCount);
+
+    // 3. Reverse merge O(n+m) into _events[] — no auxiliary buffer
+    mergeOverdub();
+
+    // 4. Back to PLAYING — no change to _playStartUs (loop already running)
+    _state = PLAYING;
+}
+
+void LoopEngine::doPlay(float currentBPM) {
+    (void)currentBPM;  // BPM read live in tick() via parameter
+    // Direct start. If we got here via pending dispatcher, we're already on a
+    // boundary — cursor restarts from the top of the loop.
+    _playStartUs    = micros();
+    _cursorIdx      = 0;
+    _lastPositionUs = 0;
+    _lastBeatIdx    = 0xFFFFFFFF;  // force beat flash at first beat
+    _state          = PLAYING;
+}
+
+void LoopEngine::doStop(MidiTransport& transport) {
+    // Soft flush — noteOff the currently active notes, but let the pending
+    // queue finish its scheduled events (trailing notes allowed).
+    flushActiveNotes(transport, /*hard=*/false);
+    _state = STOPPED;
+}
+```
+
+#### `tick()` — pending action dispatcher + proportional playback
+
+```cpp
+void LoopEngine::tick(MidiTransport& transport, float currentBPM, uint32_t globalTick) {
+    // ---- 1. Pending action dispatcher (quantize boundary check) ----
+    if (_pendingAction != PENDING_NONE) {
+        uint16_t boundary = (_quantizeMode == LOOP_QUANT_BAR) ? TICKS_PER_BAR : TICKS_PER_BEAT;
+        if (globalTick % boundary == 0) {
+            // Boundary reached — execute and clear
+            switch (_pendingAction) {
+                case PENDING_START_RECORDING:
+                    doStartRecording();
+                    break;
+                case PENDING_STOP_RECORDING:
+                    doStopRecording(_pendingKeyIsPressed, _pendingPadOrder, _pendingBpm);
+                    break;
+                case PENDING_START_OVERDUB:
+                    doStartOverdub();
+                    break;
+                case PENDING_STOP_OVERDUB:
+                    doStopOverdub(_pendingKeyIsPressed, _pendingPadOrder, _pendingBpm);
+                    break;
+                case PENDING_PLAY:
+                    doPlay(_pendingBpm);
+                    break;
+                case PENDING_STOP:
+                    doStop(transport);
+                    break;
+                default: break;
+            }
+            _pendingAction = PENDING_NONE;
+        }
+        // Fall through to playback logic — loop continues running while PENDING_STOP
+        // waits for boundary, and PENDING_START_OVERDUB plays back normally while waiting.
+    }
+
+    // ---- 2. RECORDING tick flash (globalTick-based, no loop structure yet) ----
+    // Runs BEFORE the playback logic gate so it fires while state == RECORDING.
+    // Both FREE and QUANTIZED modes get tick flashes during recording — the
+    // recording blink needs rhythmic feedback from the master clock.
+    if (_state == RECORDING) {
+        uint32_t currentBeatTick = globalTick / TICKS_PER_BEAT;  // beat index since boot
+        if (currentBeatTick != _lastRecordBeatTick) {
+            _beatFlash = true;
+            // Bar = every 4th beat from an arbitrary reference (globalTick % 96 == 0)
+            if ((globalTick % TICKS_PER_BAR) < TICKS_PER_BEAT) _barFlash = true;
+            _lastRecordBeatTick = currentBeatTick;
+        }
+        return;  // RECORDING does not run playback logic
+    }
+
+    // ---- 3. Playback logic (only PLAYING and OVERDUBBING produce scheduled events) ----
+    if (_state != PLAYING && _state != OVERDUBBING) return;
+
+    uint32_t now = micros();
+
+    uint32_t liveDurationUs   = calcLoopDurationUs(currentBPM);
+    uint32_t recordDurationUs = calcLoopDurationUs(_recordBpm);
+    if (liveDurationUs == 0 || recordDurationUs == 0) return;  // defense in depth
+
+    uint32_t elapsedUs  = (now - _playStartUs) % liveDurationUs;
+    uint32_t positionUs = (uint32_t)((float)elapsedUs * (float)recordDurationUs / (float)liveDurationUs);
+
+    // Wrap detection: position jumped backward relative to last tick.
+    // DO NOT flush active notes here — refcount + pending queue handle long notes
+    // that cross the wrap naturally (see Budget Philosophy: overlaps allowed).
+    bool wrapped = (positionUs < _lastPositionUs);
+    if (wrapped) {
+        _cursorIdx    = 0;
+        _wrapFlash    = true;
+        _lastBeatIdx  = 0xFFFFFFFF;  // reset so first beat of new cycle flashes
+    }
+
+    // ---- 4. PLAYING/OVERDUBBING tick flash (positionUs-based, only in QUANTIZED mode) ----
+    // FREE mode: no tick flashes during playback (solid render, no internal
+    // beat grid exposed). QUANTIZED modes: derive beat/bar from the loop's
+    // own structure so FREE-recorded loops still pulse at their intrinsic rate
+    // when switched to a QUANTIZED mode — but per user decision, FREE stays
+    // visually solid during playback.
+    if (_quantizeMode != LOOP_QUANT_FREE && _loopLengthBars > 0) {
+        uint32_t barDurationUs  = recordDurationUs / _loopLengthBars;
+        uint32_t beatDurationUs = barDurationUs / 4;
+        if (beatDurationUs > 0) {
+            uint32_t beatIdxNow = positionUs / beatDurationUs;
+            if (beatIdxNow != _lastBeatIdx) {
+                _beatFlash = true;
+                // Bar = every 4th beat (beat 1 of a new bar)
+                if ((beatIdxNow % 4) == 0 && !wrapped) _barFlash = true;
+                // Note: wrap already sets _wrapFlash above; we don't set bar on wrap
+                // because wrap is a strictly stronger event than bar (hierarchy).
+                _lastBeatIdx = beatIdxNow;
+            }
+        }
+    }
+
+    _lastPositionUs = positionUs;
+
+    // ---- 5. Cursor scan — both noteOn AND noteOff go through schedulePending ----
+    while (_cursorIdx < _eventCount &&
+           _events[_cursorIdx].offsetUs <= positionUs) {
+        const LoopEvent& ev = _events[_cursorIdx];
+        int32_t shuffleUs = calcShuffleOffsetUs(ev.offsetUs, recordDurationUs);
+        int32_t chaosUs   = calcChaosOffsetUs(ev.offsetUs);
+
+        uint8_t note = padToNote(ev.padIndex);
+        if (note != 0xFF) {
+            if (ev.velocity > 0) {
+                uint8_t vel = applyVelocityPattern(ev.velocity, ev.offsetUs, recordDurationUs);
+                schedulePending(now + shuffleUs + chaosUs, note, vel);
+            } else {
+                // noteOff: ALSO through pending with same shuffle/chaos offset
+                schedulePending(now + shuffleUs + chaosUs, note, 0);
+            }
+        }
+        _cursorIdx++;
+    }
+}
+```
+
+#### `processEvents()` — fire pending notes via refcount
+
+```cpp
+// Fire pending events whose fireTimeUs has arrived.
+// noteOn: refcount increment — MIDI only on 0→1 transition
+// noteOff: refcount decrement — MIDI only on 1→0 transition
+// Mirrors ArpEngine.processEvents (src/arp/ArpEngine.cpp:443-447).
+void LoopEngine::processEvents(MidiTransport& transport) {
+    uint32_t now = micros();
+    for (uint8_t i = 0; i < MAX_PENDING; i++) {
+        if (!_pending[i].active) continue;
+        if ((int32_t)(now - _pending[i].fireTimeUs) < 0) continue;  // not yet
+
+        uint8_t note = _pending[i].note;
+        if (note < 128) {
+            if (_pending[i].velocity > 0) {
+                // noteOn: only send MIDI on 0→1
+                if (_noteRefCount[note] == 0) {
+                    transport.sendNoteOn(_channel, note, _pending[i].velocity);
+                }
+                _noteRefCount[note]++;
+            } else {
+                // noteOff: only send MIDI on 1→0
+                if (_noteRefCount[note] > 0) {
+                    _noteRefCount[note]--;
+                    if (_noteRefCount[note] == 0) {
+                        transport.sendNoteOn(_channel, note, 0);
+                    }
+                }
+            }
+        }
+        _pending[i].active = false;
+    }
+}
+```
+
+#### `schedulePending()` — queue a note for later firing
+
+```cpp
+// Store a pending note in the first free slot. Silent drop on overflow —
+// MAX_PENDING = 48 is sized generously to make this practically unreachable.
+// Under DEBUG_SERIAL, log a warning so overflow shows up in dev but costs
+// nothing in release.
+void LoopEngine::schedulePending(uint32_t fireTimeUs, uint8_t note, uint8_t velocity) {
+    for (uint8_t i = 0; i < MAX_PENDING; i++) {
+        if (!_pending[i].active) {
+            _pending[i].fireTimeUs = fireTimeUs;
+            _pending[i].note       = note;
+            _pending[i].velocity   = velocity;
+            _pending[i].active     = true;
+            return;
+        }
+    }
+    #if DEBUG_SERIAL
+    Serial.printf("[LOOP] pending queue overflow on bank %u — note %u dropped\n",
+                  _channel, note);
+    #endif
+}
+```
+
+#### `flushActiveNotes(hard)` — soft or hard flush
+
+```cpp
+// hard = true  → noteOff every active note AND empty the pending queue.
+//                Used by clear(), abortOverdub(), flushLiveNotes()-equivalent paths.
+// hard = false → noteOff every active note but LEAVE the pending queue running.
+//                Used by doStop() — trailing shuffle/chaos events finish their course.
+void LoopEngine::flushActiveNotes(MidiTransport& transport, bool hard) {
+    for (uint8_t n = 0; n < 128; n++) {
+        if (_noteRefCount[n] > 0) {
+            transport.sendNoteOn(_channel, n, 0);  // noteOff
+            _noteRefCount[n] = 0;
+        }
+    }
+    if (hard) {
+        for (uint8_t i = 0; i < MAX_PENDING; i++) _pending[i].active = false;
+    }
+}
+```
+
+#### `recordNoteOn` / `recordNoteOff` — capture input during RECORDING or OVERDUBBING
+
+```cpp
+void LoopEngine::recordNoteOn(uint8_t padIndex, uint8_t velocity) {
+    if (padIndex >= 48) return;
+    uint32_t offsetUs;
+    if (_state == RECORDING) {
+        if (_eventCount >= MAX_LOOP_EVENTS) return;
+        offsetUs = micros() - _recordStartUs;
+        _events[_eventCount++] = { offsetUs, padIndex, velocity, {0, 0} };
+    } else if (_state == OVERDUBBING) {
+        if (_overdubCount >= MAX_OVERDUB_EVENTS) return;
+        // Compute current loop position (recording timebase)
+        uint32_t now = micros();
+        uint32_t liveDurationUs = calcLoopDurationUs(_recordBpm);  // same timebase as events
+        uint32_t elapsedUs  = (now - _playStartUs) % liveDurationUs;
+        offsetUs = elapsedUs;  // loop already normalized to recording timebase
+        _overdubBuf[_overdubCount++] = { offsetUs, padIndex, velocity, {0, 0} };
+        _overdubActivePads[padIndex] = true;
+    }
+}
+
+void LoopEngine::recordNoteOff(uint8_t padIndex) {
+    if (padIndex >= 48) return;
+    uint32_t offsetUs;
+    if (_state == RECORDING) {
+        if (_eventCount >= MAX_LOOP_EVENTS) return;
+        offsetUs = micros() - _recordStartUs;
+        _events[_eventCount++] = { offsetUs, padIndex, 0, {0, 0} };
+    } else if (_state == OVERDUBBING) {
+        if (_overdubCount >= MAX_OVERDUB_EVENTS) return;
+        uint32_t now = micros();
+        uint32_t liveDurationUs = calcLoopDurationUs(_recordBpm);
+        uint32_t elapsedUs  = (now - _playStartUs) % liveDurationUs;
+        offsetUs = elapsedUs;
+        _overdubBuf[_overdubCount++] = { offsetUs, padIndex, 0, {0, 0} };
+        // NOTE: We do NOT clear _overdubActivePads[padIndex] here. The bitmask
+        // tracks "was this pad recordNoteOn'd during this overdub session", used
+        // solely by flushHeldPadsToOverdub at close time to decide which held
+        // pads deserve an injected noteOff. Once the user has released the pad
+        // naturally, the bitmask entry doesn't matter — it's only read for pads
+        // still held at close.
+    }
+}
+```
+
+#### `sortEvents` — insertion sort, in place
+
+```cpp
+// Insertion sort by offsetUs. N is small (< MAX_OVERDUB_EVENTS for overdub buf,
+// typically <200 events for main buf). Stable, no allocation.
+void LoopEngine::sortEvents(LoopEvent* buf, uint16_t count) {
+    for (uint16_t i = 1; i < count; i++) {
+        LoopEvent key = buf[i];
+        int16_t j = (int16_t)i - 1;
+        while (j >= 0 && buf[j].offsetUs > key.offsetUs) {
+            buf[j + 1] = buf[j];
+            j--;
+        }
+        buf[j + 1] = key;
+    }
+}
+```
+
+#### `mergeOverdub` — reverse merge O(n+m), in place in `_events[]`
+
+```cpp
+// Merge sorted _overdubBuf[] into sorted _events[] in place.
+// Algorithm: reverse merge from the end. Assumes _events has capacity for
+// _eventCount + _overdubCount. Both buffers must already be sorted by offsetUs.
+void LoopEngine::mergeOverdub() {
+    if (_overdubCount == 0) return;
+    uint16_t totalCount = _eventCount + _overdubCount;
+    if (totalCount > MAX_LOOP_EVENTS) {
+        // Overflow guard — drop overdub events that won't fit (rare edge case
+        // with very long overdubs on an already dense loop). Defensive; the
+        // sort below still works on the truncated count.
+        totalCount = MAX_LOOP_EVENTS;
+        _overdubCount = totalCount - _eventCount;
+    }
+
+    int32_t i = (int32_t)_eventCount - 1;     // tail of main buffer
+    int32_t j = (int32_t)_overdubCount - 1;   // tail of overdub buffer
+    int32_t k = (int32_t)totalCount - 1;      // write position
+
+    while (j >= 0) {
+        if (i >= 0 && _events[i].offsetUs > _overdubBuf[j].offsetUs) {
+            _events[k--] = _events[i--];
+        } else {
+            _events[k--] = _overdubBuf[j--];
+        }
+    }
+    // Remaining _events[i..] already in place.
+
+    _eventCount   = totalCount;
+    _overdubCount = 0;
+}
+```
+
+#### `flushLiveNotes` — bank switch cleanup
+
+```cpp
+// Called by BankManager on bank switch, outgoing bank.
+// Sends CC123 (All Notes Off) on this engine's channel and zeroes refcounts.
+// Does NOT touch the pending queue — the engine keeps running in background
+// and its pending events will fire on the correct channel (still _channel).
+void LoopEngine::flushLiveNotes(MidiTransport& transport, uint8_t channel) {
+    (void)channel;  // signature kept for symmetry; we always use our own _channel
+    transport.sendAllNotesOff(_channel);
+    memset(_noteRefCount, 0, sizeof(_noteRefCount));
+    // Pending queue NOT cleared — trailing events will fire normally on _channel.
+    // New live presses on the incoming bank (different channel) won't collide
+    // because refcount is per-engine and only manages this engine's channel.
+}
+```
+
+#### Getters
+
+```cpp
+LoopEngine::State LoopEngine::getState() const        { return _state; }
+bool     LoopEngine::isPlaying() const                { return _state == PLAYING; }
+bool     LoopEngine::isRecording() const              { return _state == RECORDING || _state == OVERDUBBING; }
+bool     LoopEngine::hasPendingAction() const         { return _pendingAction != PENDING_NONE; }
+uint8_t  LoopEngine::getLoopQuantizeMode() const      { return _quantizeMode; }
+uint16_t LoopEngine::getEventCount() const            { return _eventCount; }
+
+// Consume-on-read pattern: flag is cleared as it is returned.
+// Each flag is consumed independently by LedController each frame, so if
+// multiple flags are set (e.g. beat + bar + wrap at the same sample), they
+// all get delivered. LedController then picks the hierarchy winner
+// (wrap > bar > beat) for the render.
+bool LoopEngine::consumeBeatFlash() {
+    bool tmp = _beatFlash;
+    _beatFlash = false;
+    return tmp;
+}
+bool LoopEngine::consumeBarFlash() {
+    bool tmp = _barFlash;
+    _barFlash = false;
+    return tmp;
+}
+bool LoopEngine::consumeWrapFlash() {
+    bool tmp = _wrapFlash;
+    _wrapFlash = false;
+    return tmp;
+}
+```
 
 ---
 
@@ -245,11 +901,15 @@ static const uint32_t CLEAR_LONG_PRESS_MS = 500;
 
 ```cpp
 // --- Assign LoopEngines to LOOP banks ---
+// Reads BankTypeStore.loopQuantize[] (loaded by NvsManager::loadAll()) and
+// pushes it into each engine. If loadAll() was never called or the store is
+// fresh, loopQuantize[] is all zeros = LOOP_QUANT_FREE (default).
 uint8_t loopIdx = 0;
 for (uint8_t i = 0; i < NUM_BANKS && loopIdx < MAX_LOOP_BANKS; i++) {
     if (s_banks[i].type == BANK_LOOP) {
         s_loopEngines[loopIdx].begin(i);
         s_loopEngines[loopIdx].setPadOrder(s_padOrder);
+        s_loopEngines[loopIdx].setLoopQuantizeMode(s_bankTypeStore.loopQuantize[i]);
         s_banks[i].loopEngine = &s_loopEngines[loopIdx];
         loopIdx++;
     }
@@ -266,6 +926,7 @@ for (uint8_t i = 0; i < NUM_BANKS && loopIdx < MAX_LOOP_BANKS; i++) {
       // Re-run assignment for the test bank
       s_loopEngines[0].begin(LOOP_TEST_BANK);
       s_loopEngines[0].setPadOrder(s_padOrder);
+      s_loopEngines[0].setLoopQuantizeMode(LOOP_QUANT_FREE);  // test = no quantize
       s_banks[LOOP_TEST_BANK].loopEngine = &s_loopEngines[0];
   }
   s_recPad      = LOOP_TEST_REC_PAD;
@@ -280,7 +941,9 @@ for (uint8_t i = 0; i < NUM_BANKS && loopIdx < MAX_LOOP_BANKS; i++) {
 
 ### 5a. Add function (after processArpMode, line ~554)
 
-Reference: design doc section "processLoopMode() (inline in loop())".
+Pad input dispatch for LOOP banks. Handles live play via refcount (so live press
+does not retrigger a loop note that is already sounding) and routes presses
+into the engine's record buffer when state is RECORDING or OVERDUBBING.
 
 ```cpp
 static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, uint32_t now) {
@@ -341,20 +1004,22 @@ static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, ui
 
 The 3 control pads (REC, PLAY/STOP, CLEAR) each use simple tap edge detection. CLEAR uses 500ms long press. This function runs OUTSIDE the `isHolding()` guard — both hands free for drumming.
 
-**State transition table** (verified against design doc):
+**State transition table** (all transitions respect the per-bank `loopQuantize` setting
+— except **abort** and **clear** which are always immediate):
 
-| Pad | Current State | Action | New State |
-|---|---|---|---|
-| REC | EMPTY | startRecording() | RECORDING |
-| REC | RECORDING | stopRecording() + bar-snap | PLAYING |
-| REC | PLAYING | startOverdub() | OVERDUBBING |
-| REC | OVERDUBBING | stopOverdub() + merge | PLAYING |
-| REC | STOPPED | *(ignored)* | STOPPED |
-| P/S | PLAYING | stop() | STOPPED |
-| P/S | OVERDUBBING | stop() *(discard overdub)* | STOPPED |
-| P/S | STOPPED | play() *(quantized)* | PLAYING |
-| P/S | EMPTY/RECORDING | *(ignored)* | unchanged |
-| CLR | any except EMPTY | clear() *(500ms hold)* | EMPTY |
+| Pad | Current State | Action | New State | Quantizable |
+|---|---|---|---|---|
+| REC | EMPTY | startRecording() | RECORDING | YES |
+| REC | RECORDING | stopRecording() + bar-snap | PLAYING | YES |
+| REC | PLAYING | startOverdub() | OVERDUBBING | YES |
+| REC | OVERDUBBING | stopOverdub() + merge | PLAYING | YES |
+| REC | STOPPED | *(ignored)* | STOPPED | — |
+| P/S | PLAYING | stop() + soft flush | STOPPED | YES |
+| P/S | OVERDUBBING | abortOverdub() + hard flush *(discard overdub)* | STOPPED | **NO (abort = immediate)** |
+| P/S | STOPPED | play() | PLAYING | YES |
+| P/S | EMPTY/RECORDING | *(ignored)* | unchanged | — |
+| CLR | OVERDUBBING | cancelOverdub() *(500ms hold, discard only current overdub pass)* | PLAYING | **NO (hold = human quantize)** |
+| CLR | any other except EMPTY | clear() *(500ms hold + hard flush)* | EMPTY | **NO (destructive)** |
 
 ```cpp
 static void handleLoopControls(const SharedKeyboardState& state, uint32_t now) {
@@ -400,18 +1065,30 @@ static void handleLoopControls(const SharedKeyboardState& state, uint32_t now) {
     }
 
     // --- PLAY/STOP pad: simple tap edge ---
+    // No CONFIRM_PLAY/CONFIRM_STOP triggered for LOOP — the new LED rendering
+    // already gives distinct feedback:
+    //   - In QUANTIZED mode, the waiting quantize blink (hasPendingAction)
+    //     confirms the tap immediately.
+    //   - In FREE mode, the instant color change (stopped→playing or
+    //     playing→stopped) is the visible feedback.
+    //   - Abort during OVERDUBBING is clearly visible (magenta→dim transition).
+    // Removing these confirms declutters the LED for LOOP without losing info.
     if (s_loopPlayPad < NUM_KEYS) {
         bool pressed = state.keyIsPressed[s_loopPlayPad];
         if (pressed && !s_lastLoopPlayState) {
             switch (ls) {
                 case LoopEngine::PLAYING:
-                case LoopEngine::OVERDUBBING:
+                    // Quantizable soft stop — playback continues until boundary,
+                    // trailing pending events finish naturally.
                     eng->stop(s_transport);
-                    s_leds.triggerConfirm(CONFIRM_STOP);
+                    break;
+                case LoopEngine::OVERDUBBING:
+                    // Abort — ALWAYS immediate, hard flush, discard overdub.
+                    eng->abortOverdub(s_transport);
                     break;
                 case LoopEngine::STOPPED:
-                    eng->play(s_clockManager, s_clockManager.getSmoothedBPMFloat());
-                    s_leds.triggerConfirm(CONFIRM_PLAY);
+                    // Quantizable play — snap to next boundary per loopQuantize mode.
+                    eng->play(s_clockManager.getSmoothedBPMFloat());
                     break;
                 default: break;  // EMPTY, RECORDING: ignored
             }
@@ -420,25 +1097,50 @@ static void handleLoopControls(const SharedKeyboardState& state, uint32_t now) {
     }
 
     // --- CLEAR pad: long press (500ms) + LED ramp ---
+    //
+    // ALWAYS immediate (no quantize snap — the 500ms hold IS the "human quantize").
+    //
+    // Behavior depends on state AT RAMP COMPLETION:
+    //   OVERDUBBING → cancelOverdub() — discards ONLY the current overdub
+    //                                   pass, loop keeps playing with its
+    //                                   previous content. "Undo overdub."
+    //   anything else (except EMPTY) → clear() — hard flush, state → EMPTY.
+    //
+    // IMPORTANT edge case: when ls == EMPTY we still update s_lastClearState
+    // below so the rising-edge detection stays coherent across state changes.
+    // Without this, a held CLEAR pad during EMPTY→RECORDING transition would
+    // produce a false rising edge and start the clear timer mid-recording.
+    bool clearPressed = (s_clearPad < NUM_KEYS) ? state.keyIsPressed[s_clearPad] : false;
     if (s_clearPad < NUM_KEYS && ls != LoopEngine::EMPTY) {
-        bool pressed = state.keyIsPressed[s_clearPad];
-        if (pressed && !s_lastClearState) {
+        if (clearPressed && !s_lastClearState) {
             s_clearPressStart = now;
             s_clearFired = false;
         }
-        if (pressed && !s_clearFired) {
+        if (clearPressed && !s_clearFired) {
             uint32_t held = now - s_clearPressStart;
             if (held < CLEAR_LONG_PRESS_MS) {
                 uint8_t ramp = (uint8_t)((uint32_t)held * 100 / CLEAR_LONG_PRESS_MS);
                 s_leds.showClearRamp(ramp);
             } else {
-                eng->clear(s_transport);
-                s_leds.triggerConfirm(CONFIRM_STOP);
+                // Ramp complete — dispatch based on current state
+                if (ls == LoopEngine::OVERDUBBING) {
+                    // Undo overdub pass, keep loop. No confirm needed:
+                    // the color transition magenta→base is instant and visible.
+                    eng->cancelOverdub();
+                } else {
+                    // Hard flush, state → EMPTY. Keep CONFIRM_STOP here: the
+                    // transition from a colored state to dim EMPTY is subtle,
+                    // and clear is destructive enough to warrant a distinct flash.
+                    eng->clear(s_transport);
+                    s_leds.triggerConfirm(CONFIRM_STOP);
+                }
                 s_clearFired = true;
             }
         }
-        s_lastClearState = pressed;
     }
+    // Always update edge state — even when ls == EMPTY — to avoid false rising
+    // edges when state transitions while the pad is held.
+    s_lastClearState = clearPressed;
 }
 ```
 
@@ -480,11 +1182,14 @@ switch (slot.type) {
   s_arpScheduler.tick();                          // line 972
   s_arpScheduler.processEvents();                 // line 973
 
-  // LOOP engines: tick + processEvents (all banks, not just foreground)
+  // LOOP engines: tick + processEvents (all banks, not just foreground).
+  // tick() receives globalTick (from ClockManager) so the pending action
+  // dispatcher can check beat/bar boundaries for quantized transitions.
+  uint32_t globalTick = s_clockManager.getCurrentTick();
+  float    smoothedBpm = s_clockManager.getSmoothedBPMFloat();
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
       if (s_banks[i].type == BANK_LOOP && s_banks[i].loopEngine) {
-          s_banks[i].loopEngine->tick(s_transport,
-              s_clockManager.getSmoothedBPMFloat());
+          s_banks[i].loopEngine->tick(s_transport, smoothedBpm, globalTick);
           s_banks[i].loopEngine->processEvents(s_transport);
       }
   }
@@ -493,6 +1198,8 @@ switch (slot.type) {
 ```
 
 **Why loop all banks?** Background LOOP banks continue playing. Unlike ArpScheduler which manages all engines internally, LoopEngine tick/processEvents are called directly per bank.
+
+**Why per-bank tick() and not a scheduler?** LOOP playback is microsecond-based (proportional position via `micros()`), not tick-based. There is no per-engine tick accumulator to dispatch. `globalTick` is passed only for the quantize boundary check, not for step scheduling.
 
 ---
 
@@ -676,303 +1383,23 @@ Expected: clean build. LoopEngine compiles with ArpEngine-like patterns. Test co
 
 ---
 
-## Design Doc Correction Found
+## Audit History
 
-Step 10 corrects a gap in the design doc: `processLoopMode()` only checks `OVERDUBBING` for recording noteOn/Off, but `RECORDING` also needs it (first recording captures events too). The design doc `handleLoopControls()` correctly routes `startRecording()` → RECORDING state, but `processLoopMode()` must record events in both RECORDING and OVERDUBBING states.
+This plan incorporates the resolution of audit findings from 2026-04-05 (5 parallel agents vs early draft) and 2026-04-06 (3 parallel agents, deep audit of quantize behavior and noteOff pending). The full inline implementations above already contain:
 
----
-
-## Audit Notes (2026-04-05) — Cross-checked by 5 parallel agents + design doc
-
-### BUG #1 — `sendNoteOn` / `sendNoteOff` parameter order (**CRITICAL**)
-
-Step 5a uses `s_transport.sendNoteOn(note, vel, slot.channel)` but `MidiTransport::sendNoteOn`
-signature is `(uint8_t channel, uint8_t note, uint8_t velocity)`. **Parameter order is
-(channel, note, velocity), not (note, vel, channel).** Compiles without warning (all uint8_t)
-but sends notes on wrong channel with swapped note/velocity values.
-
-Also: `sendNoteOff()` does not exist in MidiTransport. ArpEngine uses
-`sendNoteOn(channel, note, 0)` for noteOff (velocity 0). The design doc confirms this
-at line 1319: `s_transport.sendNoteOff(note, 0, slot.channel)` — but this also has wrong
-param order.
-
-**Fix for Step 5a**: Replace ALL transport calls in processLoopMode:
-```cpp
-// noteOn:
-s_transport.sendNoteOn(slot.channel, note, vel);
-// noteOff:
-s_transport.sendNoteOn(slot.channel, note, 0);
-```
-
-The design doc (line 1310-1319) has the SAME bug and must also be corrected.
-
-### BUG #2 — Step 5a vs Step 10 inconsistency (**merged**)
-
-Step 5a only records during OVERDUBBING. Step 10 corrects this to include RECORDING.
-**The implementer should use Step 10's version directly in Step 5a** to avoid writing
-incorrect code then fixing it 5 steps later. The code in Step 5a should read:
-
-```cpp
-    LoopEngine::State ls = eng->getState();
-    if (pressed && !wasPressed) {
-        // ... noteOn + refcount ...
-        if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
-            eng->recordNoteOn(p, vel);
-        }
-    } else if (!pressed && wasPressed) {
-        // ... noteOff + refcount ...
-        if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
-            eng->recordNoteOff(p);
-        }
-    }
-```
-
-### BUG #3 — BankManager recording lock not activated in Phase 2
-
-Phase 1 adds a stub guard in `switchToBank()` with a comment saying
-"Phase 2 will replace this with `isRecording()`". **Phase 2 never mentions
-BankManager in its modified files.** The guard remains dead.
-
-**Fix**: Add a step to Phase 2 (or a note in Step 4a) to uncomment the
-BankManager guard:
-```cpp
-  // BankManager.cpp switchToBank() — Phase 1 stub → Phase 2 real guard:
-  if (cur.type == BANK_LOOP && cur.loopEngine) {
-    LoopEngine::State ls = cur.loopEngine->getState();
-    if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
-      return;  // Deny bank switch during recording/overdubbing
-    }
-  }
-```
-
-And add `flushLiveNotes` call (confirmed by design doc line 526-533):
-```cpp
-  if (cur.type == BANK_LOOP && cur.loopEngine && _transport) {
-    cur.loopEngine->flushLiveNotes(*_transport, _currentBank);
-  }
-```
-
-Both require `#include "loop/LoopEngine.h"` in BankManager.cpp.
-
-### BUG #4 — `padToNote()` overflow on unmapped pads
-
-`padToNote()` returns `_padOrder[padIndex] + 36`. If padOrder[i] == 0xFF
-(NOTEMAP_UNMAPPED), result is 0xFF + 36 = 35 (uint8_t overflow) — a valid
-but wrong MIDI note. ArpEngine avoids this because ScaleResolver checks for
-0xFF; LOOP bypasses ScaleResolver.
-
-**Fix**: Guard in padToNote:
-```cpp
-uint8_t padToNote(uint8_t padIndex) const {
-    uint8_t order = _padOrder[padIndex];
-    if (order == 0xFF) return 0xFF;  // unmapped
-    return order + LOOP_NOTE_OFFSET;
-}
-```
-Callers must check for 0xFF before using the note:
-```cpp
-uint8_t note = eng->padToNote(p);
-if (note == 0xFF) continue;  // skip unmapped pad
-```
-
-### BUG #5 — `handleLeftReleaseCleanup` missing LOOP branch
-
-`handleLeftReleaseCleanup()` in main.cpp handles NORMAL (noteOff) and ARPEG
-(remove pile). When left button releases on a LOOP bank, pads pressed before
-the hold and released during the hold get no cleanup — their noteOff edge was
-missed (processLoopMode is gated by `!isHolding()`). Result: stuck notes.
-
-**Fix**: Add LOOP branch in handleLeftReleaseCleanup:
-```cpp
-  case BANK_LOOP:
-    if (slot.loopEngine) {
-      for (int i = 0; i < NUM_KEYS; i++) {
-        if (s_lastKeys[i] && !state.keyIsPressed[i]) {
-          uint8_t note = slot.loopEngine->padToNote(i);
-          if (note != 0xFF && slot.loopEngine->noteRefDecrement(note)) {
-            s_transport.sendNoteOn(slot.channel, note, 0);  // noteOff
-          }
-        }
-      }
-    }
-    break;
-```
-
-### GAP #6 — `handleLoopControls()` full code now available
-
-The plan said "Full implementation as shown in design doc" without code.
-The design doc (lines 1199-1282) contains the complete implementation with:
-- REC pad: switch(state) → EMPTY→startRecording, RECORDING→stopRecording,
-  PLAYING→startOverdub, OVERDUBBING→stopOverdub, STOPPED→ignored
-- PLAY/STOP pad: PLAYING/OVERDUBBING→stop, STOPPED→play, EMPTY/RECORDING→ignored
-- CLEAR pad: long press 500ms + LED ramp, any state except EMPTY→clear
-
-**Key state transition table** (verified against design doc lines 406-418):
-
-| Pad | Current State | Action | New State |
-|---|---|---|---|
-| REC | EMPTY | startRecording() | RECORDING |
-| REC | RECORDING | stopRecording() + bar-snap | PLAYING |
-| REC | PLAYING | startOverdub() | OVERDUBBING |
-| REC | OVERDUBBING | stopOverdub() + merge | PLAYING |
-| REC | STOPPED | ignored | STOPPED |
-| P/S | PLAYING | stop() | STOPPED |
-| P/S | OVERDUBBING | stop() (discard overdub) | STOPPED |
-| P/S | STOPPED | play() (quantized) | PLAYING |
-| P/S | EMPTY/RECORDING | ignored | unchanged |
-| CLR | any except EMPTY | clear() (500ms hold) | EMPTY |
-
-### GAP #7 — LoopEvent structure (from design doc)
-
-```cpp
-struct LoopEvent {
-    uint32_t offsetUs;    // Microseconds from loop start (recording timebase)
-    uint8_t  padIndex;    // 0-47
-    uint8_t  velocity;    // 0 = noteOff, >0 = noteOn
-    uint8_t  _pad[2];     // Alignment to 8 bytes
-};
-static_assert(sizeof(LoopEvent) == 8, "LoopEvent must be 8 bytes");
-```
-
-No `isNoteOn` field — velocity == 0 discriminates noteOff from noteOn.
-
-### GAP #8 — Proportional playback formula (from design doc)
-
-```cpp
-// In tick():
-uint32_t liveDurationUs   = calcLoopDurationUs(currentBPM);
-uint32_t recordDurationUs = calcLoopDurationUs(_recordBpm);
-uint32_t elapsedUs  = (micros() - _playStartUs) % liveDurationUs;
-uint32_t positionUs = (uint32_t)((float)elapsedUs
-                      * (float)recordDurationUs / (float)liveDurationUs);
-// positionUs is in recording timebase → matches event offsets directly
-
-// Helper:
-uint32_t calcLoopDurationUs(float bpm) const {
-    return (uint32_t)(_loopLengthBars * 4.0f * 60000000.0f / bpm);
-}
-```
-
-**Bar snap formula** (stopRecording):
-```cpp
-uint32_t barDurationUs = (uint32_t)(4.0f * 60000000.0f / _recordBpm);
-uint32_t recordedDurationUs = micros() - _recordStartUs;
-uint16_t bars = (recordedDurationUs + barDurationUs / 2) / barDurationUs;  // round nearest
-if (bars == 0) bars = 1;
-if (bars > 64) bars = 64;
-_loopLengthBars = bars;
-// Then normalize all event offsets to [0, bars * barDurationUs)
-float scale = (float)(bars * barDurationUs) / (float)recordedDurationUs;
-for (uint16_t i = 0; i < _eventCount; i++) {
-    _events[i].offsetUs = (uint32_t)((float)_events[i].offsetUs * scale);
-}
-```
-
-**Wrap detection**: `if (positionUs < _lastPositionUs)` — position jumped backward.
-On wrap: `flushActiveNotes()` + `_cursorIdx = 0` + `_tickFlash = true`.
-No rebase of `_playStartUs` — unsigned modulus handles overflow.
-
-**Cursor scan — noteOn AND noteOff both go through pending** (Design #1 redesign):
-
-The design doc tick() code has noteOn via `schedulePending` and noteOff inline.
-**This must be changed**: noteOff must also go through `schedulePending` with velocity=0,
-so shuffle/chaos offsets are applied to both. Otherwise the gate shortens on shuffled
-notes (audible on sustained sounds like bass).
-
-Corrected cursor scan inner loop:
-```cpp
-    while (_cursorIdx < _eventCount &&
-           _events[_cursorIdx].offsetUs <= positionUs) {
-        const LoopEvent& ev = _events[_cursorIdx];
-        int32_t shuffleUs = calcShuffleOffsetUs(ev.offsetUs, recordDurationUs);
-        int32_t chaosUs   = calcChaosOffsetUs(ev.offsetUs);
-
-        if (ev.velocity > 0) {
-            // noteOn: apply velocity pattern, schedule via pending
-            uint8_t vel = applyVelocityPattern(ev.velocity, ev.offsetUs, recordDurationUs);
-            schedulePending(now + shuffleUs + chaosUs, padToNote(ev.padIndex), vel);
-        } else {
-            // noteOff: ALSO schedule via pending (same shuffle/chaos offset)
-            // This preserves gate length — mirrors ArpEngine pending pattern
-            schedulePending(now + shuffleUs + chaosUs, padToNote(ev.padIndex), 0);
-        }
-        _cursorIdx++;
-    }
-```
-
-And `processEvents()` must handle both (mirrors ArpEngine.cpp:443-447):
-```cpp
-void LoopEngine::processEvents(MidiTransport& transport) {
-    uint32_t now = micros();
-    for (uint8_t i = 0; i < MAX_PENDING; i++) {
-        if (_pending[i].active && (int32_t)(now - _pending[i].fireTimeUs) >= 0) {
-            uint8_t note = _pending[i].note;
-            if (_pending[i].velocity > 0) {
-                // noteOn: refcount increment, MIDI only on 0→1
-                if (_noteRefCount[note] == 0) {
-                    transport.sendNoteOn(_channel, note, _pending[i].velocity);
-                }
-                _noteRefCount[note]++;
-            } else {
-                // noteOff: refcount decrement, MIDI only on 1→0
-                if (_noteRefCount[note] > 0) {
-                    _noteRefCount[note]--;
-                    if (_noteRefCount[note] == 0) {
-                        transport.sendNoteOn(_channel, note, 0);  // velocity 0 = noteOff
-                    }
-                }
-            }
-            _pending[i].active = false;
-        }
-    }
-}
-```
-
-### GAP #9 — Quantized start: tick() signature vs ClockManager
-
-The plan's `tick(transport, currentBPM)` lacks `globalTick`. Design doc resolves
-this differently from ArpEngine: `play()` pre-computes `_playStartUs` with the
-quantize delay (using ClockManager at call time), and `tick()` checks
-`if ((int32_t)(now - _playStartUs) < 0) return;`. No tick boundary check needed
-inside `tick()`. This is consistent and intentional.
-
-### OBSERVATION #10 — `noteRefDecrement` must guard refcount==0
-
-The design doc (line 1337-1340) confirms the guard:
-```cpp
-bool noteRefDecrement(uint8_t note) {
-    if (_noteRefCount[note] > 0) {
-        return (--_noteRefCount[note] == 0);
-    }
-    return false;
-}
-```
-Without this, stop() followed by pad release would cause uint8_t underflow.
-
-### OBSERVATION #11 — `stop()` during OVERDUBBING discards partial overdub
-
-Design doc (line 414): `P/S during OVERDUBBING → STOPPED (abort, discard)`.
-This is intentional — the user presses PLAY/STOP to abort, not REC to commit.
-Documented, not a bug.
-
-### OBSERVATION #12 — BPM == 0 division by zero risk
-
-`calcLoopDurationUs(bpm)` divides by bpm. ClockManager can briefly return 0.0f
-from `_lastKnownBPM` in a narrow race window. **Add guard**:
-```cpp
-uint32_t calcLoopDurationUs(float bpm) const {
-    if (bpm < 1.0f) bpm = 1.0f;  // safety clamp
-    return (uint32_t)(_loopLengthBars * 4.0f * 60000000.0f / bpm);
-}
-```
-
-### OBSERVATION #13 — 18.8 KB SRAM always allocated
-
-`s_loopEngines[2]` is statically allocated even if no LOOP banks exist.
-The design doc suggests `#define ENABLE_LOOP_MODE 1` compile guard (line 1402-1407).
-Not critical (22% SRAM usage with LOOP vs 16% without), but noted.
-
-### FILES table correction
-
-BankManager.cpp MUST be listed as modified in Phase 2 (recording lock + flushLiveNotes
-activation + LoopEngine.h include).
+- `sendNoteOn(channel, note, velocity)` with correct parameter order (never `sendNoteOff`, which does not exist in `MidiTransport`)
+- `padToNote()` guard against unmapped pads returning `0xFF` (prevents `0xFF + 36 = 35` silent corruption)
+- `noteRefDecrement()` guard against underflow (required because `flushActiveNotes(hard=true)` zeros all refcounts)
+- `recordNoteOn/Off` called in **both** `RECORDING` **and** `OVERDUBBING` states (first recording captures events too)
+- `calcLoopDurationUs()` clamps BPM at 10.0f minimum (prevents uint32_t overflow on long loops at very low BPM)
+- `handleLeftReleaseCleanup()` LOOP branch (prevents stuck notes when left button releases after a pad release mid-hold)
+- `BankManager::switchToBank()` LOOP recording lock + `flushLiveNotes` (Phase 1 stubs replaced with the real guards in Step 10 below)
+- `handleLoopControls()` CLEAR edge-state update moved out of the `ls != EMPTY` guard (prevents false rising edge causing accidental clear on state transitions)
+- **noteOn AND noteOff both routed through `schedulePending`** (Design #1 redesign — shuffle/chaos offsets applied to both, preserving gate length on sustained notes)
+- **`processEvents()` handles both** via refcount increment (noteOn) and decrement (noteOff)
+- **Six quantized transitions** + two always-immediate (abort, clear), driven by the per-bank `LoopQuantMode` field
+- **Pending action dispatcher** in `tick()` — waits for `globalTick % boundary == 0` before executing the deferred transition
+- **`flushActiveNotes(hard)` with soft mode** — refcount flush without clearing pending queue, so trailing shuffle/chaos events finish their course when the user stops the loop. At wrap, `flushActiveNotes` is **NOT** called — refcount naturally handles notes that cross the wrap boundary (overlaps allowed by design, per Budget Philosophy).
+- **`_overdubActivePads[48]` bitmask** — ensures `stopOverdub()` only injects noteOff for pads that actually received a `recordNoteOn` during the current overdub session (prevents orphan noteOffs for pads held from before the overdub).
+- **`MAX_PENDING = 48`** (was 16) — sized generously per the "prefer safe over economical" Budget Philosophy now in CLAUDE.md.
+- **Decoupling from `docs/drafts/loop-mode-design.md`** — this plan is now fully self-contained. The draft is kept for historical reference only.

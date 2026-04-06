@@ -49,6 +49,46 @@ const uint8_t MAX_ARP_BANKS    = 4;
 const uint8_t MAX_LOOP_BANKS   = 2;   // <-- ADD
 ```
 
+### 1e. Add LoopQuantMode enum in HardwareConfig.h (after ArpStartMode, line ~268)
+
+LOOP quantize is a **separate field** from ARPEG quantize (intentionally — allows future extension with 1/2 bar, 2 bars, etc., without touching ArpStartMode). Numeric values parallel ArpStartMode for familiarity.
+
+```cpp
+// --- Loop Quantize (per-bank LOOP, set in Tool 4) ---
+// Affects 6 transitions: start rec, close rec, start overdub, close overdub,
+// play, stop. FREE = loop libre (no snap). Abort (PLAY/STOP during
+// OVERDUBBING) and CLEAR (long-press) are ALWAYS immediate regardless of mode.
+enum LoopQuantMode : uint8_t {
+  LOOP_QUANT_FREE  = 0,  // No snap — transitions fire on tap
+  LOOP_QUANT_BEAT  = 1,  // Snap to next beat (24 ticks)
+  LOOP_QUANT_BAR   = 2,  // Snap to next bar (96 ticks, 4/4)
+  NUM_LOOP_QUANT_MODES = 3
+};
+const uint8_t DEFAULT_LOOP_QUANT_MODE = LOOP_QUANT_FREE;
+```
+
+### 1f. Extend BankTypeStore with loopQuantize[] field (KeyboardData.h, line 384)
+
+The current struct is 20 bytes. Adding `loopQuantize[NUM_BANKS]` brings it to 28 bytes — still well under `NVS_BLOB_MAX_SIZE` (128). The `static_assert` already guards the max.
+
+```cpp
+struct BankTypeStore {
+  uint16_t magic;
+  uint8_t  version;
+  uint8_t  reserved;
+  uint8_t  types[NUM_BANKS];         // BankType enum cast
+  uint8_t  quantize[NUM_BANKS];      // ArpStartMode enum (ARPEG banks)
+  uint8_t  loopQuantize[NUM_BANKS];  // LoopQuantMode enum (LOOP banks)  <-- ADD
+};
+static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds NVS blob max");
+```
+
+**Bump `BANKTYPE_VERSION`** from 1 → 2 to force NVS reset of the new field (Zero Migration Policy — old 20-byte blobs get rejected and defaults apply).
+
+```cpp
+#define BANKTYPE_VERSION     2   // was 1
+```
+
 ---
 
 ## Step 2 — KeyboardData.h: LoopPadStore + LoopPotStore
@@ -130,6 +170,7 @@ inline void validateBankTypeStore(BankTypeStore& s) {
       if (loopCount > MAX_LOOP_BANKS) s.types[i] = BANK_NORMAL;
     }
     if (s.quantize[i] >= NUM_ARP_START_MODES) s.quantize[i] = DEFAULT_ARP_START_MODE;
+    if (s.loopQuantize[i] >= NUM_LOOP_QUANT_MODES) s.loopQuantize[i] = DEFAULT_LOOP_QUANT_MODE;
   }
 }
 ```
@@ -163,9 +204,19 @@ static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 5, 6, 7, 8, 11 };
 static constexpr RGBW COL_SETUP     = {128,   0, 255,   0};  // existing
 
 // LOOP colors (red/magenta family) — W=0 for pure chromatic
-static constexpr RGBW COL_LOOP      = {255,   0,  60,   0};  // LOOP foreground — hot magenta
-static constexpr RGBW COL_LOOP_DIM  = { 40,   0,  10,   0};  // LOOP background
-static constexpr RGBW COL_LOOP_REC  = {255,   0,  40,   0};  // Recording — red-magenta
+// Five distinct colors:
+//   - COL_LOOP_FREE       : solid during PLAYING/STOPPED in FREE mode (no tick flashes)
+//   - COL_LOOP_QUANTIZED  : solid during PLAYING/STOPPED in BEAT/BAR mode (tick flashes active)
+//   - COL_LOOP_REC        : blink base during RECORDING (both modes)
+//   - COL_LOOP_OVD        : blink base during OVERDUBBING (both modes)
+//   - COL_LOOP_DIM        : EMPTY state and background dim base
+// Compile-time for Phase 2-4; future Tool 7 LOOP page will migrate to runtime
+// color slots (like ARPEG colors already do).
+static constexpr RGBW COL_LOOP_FREE      = {255,   0, 100,   0};  // FREE playback — hot magenta-red
+static constexpr RGBW COL_LOOP_QUANTIZED = {180,   0, 180,   0};  // QUANTIZED playback — cooler magenta-violet
+static constexpr RGBW COL_LOOP_REC       = {255,   0,   0,   0};  // RECORDING — pure red
+static constexpr RGBW COL_LOOP_OVD       = {255,   0, 150,   0};  // OVERDUBBING — bright magenta
+static constexpr RGBW COL_LOOP_DIM       = { 30,   0,  15,   0};  // EMPTY/background dim
 ```
 
 ### 4b. Add LOOP LED intensity constants (after battery gradient, line ~53)
@@ -173,15 +224,39 @@ static constexpr RGBW COL_LOOP_REC  = {255,   0,  40,   0};  // Recording — re
 ```cpp
 // LOOP LED intensities — 0-100 PERCEPTUAL % (same unit as setPixel intensityPct)
 // Mirrors ARPEG pattern: solid states, sine pulse only on FG stopped+events loaded.
-// Compile-time for now; future Tool 7 will make runtime-configurable.
+// Compile-time for now; future Tool 7 LOOP page will make runtime-configurable.
 static constexpr uint8_t LED_FG_LOOP_IDLE       = 20;   // FG EMPTY or STOPPED (no events) — solid dim
 static constexpr uint8_t LED_FG_LOOP_STOP_MIN   = 20;   // FG STOPPED + events loaded — sine pulse min
 static constexpr uint8_t LED_FG_LOOP_STOP_MAX   = 80;   // FG STOPPED + events loaded — sine pulse max
-static constexpr uint8_t LED_FG_LOOP_PLAY       = 85;   // FG PLAYING — solid bright
-static constexpr uint8_t LED_FG_LOOP_FLASH      = 100;  // FG wrap flash spike
+static constexpr uint8_t LED_FG_LOOP_PLAY       = 85;   // FG PLAYING — solid bright (both FREE and QUANTIZED)
+static constexpr uint8_t LED_FG_LOOP_REC        = 75;   // FG RECORDING base intensity (red blink)
+static constexpr uint8_t LED_FG_LOOP_OVD        = 75;   // FG OVERDUBBING base intensity (magenta blink)
 static constexpr uint8_t LED_BG_LOOP_DIM        = 5;    // BG (all non-playing states) — solid dim
-static constexpr uint8_t LED_BG_LOOP_PLAY       = 8;    // BG PLAYING — solid dim
-static constexpr uint8_t LED_BG_LOOP_FLASH      = 25;   // BG wrap flash spike
+static constexpr uint8_t LED_BG_LOOP_PLAY       = 8;    // BG PLAYING — solid dim base
+
+// Tick flash hierarchy — boosts added to base intensity on beat/bar/wrap crossings.
+// Applied ONLY in QUANTIZED modes (BEAT/BAR) during PLAYING/OVERDUBBING, using
+// the loop's internal positionUs-derived beat grid. ALSO applied during RECORDING
+// (both FREE and QUANTIZED) using globalTick from ClockManager, since the loop
+// structure is not yet established. In FREE mode during PLAYING, tick flashes
+// are DISABLED — the color stays solid (no internal beat grid exists yet).
+//
+// Boost = additive percentage points on top of base intensity, clamped to 100.
+// Set a boost to 0 to disable the corresponding flash entirely.
+// Hierarchy: max(active flash boosts) wins when multiple flashes overlap.
+static constexpr uint8_t LED_TICK_BOOST_BEAT    = 10;   // Normal beat (beats 2/3/4 of a bar)
+static constexpr uint8_t LED_TICK_BOOST_BEAT1   = 25;   // Downbeat (beat 1, NOT the bar boost — bar is separate)
+static constexpr uint8_t LED_TICK_BOOST_BAR     = 40;   // Bar boundary (beat 1 of a new bar)
+static constexpr uint8_t LED_TICK_BOOST_WRAP    = 60;   // Loop wrap (end-of-cycle, hardest flash)
+static constexpr uint8_t LED_TICK_BOOST_BEAT_BG = 5;    // BG simple beat tick (same color as BG base)
+
+static constexpr uint16_t LED_TICK_DUR_BEAT_MS  = 20;   // Beat/beat1 flash hold time
+static constexpr uint16_t LED_TICK_DUR_BAR_MS   = 40;   // Bar flash hold time
+static constexpr uint16_t LED_TICK_DUR_WRAP_MS  = 60;   // Wrap flash hold time
+
+// Waiting quantize blink (during hasPendingAction() wait for boundary)
+static constexpr uint16_t LED_WAIT_QUANT_PERIOD_MS = 100;  // blink half-period (on/off)
+static constexpr uint8_t  LED_WAIT_QUANT_INTENSITY = 90;   // blink "on" intensity
 ```
 
 ---
@@ -388,7 +463,7 @@ Expected: **clean build, zero warnings** related to LOOP. Possible warning about
 | File | Changes |
 |---|---|
 | `src/core/KeyboardData.h` | BANK_LOOP enum, LoopEngine forward-declare, BankSlot.loopEngine, MAX_LOOP_BANKS, LoopPadStore, LoopPotStore, validateLoopPadStore, fix validateBankTypeStore, PotMappingStore.loopMap, NVS defines, NVS_DESCRIPTORS, TOOL_NVS indices |
-| `src/core/HardwareConfig.h` | COL_LOOP/COL_LOOP_DIM/COL_LOOP_REC, LED_FG/BG_LOOP_* intensity constants |
+| `src/core/HardwareConfig.h` | LoopQuantMode enum, COL_LOOP_FREE/QUANTIZED/REC/OVD/DIM, LED_FG/BG_LOOP_* intensities, LED_TICK_BOOST_*, LED_TICK_DUR_*, LED_WAIT_QUANT_* |
 | `src/managers/BankManager.h` | MidiTransport forward-declare, _transport member, begin() signature |
 | `src/managers/BankManager.cpp` | begin() body, switchToBank() LOOP guards (stub), debug print 3-way |
 | `src/managers/ScaleManager.cpp` | processScalePads() LOOP early return with _lastScaleKeys sync |

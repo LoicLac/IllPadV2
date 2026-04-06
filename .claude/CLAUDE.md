@@ -380,3 +380,22 @@ NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never bl
 | Core 1 | ~16% | Plenty of headroom |
 | BLE MIDI | 30-50% worst case | noteOn/Off bypass queue. Aftertouch overflow tolerated. |
 | SRAM | ~16% | ~51KB / 320KB |
+
+### Budget Philosophy — prefer safe over economical
+
+**SRAM, PSRAM, and flash budgets are generous.** The ESP32-S3-N8R16 has 320KB SRAM, 16MB PSRAM, 8MB flash, and the firmware currently uses ~16% SRAM. The only truly constrained resource is **per-cycle CPU time on Core 0** (~92% used by sensing).
+
+**Prefer safe/generous over economical** when it comes to:
+- Buffer sizes (pending queues, event buffers, overdub buffers — bump them rather than risk drops under load)
+- Defense-in-depth guards (even when upstream already guards)
+- Static allocations for always-alive patterns (e.g. `s_loopEngines[MAX_LOOP_BANKS]` always allocated)
+- State duplication that simplifies invariants (e.g. tracking flags that avoid subtle edge cases)
+
+**Do NOT economize** on:
+- SRAM bytes for safer margins (a few hundred bytes for a bigger pending queue is fine)
+- PSRAM for larger audio/loop buffers (still barely touched)
+
+**DO economize** on:
+- Core 0 CPU cycles (sensing is the bottleneck)
+- BLE MIDI bandwidth in worst case (noteOn/Off bypass queue, aftertouch overflow tolerated)
+- Flash writes (NVS has wear limits — use dirty flag debouncing)

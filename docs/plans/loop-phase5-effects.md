@@ -14,7 +14,7 @@ Replace the 3 effect stubs in LoopEngine.cpp with real implementations. All the 
 
 ## Step 1 — LoopEngine.cpp: calcShuffleOffsetUs()
 
-Replace stub with real implementation. Reference: design doc section "Effects > Shuffle".
+Replace the Phase 2 stub with the real implementation below.
 
 ```cpp
 int32_t LoopEngine::calcShuffleOffsetUs(uint32_t eventOffsetUs, uint32_t recordDurationUs) {
@@ -39,7 +39,7 @@ int32_t LoopEngine::calcShuffleOffsetUs(uint32_t eventOffsetUs, uint32_t recordD
 
 ## Step 2 — LoopEngine.cpp: calcChaosOffsetUs()
 
-Replace stub. Reference: design doc section "Effects > Chaos / Jitter".
+Replace the Phase 2 stub with the real implementation below.
 
 ```cpp
 int32_t LoopEngine::calcChaosOffsetUs(uint32_t eventOffsetUs) {
@@ -70,7 +70,7 @@ int32_t LoopEngine::calcChaosOffsetUs(uint32_t eventOffsetUs) {
 
 ## Step 3 — LoopEngine.cpp: applyVelocityPattern()
 
-Replace stub. Reference: design doc section "Effects > Velocity Patterns".
+Replace the Phase 2 stub with the real implementation below.
 
 ```cpp
 // 4 groove patterns (16 steps each, values 0-100 as percentage of original velocity)
