@@ -168,6 +168,9 @@ with an unshuffled noteOff would shorten the gate — audible on sustained sound
 - `uint32_t _lastBeatIdx` — last beat index detected in PLAYING/OVERDUBBING (from positionUs)
 - `uint32_t _lastRecordBeatTick` — last globalTick modulo 24 checkpoint during RECORDING (for beat flash detection when no loop structure exists yet)
 - `uint32_t _lastDispatchedGlobalTick` — last globalTick value at which the pending action dispatcher fired (or `0xFFFFFFFF` if never). Used to detect a quantize boundary CROSSING rather than exact landing. **AUDIT FIX B1 2026-04-06 pass 2** — without this, `globalTick % boundary == 0` could miss a boundary when `ClockManager::generateTicks()` catches up multiple ticks in one call (up to 4 — see `ClockManager.cpp:181-203`). See also `docs/reference/known-bugs.md` for the parallel pre-existing bug in ArpEngine.
+- `const bool*    _pendingKeyIsPressed` — stash for the deferred dispatcher: stores the `keyIsPressed[]` pointer captured at `stopRecording()` / `stopOverdub()` call time, used by the WAITING_* dispatcher when the boundary arrives. Init `nullptr`. **AUDIT FIX D-PLAN-1 2026-04-07** — referenced by Step 1 transition stash code (lines ~317-321) and dispatcher (lines ~544-553) but was missing from this list.
+- `const uint8_t* _pendingPadOrder` — stash for `padOrder` pointer, same purpose. Init `nullptr`.
+- `float          _pendingBpm` — stash for `currentBPM` value, same purpose. Init `120.0f`.
 
 ### 1b. Create `src/loop/LoopEngine.cpp`
 
@@ -260,6 +263,9 @@ void LoopEngine::begin(uint8_t channel) {
     _lastBeatIdx    = 0;
     _lastRecordBeatTick       = 0xFFFFFFFF;
     _lastDispatchedGlobalTick = 0xFFFFFFFF;   // B1 pass 2: sentinel "never dispatched"
+    _pendingKeyIsPressed = nullptr;           // D-PLAN-1: stash members init
+    _pendingPadOrder     = nullptr;
+    _pendingBpm          = 120.0f;
     _padOrder       = nullptr;
     memset(_noteRefCount, 0, sizeof(_noteRefCount));
     memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
