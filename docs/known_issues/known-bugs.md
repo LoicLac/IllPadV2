@@ -14,7 +14,8 @@ Tracker des bugs identifiés lors d'audits ou de tests, classés par sévérité
 
 | ID | Fichier:ligne | Description courte | Sévérité | Status | Date |
 |---|---|---|---|---|---|
-| B-003 | runtime (NVS ou hardware) | NORMAL+hold-left : pots R2/R3 ont leurs cibles inversées (PITCH_BEND apparaît sur R2 au lieu de R3, AT_DEADZONE sur R3 au lieu de R2). R1 et R4 OK. Diagnostic read-only branche `loop` 2026-04-07 : code firmware vérifié intégralement (DEFAULT_MAPPING `PotRouter.cpp:18-39`, `rebuildBindings()` ligne 162-228, `resolveBindings()` ligne 334-381, `POT_PINS[]` `HardwareConfig.h:146-148`) — tout est cohérent. Phase 1 LOOP n'a pas touché ces fichiers. Causes probables : (1) NVS contient un PotMappingStore custom hérité d'une session Tool 6 antérieure qui override le default ; (2) wiring hardware GPIO5↔GPIO6 inversés sur le PCB. Distinguer via : serial boot pour chercher `[NVS] Pot mapping loaded.` (présent → cause 1, absent → cause 2) ou Tool 6 affichage de la page NORMAL pour comparer avec le default attendu. | high | TODO | 2026-04-07 |
+
+*(aucun bug ouvert pour le moment)*
 
 ---
 
@@ -24,6 +25,7 @@ Tracker des bugs identifiés lors d'audits ou de tests, classés par sévérité
 |---|---|---|---|---|
 | B-001 | `src/arp/ArpEngine.cpp:284` (WAITING_QUANTIZE) | `globalTick % boundary != 0` exact-equality could skip quantize boundaries when `ClockManager::generateTicks()` caught up multiple ticks in one call (cap=4). User REC tap at quantize=BEAT/BAR could wait one extra full beat/bar. | commit c23eea4 — sentinel `_lastDispatchedGlobalTick` + crossing detection, pattern aligné avec LoopEngine plan Phase 2 Step 1c. | 2026-04-07 |
 | B-002 | `src/arp/ArpEngine.cpp:296` (PLAYING auto-play HOLD OFF) | Même pattern `% boundary != 0` dans la branche auto-play HOLD OFF — premier note add avec quantize=BEAT/BAR pouvait sauter une beat. Identifié pendant audit fresh pass 2026-04-07 (B-CODE-1). | commit c23eea4 — déduplication via deferral à la branche WAITING_QUANTIZE (single source of truth pour le crossing detection). | 2026-04-07 |
+| B-003 | NVS `illpad_pmap` (stale custom mapping) | NORMAL+hold-left : R2 et R3 cibles inversées (PITCH_BEND sur R2, AT_DEADZONE sur R3). Découvert pendant Phase 1 LOOP Hardware Checkpoint B. Code firmware vérifié intégralement (DEFAULT_MAPPING, rebuildBindings, resolveBindings, POT_PINS) — tout cohérent. Cause confirmée : `PotMappingStore` custom stocké en NVS d'une session Tool 6 antérieure qui override le default. | Phase 1 Commit 7 (`f8d9f0a`) — Step 7b ajoute `loopMap[8]` à `PotMappingStore`, taille passe de 36→52 bytes, `loadBlob` rejette le vieux blob 36-byte par size mismatch (Zero Migration Policy), DEFAULT_MAPPING rechargé. Confirmé hardware par l'utilisateur après reboot du build Phase 1 final. | 2026-04-07 |
 
 ---
 
