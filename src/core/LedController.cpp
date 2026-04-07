@@ -387,6 +387,12 @@ bool LedController::renderConfirmation(unsigned long now) {
       if (elapsed >= _octaveDurationMs) { _confirmType = CONFIRM_NONE; return false; }
       return true;
 
+    case CONFIRM_LOOP_REC:
+      // Phase 1 stub: track expiry only, no overlay rendering yet (Phase 4 adds it).
+      // 200 ms matches the value Phase 4 will use for rendering.
+      if (elapsed >= 200) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
+
     default:
       _confirmType = CONFIRM_NONE;
       return false;

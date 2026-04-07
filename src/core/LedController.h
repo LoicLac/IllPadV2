@@ -9,6 +9,7 @@
 // Forward declarations
 struct BankSlot;
 class ArpEngine;
+class LoopEngine;
 
 // =================================================================
 // Confirmation blink types
@@ -24,6 +25,7 @@ enum ConfirmType : uint8_t {
   CONFIRM_PLAY         = 7,
   CONFIRM_STOP         = 8,
   CONFIRM_OCTAVE       = 9,
+  CONFIRM_LOOP_REC     = 10,  // LOOP record/overdub started — rendering in Phase 4
 };
 
 class LedController {
@@ -80,6 +82,9 @@ public:
 
   // Tempo bargraph (level bar + BPM pulse on tip LED)
   void showTempoBargraph(float realLevel, uint8_t potLevel, bool caught, uint16_t bpm);
+
+  // LOOP clear ramp overlay (stub — Phase 4 adds real ramp rendering)
+  void showClearRamp(uint8_t pct) { (void)pct; }
 
   // Calibration
   void setCalibrationMode(bool active);
