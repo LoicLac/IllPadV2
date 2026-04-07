@@ -1,6 +1,7 @@
 #include "BankManager.h"
 #include "../midi/MidiEngine.h"
 #include "../core/LedController.h"
+#include "../core/MidiTransport.h"
 #include <Arduino.h>
 #include <string.h>
 
@@ -22,11 +23,13 @@ BankManager::BankManager()
 }
 
 void BankManager::begin(MidiEngine* engine, LedController* leds,
-                         BankSlot* banks, uint8_t* lastKeys) {
-  _engine   = engine;
-  _leds     = leds;
-  _banks    = banks;
-  _lastKeys = lastKeys;
+                         BankSlot* banks, uint8_t* lastKeys,
+                         MidiTransport* transport) {
+  _engine    = engine;
+  _leds      = leds;
+  _banks     = banks;
+  _lastKeys  = lastKeys;
+  _transport = transport;
 
   // Show initial bank on LED
   if (_leds) _leds->setCurrentBank(_currentBank);
@@ -117,10 +120,25 @@ bool BankManager::isHolding() const {
 void BankManager::switchToBank(uint8_t newBank) {
   if (newBank >= NUM_BANKS || newBank == _currentBank) return;
 
+  // LOOP recording lock: deny switch while recording/overdubbing.
+  // Phase 1 stub — loopEngine is always nullptr, guard never fires.
+  // Phase 2 will replace this with:
+  //   if (_banks[_currentBank].loopEngine->isRecording()) return;
+  // (audit BUG #2: must check engine STATE, not pointer presence — pointer
+  // check would block ALL switches once Phase 2 assigns the engine).
+  if (_banks[_currentBank].type == BANK_LOOP && _banks[_currentBank].loopEngine) {
+    // Phase 2 will add the actual recording-state guard here.
+  }
+
   // Reset pitch bend to center on old bank's channel, then all notes off
   if (_engine) {
     _engine->sendPitchBend(8192);  // PB center before switching channel
     _engine->allNotesOff();
+  }
+
+  // Flush LOOP live notes on outgoing bank (CC123) — Phase 2 stub.
+  if (_banks[_currentBank].type == BANK_LOOP && _banks[_currentBank].loopEngine && _transport) {
+    // Phase 2: _banks[_currentBank].loopEngine->flushLiveNotes(*_transport, _currentBank);
   }
 
   // Update foreground flags
@@ -143,8 +161,10 @@ void BankManager::switchToBank(uint8_t newBank) {
 
   // Reset edge detection — prevents phantom notes
   #if DEBUG_SERIAL
+  static const char* typeNames[] = {"NORMAL", "ARPEG", "LOOP"};
+  uint8_t t = _banks[_currentBank].type;
   Serial.printf("[BANK] Bank %d (ch %d, %s)\n",
                 _currentBank + 1, _currentBank + 1,
-                _banks[_currentBank].type == BANK_ARPEG ? "ARPEG" : "NORMAL");
+                (t <= BANK_LOOP) ? typeNames[t] : "???");
   #endif
 }

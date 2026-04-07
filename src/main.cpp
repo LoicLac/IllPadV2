@@ -396,7 +396,7 @@ void setup() {
   s_holdPad = holdPad;
 
   // Bank Manager
-  s_bankManager.begin(&s_midiEngine, &s_leds, s_banks, s_lastKeys);
+  s_bankManager.begin(&s_midiEngine, &s_leds, s_banks, s_lastKeys, &s_transport);
   s_bankManager.setBankPads(bankPads);
   s_bankManager.setCurrentBank(currentBank);
   #if DEBUG_SERIAL

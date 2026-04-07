@@ -7,13 +7,14 @@
 
 class MidiEngine;
 class LedController;
+class MidiTransport;
 
 class BankManager {
 public:
   BankManager();
 
   void begin(MidiEngine* engine, LedController* leds, BankSlot* banks,
-             uint8_t* lastKeys);
+             uint8_t* lastKeys, MidiTransport* transport);
 
   // Call every loop iteration with current key state and button state.
   // Returns true if a bank switch occurred this frame.
@@ -34,6 +35,7 @@ private:
   LedController* _leds;
   BankSlot*      _banks;
   uint8_t*       _lastKeys;    // main loop's s_lastKeys — reset on switch
+  MidiTransport* _transport = nullptr;  // for LOOP flushLiveNotes (Phase 2)
 
   uint8_t _currentBank;
   uint8_t _bankPads[NUM_BANKS];
