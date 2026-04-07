@@ -273,30 +273,20 @@ void setup() {
                            holdPad, s_playStopPad, octavePads,
                            &s_potRouter);
       s_setupManager.run();
-
-      // Reload calibration data after setup (may have been changed by Tool 1)
-      s_keyboard.loadCalibrationData();
-      s_keyboard.calculateAdaptiveThresholds();
-      #if DEBUG_SERIAL
-      Serial.println("[SETUP] Exited setup mode. Continuing boot...");
-      #endif
+      // F-CODE-7: setupManager.run() never returns — its only exit path is
+      // ESP.restart() in Tool 0 confirmation. Code below this point was dead.
     }
   }
 
   // MIDI Transport (USB + BLE) — after setup, before normal boot
-  // Load BLE interval early (before begin) so BLE_OFF can skip BLE init entirely
+  // Load BLE interval early (before begin) so BLE_OFF can skip BLE init entirely.
+  // F-CODE-8 fix: use NvsManager::loadBlob + validate (was: ad-hoc Preferences read).
   {
-    Preferences prefs;
-    if (prefs.begin(SETTINGS_NVS_NAMESPACE, true)) {
-      size_t len = prefs.getBytesLength(SETTINGS_NVS_KEY);
-      if (len == sizeof(SettingsStore)) {
-        SettingsStore tmp;
-        prefs.getBytes(SETTINGS_NVS_KEY, &tmp, sizeof(SettingsStore));
-        if (tmp.magic == EEPROM_MAGIC && tmp.version == SETTINGS_VERSION) {
-          s_transport.setBleInterval(tmp.bleInterval);
-        }
-      }
-      prefs.end();
+    SettingsStore tmp;
+    if (NvsManager::loadBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY,
+                             EEPROM_MAGIC, SETTINGS_VERSION, &tmp, sizeof(tmp))) {
+      validateSettingsStore(tmp);
+      s_transport.setBleInterval(tmp.bleInterval);
     }
   }
   s_leds.showBootProgress(4);  // Step 4: starting MIDI

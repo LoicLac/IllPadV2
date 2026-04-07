@@ -590,7 +590,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       size_t len = prefs.getBytesLength(key);
       if (len == sizeof(ArpPotStore)) {
         prefs.getBytes(key, &_pendingArpPot[i], sizeof(ArpPotStore));
-        if (_pendingArpPot[i].division >= NUM_ARP_DIVISIONS) _pendingArpPot[i].division = 4;
+        if (_pendingArpPot[i].division >= NUM_ARP_DIVISIONS) _pendingArpPot[i].division = DIV_1_8;  // F-CODE-3: align with ctor default
         if (_pendingArpPot[i].pattern  >= NUM_ARP_PATTERNS)  _pendingArpPot[i].pattern  = 0;
         if (_pendingArpPot[i].octaveRange < 1 || _pendingArpPot[i].octaveRange > 4)
           _pendingArpPot[i].octaveRange = 1;

@@ -20,12 +20,19 @@ static USBMIDI usbMidi(DEVICE_NAME_USB);
 static std::atomic<bool> s_bleConnected{false};
 static std::atomic<uint8_t> s_bleIntervalSetting{BLE_NORMAL};
 
-// Clock reception callback (set by main.cpp, called from USB poll + BLE callback)
-static MidiClockCallback s_clockCb = nullptr;
+// Clock reception callback (set by main.cpp, called from USB poll + BLE callback).
+// F-CODE-10 fix (audit 2026-04-07): atomic to make the cross-core access (NimBLE
+// task on Core 0 reads, Core 1 setup() writes once at boot) explicit and portable.
+// In practice the write happens once before BLE starts, so the race window is nil,
+// but the type now documents the cross-thread access pattern.
+static std::atomic<MidiClockCallback> s_clockCb{nullptr};
 
 // BLE system real-time callback (called from NimBLE task)
 static void onBleSystemRT(uint8_t status) {
-  if (status == 0xF8 && s_clockCb)     s_clockCb(1);        // BLE clock tick
+  if (status == 0xF8) {
+    auto cb = s_clockCb.load(std::memory_order_acquire);
+    if (cb) cb(1);  // BLE clock tick
+  }
   // 0xFA/0xFB/0xFC (Start/Continue/Stop) intentionally ignored — ILLPAD is an instrument, not a transport follower
 }
 
@@ -126,7 +133,10 @@ void MidiTransport::update() {
       uint8_t cin = MIDI_EP_HEADER_CIN_GET(pkt.header);
       if (cin == 0x0F) {  // CIN 0x0F = Single Byte (system real-time)
         uint8_t status = pkt.byte1;
-        if (status == 0xF8 && s_clockCb)     s_clockCb(0);        // USB clock tick
+        if (status == 0xF8) {
+          auto cb = s_clockCb.load(std::memory_order_acquire);
+          if (cb) cb(0);  // USB clock tick
+        }
         // 0xFA/0xFB/0xFC (Start/Continue/Stop) intentionally ignored
       }
     }
@@ -146,7 +156,7 @@ void MidiTransport::setBleInterval(uint8_t interval) {
 // =================================================================
 
 void MidiTransport::setClockCallback(MidiClockCallback cb) {
-  s_clockCb = cb;
+  s_clockCb.store(cb, std::memory_order_release);
 }
 
 // =================================================================

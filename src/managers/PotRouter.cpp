@@ -64,8 +64,8 @@ PotRouter::PotRouter()
   , _bargraphDirty(false)
   , _bargraphLevel(0.0f)
   , _bargraphPotLevel(0)
+  , _bargraphCaught(false)            // F-CODE-1: align init order with .h declaration
   , _bargraphTarget(TARGET_EMPTY)
-  , _bargraphCaught(false)
   , _dirty(false)
 {
   // Init per-pot state (ADC arrays now in PotFilter)

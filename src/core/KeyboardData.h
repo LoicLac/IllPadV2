@@ -457,6 +457,8 @@ static_assert(sizeof(CalDataStore) <= NVS_BLOB_MAX_SIZE, "CalDataStore exceeds N
 static_assert(sizeof(NoteMapStore) <= NVS_BLOB_MAX_SIZE, "NoteMapStore exceeds NVS blob max");
 static_assert(sizeof(BankPadStore) <= NVS_BLOB_MAX_SIZE, "BankPadStore exceeds NVS blob max");
 static_assert(sizeof(SettingsStore) <= NVS_BLOB_MAX_SIZE, "SettingsStore exceeds NVS blob max");
+static_assert(sizeof(PotParamsStore) <= NVS_BLOB_MAX_SIZE, "PotParamsStore exceeds NVS blob max");  // F-CODE-4
+static_assert(sizeof(ArpPotStore) <= NVS_BLOB_MAX_SIZE, "ArpPotStore exceeds NVS blob max");        // F-CODE-4
 static_assert(sizeof(PotMappingStore) <= NVS_BLOB_MAX_SIZE, "PotMappingStore exceeds NVS blob max");
 static_assert(sizeof(LedSettingsStore) <= NVS_BLOB_MAX_SIZE, "LedSettingsStore exceeds NVS blob max");
 static_assert(sizeof(ColorSlotStore) <= NVS_BLOB_MAX_SIZE, "ColorSlotStore exceeds NVS blob max");
@@ -648,6 +650,6 @@ static constexpr uint8_t NVS_DESCRIPTOR_COUNT = sizeof(NVS_DESCRIPTORS) / sizeof
 // Tool-to-descriptor mapping: each tool checks descriptors in range [first, last] inclusive
 // T3 spans 3 (bankpad+scalepad+arppad), T6 spans 2 (potmapping+potfilter), T7 spans 2 (ledsettings+colorslots)
 static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 5, 6, 7, 9 };   // T1..T7
-static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 7, 10 };  // T6=7 only (PotFilter descriptor 8 added when Phase 3 Monitor is implemented), T7 covers 9-10
+static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 8, 10 };  // T6=7-8 (PotMapping+PotFilter), T7=9-10 (LedSettings+ColorSlots) — F-CODE-5 (audit 2026-04-07)
 
 #endif // KEYBOARD_DATA_H
