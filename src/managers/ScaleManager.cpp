@@ -122,6 +122,26 @@ ScaleChangeType ScaleManager::consumeScaleChange() {
 // =================================================================
 void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot) {
 
+  // LOOP banks bypass scale resolution — scale pads are no-op.
+  // Still sync _lastScaleKeys to prevent phantom edges on subsequent
+  // LOOP → ARPEG bank switch (scale, hold, and octave pads all matter).
+  // Audit fix B6: also sync hold + octave entries (originally only the
+  // 15 scale pads were synced, leaving hold/octave stale).
+  if (slot.type == BANK_LOOP) {
+    // Root / mode / chromatic
+    for (uint8_t r = 0; r < 7; r++) {
+      if (_rootPads[r] < NUM_KEYS) _lastScaleKeys[_rootPads[r]] = keyIsPressed[_rootPads[r]];
+      if (_modePads[r] < NUM_KEYS) _lastScaleKeys[_modePads[r]] = keyIsPressed[_modePads[r]];
+    }
+    if (_chromaticPad < NUM_KEYS) _lastScaleKeys[_chromaticPad] = keyIsPressed[_chromaticPad];
+    // Hold + octave (ARPEG-only roles, same phantom-edge risk on switch)
+    if (_holdPad < NUM_KEYS) _lastScaleKeys[_holdPad] = keyIsPressed[_holdPad];
+    for (uint8_t o = 0; o < 4; o++) {
+      if (_octavePads[o] < NUM_KEYS) _lastScaleKeys[_octavePads[o]] = keyIsPressed[_octavePads[o]];
+    }
+    return;  // Skip root/mode/chrom processing AND hold/octave (already ARPEG-guarded below)
+  }
+
   // --- Root pads (0-6 → A,B,C,D,E,F,G) ---
   for (uint8_t r = 0; r < 7; r++) {
     uint8_t pad = _rootPads[r];
