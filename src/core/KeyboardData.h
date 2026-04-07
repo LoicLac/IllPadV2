@@ -281,6 +281,7 @@ struct LedSettingsStore {
 enum BankType : uint8_t {
   BANK_NORMAL = 0,
   BANK_ARPEG  = 1,
+  BANK_LOOP   = 2,
   BANK_ANY    = 0xFF  // Used in PotRouter bindings (matches any type)
 };
 
@@ -292,12 +293,14 @@ struct ScaleConfig {
 
 // Forward declaration
 class ArpEngine;
+class LoopEngine;
 
 struct BankSlot {
   uint8_t     channel;                    // 0-7 (fixed, = bank index)
-  BankType    type;                       // NORMAL or ARPEG
+  BankType    type;                       // NORMAL, ARPEG, or LOOP
   ScaleConfig scale;
   ArpEngine*  arpEngine;                  // non-null if ARPEG
+  LoopEngine* loopEngine;                 // non-null if LOOP
   bool        isForeground;
   uint8_t     baseVelocity;              // 1-127, per-bank (NORMAL + ARPEG)
   uint8_t     velocityVariation;         // 0-100%, per-bank (NORMAL + ARPEG)
@@ -379,14 +382,15 @@ struct ArpPadStore {
 static_assert(sizeof(ArpPadStore) <= NVS_BLOB_MAX_SIZE, "ArpPadStore exceeds NVS blob max");
 
 #define BANKTYPE_NVS_KEY_V2  "config"
-#define BANKTYPE_VERSION     1
+#define BANKTYPE_VERSION     2  // 1→2: added loopQuantize[]
 
 struct BankTypeStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  reserved;
-  uint8_t  types[NUM_BANKS];     // BankType enum cast
-  uint8_t  quantize[NUM_BANKS];  // ArpStartMode enum
+  uint8_t  types[NUM_BANKS];         // BankType enum cast
+  uint8_t  quantize[NUM_BANKS];      // ArpStartMode enum (ARPEG banks)
+  uint8_t  loopQuantize[NUM_BANKS];  // LoopQuantMode enum (LOOP banks)
 };
 static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds NVS blob max");
 
@@ -472,6 +476,7 @@ static_assert(offsetof(SettingsStore, baselineProfile) == 3,
 // =================================================================
 
 const uint8_t MAX_ARP_BANKS    = 4;
+const uint8_t MAX_LOOP_BANKS   = 2;
 const uint8_t MAX_ARP_NOTES    = 48;
 const uint8_t MAX_ARP_SEQUENCE = 192;  // 48 notes × 4 octaves
 const uint8_t MAX_ARP_OCTAVES  = 4;

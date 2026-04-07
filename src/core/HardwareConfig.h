@@ -267,6 +267,18 @@ enum ArpStartMode : uint8_t {
 };
 const uint8_t DEFAULT_ARP_START_MODE = ARP_START_IMMEDIATE;
 
+// --- Loop Quantize (per-bank LOOP, set in Tool 4) ---
+// Affects 6 transitions: start rec, close rec, start overdub, close overdub,
+// play, stop. FREE = loop libre (no snap). Abort (PLAY/STOP during
+// OVERDUBBING) and CLEAR (long-press) are ALWAYS immediate regardless of mode.
+enum LoopQuantMode : uint8_t {
+  LOOP_QUANT_FREE  = 0,  // No snap — transitions fire on tap
+  LOOP_QUANT_BEAT  = 1,  // Snap to next beat (24 ticks)
+  LOOP_QUANT_BAR   = 2,  // Snap to next bar (96 ticks, 4/4)
+  NUM_LOOP_QUANT_MODES = 3
+};
+const uint8_t DEFAULT_LOOP_QUANT_MODE = LOOP_QUANT_FREE;
+
 // --- Double-Tap Window (ARPEG HOLD mode) ---
 const uint8_t DOUBLE_TAP_MS_MIN     = 100;
 const uint8_t DOUBLE_TAP_MS_MAX     = 250;
