@@ -194,6 +194,7 @@ void setup() {
     s_banks[i].type               = BANK_NORMAL;
     s_banks[i].scale              = {true, 2, 0};  // chromatic=true, root=C(2), mode=Ionian(0)
     s_banks[i].arpEngine          = nullptr;
+    s_banks[i].loopEngine         = nullptr;
     s_banks[i].isForeground       = false;
     s_banks[i].baseVelocity       = DEFAULT_BASE_VELOCITY;
     s_banks[i].velocityVariation  = DEFAULT_VELOCITY_VARIATION;

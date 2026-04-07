@@ -484,6 +484,7 @@ struct PotMappingStore {
   uint8_t    reserved;
   PotMapping normalMap[POT_MAPPING_SLOTS];
   PotMapping arpegMap[POT_MAPPING_SLOTS];
+  PotMapping loopMap[POT_MAPPING_SLOTS];   // LOOP context (Phase 4 wires it)
 };
 
 // --- Defensive static_asserts for all Store structs ---
