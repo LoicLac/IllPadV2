@@ -14,8 +14,7 @@ Tracker des bugs identifiés lors d'audits ou de tests, classés par sévérité
 
 | ID | Fichier:ligne | Description courte | Sévérité | Status | Date |
 |---|---|---|---|---|---|
-
-*(aucun bug ouvert pour le moment)*
+| B-003 | runtime (NVS ou hardware) | NORMAL+hold-left : pots R2/R3 ont leurs cibles inversées (PITCH_BEND apparaît sur R2 au lieu de R3, AT_DEADZONE sur R3 au lieu de R2). R1 et R4 OK. Diagnostic read-only branche `loop` 2026-04-07 : code firmware vérifié intégralement (DEFAULT_MAPPING `PotRouter.cpp:18-39`, `rebuildBindings()` ligne 162-228, `resolveBindings()` ligne 334-381, `POT_PINS[]` `HardwareConfig.h:146-148`) — tout est cohérent. Phase 1 LOOP n'a pas touché ces fichiers. Causes probables : (1) NVS contient un PotMappingStore custom hérité d'une session Tool 6 antérieure qui override le default ; (2) wiring hardware GPIO5↔GPIO6 inversés sur le PCB. Distinguer via : serial boot pour chercher `[NVS] Pot mapping loaded.` (présent → cause 1, absent → cause 2) ou Tool 6 affichage de la page NORMAL pour comparer avec le default attendu. | high | TODO | 2026-04-07 |
 
 ---
 
