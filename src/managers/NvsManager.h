@@ -42,6 +42,10 @@ public:
   uint8_t getLoadedQuantizeMode(uint8_t bank) const;
   void    setLoadedQuantizeMode(uint8_t bank, uint8_t mode);
 
+  // Access loaded LOOP quantize modes (per-bank, for LoopEngine init at boot)
+  uint8_t getLoadedLoopQuantizeMode(uint8_t bank) const;
+  void    setLoadedLoopQuantizeMode(uint8_t bank, uint8_t mode);
+
   // Access loaded arp params (for ArpEngine init at boot, after loadAll)
   const ArpPotStore& getLoadedArpParams(uint8_t bankIdx) const;
 
@@ -99,7 +103,8 @@ private:
   uint8_t     _pendingVelVar[NUM_BANKS];
   uint16_t    _pendingPitchBend[NUM_BANKS];
   ArpPotStore _pendingArpPot[NUM_BANKS];
-  uint8_t     _loadedQuantize[NUM_BANKS];  // ArpStartMode per bank (loaded at boot)
+  uint8_t     _loadedQuantize[NUM_BANKS];      // ArpStartMode per bank (loaded at boot)
+  uint8_t     _loadedLoopQuantize[NUM_BANKS];  // LoopQuantMode per bank (loaded at boot)
   uint16_t    _pendingTempo;
   uint8_t     _pendingLedBright;
   uint8_t     _pendingPadSens;

@@ -539,6 +539,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
 
   // --- Bank types + quantize modes ---
   memset(_loadedQuantize, DEFAULT_ARP_START_MODE, NUM_BANKS);
+  memset(_loadedLoopQuantize, DEFAULT_LOOP_QUANT_MODE, NUM_BANKS);
   {
     BankTypeStore bts;
     if (NvsManager::loadBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
@@ -546,7 +547,8 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       validateBankTypeStore(bts);
       for (uint8_t i = 0; i < NUM_BANKS; i++) {
         banks[i].type = (BankType)bts.types[i];
-        _loadedQuantize[i] = bts.quantize[i];
+        _loadedQuantize[i]     = bts.quantize[i];
+        _loadedLoopQuantize[i] = bts.loopQuantize[i];
       }
       #if DEBUG_SERIAL
       Serial.println("[NVS] Bank types + quantize loaded (v2 store).");
@@ -808,6 +810,15 @@ uint8_t NvsManager::getLoadedQuantizeMode(uint8_t bank) const {
 
 void NvsManager::setLoadedQuantizeMode(uint8_t bank, uint8_t mode) {
   if (bank < NUM_BANKS) _loadedQuantize[bank] = mode;
+}
+
+uint8_t NvsManager::getLoadedLoopQuantizeMode(uint8_t bank) const {
+  if (bank >= NUM_BANKS) return DEFAULT_LOOP_QUANT_MODE;
+  return _loadedLoopQuantize[bank];
+}
+
+void NvsManager::setLoadedLoopQuantizeMode(uint8_t bank, uint8_t mode) {
+  if (bank < NUM_BANKS) _loadedLoopQuantize[bank] = mode;
 }
 
 const ArpPotStore& NvsManager::getLoadedArpParams(uint8_t bankIdx) const {

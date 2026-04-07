@@ -531,11 +531,19 @@ inline void validateSettingsStore(SettingsStore& s) {
 
 inline void validateBankTypeStore(BankTypeStore& s) {
   uint8_t arpCount = 0;
+  uint8_t loopCount = 0;
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    if (s.types[i] > BANK_ARPEG) s.types[i] = BANK_NORMAL;
-    if (s.types[i] == BANK_ARPEG) arpCount++;
-    if (arpCount > MAX_ARP_BANKS) s.types[i] = BANK_NORMAL;
+    if (s.types[i] > BANK_LOOP) s.types[i] = BANK_NORMAL;  // was: > BANK_ARPEG (BUG #1 fix)
+    if (s.types[i] == BANK_ARPEG) {
+      arpCount++;
+      if (arpCount > MAX_ARP_BANKS) s.types[i] = BANK_NORMAL;
+    }
+    if (s.types[i] == BANK_LOOP) {
+      loopCount++;
+      if (loopCount > MAX_LOOP_BANKS) s.types[i] = BANK_NORMAL;
+    }
     if (s.quantize[i] >= NUM_ARP_START_MODES) s.quantize[i] = DEFAULT_ARP_START_MODE;
+    if (s.loopQuantize[i] >= NUM_LOOP_QUANT_MODES) s.loopQuantize[i] = DEFAULT_LOOP_QUANT_MODE;
   }
 }
 
@@ -552,6 +560,15 @@ inline void validateArpPadStore(ArpPadStore& s) {
   if (s.playStopPad >= NUM_KEYS) s.playStopPad = 24;
   for (uint8_t i = 0; i < 4; i++) {
     if (s.octavePads[i] >= NUM_KEYS) s.octavePads[i] = 25 + i;
+  }
+}
+
+inline void validateLoopPadStore(LoopPadStore& s) {
+  if (s.recPad != 0xFF && s.recPad >= NUM_KEYS)             s.recPad      = 0xFF;
+  if (s.playStopPad != 0xFF && s.playStopPad >= NUM_KEYS)   s.playStopPad = 0xFF;
+  if (s.clearPad != 0xFF && s.clearPad >= NUM_KEYS)         s.clearPad    = 0xFF;
+  for (uint8_t i = 0; i < LOOP_SLOT_COUNT; i++) {
+    if (s.slotPads[i] != 0xFF && s.slotPads[i] >= NUM_KEYS) s.slotPads[i] = 0xFF;
   }
 }
 
@@ -673,18 +690,19 @@ static constexpr NvsDescriptor NVS_DESCRIPTORS[] = {
   { BANKPAD_NVS_NAMESPACE,     BANKPAD_NVS_KEY,        EEPROM_MAGIC,    BANKPAD_VERSION,      (uint16_t)sizeof(BankPadStore)      },  // 2: T3a
   { SCALE_PAD_NVS_NAMESPACE,   SCALEPAD_NVS_KEY,       EEPROM_MAGIC,    SCALEPAD_VERSION,     (uint16_t)sizeof(ScalePadStore)     },  // 3: T3b
   { ARP_PAD_NVS_NAMESPACE,     ARPPAD_NVS_KEY,         EEPROM_MAGIC,    ARPPAD_VERSION,       (uint16_t)sizeof(ArpPadStore)       },  // 4: T3c
-  { BANKTYPE_NVS_NAMESPACE,    BANKTYPE_NVS_KEY_V2,    EEPROM_MAGIC,    BANKTYPE_VERSION,     (uint16_t)sizeof(BankTypeStore)     },  // 5: T4
-  { SETTINGS_NVS_NAMESPACE,    SETTINGS_NVS_KEY,       EEPROM_MAGIC,    SETTINGS_VERSION,     (uint16_t)sizeof(SettingsStore)     },  // 6: T5
-  { POTMAP_NVS_NAMESPACE,      POTMAP_NVS_KEY,         EEPROM_MAGIC,    POTMAP_VERSION,       (uint16_t)sizeof(PotMappingStore)   },  // 7: T6
-  { POTFILTER_NVS_NAMESPACE,   POTFILTER_NVS_KEY,      EEPROM_MAGIC,    POT_FILTER_VERSION,   (uint16_t)sizeof(PotFilterStore)    },  // 8: PotFilter (Monitor in T6)
-  { LED_SETTINGS_NVS_NAMESPACE,LED_SETTINGS_NVS_KEY,   EEPROM_MAGIC,    LED_SETTINGS_VERSION, (uint16_t)sizeof(LedSettingsStore)  },  // 9: T7a
-  { LED_SETTINGS_NVS_NAMESPACE,COLOR_SLOT_NVS_KEY,     COLOR_SLOT_MAGIC,COLOR_SLOT_VERSION,   (uint16_t)sizeof(ColorSlotStore)    },  // 10: T7b
+  { LOOP_PAD_NVS_NAMESPACE,    LOOPPAD_NVS_KEY,        EEPROM_MAGIC,    LOOPPAD_VERSION,      (uint16_t)sizeof(LoopPadStore)      },  // 5: T3d
+  { BANKTYPE_NVS_NAMESPACE,    BANKTYPE_NVS_KEY_V2,    EEPROM_MAGIC,    BANKTYPE_VERSION,     (uint16_t)sizeof(BankTypeStore)     },  // 6: T4
+  { SETTINGS_NVS_NAMESPACE,    SETTINGS_NVS_KEY,       EEPROM_MAGIC,    SETTINGS_VERSION,     (uint16_t)sizeof(SettingsStore)     },  // 7: T5
+  { POTMAP_NVS_NAMESPACE,      POTMAP_NVS_KEY,         EEPROM_MAGIC,    POTMAP_VERSION,       (uint16_t)sizeof(PotMappingStore)   },  // 8: T6
+  { POTFILTER_NVS_NAMESPACE,   POTFILTER_NVS_KEY,      EEPROM_MAGIC,    POT_FILTER_VERSION,   (uint16_t)sizeof(PotFilterStore)    },  // 9: PotFilter (Monitor in T6)
+  { LED_SETTINGS_NVS_NAMESPACE,LED_SETTINGS_NVS_KEY,   EEPROM_MAGIC,    LED_SETTINGS_VERSION, (uint16_t)sizeof(LedSettingsStore)  },  // 10: T7a
+  { LED_SETTINGS_NVS_NAMESPACE,COLOR_SLOT_NVS_KEY,     COLOR_SLOT_MAGIC,COLOR_SLOT_VERSION,   (uint16_t)sizeof(ColorSlotStore)    },  // 11: T7b
 };
 static constexpr uint8_t NVS_DESCRIPTOR_COUNT = sizeof(NVS_DESCRIPTORS) / sizeof(NVS_DESCRIPTORS[0]);
 
 // Tool-to-descriptor mapping: each tool checks descriptors in range [first, last] inclusive
-// T3 spans 3 (bankpad+scalepad+arppad), T6 spans 2 (potmapping+potfilter), T7 spans 2 (ledsettings+colorslots)
-static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 5, 6, 7, 9 };   // T1..T7
-static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 8, 10 };  // T6=7-8 (PotMapping+PotFilter), T7=9-10 (LedSettings+ColorSlots) — F-CODE-5 (audit 2026-04-07)
+// T3 spans 4 (bankpad+scalepad+arppad+looppad), T6 spans 2 (potmapping+potfilter), T7 spans 2 (ledsettings+colorslots)
+static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 6, 7, 8, 10 };  // T1..T7
+static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 5, 6, 7, 9, 11 };  // T3=2-5, T6=8-9 (PotMapping+PotFilter), T7=10-11 (LedSettings+ColorSlots)
 
 #endif // KEYBOARD_DATA_H
