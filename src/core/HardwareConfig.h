@@ -45,11 +45,78 @@ static constexpr RGBW COL_BOOT      = {  0,   0,   0, 255};  // Boot — clean W
 static constexpr RGBW COL_BOOT_FAIL = {255,   0,   0,   0};  // Boot fail — red
 static constexpr RGBW COL_SETUP     = {128,   0, 255,   0};  // Setup comet — violet
 
+// LOOP colors (red/magenta family) — W=0 for pure chromatic
+// Five distinct colors:
+//   - COL_LOOP_FREE       : solid during PLAYING/STOPPED in FREE mode (no tick flashes)
+//   - COL_LOOP_QUANTIZED  : solid during PLAYING/STOPPED in BEAT/BAR mode (tick flashes active)
+//   - COL_LOOP_REC        : blink base during RECORDING (both modes)
+//   - COL_LOOP_OVD        : blink base during OVERDUBBING (both modes)
+//   - COL_LOOP_DIM        : EMPTY state and background dim base
+// Compile-time for Phase 2-4; future Tool 7 LOOP page will migrate to runtime
+// color slots (like ARPEG colors already do).
+static constexpr RGBW COL_LOOP_FREE      = {255,   0, 100,   0};  // FREE playback — hot magenta-red
+static constexpr RGBW COL_LOOP_QUANTIZED = {180,   0, 180,   0};  // QUANTIZED playback — cooler magenta-violet
+static constexpr RGBW COL_LOOP_REC       = {255,   0,   0,   0};  // RECORDING — pure red
+static constexpr RGBW COL_LOOP_OVD       = {255,   0, 150,   0};  // OVERDUBBING — bright magenta
+static constexpr RGBW COL_LOOP_DIM       = { 30,   0,  15,   0};  // EMPTY/background dim
+
 // Battery gauge gradient (LED 0 = red, LED 7 = green) — no W channel
 static constexpr RGBW COL_BATTERY[NUM_LEDS] = {
   {255,   0, 0, 0}, {255,  36, 0, 0}, {255,  73, 0, 0}, {255, 145, 0, 0},
   {200, 200, 0, 0}, {145, 255, 0, 0}, { 73, 255, 0, 0}, {  0, 255, 0, 0}
 };
+
+// LOOP LED intensities — 0-100 PERCEPTUAL % (same unit as setPixel intensityPct)
+// Mirrors ARPEG pattern: solid states, sine pulse only on FG stopped+events loaded.
+// Compile-time for now; future Tool 7 LOOP page will make runtime-configurable.
+static constexpr uint8_t LED_FG_LOOP_IDLE       = 20;   // FG EMPTY or STOPPED (no events) — solid dim
+static constexpr uint8_t LED_FG_LOOP_STOP_MIN   = 20;   // FG STOPPED + events loaded — sine pulse min
+static constexpr uint8_t LED_FG_LOOP_STOP_MAX   = 80;   // FG STOPPED + events loaded — sine pulse max
+static constexpr uint8_t LED_FG_LOOP_PLAY       = 85;   // FG PLAYING — solid bright (both FREE and QUANTIZED)
+static constexpr uint8_t LED_FG_LOOP_REC        = 75;   // FG RECORDING base intensity (red blink)
+static constexpr uint8_t LED_FG_LOOP_OVD        = 75;   // FG OVERDUBBING base intensity (magenta blink)
+static constexpr uint8_t LED_BG_LOOP_DIM        = 5;    // BG (all non-playing states) — solid dim
+static constexpr uint8_t LED_BG_LOOP_PLAY       = 8;    // BG PLAYING — solid dim base
+
+// Tick flash hierarchy — boosts added to base intensity on beat/bar/wrap crossings.
+// Applied ONLY in QUANTIZED modes (BEAT/BAR) during PLAYING/OVERDUBBING, using
+// the loop's internal positionUs-derived beat grid. ALSO applied during RECORDING
+// (both FREE and QUANTIZED) using globalTick from ClockManager, since the loop
+// structure is not yet established. In FREE mode during PLAYING, tick flashes
+// are DISABLED — the color stays solid (no internal beat grid exists yet).
+//
+// Boost = additive percentage points on top of base intensity, clamped to 100.
+// Set a boost to 0 to disable the corresponding flash entirely.
+// Hierarchy: max(active flash boosts) wins when multiple flashes overlap.
+static constexpr uint8_t LED_TICK_BOOST_BEAT    = 10;   // Normal beat (beats 2/3/4 of a bar)
+static constexpr uint8_t LED_TICK_BOOST_BAR     = 40;   // Bar boundary (beat 1 of a new bar)
+static constexpr uint8_t LED_TICK_BOOST_WRAP    = 60;   // Loop wrap (end-of-cycle, hardest flash)
+static constexpr uint8_t LED_TICK_BOOST_BEAT_BG = 5;    // BG simple beat tick (same color as BG base)
+
+static constexpr uint16_t LED_TICK_DUR_BEAT_MS  = 20;   // Beat flash hold time
+static constexpr uint16_t LED_TICK_DUR_BAR_MS   = 40;   // Bar flash hold time
+static constexpr uint16_t LED_TICK_DUR_WRAP_MS  = 60;   // Wrap flash hold time
+
+// Waiting quantize blink (during hasPendingAction() wait for boundary)
+static constexpr uint16_t LED_WAIT_QUANT_PERIOD_MS = 100;  // blink half-period (on/off)
+static constexpr uint8_t  LED_WAIT_QUANT_INTENSITY = 90;   // blink "on" intensity
+
+// --- LOOP Slot Drive (Phase 6) ---
+// Long-press threshold for save action (release before this = load attempt)
+static constexpr uint16_t LOOP_SLOT_LONG_PRESS_MS = 1000;
+// Minimum press duration to count as a load (release below this = silent cancel)
+static constexpr uint16_t LOOP_SLOT_LOAD_MIN_MS   = 300;
+// LED ramp duration during save hold (matches LONG_PRESS_MS by definition)
+static constexpr uint16_t LOOP_SLOT_RAMP_DURATION_MS = 1000;
+
+// Slot drive LED colors (red/white/green family) — W=0 for pure chromatic
+static constexpr RGBW COL_LOOP_SLOT_LOAD   = {  0, 255,   0,   0};  // Load OK — green
+static constexpr RGBW COL_LOOP_SLOT_SAVE   = {  0,   0,   0, 255};  // Save OK — white
+static constexpr RGBW COL_LOOP_SLOT_REFUSE = {255,   0,   0,   0};  // Refus — red
+static constexpr RGBW COL_LOOP_SLOT_DELETE = {255,   0,   0,   0};  // Delete OK — red (rendered as double blink)
+
+// Number of slot pads (= number of slots in the drive)
+static constexpr uint8_t LOOP_SLOT_COUNT = 16;
 
 // Gamma LUT is now runtime-generated in LedController::rebuildGammaLut().
 // Configurable via gammaTenths in LedSettingsStore (Tool 7).

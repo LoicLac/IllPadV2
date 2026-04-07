@@ -115,6 +115,15 @@ struct ArpPotStore {
   uint8_t  shuffleTemplate;  // 0-9 (index into groove templates)
 };
 
+struct LoopPotStore {
+  uint16_t shuffleDepthRaw;    // 0-4095 (maps to 0.0-1.0)
+  uint8_t  shuffleTemplate;    // 0-9
+  uint8_t  velPatternIdx;      // 0-3
+  uint16_t chaosRaw;           // 0-4095 (maps to 0.0-1.0)
+  uint16_t velPatternDepthRaw; // 0-4095 (maps to 0.0-1.0)
+};
+static_assert(sizeof(LoopPotStore) == 8, "LoopPotStore must be 8 bytes");
+
 // =================================================================
 // Color Preset Palette (const, in flash — not NVS)
 // =================================================================
@@ -346,6 +355,13 @@ enum ArpDivision : uint8_t {
 
 #define ARP_PAD_NVS_NAMESPACE   "illpad_apad"
 
+#define LOOP_PAD_NVS_NAMESPACE  "illpad_lpad"
+#define LOOPPAD_NVS_KEY         "pads"
+#define LOOPPAD_VERSION         2   // slotPads[16] included from the start (audit C2)
+
+#define LOOPPOT_NVS_NAMESPACE   "illpad_lpot"
+// Keys: "loop_0" through "loop_7" (per bank, raw blob, no magic/version)
+
 // =================================================================
 // NVS blob size limit — all Store structs must fit in a stack buffer
 // =================================================================
@@ -380,6 +396,20 @@ struct ArpPadStore {
   uint8_t  _pad[2];      // alignment to 12 bytes
 };
 static_assert(sizeof(ArpPadStore) <= NVS_BLOB_MAX_SIZE, "ArpPadStore exceeds NVS blob max");
+
+struct LoopPadStore {
+  uint16_t magic;                       // EEPROM_MAGIC
+  uint8_t  version;                     // LOOPPAD_VERSION (=2)
+  uint8_t  reserved;
+  uint8_t  recPad;                      // 0xFF = unassigned
+  uint8_t  playStopPad;
+  uint8_t  clearPad;
+  uint8_t  _pad;                        // alignment to 8 bytes
+  uint8_t  slotPads[LOOP_SLOT_COUNT];   // 16 bytes — 0xFF = slot unassigned
+  uint8_t  _pad2[8];                    // padding to 32 bytes (room for future fields)
+};
+static_assert(sizeof(LoopPadStore) == 32, "LoopPadStore must be 32 bytes");
+static_assert(sizeof(LoopPadStore) <= NVS_BLOB_MAX_SIZE, "LoopPadStore exceeds NVS blob max");
 
 #define BANKTYPE_NVS_KEY_V2  "config"
 #define BANKTYPE_VERSION     2  // 1→2: added loopQuantize[]
