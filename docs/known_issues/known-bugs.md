@@ -14,8 +14,7 @@ Tracker des bugs identifiés lors d'audits ou de tests, classés par sévérité
 
 | ID | Fichier:ligne | Description courte | Sévérité | Status | Date |
 |---|---|---|---|---|---|
-
-*(aucun bug ouvert pour le moment)*
+| B-004 | `src/setup/ToolPotMapping.cpp:486-531` (`drawScreen()`) | Tool 6 : presser `d` (NAV_DEFAULTS) en mode navigation set bien `confirmDefaults = true` (ligne 734) et la branche d'attente y/n (ligne 600-621) consomme correctement le clavier, MAIS `drawScreen()` ne contient AUCUN rendu du prompt "Reset to defaults? (y/n)". Conséquence : l'utilisateur presse `d`, rien ne change visuellement, presse une autre touche par réflexe → cancel silencieux. La fonctionnalité reset-to-defaults est effectivement inaccessible. Pré-existant : commit `f7f9b0a` du 2026-03-23, antérieur à la branche `loop`. Détecté pendant Phase 1 LOOP Hardware Checkpoint C alors que B-002 stale NVS rendait Tool 6 plus visible. Fix : ajouter une branche `if (confirmDefaults) drawControlBar("Reset to defaults? [y/n]")` dans `drawScreen()`, similaire au pattern `_confirmSteal` ligne 514. Hors scope Phase 1 LOOP. | medium | TODO | 2026-04-08 |
 
 ---
 
