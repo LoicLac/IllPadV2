@@ -3,6 +3,19 @@
 #include <Arduino.h>
 
 // =================================================================
+// Debug helpers (compiled out when DEBUG_SERIAL == 0)
+// =================================================================
+#if DEBUG_SERIAL
+static const char* LOOP_STATE_NAMES[] = {
+    "EMPTY", "REC", "PLAY", "OVD", "STOP"
+};
+static const char* LOOP_PENDING_NAMES[] = {
+    "NONE", "START_REC", "STOP_REC", "START_OVD",
+    "STOP_OVD", "PLAY", "STOP"
+};
+#endif
+
+// =================================================================
 // Constructor — defensive init, begin() does the full wiring
 // =================================================================
 // All scalar members have default initializers in the header (C++11).
@@ -49,6 +62,11 @@ void LoopEngine::begin(uint8_t channel) {
 }
 
 void LoopEngine::clear(MidiTransport& transport) {
+    #if DEBUG_SERIAL
+    State oldState = _state;
+    uint16_t discardedEvents  = _eventCount;
+    uint16_t discardedOverdub = _overdubCount;
+    #endif
     flushActiveNotes(transport, /*hard=*/true);  // noteOff + vide pending
     _state          = EMPTY;
     _pendingAction  = PENDING_NONE;
@@ -64,6 +82,12 @@ void LoopEngine::clear(MidiTransport& transport) {
     _lastRecordBeatTick = 0xFFFFFFFF;
     memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
     memset(_liveNote, 0xFF, sizeof(_liveNote));   // B1: any outstanding live notes are now gone
+    #if DEBUG_SERIAL
+    Serial.printf("[LOOP] ch%u CLEAR from %s: %u events + %u overdub discarded -> EMPTY\n",
+                  _channel + 1,
+                  (oldState < 5) ? LOOP_STATE_NAMES[oldState] : "?",
+                  (unsigned)discardedEvents, (unsigned)discardedOverdub);
+    #endif
 }
 
 void LoopEngine::setPadOrder(const uint8_t* padOrder) {
@@ -209,11 +233,18 @@ void LoopEngine::stop(MidiTransport& transport) {
 // Quantize mode is ignored — abort means "stop now, throw away overdub".
 void LoopEngine::abortOverdub(MidiTransport& transport) {
     if (_state != OVERDUBBING) return;
+    #if DEBUG_SERIAL
+    uint16_t discarded = _overdubCount;
+    #endif
     _overdubCount = 0;
     memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
     flushActiveNotes(transport, /*hard=*/true);
     _state         = STOPPED;
     _pendingAction = PENDING_NONE;
+    #if DEBUG_SERIAL
+    Serial.printf("[LOOP] ch%u OVD ABORT (%u events discarded, hard flush -> STOP)\n",
+                  _channel + 1, (unsigned)discarded);
+    #endif
 }
 
 // Cancel overdub (CLEAR long-press during OVERDUBBING): discard only the
@@ -226,12 +257,19 @@ void LoopEngine::abortOverdub(MidiTransport& transport) {
 // will release normally via processLoopMode on the next frame.
 void LoopEngine::cancelOverdub() {
     if (_state != OVERDUBBING) return;
+    #if DEBUG_SERIAL
+    uint16_t discarded = _overdubCount;
+    #endif
     _overdubCount = 0;
     memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
     _state         = PLAYING;
     _pendingAction = PENDING_NONE;
     // _playStartUs, _cursorIdx, _lastPositionUs untouched → loop continues
     // exactly where it was. No audible gap, no retrigger.
+    #if DEBUG_SERIAL
+    Serial.printf("[LOOP] ch%u OVD CANCEL (undo pass, %u events discarded -> PLAY)\n",
+                  _channel + 1, (unsigned)discarded);
+    #endif
 }
 
 // =================================================================
@@ -243,6 +281,9 @@ void LoopEngine::doStartRecording() {
     _recordStartUs = micros();
     _lastRecordBeatTick = 0xFFFFFFFF;  // force first beat flash at first tick
     _state         = RECORDING;
+    #if DEBUG_SERIAL
+    Serial.printf("[LOOP] ch%u REC start\n", _channel + 1);
+    #endif
 }
 
 void LoopEngine::doStopRecording(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
@@ -294,12 +335,20 @@ void LoopEngine::doStopRecording(const uint8_t* keyIsPressed, const uint8_t* pad
     _lastPositionUs = 0;
     _lastBeatIdx    = 0xFFFFFFFF;   // force beat flash at first beat of playback
     _state          = PLAYING;
+    #if DEBUG_SERIAL
+    Serial.printf("[LOOP] ch%u REC close: %u events, %u bars @ %.1f BPM -> PLAY\n",
+                  _channel + 1, (unsigned)_eventCount, (unsigned)_loopLengthBars, _recordBpm);
+    #endif
 }
 
 void LoopEngine::doStartOverdub() {
     _overdubCount = 0;
     memset(_overdubActivePads, 0, sizeof(_overdubActivePads));
     _state        = OVERDUBBING;
+    #if DEBUG_SERIAL
+    Serial.printf("[LOOP] ch%u OVD start (base %u events)\n",
+                  _channel + 1, (unsigned)_eventCount);
+    #endif
 }
 
 void LoopEngine::doStopOverdub(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
@@ -314,6 +363,9 @@ void LoopEngine::doStopOverdub(const uint8_t* keyIsPressed, const uint8_t* padOr
     if (liveDurationUs == 0 || recordDurationUs == 0) {
         _overdubCount = 0;
         _state = PLAYING;
+        #if DEBUG_SERIAL
+        Serial.printf("[LOOP] ch%u OVD close: zero duration guard -> PLAY\n", _channel + 1);
+        #endif
         return;
     }
     uint32_t elapsedUs  = (closeUs - _playStartUs) % liveDurationUs;
@@ -330,7 +382,17 @@ void LoopEngine::doStopOverdub(const uint8_t* keyIsPressed, const uint8_t* padOr
     sortEvents(_overdubBuf, _overdubCount);
 
     // 3. Reverse merge O(n+m) into _events[] — no auxiliary buffer
+    #if DEBUG_SERIAL
+    uint16_t beforeMerge = _eventCount;
+    uint16_t overdubSize = _overdubCount;
+    #endif
     mergeOverdub();
+    #if DEBUG_SERIAL
+    uint16_t mergedCount = _eventCount - beforeMerge;  // 0 if B-PLAN-1 refused
+    Serial.printf("[LOOP] ch%u OVD close: +%u/%u merged, total %u -> PLAY\n",
+                  _channel + 1, (unsigned)mergedCount, (unsigned)overdubSize,
+                  (unsigned)_eventCount);
+    #endif
 
     // 4. Back to PLAYING — no change to _playStartUs (loop already running)
     _state = PLAYING;
@@ -345,6 +407,10 @@ void LoopEngine::doPlay(float currentBPM) {
     _lastPositionUs = 0;
     _lastBeatIdx    = 0xFFFFFFFF;   // force beat flash at first beat
     _state          = PLAYING;
+    #if DEBUG_SERIAL
+    Serial.printf("[LOOP] ch%u PLAY (%u events, %u bars)\n",
+                  _channel + 1, (unsigned)_eventCount, (unsigned)_loopLengthBars);
+    #endif
 }
 
 void LoopEngine::doStop(MidiTransport& transport) {
@@ -352,6 +418,10 @@ void LoopEngine::doStop(MidiTransport& transport) {
     // queue finish its scheduled events (trailing notes allowed).
     flushActiveNotes(transport, /*hard=*/false);
     _state = STOPPED;
+    #if DEBUG_SERIAL
+    Serial.printf("[LOOP] ch%u STOP (soft flush, %u events preserved)\n",
+                  _channel + 1, (unsigned)_eventCount);
+    #endif
 }
 
 // =================================================================
@@ -374,6 +444,12 @@ void LoopEngine::tick(MidiTransport& transport, float currentBPM, uint32_t globa
         bool crossed = (_lastDispatchedGlobalTick == 0xFFFFFFFF)
                      || ((globalTick / boundary) > (_lastDispatchedGlobalTick / boundary));
         if (crossed) {
+            #if DEBUG_SERIAL
+            Serial.printf("[LOOP] ch%u pending %s dispatched @globalTick=%u (boundary=%u)\n",
+                          _channel + 1,
+                          (_pendingAction < 7) ? LOOP_PENDING_NAMES[_pendingAction] : "?",
+                          (unsigned)globalTick, (unsigned)boundary);
+            #endif
             switch (_pendingAction) {
                 case PENDING_START_RECORDING:
                     doStartRecording();
