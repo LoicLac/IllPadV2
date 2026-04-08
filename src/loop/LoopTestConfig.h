@@ -17,13 +17,14 @@
 // Bank index (0-7) to force as LOOP at boot. Bank 8 = index 7 = MIDI ch 8.
 #define LOOP_TEST_BANK        7
 
-// 3 adjacent physical pads for REC / PLAY-STOP / CLEAR. Adjust to whatever
-// is convenient on the prototype layout. These pads MUST NOT collide with
-// any existing bank/scale/arp role (Tool 3). They act as control pads only
-// when the foreground bank is LOOP_TEST_BANK — on other banks they remain
-// regular music pads.
-#define LOOP_TEST_REC_PAD      30
-#define LOOP_TEST_PLAYSTOP_PAD 31
-#define LOOP_TEST_CLEAR_PAD    32
+// 3 physical pads (0-based indices, NUM_KEYS = 48 → valid range 0-47)
+// for REC / PLAY-STOP / CLEAR. Adjust to whatever is convenient on the
+// prototype layout. These pads MUST NOT collide with any existing
+// bank/scale/arp role (Tool 3). They act as control pads only when the
+// foreground bank is LOOP_TEST_BANK — on other banks they remain regular
+// music pads.
+#define LOOP_TEST_REC_PAD      47
+#define LOOP_TEST_PLAYSTOP_PAD 46
+#define LOOP_TEST_CLEAR_PAD    45
 
 #endif // LOOP_TEST_CONFIG_H
