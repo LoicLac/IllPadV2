@@ -688,6 +688,18 @@ static void handleLeftReleaseCleanup(const SharedKeyboardState& state) {
           relSlot.arpEngine->removePadPosition(s_padOrder[i]);
         }
       }
+    } else if (relSlot.type == BANK_LOOP && relSlot.loopEngine) {
+      // AUDIT FIX B1: idempotent sweep via releaseLivePad(). No-op on pads
+      // that have no live note attached (_liveNote[i] == 0xFF). Pads pressed
+      // before the hold and released during it still have their live note
+      // stored, so this sweep cleans them up even though their falling edge
+      // was missed by the isHolding() gate on processLoopMode. Mirror of the
+      // NORMAL sweep which uses MidiEngine::noteOff(i) via _lastResolvedNote.
+      for (int i = 0; i < NUM_KEYS; i++) {
+        if (!state.keyIsPressed[i]) {
+          relSlot.loopEngine->releaseLivePad(i, s_transport);
+        }
+      }
     }
   }
   s_wasHolding = holdingNow;

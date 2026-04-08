@@ -2,6 +2,7 @@
 #include "../midi/MidiEngine.h"
 #include "../core/LedController.h"
 #include "../core/MidiTransport.h"
+#include "../loop/LoopEngine.h"  // Phase 2 Step 10: isRecording() + flushLiveNotes()
 #include <Arduino.h>
 #include <string.h>
 
@@ -120,14 +121,18 @@ bool BankManager::isHolding() const {
 void BankManager::switchToBank(uint8_t newBank) {
   if (newBank >= NUM_BANKS || newBank == _currentBank) return;
 
-  // LOOP recording lock: deny switch while recording/overdubbing.
-  // Phase 1 stub — loopEngine is always nullptr, guard never fires.
-  // Phase 2 will replace this with:
-  //   if (_banks[_currentBank].loopEngine->isRecording()) return;
-  // (audit BUG #2: must check engine STATE, not pointer presence — pointer
-  // check would block ALL switches once Phase 2 assigns the engine).
+  // LOOP recording lock: deny switch while recording/overdubbing (audit BUG #2
+  // — the nullptr check is NOT sufficient; we must also check the engine STATE,
+  // otherwise any LOOP bank with an assigned engine would be permanently stuck).
+  // isRecording() returns true for RECORDING or OVERDUBBING, not PLAYING/STOPPED/EMPTY.
   if (_banks[_currentBank].type == BANK_LOOP && _banks[_currentBank].loopEngine) {
-    // Phase 2 will add the actual recording-state guard here.
+    if (_banks[_currentBank].loopEngine->isRecording()) {
+      #if DEBUG_SERIAL
+      Serial.printf("[BANK] switch denied: bank %d LOOP is recording/overdubbing\n",
+                    _currentBank + 1);
+      #endif
+      return;  // Silently deny — user must close recording first
+    }
   }
 
   // Reset pitch bend to center on old bank's channel, then all notes off
@@ -136,9 +141,11 @@ void BankManager::switchToBank(uint8_t newBank) {
     _engine->allNotesOff();
   }
 
-  // Flush LOOP live notes on outgoing bank (CC123) — Phase 2 stub.
+  // Flush LOOP live notes on outgoing bank (CC123 + refcount zero + _liveNote
+  // reset). Does NOT touch _events[] or pending queue — the loop keeps running
+  // in background and its scheduled events will continue to fire on _channel.
   if (_banks[_currentBank].type == BANK_LOOP && _banks[_currentBank].loopEngine && _transport) {
-    // Phase 2: _banks[_currentBank].loopEngine->flushLiveNotes(*_transport, _currentBank);
+    _banks[_currentBank].loopEngine->flushLiveNotes(*_transport, _currentBank);
   }
 
   // Update foreground flags
