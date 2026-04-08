@@ -774,8 +774,21 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       #if DEBUG_SERIAL
       Serial.println("[NVS] Pot filter config loaded.");
       #endif
+    } else {
+      // Bootstrap: no blob yet (commit 94d4ed2 introduced the descriptor
+      // without a writer). Seed NVS with current PotFilter defaults so the
+      // T6 menu badge turns "ok" from the 2nd boot onward. Subsequent reads
+      // go through the happy path above.
+      PotFilterStore seed = PotFilter::getConfig();
+      seed.magic   = EEPROM_MAGIC;
+      seed.version = POT_FILTER_VERSION;
+      validatePotFilterStore(seed);
+      if (saveBlob(POTFILTER_NVS_NAMESPACE, POTFILTER_NVS_KEY, &seed, sizeof(seed))) {
+        #if DEBUG_SERIAL
+        Serial.println("[NVS] Pot filter config seeded with defaults.");
+        #endif
+      }
     }
-    // else: PotFilter uses built-in defaults (set in begin())
   }
 
   // --- Apply loaded values to PotRouter (BEFORE PotRouter::begin()) ---
