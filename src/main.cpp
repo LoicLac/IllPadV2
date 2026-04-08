@@ -19,6 +19,10 @@
 #include "arp/ArpEngine.h"
 #include "arp/ArpScheduler.h"
 
+// Loop
+#include "loop/LoopEngine.h"
+#include "loop/LoopTestConfig.h"  // defines LOOP_TEST_ENABLED (to be removed in Phase 3)
+
 // Managers
 #include "managers/BankManager.h"
 #include "managers/ScaleManager.h"
@@ -65,6 +69,10 @@ static BankSlot s_banks[NUM_BANKS];
 // Static ArpEngine pool (max 4 ARPEG banks)
 static ArpEngine s_arpEngines[4];
 
+// Static LoopEngine pool (max MAX_LOOP_BANKS = 2 LOOP banks). ~10 KB per
+// instance (mainly _events[1024] = 8 KB). Always alive regardless of type.
+static LoopEngine s_loopEngines[MAX_LOOP_BANKS];
+
 // Pad ordering: sequential 0..47 (Tool 2 will customize later)
 static uint8_t s_padOrder[NUM_KEYS];
 
@@ -74,6 +82,21 @@ static uint8_t s_lastKeys[NUM_KEYS];
 // Play/Stop pad (ARPEG only, always active — not gated by button hold)
 static uint8_t s_playStopPad = 24;  // Default, overwritten by NVS
 static bool    s_lastPlayStopState = false;
+
+// LOOP control pads (Phase 2: loaded from LoopTestConfig.h; Phase 3 will
+// source them from LoopPadStore via ToolPadRoles).
+// s_loopSlotPads[16] is declared for the Phase 6 slot drive but unused in
+// Phase 2 — initialised to 0xFF in setup() (Phase 1 Step 7c-5 cross-phase ref).
+static uint8_t  s_recPad             = 0xFF;
+static uint8_t  s_loopPlayPad        = 0xFF;
+static uint8_t  s_clearPad           = 0xFF;
+static uint8_t  s_loopSlotPads[LOOP_SLOT_COUNT];  // Phase 6 — initialised 0xFF below
+static bool     s_lastRecState       = false;
+static bool     s_lastLoopPlayState  = false;
+static bool     s_lastClearState     = false;
+static uint32_t s_clearPressStart    = 0;
+static bool     s_clearFired         = false;
+static const uint32_t CLEAR_LONG_PRESS_MS = 500;
 
 // Double-tap detection (ARPEG HOLD mode)
 static uint32_t s_lastPressTime[NUM_KEYS];
@@ -201,6 +224,9 @@ void setup() {
     s_banks[i].pitchBendOffset    = DEFAULT_PITCH_BEND_OFFSET;
     bankPads[i] = i;  // defaults
   }
+
+  // LOOP slot pads default unassigned (Phase 6 will populate from LoopPadStore)
+  memset(s_loopSlotPads, 0xFF, sizeof(s_loopSlotPads));
 
   // Scale/arp pad defaults (declared here so setup mode can access them)
   uint8_t rootPads[7], modePads[7];
@@ -362,6 +388,50 @@ void setup() {
     }
     #endif
   }
+
+  // Assign LoopEngines to LOOP banks (after NVS load).
+  // AUDIT FIX A1: reads the loop quantize mode from NvsManager (populated by
+  // loadAll() from BankTypeStore.loopQuantize[]). Defaults to LOOP_QUANT_FREE
+  // when the store was fresh (set by NvsManager constructor — Phase 1 Step 3e).
+  {
+    uint8_t loopIdx = 0;
+    for (uint8_t i = 0; i < NUM_BANKS && loopIdx < MAX_LOOP_BANKS; i++) {
+      if (s_banks[i].type == BANK_LOOP) {
+        s_loopEngines[loopIdx].begin(i);
+        s_loopEngines[loopIdx].setPadOrder(s_padOrder);
+        s_loopEngines[loopIdx].setLoopQuantizeMode(
+            s_nvsManager.getLoadedLoopQuantizeMode(i));
+        s_banks[i].loopEngine = &s_loopEngines[loopIdx];
+        loopIdx++;
+        #if DEBUG_SERIAL
+        Serial.printf("[INIT] Bank %d: LOOP, LoopEngine assigned (quantize=%u)\n",
+                      i + 1, (unsigned)s_nvsManager.getLoadedLoopQuantizeMode(i));
+        #endif
+      }
+    }
+  }
+
+  // LoopTestConfig override (Phase 2 only — removed in Phase 3).
+  // Forces LOOP_TEST_BANK as LOOP and assigns the 3 control pads, so the
+  // engine can be exercised on-device before Tool 4/Tool 3 gain LOOP support.
+  // Safe assumption: NVS cannot contain a LOOP bank yet (no writer in Phase 1),
+  // so s_loopEngines[0] is guaranteed available for reuse here.
+  #if LOOP_TEST_ENABLED
+  s_banks[LOOP_TEST_BANK].type = BANK_LOOP;
+  if (!s_banks[LOOP_TEST_BANK].loopEngine) {
+      s_loopEngines[0].begin(LOOP_TEST_BANK);
+      s_loopEngines[0].setPadOrder(s_padOrder);
+      s_loopEngines[0].setLoopQuantizeMode(LOOP_QUANT_FREE);  // test = no quantize
+      s_banks[LOOP_TEST_BANK].loopEngine = &s_loopEngines[0];
+  }
+  s_recPad      = LOOP_TEST_REC_PAD;
+  s_loopPlayPad = LOOP_TEST_PLAYSTOP_PAD;
+  s_clearPad    = LOOP_TEST_CLEAR_PAD;
+  #if DEBUG_SERIAL
+  Serial.printf("[INIT] LoopTestConfig: bank %d forced LOOP, pads rec=%u ps=%u clr=%u\n",
+                LOOP_TEST_BANK + 1, s_recPad, s_loopPlayPad, s_clearPad);
+  #endif
+  #endif
 
   // ArpScheduler — register engines + set scale/padOrder context
   s_arpScheduler.begin(&s_transport, &s_clockManager);
