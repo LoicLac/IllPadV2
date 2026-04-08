@@ -150,7 +150,7 @@ void LoopEngine::startRecording() {
     }
 }
 
-void LoopEngine::stopRecording(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
+void LoopEngine::stopRecording(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
     if (_state != RECORDING) return;
     if (_quantizeMode == LOOP_QUANT_FREE) {
         doStopRecording(keyIsPressed, padOrder, currentBPM);
@@ -173,7 +173,7 @@ void LoopEngine::startOverdub() {
     }
 }
 
-void LoopEngine::stopOverdub(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
+void LoopEngine::stopOverdub(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
     if (_state != OVERDUBBING) return;
     if (_quantizeMode == LOOP_QUANT_FREE) {
         doStopOverdub(keyIsPressed, padOrder, currentBPM);
@@ -245,7 +245,7 @@ void LoopEngine::doStartRecording() {
     _state         = RECORDING;
 }
 
-void LoopEngine::doStopRecording(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
+void LoopEngine::doStopRecording(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
     (void)padOrder;  // unused directly — padToNote uses _padOrder member
 
     // 1. Flush held pads — we haven't tracked "recorded pads" during the first
@@ -302,7 +302,7 @@ void LoopEngine::doStartOverdub() {
     _state        = OVERDUBBING;
 }
 
-void LoopEngine::doStopOverdub(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
+void LoopEngine::doStopOverdub(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM) {
     (void)padOrder;  // unused — kept for signature symmetry with stopRecording
 
     // 1. Flush held pads — but ONLY pads that had a recordNoteOn during this

@@ -613,6 +613,62 @@ static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uin
   }
 }
 
+// --- LOOP mode pad input: live play via refcount + routing into record buffer ---
+// AUDIT FIX (B1, 2026-04-06): uses setLiveNote() + releaseLivePad() instead of
+// direct noteRefDecrement + manual sendNoteOn at release. The release path is
+// symmetric with the handleLeftReleaseCleanup sweep, which uses the same
+// idempotent releaseLivePad() pattern.
+//
+// LOOP bypasses MidiEngine (no ScaleResolver — padToNote() is a direct
+// offset). Refcount + _liveNote[] dedupe live presses against any loop
+// playback event already ringing on the same MIDI note.
+static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, uint32_t now) {
+  (void)now;  // kept for signature symmetry with processArpMode
+  LoopEngine* eng = slot.loopEngine;
+  if (!eng) return;
+
+  LoopEngine::State ls = eng->getState();
+
+  for (uint8_t p = 0; p < NUM_KEYS; p++) {
+    // Skip LOOP control pads (REC / PLAY-STOP / CLEAR) — handled in handleLoopControls
+    if (p == s_recPad || p == s_loopPlayPad || p == s_clearPad) continue;
+
+    bool pressed    = state.keyIsPressed[p];
+    bool wasPressed = s_lastKeys[p];
+
+    if (pressed && !wasPressed) {
+      uint8_t note = eng->padToNote(p);
+      if (note == 0xFF) continue;  // unmapped pad
+      uint8_t vel  = slot.baseVelocity;
+      if (slot.velocityVariation > 0) {
+        int16_t range  = (int16_t)slot.velocityVariation * 127 / 200;
+        int16_t offset = (int16_t)(random(-range, range + 1));
+        int16_t result = (int16_t)vel + offset;
+        vel = (uint8_t)constrain(result, 1, 127);
+      }
+      // Refcount: only send MIDI noteOn on 0→1 transition
+      if (eng->noteRefIncrement(note)) {
+        s_transport.sendNoteOn(slot.channel, note, vel);
+      }
+      // B1 fix: track per-pad live note for idempotent cleanup at hold-release
+      // and bank-switch sweeps (mirrors MidiEngine._lastResolvedNote pattern).
+      eng->setLiveNote(p, note);
+      // Record during RECORDING or OVERDUBBING
+      if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
+        eng->recordNoteOn(p, vel);
+      }
+    } else if (!pressed && wasPressed) {
+      // B1 fix: releaseLivePad is idempotent — handles refcount decrement AND
+      // MIDI noteOff internally AND clears _liveNote[p]. No manual padToNote
+      // / noteRefDecrement / sendNoteOn needed here.
+      eng->releaseLivePad(p, s_transport);
+      if (ls == LoopEngine::RECORDING || ls == LoopEngine::OVERDUBBING) {
+        eng->recordNoteOff(p);
+      }
+    }
+  }
+}
+
 static void handleLeftReleaseCleanup(const SharedKeyboardState& state) {
   static bool s_wasHolding = false;
   bool holdingNow = s_bankManager.isHolding() || s_scaleManager.isHolding();
@@ -648,6 +704,10 @@ static void handlePadInput(const SharedKeyboardState& state, uint32_t now) {
       case BANK_ARPEG:
         if (slot.arpEngine) processArpMode(state, slot, now);
         break;
+      case BANK_LOOP:
+        if (slot.loopEngine) processLoopMode(state, slot, now);
+        break;
+      default: break;  // BANK_ANY (sentinel) — ignored
     }
   }
 
@@ -666,6 +726,13 @@ static void reloadPerBankParams(BankSlot& newSlot) {
     div       = newSlot.arpEngine->getDivision();
     pat       = newSlot.arpEngine->getPattern();
     shufTmpl  = newSlot.arpEngine->getShuffleTemplate();
+  }
+  // LOOP: shuffle depth/template are shared with ARPEG slots; gate/div/pattern
+  // are ARPEG-only. Pull what LoopEngine exposes so the PotRouter catch state
+  // reflects the loop's per-bank params on bank switch.
+  if (newSlot.type == BANK_LOOP && newSlot.loopEngine) {
+    shufDepth = newSlot.loopEngine->getShuffleDepth();
+    shufTmpl  = newSlot.loopEngine->getShuffleTemplate();
   }
 
   s_potRouter.loadStoredPerBank(
@@ -761,6 +828,124 @@ static void handlePlayStopPad(const SharedKeyboardState& state,
   }
 }
 
+// --- LOOP control pads (REC / PLAY-STOP / CLEAR) ---
+// Runs OUTSIDE the isHolding() guard — both hands free for drumming.
+// REC: simple tap edge, dispatches on current state (EMPTY/RECORDING/PLAYING/
+//      OVERDUBBING → next state, quantizable per-bank).
+// PLAY/STOP: simple tap edge. PLAYING → stop() (quantizable soft flush),
+//            OVERDUBBING → abortOverdub() (ALWAYS immediate, hard flush,
+//            discards overdub), STOPPED → play() (quantizable).
+// CLEAR: 500ms long-press with LED ramp. OVERDUBBING → cancelOverdub() (undo
+//        overdub pass, keep loop), else → clear() (hard flush, state → EMPTY).
+//        ALWAYS immediate — the 500ms hold IS the human quantize.
+static void handleLoopControls(const SharedKeyboardState& state, uint32_t now) {
+  BankSlot& slot = s_bankManager.getCurrentSlot();
+  if (slot.type != BANK_LOOP || !slot.loopEngine) {
+    // Not a LOOP bank — reset edge states so pads act as regular music pads
+    s_lastRecState      = (s_recPad      < NUM_KEYS) ? state.keyIsPressed[s_recPad]      : false;
+    s_lastLoopPlayState = (s_loopPlayPad < NUM_KEYS) ? state.keyIsPressed[s_loopPlayPad] : false;
+    s_lastClearState    = (s_clearPad    < NUM_KEYS) ? state.keyIsPressed[s_clearPad]    : false;
+    return;
+  }
+
+  LoopEngine* eng = slot.loopEngine;
+  LoopEngine::State ls = eng->getState();
+
+  // --- REC pad: simple tap edge, state-dispatched transition ---
+  if (s_recPad < NUM_KEYS) {
+    bool pressed = state.keyIsPressed[s_recPad];
+    if (pressed && !s_lastRecState) {
+      switch (ls) {
+        case LoopEngine::EMPTY:
+          eng->startRecording();
+          s_leds.triggerConfirm(CONFIRM_LOOP_REC);
+          break;
+        case LoopEngine::RECORDING:
+          eng->stopRecording(state.keyIsPressed, s_padOrder,
+                             s_clockManager.getSmoothedBPMFloat());
+          s_leds.triggerConfirm(CONFIRM_PLAY);
+          break;
+        case LoopEngine::PLAYING:
+          eng->startOverdub();
+          s_leds.triggerConfirm(CONFIRM_LOOP_REC);
+          break;
+        case LoopEngine::OVERDUBBING:
+          eng->stopOverdub(state.keyIsPressed, s_padOrder,
+                           s_clockManager.getSmoothedBPMFloat());
+          s_leds.triggerConfirm(CONFIRM_PLAY);
+          break;
+        default: break;  // STOPPED: REC ignored
+      }
+    }
+    s_lastRecState = pressed;
+  }
+
+  // --- PLAY/STOP pad: simple tap edge ---
+  // No CONFIRM_PLAY/CONFIRM_STOP triggered for LOOP — the Phase 4 LED
+  // rendering already gives distinct feedback (waiting quantize blink,
+  // instant color change, magenta→dim abort transition).
+  if (s_loopPlayPad < NUM_KEYS) {
+    bool pressed = state.keyIsPressed[s_loopPlayPad];
+    if (pressed && !s_lastLoopPlayState) {
+      switch (ls) {
+        case LoopEngine::PLAYING:
+          // Quantizable soft stop — trailing pending events finish naturally
+          eng->stop(s_transport);
+          break;
+        case LoopEngine::OVERDUBBING:
+          // Abort — ALWAYS immediate, hard flush, discard overdub
+          eng->abortOverdub(s_transport);
+          break;
+        case LoopEngine::STOPPED:
+          // Quantizable play — snap to next boundary per loopQuantize mode
+          eng->play(s_clockManager.getSmoothedBPMFloat());
+          break;
+        default: break;  // EMPTY, RECORDING: ignored
+      }
+    }
+    s_lastLoopPlayState = pressed;
+  }
+
+  // --- CLEAR pad: long press (500ms) + LED ramp ---
+  // ALWAYS immediate (no quantize snap — the 500ms hold IS the human quantize).
+  //
+  // IMPORTANT edge case: when ls == EMPTY we still update s_lastClearState
+  // below so the rising-edge detection stays coherent across state changes.
+  // Without this, a held CLEAR pad during an EMPTY→RECORDING transition
+  // would produce a false rising edge and start the clear timer mid-recording.
+  bool clearPressed = (s_clearPad < NUM_KEYS) ? state.keyIsPressed[s_clearPad] : false;
+  if (s_clearPad < NUM_KEYS && ls != LoopEngine::EMPTY) {
+    if (clearPressed && !s_lastClearState) {
+      s_clearPressStart = now;
+      s_clearFired = false;
+    }
+    if (clearPressed && !s_clearFired) {
+      uint32_t held = now - s_clearPressStart;
+      if (held < CLEAR_LONG_PRESS_MS) {
+        uint8_t ramp = (uint8_t)((uint32_t)held * 100 / CLEAR_LONG_PRESS_MS);
+        s_leds.showClearRamp(ramp);
+      } else {
+        // Ramp complete — dispatch based on current state
+        if (ls == LoopEngine::OVERDUBBING) {
+          // Undo overdub pass, keep loop. No confirm (color transition
+          // magenta→base is instant and visible).
+          eng->cancelOverdub();
+        } else {
+          // Hard flush, state → EMPTY. CONFIRM_STOP here: the transition from
+          // a colored state to dim EMPTY is subtle, and clear is destructive
+          // enough to warrant a distinct flash.
+          eng->clear(s_transport);
+          s_leds.triggerConfirm(CONFIRM_STOP);
+        }
+        s_clearFired = true;
+      }
+    }
+  }
+  // Always update clear edge state — even when ls == EMPTY — to avoid false
+  // rising edges when state transitions while the pad is held.
+  s_lastClearState = clearPressed;
+}
+
 // --- Push live pot params to engine (extracted for LOOP extensibility) ---
 static void pushParamsToEngine(BankSlot& slot) {
   if (slot.type == BANK_ARPEG && slot.arpEngine) {
@@ -772,6 +957,20 @@ static void pushParamsToEngine(BankSlot& slot) {
     slot.arpEngine->setBaseVelocity(s_potRouter.getBaseVelocity());
     slot.arpEngine->setVelocityVariation(s_potRouter.getVelocityVariation());
   }
+}
+
+// --- Push live pot params to LOOP engine (separate from pushParamsToEngine
+// because LoopEngine has a distinct param surface: no gate/division/pattern,
+// shares shuffle + velocity with ARPEG). Chaos, velPattern and velPatternDepth
+// are Phase 5 stubs with no PotRouter target yet.
+static void pushParamsToLoop(BankSlot& slot) {
+  if (slot.type != BANK_LOOP || !slot.loopEngine) return;
+  slot.loopEngine->setShuffleDepth(s_potRouter.getShuffleDepth());
+  slot.loopEngine->setShuffleTemplate(s_potRouter.getShuffleTemplate());
+  slot.loopEngine->setBaseVelocity(s_potRouter.getBaseVelocity());
+  slot.loopEngine->setVelocityVariation(s_potRouter.getVelocityVariation());
+  // Phase 5 stubs (no pot target yet): setChaosAmount, setVelPatternIdx,
+  // setVelPatternDepth.
 }
 
 // --- Pot pipeline: ADC read, param push, CC/PB, bargraph, battery, LEDs ---
@@ -795,6 +994,7 @@ static void handlePotPipeline(bool leftHeld, bool rearHeld) {
 
   // Push live params to engine (per bank type)
   pushParamsToEngine(potSlot);
+  pushParamsToLoop(potSlot);
 
   // Global params: Core 0 atomics
   s_responseShape.store(s_potRouter.getResponseShape(), std::memory_order_relaxed);
@@ -1022,6 +1222,11 @@ void loop() {
 
   handlePlayStopPad(state, holdBeforeUpdate, bankSwitched);
 
+  // LOOP control pads (REC / PLAY-STOP / CLEAR) — before handlePadInput so
+  // that a REC rising-edge transitions the state into RECORDING in the same
+  // frame, letting processLoopMode capture the same frame's pad edges.
+  handleLoopControls(state, now);
+
   handlePadInput(state, now);
 
   // Always sync edge state — prevents ghost notes when button releases
@@ -1032,6 +1237,23 @@ void loop() {
   // --- ArpScheduler: dispatch clock ticks to all active arps ---
   s_arpScheduler.tick();
   s_arpScheduler.processEvents();  // Fire pending gate noteOff + shuffled noteOn
+
+  // --- LoopEngine: tick + processEvents for all LOOP banks (foreground AND
+  // background). Unlike ArpScheduler (which manages all arp engines
+  // internally), LoopEngine tick/processEvents are called directly per bank
+  // because LOOP playback is microsecond-based, not tick-based. globalTick
+  // is only used by the pending action dispatcher for quantize boundary
+  // crossing detection (not for step scheduling).
+  {
+    uint32_t globalTick  = s_clockManager.getCurrentTick();
+    float    smoothedBpm = s_clockManager.getSmoothedBPMFloat();
+    for (uint8_t i = 0; i < NUM_BANKS; i++) {
+      if (s_banks[i].type == BANK_LOOP && s_banks[i].loopEngine) {
+        s_banks[i].loopEngine->tick(s_transport, smoothedBpm, globalTick);
+        s_banks[i].loopEngine->processEvents(s_transport);
+      }
+    }
+  }
 
   // --- CRITICAL PATH END ---
   s_midiEngine.flush();

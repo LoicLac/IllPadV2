@@ -87,9 +87,9 @@ public:
 
     // --- State transitions (quantizable — snap to beat/bar when mode != FREE) ---
     void startRecording();
-    void stopRecording(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM);
+    void stopRecording(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM);
     void startOverdub();
-    void stopOverdub(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM);
+    void stopOverdub(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM);
     void play(float currentBPM);
     void stop(MidiTransport& transport);            // PLAYING → STOPPED (soft flush; trailing pending ok)
 
@@ -196,7 +196,9 @@ private:
     // --- Pending action dispatcher stash (AUDIT FIX D-PLAN-1 2026-04-07) ---
     // Captured at the transition call site (stopRecording/stopOverdub/play),
     // consumed by the dispatcher in tick() when the quantize boundary crosses.
-    const bool*    _pendingKeyIsPressed = nullptr;
+    // keyIsPressed is uint8_t[] (0/1) to match SharedKeyboardState.keyIsPressed
+    // — bool[] would require an unsafe type-punned cast at every call site.
+    const uint8_t* _pendingKeyIsPressed = nullptr;
     const uint8_t* _pendingPadOrder     = nullptr;
     float          _pendingBpm          = 120.0f;
 
@@ -227,9 +229,9 @@ private:
 
     // --- Private transition implementations (the real work) ---
     void doStartRecording();
-    void doStopRecording(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM);
+    void doStopRecording(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM);
     void doStartOverdub();
-    void doStopOverdub(const bool* keyIsPressed, const uint8_t* padOrder, float currentBPM);
+    void doStopOverdub(const uint8_t* keyIsPressed, const uint8_t* padOrder, float currentBPM);
     void doPlay(float currentBPM);
     void doStop(MidiTransport& transport);
 
