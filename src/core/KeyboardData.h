@@ -593,29 +593,25 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
 // ── Pot Filter ──────────────────────────────────
 #define POTFILTER_NVS_NAMESPACE "illpad_pflt"
 #define POTFILTER_NVS_KEY       "cfg"
-const uint8_t POT_FILTER_VERSION = 1;
+const uint8_t POT_FILTER_VERSION = 2;  // v2: MCP3208 — removed snap100/actThresh10 (no EMA)
 
 struct PotFilterStore {
     uint16_t magic;        // EEPROM_MAGIC
     uint8_t  version;      // POT_FILTER_VERSION
-    uint8_t  snap100;      // snapMultiplier × 100 (1-30, default 5)
-    uint8_t  actThresh10;  // activityThreshold × 10 (20-200, default 150)
-    uint8_t  sleepEn;      // 0=off, 1=on
+    uint8_t  sleepEn;      // 0=off, 1=on (default 1)
     uint16_t sleepMs;      // sleep delay ms (100-2000, default 500)
-    uint8_t  deadband;     // ADC units (1-30, default 16)
-    uint8_t  edgeSnap;     // ADC units (0-30, default 12)
-    uint8_t  wakeThresh;   // ADC units to wake from sleep (10-100, default 40)
+    uint8_t  deadband;     // ADC units (1-10, default 3)
+    uint8_t  edgeSnap;     // ADC units from edges (0-10, default 3)
+    uint8_t  wakeThresh;   // ADC units to wake from sleep (3-30, default 8)
 };
 static_assert(sizeof(PotFilterStore) <= NVS_BLOB_MAX_SIZE, "PotFilterStore too large");
 
 inline void validatePotFilterStore(PotFilterStore& s) {
-    if (s.snap100 < 1 || s.snap100 > 30)           s.snap100 = 5;
-    if (s.actThresh10 < 20 || s.actThresh10 > 200)  s.actThresh10 = 150;
-    if (s.sleepEn > 1)                               s.sleepEn = 1;
-    if (s.sleepMs < 100 || s.sleepMs > 2000)         s.sleepMs = 500;
-    if (s.deadband < 1 || s.deadband > 30)           s.deadband = 16;
-    if (s.edgeSnap > 30)                             s.edgeSnap = 12;
-    if (s.wakeThresh < 10 || s.wakeThresh > 100)    s.wakeThresh = 40;
+    if (s.sleepEn > 1)                             s.sleepEn = 1;
+    if (s.sleepMs < 100 || s.sleepMs > 2000)       s.sleepMs = 500;
+    if (s.deadband < 1 || s.deadband > 10)         s.deadband = 3;
+    if (s.edgeSnap > 10)                           s.edgeSnap = 3;
+    if (s.wakeThresh < 3 || s.wakeThresh > 30)    s.wakeThresh = 8;
 }
 
 // =================================================================

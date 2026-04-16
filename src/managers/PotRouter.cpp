@@ -4,7 +4,7 @@
 #include <Arduino.h>
 #include <string.h>
 
-// POT_PINS[] now in HardwareConfig.h (shared with PotFilter, SetupPotInput, ToolPotMapping)
+// Pot reads via MCP3208 SPI in PotFilter (channels 0-4, see HardwareConfig.h)
 
 // =================================================================
 // Default pot mapping — matches original hardcoded binding table.

@@ -50,14 +50,12 @@ void SetupManager::run() {
   _leds->startSetupComet();
   _leds->update();
 
-  // Apply setup-specific PotFilter config (snappier for UI navigation).
+  // Apply setup-specific PotFilter config (finer for UI navigation).
   // No restore needed — setup always ends with ESP.restart().
   {
     PotFilterStore setupCfg = PotFilter::getConfig();
-    setupCfg.snap100     = 20;   // 0.20 (4x faster than runtime 0.05)
-    setupCfg.actThresh10 = 80;   // 8.0 (reacts to slow movements, runtime=20.0)
-    setupCfg.deadband    = 10;   // ~410 positions (runtime=20, ~205 positions)
-    setupCfg.sleepEn     = 0;    // no sleep in setup
+    setupCfg.deadband = 2;    // finer for setup UI (runtime default 3)
+    setupCfg.sleepEn  = 0;    // no sleep in setup
     PotFilter::setConfig(setupCfg);
   }
 

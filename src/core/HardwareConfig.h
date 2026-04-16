@@ -135,17 +135,21 @@ const uint16_t CAL_HOLD_DURATION_MS = 3000; // Hold 3s after press to enter cali
 const uint16_t CAL_AUTOCONFIG_COUNTDOWN_MS = 1000;
 const uint8_t  CHASE_STEP_MS = 80;          // Speed of chase pattern (ms per LED step)
 
-// --- Analog Pots (V2: 5 potentiometers — 4 right + 1 rear) ---
-// ALL pots on ADC1 (GPIO 1–10) for reliable reads with BLE active.
-const uint8_t POT_RIGHT1_PIN = 4;   // GPIO4  — ADC1_CH3 — Right side pot 1 (tempo / division)
-const uint8_t POT_RIGHT2_PIN = 5;   // GPIO5  — ADC1_CH4 — Right side pot 2 (shape-gate / deadzone-shuffle)
-const uint8_t POT_RIGHT3_PIN = 6;   // GPIO6  — ADC1_CH5 — Right side pot 3 (slew-pattern / pitchbend-shuffletemplate)
-const uint8_t POT_RIGHT4_PIN = 7;   // GPIO7  — ADC1_CH6 — Right side pot 4 (base velocity / velocity variation)
-const uint8_t POT_REAR_PIN   = 1;   // GPIO1  — ADC1_CH0 — Rear (LED brightness / pad sensitivity)
+// --- MCP3208 SPI ADC — 5 pots (channels 0-4) ---
+// GPIO 4/5/6/7/1 freed (formerly ADC1 pot reads).
+// SPI pins: free on ESP32-S3-N8R16 (not USB, not I2C, not flash/PSRAM).
+const uint8_t MCP3208_SCK_PIN  = 18;  // SPI clock
+const uint8_t MCP3208_MISO_PIN = 16;  // DOUT (ADC → MCU)
+const uint8_t MCP3208_MOSI_PIN = 15;  // DIN  (MCU → ADC)
+const uint8_t MCP3208_CS_PIN   = 17;  // /CS  (active LOW)
+
 const uint8_t NUM_POTS = 5;
-const uint8_t POT_PINS[NUM_POTS] = {
-    POT_RIGHT1_PIN, POT_RIGHT2_PIN, POT_RIGHT3_PIN, POT_RIGHT4_PIN, POT_REAR_PIN
-};
+// MCP3208 channel indices (match physical wiring, see docs/drafts/mcp3208-wiring.md)
+const uint8_t POT_CH_RIGHT1 = 0;  // CH0 — Tempo / Division
+const uint8_t POT_CH_RIGHT2 = 1;  // CH1 — Shape-Gate / Deadzone-Shuffle
+const uint8_t POT_CH_RIGHT3 = 2;  // CH2 — Slew-Pattern / PB-ShufTemplate
+const uint8_t POT_CH_RIGHT4 = 3;  // CH3 — Velocity base / variation
+const uint8_t POT_CH_REAR   = 4;  // CH4 — LED brightness / Pad sensitivity
 
 const int   POT_DEADZONE        = 50;    // ADC change threshold for debug display
 
