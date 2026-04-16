@@ -454,6 +454,15 @@ void ToolPotMapping::drawPoolLine() {
 // drawInfoPanel
 // =================================================================
 void ToolPotMapping::drawInfoPanel() {
+  if (_confirmDefaults) {
+    _ui->drawFrameLine(VT_YELLOW "Reset %s to defaults? (y/n)" VT_RESET,
+                       _contextNormal ? "NORMAL" : "ARPEG");
+    _ui->drawFrameEmpty();
+    _ui->drawFrameEmpty();
+    _ui->drawFrameEmpty();
+    return;
+  }
+
   if (_confirmSteal) {
     _ui->drawFrameLine(VT_YELLOW "Already assigned to %s. Replace? (y/n)" VT_RESET,
                        slotName((uint8_t)_stealSourceSlot));
@@ -511,7 +520,9 @@ void ToolPotMapping::drawScreen() {
   _ui->drawFrameEmpty();
 
   // Control bar
-  if (_confirmSteal) {
+  if (_confirmDefaults) {
+    _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
+  } else if (_confirmSteal) {
     _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
   } else if (_ccEditing) {
     _ui->drawControlBar(VT_DIM "[</>] CC#  [P1] sweep  [RET] CONFIRM  [q] CANCEL" VT_RESET);
@@ -552,6 +563,7 @@ void ToolPotMapping::run() {
   _confirmSteal = false;
   _stealSourceSlot = -1;
   _stealTarget = TARGET_EMPTY;
+  _confirmDefaults = false;
   // Check if NVS actually has saved data (not just defaults)
   _nvsSaved = NvsManager::checkBlob(POTMAP_NVS_NAMESPACE, POTMAP_NVS_KEY,
                                      EEPROM_MAGIC, POTMAP_VERSION, sizeof(PotMappingStore));
@@ -563,7 +575,7 @@ void ToolPotMapping::run() {
 
   InputParser input;
   bool screenDirty = true;
-  bool confirmDefaults = false;
+  // _confirmDefaults initialized in run() preamble above
 
   _ui->vtClear();
 
@@ -584,7 +596,7 @@ void ToolPotMapping::run() {
     }
 
     // Physical pot detection (when not editing)
-    if (!_editing && !_ccEditing && !_confirmSteal && !confirmDefaults) {
+    if (!_editing && !_ccEditing && !_confirmSteal && !_confirmDefaults) {
       bool btnLeftHeld = (digitalRead(BTN_LEFT_PIN) == LOW);
       int8_t movedSlot = detectMovedPot(btnLeftHeld);
       if (movedSlot >= 0) {
@@ -597,7 +609,7 @@ void ToolPotMapping::run() {
     NavEvent ev = input.update();
 
     // --- Defaults confirmation ---
-    if (confirmDefaults) {
+    if (_confirmDefaults) {
       if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
         if (_contextNormal) {
           memcpy(_wk.normalMap, PotRouter::DEFAULT_MAPPING.normalMap,
@@ -609,11 +621,11 @@ void ToolPotMapping::run() {
         if (saveMapping()) {
           _ui->flashSaved();
         }
-        confirmDefaults = false;
+        _confirmDefaults = false;
         buildPool();
         screenDirty = true;
       } else if (ev.type != NAV_NONE) {
-        confirmDefaults = false;
+        _confirmDefaults = false;
         screenDirty = true;
       }
       delay(5);
@@ -731,7 +743,7 @@ void ToolPotMapping::run() {
     }
 
     if (ev.type == NAV_DEFAULTS && !_editing) {
-      confirmDefaults = true;
+      _confirmDefaults = true;
       screenDirty = true;
     }
 

@@ -223,6 +223,11 @@ void setup() {
                              &pfs, sizeof(pfs))) {
       validatePotFilterStore(pfs);
       PotFilter::setConfig(pfs);
+    } else {
+      // Save defaults so menu badge shows "ok" (stale blob after version bump)
+      PotFilterStore defaults = PotFilter::getConfig();
+      NvsManager::saveBlob(POTFILTER_NVS_NAMESPACE, POTFILTER_NVS_KEY,
+                           &defaults, sizeof(defaults));
     }
   }
 

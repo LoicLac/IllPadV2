@@ -41,6 +41,7 @@ private:
   bool    _confirmSteal;
   int8_t  _stealSourceSlot;
   PotTarget _stealTarget;
+  bool    _confirmDefaults;
   bool    _nvsSaved;
 
   // Pool

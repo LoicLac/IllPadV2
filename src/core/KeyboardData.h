@@ -609,7 +609,7 @@ static_assert(sizeof(PotFilterStore) <= NVS_BLOB_MAX_SIZE, "PotFilterStore too l
 inline void validatePotFilterStore(PotFilterStore& s) {
     if (s.sleepEn > 1)                             s.sleepEn = 1;
     if (s.sleepMs < 100 || s.sleepMs > 2000)       s.sleepMs = 500;
-    if (s.deadband < 1 || s.deadband > 10)         s.deadband = 3;
+    if (s.deadband < 1 || s.deadband > 10)         s.deadband = 4;
     if (s.edgeSnap > 10)                           s.edgeSnap = 3;
     if (s.wakeThresh < 3 || s.wakeThresh > 30)    s.wakeThresh = 8;
 }

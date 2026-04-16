@@ -38,7 +38,7 @@ static void applyDefaults() {
     s_cfg.version   = POT_FILTER_VERSION;
     s_cfg.sleepEn   = 1;     // sleep enabled
     s_cfg.sleepMs   = 500;   // 500ms to sleep
-    s_cfg.deadband  = 3;     // 3 ADC units (~1365 positions on 4096)
+    s_cfg.deadband  = 4;     // 4 ADC units (~1024 positions on 4096)
     s_cfg.edgeSnap  = 3;     // 3 ADC units from edges
     s_cfg.wakeThresh = 8;    // 8 ADC units to wake from sleep
 }
@@ -63,7 +63,7 @@ void PotFilter::begin() {
     s_mcp.begin(MCP3208_CS_PIN);
 
     for (uint8_t i = 0; i < NUM_POTS; i++) {
-        uint16_t initial = (uint16_t)s_mcp.read(i);
+        uint16_t initial = 4095 - (uint16_t)s_mcp.read(i);  // Invert (CCW/CW swapped)
 
         PotData& p = s_pots[i];
         p.raw           = initial;
@@ -91,7 +91,7 @@ void PotFilter::updateAll() {
         if (p.state == POT_SLEEPING) {
             if ((now - p.lastPeekMs) < PEEK_INTERVAL_MS) continue;
             p.lastPeekMs = now;
-            p.raw = (uint16_t)s_mcp.read(i);
+            p.raw = 4095 - (uint16_t)s_mcp.read(i);  // Invert
 
             int16_t delta = (int16_t)p.raw - (int16_t)p.sleepBaseline;
             if (delta < 0) delta = -delta;
@@ -107,7 +107,7 @@ void PotFilter::updateAll() {
         }
 
         // ── ACTIVE: read + deadband ──
-        p.raw = (uint16_t)s_mcp.read(i);
+        p.raw = 4095 - (uint16_t)s_mcp.read(i);  // Invert
 
         // Deadband gate (direct integer compare, no EMA)
         int16_t diff = (int16_t)p.raw - (int16_t)p.stable;
