@@ -29,7 +29,7 @@
 - **MIDI**: USB MIDI (TinyUSB composite) + BLE MIDI (ESP32-BLE-MIDI), simultaneous
 - **USB**: Single USB-C on GPIO 19/20 (native USB, no UART bridge). ALL traffic on this one port: MIDI, CDC serial, upload, VT100 setup. Board has a 2nd USB-C (COM/UART bridge GPIO 43/44) but it is unused. JTAG builtin shares GPIO 19/20 — conflicts with TinyUSB.
 - **2 Buttons**: left GPIO 12 (bank+scale+arp single-layer control), rear GPIO 21 (battery/setup/modifier pot rear). Active LOW, internal pull-up.
-- **5 Pots**: 4 right GPIO 4/5/6/7 (tempo, shape/gate, slew/pattern, velocity), 1 rear GPIO 1 (LED brightness/sensitivity). All on ADC1 for BLE compatibility.
+- **5 Pots**: 4 right GPIO 4/5/6/7 (tempo, shape/gate, slew/shuffle, velocity), 1 rear GPIO 1 (LED brightness/sensitivity). All on ADC1 for BLE compatibility.
 - **8 LEDs**: SK6812 RGBW NeoPixel Stick, single data pin GPIO 13, Adafruit_NeoPixel driver (NEO_GRBW)
 - **Battery**: LiPo 3.7V, BQ25185 charger, ADC voltage divider
 
@@ -94,6 +94,7 @@ Critical path first, secondary after. MIDI latency depends on this order.
 ── handlePadInput(state, now) ──
 8. processNormalMode() or processArpMode()
 8b. Stuck-note cleanup on left-release edge
+8c. Edge state sync (s_lastKeys = keyIsPressed) ← before arp tick
 9. ArpScheduler.tick()                       ← all background arps
 9b. ArpScheduler.processEvents()             ← gate noteOff + shuffle noteOn
 10. MidiEngine.flush()                        ← CRITICAL PATH END
@@ -154,9 +155,9 @@ All 10 `ConfirmType` values are **overlay-only**: `renderConfirmation()` tracks 
 | Event | ConfirmType | Color | Pattern | Duration |
 |---|---|---|---|---|
 | Bank switch | `CONFIRM_BANK_SWITCH` | White | Blink on/off destination LED | bankDurationMs (300ms) |
-| Scale root | `CONFIRM_SCALE_ROOT` | Vivid yellow | Blink on/off current LED | scaleRootDurationMs (200ms) |
-| Scale mode | `CONFIRM_SCALE_MODE` | Pale yellow | Blink on/off current LED | scaleModeDurationMs (200ms) |
-| Scale chromatic | `CONFIRM_SCALE_CHROM` | Golden yellow | Blink on/off current LED | scaleChromDurationMs (200ms) |
+| Scale root | `CONFIRM_SCALE_ROOT` | Amber (preset 6) | Blink on/off current LED | scaleRootDurationMs (200ms) |
+| Scale mode | `CONFIRM_SCALE_MODE` | Gold (preset 7) | Blink on/off current LED | scaleModeDurationMs (200ms) |
+| Scale chromatic | `CONFIRM_SCALE_CHROM` | Gold (preset 7) | Blink on/off current LED | scaleChromDurationMs (200ms) |
 | Hold ON | `CONFIRM_HOLD_ON` | Deep blue | Fade IN 0%→100% (latch engage) | holdFadeMs (300ms) |
 | Hold OFF | `CONFIRM_HOLD_OFF` | Deep blue | Fade OUT 100%→0% (latch release) | holdFadeMs (300ms) |
 | Play | `CONFIRM_PLAY` | Green | Blink overlay on current LED | playDurationMs (200ms) |
@@ -188,7 +189,7 @@ New confirmation preempts active one. `LedController` no longer depends on `Cloc
 ## Buttons
 
 - **Left (hold + pad)**: single-layer control. 8 bank pads + 15 scale pads (7 root + 7 mode + 1 chromatic) + 1 HOLD toggle (ARPEG only) + 4 octave pads (ARPEG only, 1-4 octaves). All visible in one hold. BankManager and ScaleManager share this button — no conflict (pad roles are distinct, checked by Tool 3). All notes off for NORMAL on bank switch. ARPEG: nothing (arp lives/dies by its own logic). Scale change on ARPEG: no allNotesOff — arp re-resolves at next tick.
-- **Left (hold + pot)**: modifier for 4 right pots (2nd slot: division, AT deadzone/shuffle depth, pitch bend/shuffle template, velocity variation).
+- **Left (hold + pot)**: modifier for 4 right pots (2nd slot: division, AT deadzone/pattern, pitch bend/shuffle template, velocity variation).
 - **Play/Stop pad**: ARPEG + HOLD ON only — toggles arp transport. In HOLD OFF mode, this pad is a regular music pad (enters the arp pile like any other pad). On NORMAL banks, always a regular music pad.
 - **Rear (press)**: battery gauge (3s).
 - **Rear (boot, two-phase)**: press within 3s of boot, then hold 3s → setup mode (chase LED during hold).
@@ -202,7 +203,7 @@ New confirmation preempts active one. `LedController` no longer depends on `Cloc
 
 **HOLD ON (persistent)**: press=add, double-tap(configurable 100-250ms, default 150ms)=remove. Play/stop pad controls transport (restart from beginning). Bank switch = arp continues in background.
 
-5 patterns (Up/Down/UpDown/Random/Order) via pot right 3. 1-4 octaves via 4 pads in single-layer control (hold left + octave pad). Up to 48 positions (192 steps with 4 oct). Division via hold+pot right 1 (9 binary values: 4/1→1/64). Gate/shuffle/velocity per-bank via pots.
+5 patterns (Up/Down/UpDown/Random/Order) via hold+pot right 2. 1-4 octaves via 4 pads in single-layer control (hold left + octave pad). Up to 48 positions (192 steps with 4 oct). Division via hold+pot right 1 (9 binary values: 4/1→1/64). Gate/shuffle/velocity per-bank via pots.
 
 **Quantized start** (per-bank, set in Tool 4): Immediate (fire on next division boundary), Beat (snap to next 1/4 note, 24 ticks), or Bar (snap to next bar, 96 ticks). Stop is always immediate. HOLD OFF auto-play also respects quantize on 0→1 finger transition.
 
@@ -221,8 +222,8 @@ PotFilter reads 5 ADCs via 16× oversampling + adaptive EMA + deadband gate + sl
 | Pot | NORMAL alone | NORMAL + hold left | ARPEG alone | ARPEG + hold left |
 |---|---|---|---|---|
 | Right 1 | Tempo (10-260 BPM) | — empty — | Tempo (10-260 BPM) | Division (9 binary) |
-| Right 2 | Response shape | AT deadzone | Gate length | Shuffle depth (0.0-1.0) |
-| Right 3 | Slew rate | Pitch bend (per-bank) | Pattern (5 discrete) | Shuffle template (10) |
+| Right 2 | Response shape | AT deadzone | Gate length | Pattern (5 discrete) |
+| Right 3 | Slew rate | Pitch bend (per-bank) | Shuffle depth (0.0-1.0) | Shuffle template (10) |
 | Right 4 | Base velocity | Velocity variation | Base velocity | Velocity variation |
 
 | Rear pot | Alone | + hold rear |
@@ -247,10 +248,8 @@ The 4 right pots × 2 layers = **8 slots per context** (NORMAL and ARPEG indepen
 
 ## MIDI Clock & Transport
 
-ClockManager receives 0xF8 (clock ticks) via USB+BLE. Priority: USB > BLE > last known > internal (pot right 1). Start/Stop/Continue (0xFA/0xFB/0xFC) are intentionally ignored — the ILLPAD is an instrument, not a transport follower.
-**PLL** smooths BLE jitter (±15ms → ±1-2ms). ArpEngines sync to smoothed clock.
-
-**ILLPAD never sends Start/Stop/Continue** — only clock ticks (0xF8) in master mode. The ILLPAD is an instrument, not a transport controller.
+ClockManager receives 0xF8 (clock ticks) via USB+BLE. Priority: USB > BLE > last known > internal (pot right 1). Start/Stop/Continue (0xFA/0xFB/0xFC) are intentionally ignored in both directions — the ILLPAD is an instrument, not a transport follower or controller.
+**PLL** smooths BLE jitter (±15ms → ±1-2ms). ArpEngines sync to smoothed clock. Master mode sends ticks only (0xF8), never Start/Stop.
 
 ### Transport Behavior by Mode
 
@@ -289,7 +288,7 @@ src/
 ├── arp/        ArpEngine, ArpScheduler
 └── setup/      SetupManager, ToolCalibration, ToolPadOrdering, ToolPadRoles,
                 ToolBankConfig, ToolSettings, ToolPotMapping, ToolLedSettings,
-                SetupUI, SetupPotInput
+                SetupUI, SetupPotInput, InputParser, SetupCommon.h
 ```
 
 † = DO NOT MODIFY (ported from V1, musically calibrated)
@@ -308,11 +307,11 @@ Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous 
 
 ### Descriptor table + validation
 
-`NVS_DESCRIPTORS[10]` in `KeyboardData.h` — one entry per Store blob (ns, key, magic, version, size). `TOOL_NVS_FIRST[7]`/`TOOL_NVS_LAST[7]` map Tools 1-7 to descriptor ranges (T3 spans 3, T7 spans 2). Menu uses a loop over these to check all stores.
+`NVS_DESCRIPTORS[11]` in `KeyboardData.h` — one entry per Store blob (ns, key, magic, version, size). `TOOL_NVS_FIRST[7]`/`TOOL_NVS_LAST[7]` map Tools 1-7 to descriptor ranges (T3 spans 3, T6 spans 2, T7 spans 2). Menu uses a loop over these to check all stores.
 
 `NVS_BLOB_MAX_SIZE` (128) — all Store structs must fit. `static_assert` on every Store struct enforces this at compile time. `static_assert(offsetof(SettingsStore, baselineProfile) == 3)` guards the byte-3 layout.
 
-7 `inline validate*()` functions in `KeyboardData.h` — shared by `loadAll()`, setup Tools, and future WiFi handler. Single source of truth for field bounds.
+8 `inline validate*()` functions in `KeyboardData.h` — shared by `loadAll()`, setup Tools, and future WiFi handler. Single source of truth for field bounds.
 
 ### Store structs (V2 — replace raw formats)
 
@@ -386,14 +385,14 @@ NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never bl
 **SRAM, PSRAM, and flash budgets are generous.** The ESP32-S3-N8R16 has 320KB SRAM, 16MB PSRAM, 8MB flash, and the firmware currently uses ~16% SRAM. The only truly constrained resource is **per-cycle CPU time on Core 0** (~92% used by sensing).
 
 **Prefer safe/generous over economical** when it comes to:
-- Buffer sizes (pending queues, event buffers, overdub buffers — bump them rather than risk drops under load)
+- Buffer sizes (pending queues, event buffers — bump them rather than risk drops under load)
 - Defense-in-depth guards (even when upstream already guards)
-- Static allocations for always-alive patterns (e.g. `s_loopEngines[MAX_LOOP_BANKS]` always allocated)
+- Static allocations for always-alive patterns (e.g. `s_arpEngines[4]` always allocated)
 - State duplication that simplifies invariants (e.g. tracking flags that avoid subtle edge cases)
 
 **Do NOT economize** on:
 - SRAM bytes for safer margins (a few hundred bytes for a bigger pending queue is fine)
-- PSRAM for larger audio/loop buffers (still barely touched)
+- PSRAM (still barely touched)
 
 **DO economize** on:
 - Core 0 CPU cycles (sensing is the bottleneck)

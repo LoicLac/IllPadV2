@@ -10,7 +10,7 @@
 | 2 | Adafruit BQ25185 charger board | 1 | Charges battery, provides 5V power |
 | 3 | LiPo battery (3.7V) | 1 | Power when unplugged from USB |
 | 4 | MPR121 touch sensor breakout | 4 | Reads the 48 conductive pads |
-| 5 | Standard LED (3mm or 5mm) | 8 | Status display (circle layout) |
+| 5 | SK6812 RGBW NeoPixel Stick | 1 (8 LEDs) | Status display (bank state, bargraph, confirmations) |
 | 6 | Momentary push button | 2 | Left (bank+scale+arp) + Rear (battery/setup) |
 | 7 | 10kΩ linear potentiometer | 5 | 4 right (musical params) + 1 rear (brightness/sensitivity) |
 | 8 | USB-C passthrough socket | 1 | Single port on the enclosure |
@@ -195,21 +195,21 @@ ESP32 3V3    ──► NeoPixel VCC (or 5V from charger if available)
 
 #### What the LEDs Display
 
-The 8 LEDs have multiple display modes. Only one mode is active at a time (priority-based).
+The 8 LEDs have multiple display modes. Only one mode is active at a time (priority-based state machine in `LedController::update()`).
 
-**Normal — Bank indicator (default at runtime):**
+**Normal — Multi-bank state (default at runtime):**
 
-A single LED shows the current bank (MIDI channel 1–8). All other LEDs are off. Brightness is controlled by the rear pot.
+All 8 LEDs show simultaneously. Each LED represents one bank (1-8). The foreground bank is bright, background banks are dim. NORMAL banks use white (W channel), ARPEG banks use blue (configurable via Tool 7 color slots). ARPEG foreground stopped-with-notes shows a sine breathing pulse. ARPEG playing shows a tick flash on each arp step. Brightness is controlled by the rear pot.
 
-If battery drops below 20%, the active bank LED does 3 rapid blinks every 3 seconds.
+If battery drops below 20%, the foreground bank LED does 3 rapid blinks every 3 seconds.
 
 **Pot bargraph (after pot movement):**
 
-LEDs become a solid bar graph showing the current pot value (0–8 LEDs). Lasts 5 seconds after last movement.
+LEDs become a solid bar graph showing the current pot value (0–8 LEDs) with fractional tip brightness. Caught state shows solid bar; uncaught shows dim stored-value bar + bright dot at physical pot position. Tempo bargraph adds BPM pulse on tip LED. Duration: 3 seconds (configurable via Tool 5, range 1-10s).
 
 **Battery gauge (after pressing rear button):**
 
-All 8 LEDs become a heartbeat-pulsing bar graph showing battery level. Lasts 3 seconds, then returns to normal mode.
+Static bar graph (red-to-green gradient) showing battery level. Lasts 3 seconds, then returns to normal mode.
 
 | Battery level | LEDs lit |
 |---------------|----------|
@@ -219,7 +219,7 @@ All 8 LEDs become a heartbeat-pulsing bar graph showing battery level. Lasts 3 s
 | 25% | 2 |
 | 0% | none |
 
-**Error — All 8 LEDs blink in unison (~1 Hz).**
+**Error — LEDs 3 and 4 blink red (~1 Hz, 500ms period).**
 
 ---
 

@@ -32,7 +32,7 @@ Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous 
 
 ## Descriptor Table
 
-`NVS_DESCRIPTORS[10]` in `KeyboardData.h` — one entry per Store blob (will grow to 12 with LOOP mode: + LoopPadStore):
+`NVS_DESCRIPTORS[11]` in `KeyboardData.h` — one entry per Store blob:
 
 ```cpp
 struct NvsDescriptor {
@@ -50,7 +50,7 @@ struct NvsDescriptor {
 |------|-------------|--------|
 | T1 Calibration | [0] | CalDataStore |
 | T2 Pad Ordering | [1] | NoteMapStore |
-| T3 Pad Roles | [2..4] | BankPadStore + ScalePadStore + ArpPadStore (+ LoopPadStore planned) |
+| T3 Pad Roles | [2..4] | BankPadStore + ScalePadStore + ArpPadStore |
 | T4 Bank Config | [5] | BankTypeStore |
 | T5 Settings | [6] | SettingsStore |
 | T6 Pot Mapping | [7..8] | PotMappingStore + PotFilterStore |
@@ -62,18 +62,18 @@ Menu (`SetupUI::printMainMenu`) loops over these to check all stores in one pass
 
 ## Validation Functions
 
-7 `inline validate*()` functions in `KeyboardData.h` (will be 8 with LOOP mode: + `validateLoopPadStore`). Called after every `loadBlob` and before every `saveBlob` from external input (future WiFi). Single source of truth for field bounds.
+8 `inline validate*()` functions in `KeyboardData.h`. Called after every `loadBlob` and before every `saveBlob` from external input (future WiFi). Single source of truth for field bounds.
 
 | Function | Clamps |
 |----------|--------|
 | `validateSettingsStore` | profile, AT rate, BLE interval, clock mode, double-tap, bargraph, panic, batADC |
-| `validateBankTypeStore` | types (max BANK_LOOP), arpCount (max 4), loopCount (max 2), quantize modes |
+| `validateBankTypeStore` | types (max BANK_ARPEG), arpCount (max 4), quantize modes |
 | `validateScalePadStore` | rootPads, modePads, chromaticPad (all < NUM_KEYS) |
 | `validateArpPadStore` | holdPad, playStopPad, octavePads (all < NUM_KEYS) |
-| `validateLoopPadStore` | recPad, playStopPad, clearPad (all < NUM_KEYS or 0xFF) |
 | `validateBankPadStore` | bankPads (all < NUM_KEYS) |
 | `validateNoteMapStore` | noteMap entries (all < NUM_KEYS) |
 | `validateLedSettingsStore` | intensity cross-validation, timing ranges, confirmation blink counts/durations |
+| `validatePotFilterStore` | snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
 
 ---
 
@@ -85,7 +85,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 
 | Struct | Namespace | Key | Magic | Version | Size | Owner |
 |--------|-----------|-----|-------|---------|------|-------|
-| `CalDataStore` | `illpad_cal` | `caldata` | 0xBEEF | 5 | 100B | CapacitiveKeyboard (DO NOT MODIFY) |
+| `CalDataStore` | `illpad_cal` | `caldata` | 0xBEEF | 5 | 102B | CapacitiveKeyboard (DO NOT MODIFY) |
 | `NoteMapStore` | `illpad_nmap` | `map` | 0xBEEF | 1 | 52B | T2 PadOrdering |
 | `BankPadStore` | `illpad_bpad` | `map` | 0xBEEF | 1 | 12B | T3 PadRoles |
 | `SettingsStore` | `illpad_set` | `settings` | 0xBEEF | 10 | 14B | T5 Settings |
@@ -102,7 +102,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `ScalePadStore` | `illpad_spad` | `pads` | 0xBEEF | 1 | 20B | 3 separate keys (root_pads, mode_pads, chrom_pad) |
 | `ArpPadStore` | `illpad_apad` | `pads` | 0xBEEF | 1 | 12B | 3 separate keys (hold_pad, ps_pad, oct_pads) |
 | `BankTypeStore` | `illpad_btype` | `config` | 0xBEEF | 1 | 20B | raw types[8] + qmode[8] (2 blobs, desync risk) |
-| `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 8B | New (LOOP mode — planned) |
+| `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 8B | **PLANNED** — not yet in code |
 
 ### Non-Blob Namespaces (scalar values, not Store structs)
 
@@ -113,7 +113,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `illpad_bvel` | `vel_0`..`vel_7`, `var_0`..`var_7` | velocity params per bank | NvsManager (runtime) |
 | `illpad_pbnd` | `pb_0`..`pb_7` | pitch bend offset per bank | NvsManager (runtime) |
 | `illpad_apot` | `arp_0`..`arp_7` | ArpPotStore per bank (8B each) | NvsManager (runtime) |
-| `illpad_lpot` | `loop_0`..`loop_7` | LoopPotStore per bank (8B each): shuffle, chaos, vel pattern | NvsManager (runtime) — planned |
+| `illpad_lpot` | `loop_0`..`loop_7` | LoopPotStore per bank (8B each): shuffle, chaos, vel pattern | **PLANNED** — not yet in code |
 | `illpad_tempo` | `bpm` | uint16_t tempo BPM | NvsManager (runtime) |
 | `illpad_led` | `brightness` | uint8_t LED brightness | NvsManager (runtime) |
 | `illpad_sens` | `sensitivity` | uint8_t pad sensitivity | NvsManager (runtime) |
