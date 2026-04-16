@@ -23,7 +23,6 @@ ScaleManager::ScaleManager()
   , _holdPad(23)
   , _scaleChangeType(SCALE_CHANGE_NONE)
   , _octaveChanged(false)
-  , _holdToggled(false)
   , _newOctaveRange(1)
 {
   // Default pad assignments: root pads 8-14, mode pads 15-21
@@ -62,14 +61,6 @@ void ScaleManager::setHoldPad(uint8_t pad) {
 
 void ScaleManager::setOctavePads(const uint8_t* pads) {
   memcpy(_octavePads, pads, 4);
-}
-
-bool ScaleManager::hasHoldToggled() {
-  if (_holdToggled) {
-    _holdToggled = false;
-    return true;
-  }
-  return false;
 }
 
 bool ScaleManager::hasOctaveChanged() {
@@ -184,23 +175,6 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       #endif
     }
     _lastScaleKeys[_chromaticPad] = pressed;
-  }
-
-  // --- HOLD pad (ARPEG banks only) ---
-  if (_holdPad < NUM_KEYS && slot.type == BANK_ARPEG && slot.arpEngine) {
-    bool pressed = keyIsPressed[_holdPad];
-    bool wasPressed = _lastScaleKeys[_holdPad];
-
-    if (pressed && !wasPressed) {
-      bool newHold = !slot.arpEngine->isHoldOn();
-      slot.arpEngine->setHold(newHold);
-      _holdToggled = true;
-
-      #if DEBUG_SERIAL
-      Serial.printf("[ARP] Hold %s\n", newHold ? "ON" : "OFF");
-      #endif
-    }
-    _lastScaleKeys[_holdPad] = pressed;
   }
 
   // --- Octave pads (ARPEG only, 1-4 octaves) ---

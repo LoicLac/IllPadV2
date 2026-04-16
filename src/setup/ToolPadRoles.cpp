@@ -12,25 +12,25 @@
 
 // =================================================================
 // Pool linearisation for pot navigation
-// 7 lines: Clear(1) + Bank(8) + Root(7) + Mode(8) + Octave(4) + Hold(1) + Play/Stop(1) = 30
+// 6 lines: Clear(1) + Bank(8) + Root(7) + Mode(8) + Octave(4) + Hold(1) = 29
 // =================================================================
-static const uint8_t POOL_OFFSETS[] = {0, 1, 9, 16, 24, 28, 29, 30};
-static const uint8_t TOTAL_POOL_ITEMS = 30;
+static const uint8_t POOL_OFFSETS[] = {0, 1, 9, 16, 24, 28, 29};
+static const uint8_t TOTAL_POOL_ITEMS = 29;
 
 static void linearToPool(int32_t linear, uint8_t& line, uint8_t& idx) {
-  for (uint8_t i = 0; i < 7; i++) {
+  for (uint8_t i = 0; i < 6; i++) {
     if (linear < POOL_OFFSETS[i + 1]) {
       line = i;
       idx = (uint8_t)(linear - POOL_OFFSETS[i]);
       return;
     }
   }
-  line = 6;
+  line = 5;
   idx = 0;
 }
 
 static int32_t poolToLinear(uint8_t line, uint8_t idx) {
-  if (line >= 7) return TOTAL_POOL_ITEMS - 1;
+  if (line >= 6) return TOTAL_POOL_ITEMS - 1;
   return POOL_OFFSETS[line] + idx;
 }
 
@@ -56,7 +56,6 @@ static const char* GRID_OCTAVE_LABELS[] = {
 };
 
 static const char* GRID_HOLD_LABELS[] = { " Hld" };
-static const char* GRID_PLAYSTOP_LABELS[] = { " P/S" };
 
 // Pool display labels (no leading space)
 static const char* POOL_BANK_LABELS[] = {
@@ -76,7 +75,6 @@ static const char* POOL_OCTAVE_LABELS[] = {
 };
 
 static const char* POOL_HOLD_LABELS[] = { "Hld" };
-static const char* POOL_PLAYSTOP_LABELS[] = { "P/S" };
 
 // =================================================================
 // Constructor
@@ -85,9 +83,9 @@ static const char* POOL_PLAYSTOP_LABELS[] = { "P/S" };
 ToolPadRoles::ToolPadRoles()
   : _keyboard(nullptr), _leds(nullptr), _ui(nullptr),
     _bankPads(nullptr), _rootPads(nullptr), _modePads(nullptr),
-    _chromaticPad(nullptr), _holdPad(nullptr), _playStopPad(nullptr),
+    _chromaticPad(nullptr), _holdPad(nullptr),
     _octavePads(nullptr),
-    _wkChromPad(0xFF), _wkHoldPad(0xFF), _wkPlayStopPad(0xFF),
+    _wkChromPad(0xFF), _wkHoldPad(0xFF),
     _gridRow(0), _gridCol(0), _editing(false),
     _poolLine(0), _poolIdx(0),
     _confirmSteal(false), _stealFromPad(0xFF),
@@ -103,7 +101,7 @@ ToolPadRoles::ToolPadRoles()
 void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
                           SetupUI* ui,
                           uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
-                          uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
+                          uint8_t& chromaticPad, uint8_t& holdPad,
                           uint8_t* octavePads) {
   _keyboard     = keyboard;
   _leds         = leds;
@@ -113,7 +111,6 @@ void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _modePads     = modePads;
   _chromaticPad = &chromaticPad;
   _holdPad      = &holdPad;
-  _playStopPad  = &playStopPad;
   _octavePads   = octavePads;
 }
 
@@ -128,7 +125,6 @@ uint8_t ToolPadRoles::poolLineSize(uint8_t line) const {
     case 3: return POOL_MODE_COUNT;
     case 4: return POOL_OCTAVE_COUNT;
     case 5: return POOL_HOLD_COUNT;
-    case 6: return POOL_PLAYSTOP_COUNT;
     default: return 0;
   }
 }
@@ -140,7 +136,6 @@ const char* ToolPadRoles::poolItemLabel(uint8_t line, uint8_t index) const {
     case 3: return (index < POOL_MODE_COUNT)     ? POOL_MODE_LABELS[index]     : "???";
     case 4: return (index < POOL_OCTAVE_COUNT)   ? POOL_OCTAVE_LABELS[index]   : "???";
     case 5: return (index < POOL_HOLD_COUNT)     ? POOL_HOLD_LABELS[index]     : "???";
-    case 6: return (index < POOL_PLAYSTOP_COUNT) ? POOL_PLAYSTOP_LABELS[index] : "???";
     default: return "---";
   }
 }
@@ -174,7 +169,6 @@ void ToolPadRoles::buildRoleMap() {
     setRole(_wkModePads[i], ROLE_MODE, GRID_MODE_LABELS[i]);
   setRole(_wkChromPad, ROLE_MODE, GRID_MODE_LABELS[7]);  // Chr is last mode label
   setRole(_wkHoldPad, ROLE_HOLD, GRID_HOLD_LABELS[0]);
-  setRole(_wkPlayStopPad, ROLE_PLAYSTOP, GRID_PLAYSTOP_LABELS[0]);
   for (int i = 0; i < 4; i++)
     setRole(_wkOctavePads[i], ROLE_OCTAVE, GRID_OCTAVE_LABELS[i]);
 }
@@ -199,7 +193,6 @@ PadRole ToolPadRoles::getRoleForPad(uint8_t pad) const {
     if (_wkOctavePads[i] == pad) return {4, i};
   }
   if (_wkHoldPad == pad) return {5, 0};
-  if (_wkPlayStopPad == pad) return {6, 0};
   return {0, 0};
 }
 
@@ -220,9 +213,6 @@ uint8_t ToolPadRoles::findPadWithRole(uint8_t line, uint8_t index) const {
       break;
     case 5:
       if (index == 0) return _wkHoldPad;
-      break;
-    case 6:
-      if (index == 0) return _wkPlayStopPad;
       break;
   }
   return 0xFF;
@@ -246,9 +236,6 @@ void ToolPadRoles::assignRole(uint8_t pad, uint8_t line, uint8_t index) {
     case 5:
       if (index == 0) _wkHoldPad = pad;
       break;
-    case 6:
-      if (index == 0) _wkPlayStopPad = pad;
-      break;
   }
 }
 
@@ -265,7 +252,6 @@ void ToolPadRoles::clearRole(uint8_t pad) {
   }
   if (_wkChromPad == pad) _wkChromPad = 0xFF;
   if (_wkHoldPad == pad) _wkHoldPad = 0xFF;
-  if (_wkPlayStopPad == pad) _wkPlayStopPad = 0xFF;
   for (uint8_t i = 0; i < 4; i++) {
     if (_wkOctavePads[i] == pad) _wkOctavePads[i] = 0xFF;
   }
@@ -277,7 +263,6 @@ void ToolPadRoles::clearAllRoles() {
   memset(_wkModePads, 0xFF, sizeof(_wkModePads));
   _wkChromPad    = 0xFF;
   _wkHoldPad     = 0xFF;
-  _wkPlayStopPad = 0xFF;
   memset(_wkOctavePads, 0xFF, sizeof(_wkOctavePads));
 }
 
@@ -287,7 +272,6 @@ void ToolPadRoles::resetToDefaults() {
   for (uint8_t i = 0; i < 7; i++) _wkModePads[i] = 15 + i;
   _wkChromPad    = 22;
   _wkHoldPad     = 23;
-  _wkPlayStopPad = 24;
   _wkOctavePads[0] = 25;
   _wkOctavePads[1] = 26;
   _wkOctavePads[2] = 27;
@@ -336,12 +320,10 @@ bool ToolPadRoles::saveAll() {
   aps.version = ARPPAD_VERSION;
   aps.reserved = 0;
   aps.holdPad = _wkHoldPad;
-  aps.playStopPad = _wkPlayStopPad;
   memcpy(aps.octavePads, _wkOctavePads, 4);
-  memset(aps._pad, 0, 2);
+  memset(aps._pad, 0, sizeof(aps._pad));
   if (NvsManager::saveBlob(ARP_PAD_NVS_NAMESPACE, ARPPAD_NVS_KEY, &aps, sizeof(aps))) {
     *_holdPad      = _wkHoldPad;
-    *_playStopPad  = _wkPlayStopPad;
     if (_octavePads) memcpy(_octavePads, _wkOctavePads, 4);
   } else {
     allOk = false;
@@ -416,7 +398,6 @@ void ToolPadRoles::drawPool() {
   drawPoolLine(3, "Mode:",      POOL_MODE_LABELS,     POOL_MODE_COUNT,     VT_CYAN);
   drawPoolLine(4, "Octave:",    POOL_OCTAVE_LABELS,   POOL_OCTAVE_COUNT,   VT_YELLOW);
   drawPoolLine(5, "Hold:",      POOL_HOLD_LABELS,     POOL_HOLD_COUNT,     VT_MAGENTA);
-  drawPoolLine(6, "Play/Stop:", POOL_PLAYSTOP_LABELS, POOL_PLAYSTOP_COUNT, VT_BRIGHT_RED);
 
   // Clear action at the bottom
   {
@@ -474,12 +455,7 @@ void ToolPadRoles::printRoleDescription(uint8_t line, uint8_t index) {
     case 5:  // Hold
       _ui->drawFrameLine(VT_MAGENTA "HOLD toggle" VT_RESET "  " VT_DIM "--  ARPEG banks only" VT_RESET);
       _ui->drawFrameLine(VT_DIM "HOLD OFF: press=add to pile, release=remove. Arp stops when all fingers up." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "HOLD ON: press=add, double-tap=remove. Pile persists. Use Play/Stop for transport." VT_RESET);
-      break;
-    case 6:  // Play/Stop
-      _ui->drawFrameLine(VT_BRIGHT_RED "Play/Stop" VT_RESET "  " VT_DIM "--  ARPEG + HOLD ON only" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Toggles arp transport. Restarts sequence from beginning on Play." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "In HOLD OFF mode, this pad plays as a regular music pad." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "HOLD ON: press=add, double-tap=remove. Pile persists." VT_RESET);
       break;
   }
 }
@@ -593,7 +569,6 @@ void ToolPadRoles::run() {
   memcpy(_wkModePads, _modePads, 7);
   _wkChromPad    = *_chromaticPad;
   _wkHoldPad     = *_holdPad;
-  _wkPlayStopPad = *_playStopPad;
   if (_octavePads) memcpy(_wkOctavePads, _octavePads, 4);
 
   // Load saved pad roles from NVS
@@ -622,7 +597,6 @@ void ToolPadRoles::run() {
     if (apOk) {
       validateArpPadStore(aps);
       _wkHoldPad = aps.holdPad;
-      _wkPlayStopPad = aps.playStopPad;
       memcpy(_wkOctavePads, aps.octavePads, 4);
     }
 

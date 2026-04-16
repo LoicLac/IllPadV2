@@ -264,10 +264,9 @@ const uint16_t BAT_ADC_FULL_THEORETICAL   = 2606;
 
 // --- Arp Start Quantize (per-bank, set in Tool 4) ---
 enum ArpStartMode : uint8_t {
-  ARP_START_IMMEDIATE = 0,   // Fire on next division boundary (current behavior)
+  ARP_START_IMMEDIATE = 0,   // Fire on next division boundary
   ARP_START_BEAT      = 1,   // Snap to next beat (24 ticks)
-  ARP_START_BAR       = 2,   // Snap to next bar (96 ticks, 4/4)
-  NUM_ARP_START_MODES = 3
+  NUM_ARP_START_MODES = 2
 };
 const uint8_t DEFAULT_ARP_START_MODE = ARP_START_IMMEDIATE;
 

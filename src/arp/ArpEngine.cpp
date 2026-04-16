@@ -22,10 +22,10 @@ ArpEngine::ArpEngine()
     _sequenceLen(0), _sequenceDirty(false),
     _scale{true, 2, 0},  // chromatic, root C, Ionian
     _padOrder(nullptr),
-    _stepIndex(-1), _playing(false), _holdOn(false),
+    _stepIndex(-1), _playing(false), _captured(false), _pausedPile(false),
     _shuffleStepCounter(0), _tickFlash(false),
     _waitingForQuantize(false), _quantizeMode(ARP_START_IMMEDIATE),
-    _lastDispatchedGlobalTick(0xFFFFFFFF) {  // B-001/B-CODE-1 fix sentinel
+    _lastDispatchedGlobalTick(0xFFFFFFFF) {
   // Init pile arrays
   for (uint8_t i = 0; i < MAX_ARP_NOTES; i++) {
     _positions[i] = 0xFF;
@@ -83,7 +83,7 @@ void ArpEngine::setStartMode(uint8_t mode) {
 // =================================================================
 
 void ArpEngine::addPadPosition(uint8_t padOrderPos) {
-  // Detect pile 0→1 transition for shuffle reset
+  // Detect pile 0->1 transition for shuffle reset
   bool wasEmpty = (_positionCount == 0);
 
   // Ignore if already present
@@ -109,7 +109,11 @@ void ArpEngine::addPadPosition(uint8_t padOrderPos) {
   _sequenceDirty = true;
 
   // Reset shuffle groove when pile goes from empty to first note
-  if (wasEmpty) _shuffleStepCounter = 0;
+  if (wasEmpty) {
+    _shuffleStepCounter = 0;
+    // OFF mode auto-play: start playback on first note
+    if (!_captured) _playing = true;
+  }
 
   #if DEBUG_SERIAL
   Serial.printf("[ARP] Bank %d: +note (%d total)\n", _channel + 1, _positionCount);
@@ -155,8 +159,9 @@ void ArpEngine::clearAllNotes(MidiTransport& transport) {
   _sequenceLen = 0;
   _sequenceDirty = false;
   _stepIndex = -1;
-  _playing = false;
   _shuffleStepCounter = 0;
+  _waitingForQuantize = false;
+  _pausedPile = false;
 }
 
 // =================================================================
@@ -165,7 +170,6 @@ void ArpEngine::clearAllNotes(MidiTransport& transport) {
 
 void ArpEngine::setScaleConfig(const ScaleConfig& scale) {
   _scale = scale;
-  // No need to mark dirty — resolution happens live at tick time
 }
 
 void ArpEngine::setPadOrder(const uint8_t* padOrder) {
@@ -173,27 +177,61 @@ void ArpEngine::setPadOrder(const uint8_t* padOrder) {
 }
 
 // =================================================================
-// Hold + Transport
+// Capture (OFF/ON switch)
 // =================================================================
 
-void ArpEngine::setHold(bool on) { _holdOn = on; }
-bool ArpEngine::isHoldOn() const { return _holdOn; }
+void ArpEngine::setCaptured(bool captured, MidiTransport& transport,
+                             const uint8_t* keyIsPressed, uint8_t holdPadIdx) {
+  if (captured == _captured) return;
+  _captured = captured;
 
-void ArpEngine::playStop(MidiTransport& transport) {
-  _playing = !_playing;
-  if (_playing) {
-    _stepIndex = -1;              // Restart from beginning on next tick
-    _shuffleStepCounter = 0;      // Reset groove on play
-    _waitingForQuantize = (_quantizeMode != ARP_START_IMMEDIATE);
-    _lastDispatchedGlobalTick = 0xFFFFFFFF;  // B-001 fix: mark fresh wait
+  if (captured) {
+    // OFF -> ON (capture)
+    if (_pausedPile && _positionCount > 0) {
+      // Resume after pause: restart the paused pile
+      _playing = true;
+      _stepIndex = -1;
+      _shuffleStepCounter = 0;
+      _waitingForQuantize = (_quantizeMode != ARP_START_IMMEDIATE);
+      if (_waitingForQuantize) _lastDispatchedGlobalTick = 0xFFFFFFFF;
+      #if DEBUG_SERIAL
+      Serial.printf("[ARP] Bank %d: Resume paused pile (%d notes)\n", _channel + 1, _positionCount);
+      #endif
+    }
+    _pausedPile = false;
+    #if DEBUG_SERIAL
+    if (_positionCount > 0) {
+      Serial.printf("[ARP] Bank %d: Captured (%d notes)\n", _channel + 1, _positionCount);
+    } else {
+      Serial.printf("[ARP] Bank %d: Captured (empty)\n", _channel + 1);
+    }
+    #endif
   } else {
-    flushPendingNoteOffs(transport);  // Silence all ringing notes
+    // ON -> OFF (release)
+    bool anyFingerDown = false;
+    for (uint8_t i = 0; i < NUM_KEYS; i++) {
+      if (i == holdPadIdx) continue;
+      if (keyIsPressed[i]) { anyFingerDown = true; break; }
+    }
+
+    if (anyFingerDown) {
+      // Fingers down: pile cleared, live mode resumes
+      clearAllNotes(transport);
+      #if DEBUG_SERIAL
+      Serial.printf("[ARP] Bank %d: Released with fingers — pile cleared\n", _channel + 1);
+      #endif
+    } else {
+      // No fingers: pile kept, arp paused
+      flushPendingNoteOffs(transport);
+      _pausedPile = true;
+      #if DEBUG_SERIAL
+      Serial.printf("[ARP] Bank %d: Released — paused (%d notes kept)\n", _channel + 1, _positionCount);
+      #endif
+    }
   }
-  #if DEBUG_SERIAL
-  Serial.printf("[ARP] Bank %d: %s\n", _channel + 1, _playing ? "Play" : "Stop");
-  #endif
 }
 
+bool ArpEngine::isCaptured() const { return _captured; }
 bool ArpEngine::isPlaying() const { return _playing; }
 
 // =================================================================
@@ -234,10 +272,6 @@ void ArpEngine::rebuildSequence() {
 
     // ---------------------------------------------------------------
     // GROUP A: Build ascending, then post-process
-    // UP, ORDER, UP_OCTAVE, CHORD = ascending as-is
-    // DOWN, DOWN_OCTAVE = ascending then reverse
-    // UP_DOWN = ascending then append reversed middle
-    // RANDOM  = ascending then Fisher-Yates shuffle
     // ---------------------------------------------------------------
     case ARP_UP:
     case ARP_DOWN:
@@ -258,7 +292,6 @@ void ArpEngine::rebuildSequence() {
         }
       }
 
-      // DOWN / DOWN_OCTAVE: reverse entire sequence
       if (_pattern == ARP_DOWN || _pattern == ARP_DOWN_OCTAVE) {
         for (uint8_t i = 0; i < _sequenceLen / 2; i++) {
           uint8_t tmp = _sequence[i];
@@ -267,7 +300,6 @@ void ArpEngine::rebuildSequence() {
         }
       }
 
-      // UP_DOWN: append reversed middle (without repeating extremes)
       if (_pattern == ARP_UP_DOWN && _sequenceLen > 2) {
         uint8_t upLen = _sequenceLen;
         for (int16_t i = upLen - 2; i >= 1; i--) {
@@ -276,7 +308,6 @@ void ArpEngine::rebuildSequence() {
         }
       }
 
-      // RANDOM: Fisher-Yates shuffle
       if (_pattern == ARP_RANDOM && _sequenceLen > 1) {
         for (uint8_t i = _sequenceLen - 1; i > 0; i--) {
           uint8_t j = random(0, i + 1);
@@ -288,9 +319,6 @@ void ArpEngine::rebuildSequence() {
       break;
     }
 
-    // ---------------------------------------------------------------
-    // CASCADE: Each note played twice [C C D D E E]
-    // ---------------------------------------------------------------
     case ARP_CASCADE:
     {
       for (uint8_t oct = 0; oct < octaves; oct++) {
@@ -306,9 +334,6 @@ void ArpEngine::rebuildSequence() {
       break;
     }
 
-    // ---------------------------------------------------------------
-    // CONVERGE: Outside-in [0, n-1, 1, n-2, 2, ...]
-    // ---------------------------------------------------------------
     case ARP_CONVERGE:
     {
       uint8_t temp[MAX_ARP_SEQUENCE];
@@ -335,9 +360,6 @@ void ArpEngine::rebuildSequence() {
       break;
     }
 
-    // ---------------------------------------------------------------
-    // DIVERGE: Center-out [mid, mid-1, mid+1, mid-2, mid+2, ...]
-    // ---------------------------------------------------------------
     case ARP_DIVERGE:
     {
       uint8_t temp[MAX_ARP_SEQUENCE];
@@ -367,44 +389,32 @@ void ArpEngine::rebuildSequence() {
       break;
     }
 
-    // ---------------------------------------------------------------
-    // PEDAL_UP: Alternate lowest note with ascending others
-    // [A B A C A D | A A' A B' A C' A D']
-    // Pedal = source[0] at octave 0 (always lowest note)
-    // ---------------------------------------------------------------
     case ARP_PEDAL_UP:
     {
-      uint8_t pedal = source[0]; // lowest sorted position, oct 0
+      uint8_t pedal = source[0];
       for (uint8_t oct = 0; oct < octaves; oct++) {
         for (uint8_t i = 0; i < sourceCount; i++) {
           uint8_t encoded = source[i] + oct * 48;
           if (encoded > 191) continue;
-          if (oct == 0 && i == 0) continue; // skip pedal itself
+          if (oct == 0 && i == 0) continue;
           if (_sequenceLen + 2 > MAX_ARP_SEQUENCE) goto done;
           _sequence[_sequenceLen++] = pedal;
           _sequence[_sequenceLen++] = encoded;
         }
       }
-      // Edge case: single note
       if (_sequenceLen == 0 && sourceCount > 0) {
         _sequence[_sequenceLen++] = source[0];
       }
       break;
     }
 
-    // ---------------------------------------------------------------
-    // OCTAVE_WAVE: Ping-pong through octaves
-    // Oct sequence: 0, 1, ..., max-1, max-2, ..., 1
-    // ---------------------------------------------------------------
     case ARP_OCTAVE_WAVE:
     {
       uint8_t octSeq[MAX_ARP_OCTAVES * 2];
       uint8_t octSeqLen = 0;
-      // Up: 0 to octaves-1
       for (uint8_t o = 0; o < octaves; o++) {
         octSeq[octSeqLen++] = o;
       }
-      // Down: octaves-2 to 1 (skip endpoints to avoid repeat at loop boundary)
       if (octaves > 2) {
         for (int8_t o = octaves - 2; o >= 1; o--) {
           octSeq[octSeqLen++] = (uint8_t)o;
@@ -421,15 +431,11 @@ void ArpEngine::rebuildSequence() {
       break;
     }
 
-    // ---------------------------------------------------------------
-    // OCTAVE_BOUNCE: Fibonacci stepping + octave ping-pong
-    // Pre-built by simulating the NANO R4 state machine.
-    // ---------------------------------------------------------------
     case ARP_OCTAVE_BOUNCE:
     {
       int16_t simIndex = 0;
       int8_t  simOct   = 0;
-      bool    simDir   = true;  // true = forward
+      bool    simDir   = true;
       uint8_t simFib   = 0;
 
       for (uint16_t step = 0; step < MAX_ARP_SEQUENCE; step++) {
@@ -468,10 +474,6 @@ void ArpEngine::rebuildSequence() {
       break;
     }
 
-    // ---------------------------------------------------------------
-    // PROBABILITY: Fibonacci stepping + octave spiral
-    // Pre-built by simulating the NANO R4 state machine.
-    // ---------------------------------------------------------------
     case ARP_PROBABILITY:
     {
       int16_t simIndex = 0;
@@ -511,57 +513,41 @@ void ArpEngine::rebuildSequence() {
 // =================================================================
 
 ArpState ArpEngine::currentState() const {
-  if (_positionCount == 0)  return ArpState::IDLE;
-  if (_waitingForQuantize)  return ArpState::WAITING_QUANTIZE;
-  if (_playing)             return ArpState::PLAYING;
-  if (_holdOn)              return ArpState::HELD_STOPPED;
-  return ArpState::PLAYING;  // HOLD OFF + notes present = auto-play
+  if (_positionCount == 0)     return ArpState::IDLE;
+  if (_waitingForQuantize)     return ArpState::WAITING_QUANTIZE;
+  return ArpState::PLAYING;
 }
 
 // =================================================================
 // Tick — called by ArpScheduler when a rhythmic step fires
 // =================================================================
-// Classifies the current state, handles transitions, then delegates
-// to executeStep() for the actual note scheduling.
 
 void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
                      uint32_t currentTick, uint32_t globalTick) {
   switch (currentState()) {
     case ArpState::IDLE:
       flushPendingNoteOffs(transport);
-      if (!_holdOn) _playing = false;  // HOLD OFF: pile empty = arp stops naturally
-      return;
-
-    case ArpState::HELD_STOPPED:
       return;
 
     case ArpState::WAITING_QUANTIZE: {
-      uint16_t boundary = (_quantizeMode == ARP_START_BAR) ? 96 : 24;
-      // B-001 fix (2026-04-07): crossing detection. Sentinel 0xFFFFFFFF means
-      // "fresh wait, fire on next observed tick". Subsequent waits within the
-      // same play session use the strict crossing check, robust against
-      // ClockManager::generateTicks() multi-tick catch-up bursts (up to 4).
-      bool crossed = (_lastDispatchedGlobalTick == 0xFFFFFFFF)
-                   || ((globalTick / boundary) > (_lastDispatchedGlobalTick / boundary));
-      if (!crossed) return;
+      uint16_t boundary = 24;  // Beat = 24 ticks (only mode remaining)
+      // Sentinel: first tick initializes tracking point, does NOT fire.
+      // Subsequent ticks use crossing detection (robust against multi-tick bursts).
+      if (_lastDispatchedGlobalTick == 0xFFFFFFFF) {
+        _lastDispatchedGlobalTick = globalTick;
+        return;
+      }
+      bool crossed = (globalTick / boundary) > (_lastDispatchedGlobalTick / boundary);
+      if (!crossed) {
+        _lastDispatchedGlobalTick = globalTick;
+        return;
+      }
       _waitingForQuantize = false;
       _lastDispatchedGlobalTick = globalTick;
       break;
     }
 
     case ArpState::PLAYING:
-      // HOLD OFF auto-play: activate if not yet playing
-      if (!_playing) {
-        _playing = true;
-        _waitingForQuantize = (_quantizeMode != ARP_START_IMMEDIATE);
-        if (_waitingForQuantize) {
-          // B-CODE-1 fix (2026-04-07): mark fresh wait + defer to next tick
-          // via WAITING_QUANTIZE branch (single source of truth for boundary
-          // crossing detection — no logic duplication with the case above).
-          _lastDispatchedGlobalTick = 0xFFFFFFFF;
-          return;
-        }
-      }
       break;
   }
 
@@ -571,25 +557,14 @@ void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
 // =================================================================
 // executeStep — resolve note, calculate timing, schedule events
 // =================================================================
-// Called by tick() after state guards have passed.
-// Flow:
-//   1. Rebuild sequence if dirty
-//   2. Advance step index (re-shuffle on loop for RANDOM)
-//   3. Resolve padOrder position → MIDI note via ScaleResolver
-//   4. Calculate velocity with variation
-//   5. Calculate shuffle offset from groove template
-//   6. Schedule noteOn (immediate or delayed) + noteOff (gate duration)
 
 void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
-  // --- Rebuild sequence if dirty ---
   if (_sequenceDirty) rebuildSequence();
   if (_sequenceLen == 0) return;
 
-  // --- Advance step ---
   _stepIndex++;
   if (_stepIndex >= (int16_t)_sequenceLen) {
     _stepIndex = 0;
-    // RANDOM: re-shuffle at loop boundary for variety
     if (_pattern == ARP_RANDOM) {
       for (uint8_t i = _sequenceLen - 1; i > 0; i--) {
         uint8_t j = random(0, i + 1);
@@ -600,15 +575,12 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
     }
   }
 
-  // --- Decode position + octave offset ---
   uint8_t encoded = _sequence[_stepIndex];
   uint8_t pos = encoded % 48;
   uint8_t octOffset = encoded / 48;
 
-  // --- Resolve to MIDI note via ScaleResolver ---
   if (!_padOrder) return;
 
-  // Reverse lookup: find padIndex from padOrder position
   uint8_t padIndex = 0xFF;
   for (uint8_t i = 0; i < NUM_KEYS; i++) {
     if (_padOrder[i] == pos) { padIndex = i; break; }
@@ -618,12 +590,10 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
   uint8_t midiNote = ScaleResolver::resolve(padIndex, _padOrder, _scale);
   if (midiNote == 0xFF) return;
 
-  // Apply octave transposition — fold down until in range
   uint8_t finalNote = midiNote + octOffset * 12;
   while (finalNote > 127) finalNote -= 12;
-  if (finalNote > 127) return;  // Safety: should not happen after fold
+  if (finalNote > 127) return;
 
-  // --- Calculate velocity with variation ---
   uint8_t vel = _baseVelocity;
   if (_velocityVariation > 0) {
     int16_t range = (int16_t)_velocityVariation * 127 / 200;
@@ -632,7 +602,6 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
     vel = (uint8_t)constrain(result, 1, 127);
   }
 
-  // --- Calculate shuffle offset for this step (bipolar: positive = drag, negative = rush) ---
   int32_t shuffleOffsetUs = 0;
   if (_shuffleDepth > 0.001f) {
     int8_t pct = SHUFFLE_TEMPLATES[_shuffleTemplate][_shuffleStepCounter % SHUFFLE_TEMPLATE_LEN];
@@ -641,35 +610,24 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
     }
   }
 
-  // --- Calculate timing ---
   uint32_t nowUs = micros();
-  uint32_t noteOnTime = nowUs + (uint32_t)shuffleOffsetUs;  // unsigned wrap handles negative offsets
+  uint32_t noteOnTime = nowUs + (uint32_t)shuffleOffsetUs;
 
-  // Gate duration: gateLength 0.5 = half step, 1.0 = full, >1.0 = overlap.
-  // Minimum 1ms to prevent zero-length notes.
   uint32_t gateUs = (uint32_t)((float)stepDurationUs * _gateLength);
   if (gateUs < 1000) gateUs = 1000;
   uint32_t noteOffTime = noteOnTime + gateUs;
 
-  // Guard: if negative shuffle pushed noteOff into the past, clamp to now + 1ms
   if (shuffleOffsetUs < 0 && (int32_t)(noteOffTime - nowUs) < 1000) {
     noteOffTime = nowUs + 1000;
   }
 
-  // --- Schedule noteOff FIRST (reserve the slot) ---
-  // Guarantees atomic noteOn/noteOff pair: if queue is nearly full,
-  // we drop both rather than schedule noteOn without matching noteOff.
   bool noteOffOk = scheduleEvent(noteOffTime, finalNote, 0);
-  if (!noteOffOk) return;  // Queue full — skip this step entirely
+  if (!noteOffOk) return;
 
-  // --- Schedule noteOn ---
   if (shuffleOffsetUs <= 0) {
-    // No delay or negative offset (rush): fire noteOn immediately (saves a queue slot)
     refCountNoteOn(transport, finalNote, vel);
   } else {
-    // Shuffle delay: queue noteOn for later
     if (!scheduleEvent(noteOnTime, finalNote, vel)) {
-      // noteOn couldn't be scheduled — cancel the orphaned noteOff
       for (int8_t i = MAX_PENDING_EVENTS - 1; i >= 0; i--) {
         if (_events[i].active && _events[i].note == finalNote
             && _events[i].velocity == 0 && _events[i].fireTimeUs == noteOffTime) {
@@ -680,30 +638,18 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
     }
   }
 
-  // --- Signal tick to LedController ---
   _tickFlash = true;
-
-  // --- Advance shuffle step counter ---
   _shuffleStepCounter++;
 }
 
 // =================================================================
 // processEvents — fire pending events whose time has arrived
 // =================================================================
-// Called every loop iteration (~1kHz) by ArpScheduler.
-// Scans the event queue and fires any event where now >= fireTime.
-//
-// Uses (int32_t) cast on the unsigned difference to handle
-// micros() wraparound correctly. Safe as long as events are
-// not scheduled more than ~35 minutes ahead (they're not —
-// max step duration is ~96 seconds at 10 BPM, DIV_4_1).
 
 void ArpEngine::processEvents(MidiTransport& transport) {
   uint32_t nowUs = micros();
   for (uint8_t i = 0; i < MAX_PENDING_EVENTS; i++) {
     if (!_events[i].active) continue;
-
-    // Signed comparison handles micros() wrap correctly
     if ((int32_t)(nowUs - _events[i].fireTimeUs) >= 0) {
       if (_events[i].velocity > 0) {
         refCountNoteOn(transport, _events[i].note, _events[i].velocity);
@@ -716,37 +662,31 @@ void ArpEngine::processEvents(MidiTransport& transport) {
 }
 
 // =================================================================
-// flushPendingNoteOffs — emergency silence
+// flushPendingNoteOffs — emergency silence + stop playback
 // =================================================================
-// Called by playStop(stop) and clearAllNotes().
-// Two-phase flush for absolute safety:
+// Two-phase flush:
 //   1. Cancel all pending events (noteOn AND noteOff)
 //   2. Sweep refcount: any note with refcount > 0 gets a MIDI noteOff
-// This guarantees zero stuck notes even if the event queue was
-// in an inconsistent state.
+//   3. Set _playing = false (stops the arp engine)
 
 void ArpEngine::flushPendingNoteOffs(MidiTransport& transport) {
-  // Phase 1: cancel all pending events
   for (uint8_t i = 0; i < MAX_PENDING_EVENTS; i++) {
     _events[i].active = false;
   }
 
-  // Phase 2: sweep refcount — silence any note still "on"
   for (uint8_t n = 0; n < 128; n++) {
     if (_noteRefCount[n] > 0) {
-      transport.sendNoteOn(_channel, n, 0);  // velocity 0 = noteOff
+      transport.sendNoteOn(_channel, n, 0);
       _noteRefCount[n] = 0;
     }
   }
+
+  _playing = false;
 }
 
 // =================================================================
-// scheduleEvent — queue a noteOn or noteOff for future firing
+// scheduleEvent
 // =================================================================
-// Returns false if the queue is full (all 64 slots occupied).
-// This can happen with extreme gate + fast division.
-// The caller (tick) ensures noteOn/noteOff pairs are atomic:
-// noteOff is reserved first, and if noteOn fails, noteOff is cancelled.
 
 bool ArpEngine::scheduleEvent(uint32_t fireTimeUs, uint8_t note, uint8_t velocity) {
   for (uint8_t i = 0; i < MAX_PENDING_EVENTS; i++) {
@@ -765,18 +705,11 @@ bool ArpEngine::scheduleEvent(uint32_t fireTimeUs, uint8_t note, uint8_t velocit
 }
 
 // =================================================================
-// Reference-counted MIDI noteOn
+// Reference-counted MIDI noteOn/noteOff
 // =================================================================
-// Only sends actual MIDI noteOn when refcount goes from 0 to 1
-// (first instance of this note). If the note is already ringing
-// from a previous overlapping step, we just increment the count.
-//
-// This prevents the overlap bug where two steps play the same note
-// and the first noteOff kills the second one prematurely.
 
 void ArpEngine::refCountNoteOn(MidiTransport& transport, uint8_t note, uint8_t velocity) {
   if (_noteRefCount[note] == 0) {
-    // First instance — send actual MIDI noteOn
     transport.sendNoteOn(_channel, note, velocity);
   }
   if (_noteRefCount[note] < 255) {
@@ -784,18 +717,10 @@ void ArpEngine::refCountNoteOn(MidiTransport& transport, uint8_t note, uint8_t v
   }
 }
 
-// =================================================================
-// Reference-counted MIDI noteOff
-// =================================================================
-// Only sends actual MIDI noteOff when refcount goes from 1 to 0
-// (last instance of this note released). If other steps are still
-// holding this note, we just decrement.
-
 void ArpEngine::refCountNoteOff(MidiTransport& transport, uint8_t note) {
-  if (_noteRefCount[note] == 0) return;  // Already silent — nothing to do
+  if (_noteRefCount[note] == 0) return;
   _noteRefCount[note]--;
   if (_noteRefCount[note] == 0) {
-    // Last instance released — send actual MIDI noteOff
     transport.sendNoteOn(_channel, note, 0);
   }
 }

@@ -25,7 +25,7 @@ public:
              NvsManager* nvs, BankSlot* banks,
              uint8_t* padOrder, uint8_t* bankPads,
              uint8_t* rootPads, uint8_t* modePads,
-             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
+             uint8_t& chromaticPad, uint8_t& holdPad,
              uint8_t* octavePads, PotRouter* potRouter);
 
   // Enter setup mode (blocking — returns when user exits)

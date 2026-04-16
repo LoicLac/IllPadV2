@@ -71,17 +71,11 @@ static uint8_t s_padOrder[NUM_KEYS];
 // Edge detection: previous frame's key state (Core 1 only)
 static uint8_t s_lastKeys[NUM_KEYS];
 
-// Play/Stop pad (ARPEG only, always active — not gated by button hold)
-static uint8_t  s_playStopPad = 24;  // Default, overwritten by NVS
-static bool     s_lastPlayStopState = false;
-static uint32_t s_playStopPressTime = 0;
-static bool     s_playStopCleared   = true;  // Start true to prevent false trigger at boot
-
-// Double-tap detection (ARPEG HOLD mode)
+// Double-tap detection (ARPEG captured mode)
 static uint32_t s_lastPressTime[NUM_KEYS];
 static uint8_t  s_doubleTapMs = DOUBLE_TAP_MS_DEFAULT;
 
-// Hold pad (ARPEG)
+// Hold pad (ARPEG OFF/ON switch, always exposed — not gated by button hold)
 static uint8_t s_holdPad = 23;  // Default, overwritten by NVS
 
 // Panic: BLE reconnect detection + settings
@@ -277,8 +271,7 @@ void setup() {
       s_setupManager.begin(&s_keyboard, &s_leds, &s_nvsManager,
                            s_banks, s_padOrder, bankPads,
                            rootPads, modePads, chromaticPad,
-                           holdPad, s_playStopPad, octavePads,
-                           &s_potRouter);
+                           holdPad, octavePads, &s_potRouter);
       s_setupManager.run();
       // F-CODE-7: setupManager.run() never returns — its only exit path is
       // ESP.restart() in Tool 0 confirmation. Code below this point was dead.
@@ -323,7 +316,7 @@ void setup() {
   SettingsStore s_settings;
   s_nvsManager.loadAll(s_banks, currentBank, s_padOrder, bankPads,
                         rootPads, modePads, chromaticPad, holdPad,
-                        s_playStopPad, octavePads, s_potRouter, s_settings);
+                        octavePads, s_potRouter, s_settings);
 
   // Apply loaded bank
   s_banks[currentBank].isForeground = true;
@@ -504,31 +497,16 @@ static void processNormalMode(const SharedKeyboardState& state, BankSlot& slot) 
 }
 
 static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uint32_t now) {
-  static bool s_lastHoldState[NUM_BANKS] = {};
-
-  // Detect HOLD toggle ON→OFF: sync pile with physical pad state
-  uint8_t curBank = s_bankManager.getCurrentBank();
-  bool holdNow = slot.arpEngine->isHoldOn();
-  if (s_lastHoldState[curBank] && !holdNow) {
-    for (int j = 0; j < NUM_KEYS; j++) {
-      if (j == s_holdPad || j == s_playStopPad) continue;
-      if (!state.keyIsPressed[j]) {
-        slot.arpEngine->removePadPosition(s_padOrder[j]);
-      }
-    }
-  }
-  s_lastHoldState[curBank] = holdNow;
-
   for (int i = 0; i < NUM_KEYS; i++) {
-    if (i == s_holdPad) continue;
-    if (i == s_playStopPad && slot.arpEngine->isHoldOn()) continue;
+    if (i == s_holdPad) continue;  // Hold pad is never a music pad
 
     bool pressed    = state.keyIsPressed[i];
     bool wasPressed = s_lastKeys[i];
     uint8_t pos = s_padOrder[i];
 
     if (pressed && !wasPressed) {
-      if (slot.arpEngine->isHoldOn()) {
+      if (slot.arpEngine->isCaptured()) {
+        // ON mode: double-tap removes, single tap adds
         if (s_lastPressTime[i] > 0 &&
             (now - s_lastPressTime[i]) < (uint32_t)s_doubleTapMs) {
           slot.arpEngine->removePadPosition(pos);
@@ -538,13 +516,16 @@ static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uin
           s_lastPressTime[i] = now;
         }
       } else {
+        // OFF mode: live add
         slot.arpEngine->addPadPosition(pos);
       }
 
     } else if (!pressed && wasPressed) {
-      if (!slot.arpEngine->isHoldOn()) {
+      if (!slot.arpEngine->isCaptured()) {
+        // OFF mode: live remove
         slot.arpEngine->removePadPosition(pos);
       }
+      // ON mode: release ignored (pile frozen)
     }
   }
 }
@@ -561,7 +542,7 @@ static void handleLeftReleaseCleanup(const SharedKeyboardState& state) {
         }
       }
     } else if (relSlot.type == BANK_ARPEG && relSlot.arpEngine
-               && !relSlot.arpEngine->isHoldOn()) {
+               && !relSlot.arpEngine->isCaptured()) {
       for (int i = 0; i < NUM_KEYS; i++) {
         if (i == s_holdPad) continue;
         if (!state.keyIsPressed[i]) {
@@ -628,7 +609,6 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
   ScaleChangeType scaleChange = s_scaleManager.consumeScaleChange();
   bool scaleChanged = (scaleChange != SCALE_CHANGE_NONE);
   bool octaveChanged = s_scaleManager.hasOctaveChanged();
-  bool holdToggled   = s_scaleManager.hasHoldToggled();
 
   // Queue NVS save on scale change + sync arp engine scale + LED confirmation
   if (scaleChanged) {
@@ -654,63 +634,30 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
     s_leds.triggerConfirm(CONFIRM_OCTAVE, newOct);
   }
 
-  // LED confirmation on hold toggle + reset double-tap timestamps
-  if (holdToggled) {
-    BankSlot& holdSlot = s_bankManager.getCurrentSlot();
-    bool holdIsOn = (holdSlot.type == BANK_ARPEG && holdSlot.arpEngine && holdSlot.arpEngine->isHoldOn());
-    s_leds.triggerConfirm(holdIsOn ? CONFIRM_HOLD_ON : CONFIRM_HOLD_OFF);
-    if (holdIsOn) {
-      memset(s_lastPressTime, 0, sizeof(s_lastPressTime));
-    }
-  }
-
   // Clock: process ticks (PLL + tick generation)
   s_clockManager.update();
 
   return bankSwitched;
 }
 
-// --- Play/Stop pad edge detection (ARPEG + HOLD ON only) ---
-static void handlePlayStopPad(const SharedKeyboardState& state,
-                               bool holdBeforeUpdate, bool bankSwitched) {
-  BankSlot& psSlot = s_bankManager.getCurrentSlot();
-  // Use pre-toggle hold state when same bank (prevents same-frame hold+playStop loss).
-  // After bank switch, use live state (ScaleManager toggled hold on the new bank, not old).
-  bool holdForPS = bankSwitched
-      ? (psSlot.type == BANK_ARPEG && psSlot.arpEngine && psSlot.arpEngine->isHoldOn())
-      : holdBeforeUpdate;
-  if (s_playStopPad < NUM_KEYS && psSlot.type == BANK_ARPEG
-      && psSlot.arpEngine && holdForPS) {
-    bool psPressed = state.keyIsPressed[s_playStopPad];
-
-    // Press edge: toggle play/stop (instant)
-    if (psPressed && !s_lastPlayStopState) {
-      psSlot.arpEngine->playStop(s_transport);
-      if (psSlot.arpEngine->isPlaying()) {
-        s_leds.triggerConfirm(CONFIRM_PLAY);
-      } else {
-        s_leds.triggerConfirm(CONFIRM_STOP);
-      }
-      s_playStopPressTime = millis();
-      s_playStopCleared = false;
-    }
-
-    // Long press (>500ms): clear arp pile
-    if (psPressed && !s_playStopCleared
-        && (millis() - s_playStopPressTime) >= 500) {
-      psSlot.arpEngine->clearAllNotes(s_transport);
-      s_leds.triggerConfirm(CONFIRM_STOP);
-      s_playStopCleared = true;
-      #if DEBUG_SERIAL
-      Serial.println("[ARP] Play/Stop long-press: pile cleared");
-      #endif
-    }
-
-    s_lastPlayStopState = psPressed;
-  } else {
-    // Not ARPEG or HOLD OFF: reset edge detection so it triggers correctly when switching
-    s_lastPlayStopState = (s_playStopPad < NUM_KEYS) ? state.keyIsPressed[s_playStopPad] : false;
+// --- Hold pad edge detection (ARPEG OFF/ON switch, always exposed) ---
+static void handleHoldPad(const SharedKeyboardState& state) {
+  static bool s_lastHoldPadState = false;
+  BankSlot& slot = s_bankManager.getCurrentSlot();
+  if (s_holdPad >= NUM_KEYS || slot.type != BANK_ARPEG || !slot.arpEngine) {
+    s_lastHoldPadState = (s_holdPad < NUM_KEYS) ? state.keyIsPressed[s_holdPad] : false;
+    return;
   }
+  bool pressed = state.keyIsPressed[s_holdPad];
+  if (pressed && !s_lastHoldPadState) {
+    bool wasCaptured = slot.arpEngine->isCaptured();
+    slot.arpEngine->setCaptured(!wasCaptured, s_transport, state.keyIsPressed, s_holdPad);
+    s_leds.triggerConfirm(slot.arpEngine->isCaptured() ? CONFIRM_HOLD_ON : CONFIRM_HOLD_OFF);
+    if (slot.arpEngine->isCaptured()) {
+      memset(s_lastPressTime, 0, sizeof(s_lastPressTime));
+    }
+  }
+  s_lastHoldPadState = pressed;
 }
 
 // --- Push live pot params to engine (extracted for LOOP extensibility) ---
@@ -965,18 +912,10 @@ void loop() {
   bool leftHeld = (digitalRead(BTN_LEFT_PIN) == LOW);
   bool rearHeld = (digitalRead(BTN_REAR_PIN) == LOW);
 
-  // Snapshot hold state BEFORE ScaleManager may toggle it (for play/stop check below)
-  bool holdBeforeUpdate = false;
-  {
-    BankSlot& snap = s_bankManager.getCurrentSlot();
-    if (snap.type == BANK_ARPEG && snap.arpEngine)
-      holdBeforeUpdate = snap.arpEngine->isHoldOn();
-  }
-
   // --- CRITICAL PATH ---
-  bool bankSwitched = handleManagerUpdates(state, leftHeld);
+  handleManagerUpdates(state, leftHeld);
 
-  handlePlayStopPad(state, holdBeforeUpdate, bankSwitched);
+  handleHoldPad(state);
 
   handlePadInput(state, now);
 

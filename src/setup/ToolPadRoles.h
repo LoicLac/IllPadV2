@@ -18,13 +18,12 @@ enum PadRoleCode : uint8_t {
   ROLE_MODE      = 3,
   ROLE_OCTAVE    = 4,
   ROLE_HOLD      = 5,
-  ROLE_PLAYSTOP  = 6,
   ROLE_COLLISION = 0xFF
 };
 
 // Unified role identifier (pool item)
 struct PadRole {
-  uint8_t line;   // 0=none, 1=bank, 2=root, 3=mode, 4=octave, 5=hold, 6=play/stop
+  uint8_t line;   // 0=none, 1=bank, 2=root, 3=mode, 4=octave, 5=hold
   uint8_t index;  // index within that line
 };
 
@@ -35,7 +34,7 @@ public:
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
              SetupUI* ui,
              uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
-             uint8_t& chromaticPad, uint8_t& holdPad, uint8_t& playStopPad,
+             uint8_t& chromaticPad, uint8_t& holdPad,
              uint8_t* octavePads);
   void run();  // Blocking — grid + pool driven
 
@@ -50,7 +49,6 @@ private:
   uint8_t* _modePads;      // [7]
   uint8_t* _chromaticPad;  // single
   uint8_t* _holdPad;       // single
-  uint8_t* _playStopPad;   // single
   uint8_t* _octavePads;    // [4]
 
   // Working copies (edited during tool, committed on save)
@@ -59,7 +57,6 @@ private:
   uint8_t _wkModePads[7];
   uint8_t _wkChromPad;
   uint8_t _wkHoldPad;
-  uint8_t _wkPlayStopPad;
   uint8_t _wkOctavePads[4];
 
   // Grid state (rebuilt before each draw)
@@ -71,7 +68,7 @@ private:
   uint8_t _gridRow;       // 0-3 (4 rows of 12)
   uint8_t _gridCol;       // 0-11
   bool    _editing;       // true = pool navigation mode
-  uint8_t _poolLine;      // 0=clear, 1=bank, 2=root, 3=mode, 4=octave, 5=hold, 6=play/stop
+  uint8_t _poolLine;      // 0=clear, 1=bank, 2=root, 3=mode, 4=octave, 5=hold
   uint8_t _poolIdx;       // index within current pool line
   bool    _confirmSteal;  // true = waiting for y/n steal confirmation
   uint8_t _stealFromPad;  // pad that currently owns the role being stolen
@@ -82,7 +79,7 @@ private:
   // Pot navigation
   SetupPotInput _pots;
   int32_t _potNavIdx;        // Linearized grid index 0-47 (RELATIVE)
-  int32_t _potPoolLinear;    // Linearized pool index 0-29 (RELATIVE)
+  int32_t _potPoolLinear;    // Linearized pool index 0-28 (RELATIVE)
 
   // Touch detection baselines
   uint16_t _refBaselines[NUM_KEYS];
@@ -103,8 +100,7 @@ private:
   static const uint8_t POOL_MODE_COUNT     = 8;   // 7 modes + chromatic
   static const uint8_t POOL_OCTAVE_COUNT   = 4;
   static const uint8_t POOL_HOLD_COUNT     = 1;
-  static const uint8_t POOL_PLAYSTOP_COUNT = 1;
-  static const uint8_t POOL_LINE_COUNT     = 7;   // 0=clear, 1-6=categories
+  static const uint8_t POOL_LINE_COUNT     = 6;   // 0=clear, 1-5=categories
 
   uint8_t poolLineSize(uint8_t line) const;
 

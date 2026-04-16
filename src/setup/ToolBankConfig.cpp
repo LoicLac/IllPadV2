@@ -7,7 +7,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-static const char* QUANTIZE_NAMES[] = {"Immediate", "Beat", "Bar"};
+static const char* QUANTIZE_NAMES[] = {"Immediate", "Beat"};
 
 ToolBankConfig::ToolBankConfig()
   : _leds(nullptr), _nvs(nullptr), _ui(nullptr), _banks(nullptr) {}
@@ -208,11 +208,11 @@ void ToolBankConfig::run() {
         editing = true;
         // Seed pot for combined state cycle
         _potComboState = (wkTypes[cursor] == BANK_NORMAL) ? 0 : 1 + wkQuantize[cursor];
-        _pots.seed(0, &_potComboState, 0, 3, POT_RELATIVE, 8);
+        _pots.seed(0, &_potComboState, 0, 2, POT_RELATIVE, 8);
         screenDirty = true;
       }
     } else {
-      // Flat cycle: NORMAL → ARPEG-Immediate → ARPEG-Beat → ARPEG-Bar → NORMAL
+      // Flat cycle: NORMAL → ARPEG-Immediate → ARPEG-Beat → NORMAL
       if (ev.type == NAV_RIGHT) {
         if (wkTypes[cursor] == BANK_NORMAL) {
           // NORMAL → ARPEG-Immediate (check 4-limit)
@@ -228,12 +228,12 @@ void ToolBankConfig::run() {
             wkQuantize[cursor] = ARP_START_IMMEDIATE;
             errorShown = false;
           }
-        } else if (wkQuantize[cursor] < ARP_START_BAR) {
-          // ARPEG: Immediate → Beat → Bar
+        } else if (wkQuantize[cursor] < ARP_START_BEAT) {
+          // ARPEG: Immediate → Beat
           wkQuantize[cursor]++;
           errorShown = false;
         } else {
-          // ARPEG-Bar → NORMAL
+          // ARPEG-Beat → NORMAL
           wkTypes[cursor] = BANK_NORMAL;
           wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
           errorShown = false;
@@ -242,7 +242,7 @@ void ToolBankConfig::run() {
         screenDirty = true;
       } else if (ev.type == NAV_LEFT) {
         if (wkTypes[cursor] == BANK_NORMAL) {
-          // NORMAL → ARPEG-Bar (check 4-limit)
+          // NORMAL → ARPEG-Beat (check 4-limit)
           uint8_t arpCount = 0;
           for (uint8_t i = 0; i < NUM_BANKS; i++) {
             if (wkTypes[i] == BANK_ARPEG) arpCount++;
@@ -252,11 +252,11 @@ void ToolBankConfig::run() {
             errorTime = millis();
           } else {
             wkTypes[cursor] = BANK_ARPEG;
-            wkQuantize[cursor] = ARP_START_BAR;
+            wkQuantize[cursor] = ARP_START_BEAT;
             errorShown = false;
           }
         } else if (wkQuantize[cursor] > ARP_START_IMMEDIATE) {
-          // ARPEG: Bar → Beat → Immediate
+          // ARPEG: Beat → Immediate
           wkQuantize[cursor]--;
           errorShown = false;
         } else {
@@ -365,9 +365,6 @@ void ToolBankConfig::run() {
               break;
             case 1:
               _ui->drawFrameLine(VT_DIM "Beat: arp starts synced to next quarter note (24 ticks). Musical alignment." VT_RESET);
-              break;
-            case 2:
-              _ui->drawFrameLine(VT_DIM "Bar: arp starts synced to next bar (96 ticks). Perfect for loop-aligned sets." VT_RESET);
               break;
           }
         }

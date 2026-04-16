@@ -10,10 +10,10 @@
 // =================================================================
 // Page definitions
 // =================================================================
-// Page 0: COLOR (20 rows) + TIMING (3 rows) = 23
-// Page 1: CONFIRM — 14 params
-static const uint8_t PAGE0_COUNT = 23;
-static const uint8_t PAGE1_COUNT = 15;  // 15 params: bank(2) + scale(6) + hold(1) + play(2) + stop(2) + octave(2)
+// Page 0: COLOR (18 rows) + TIMING (3 rows) = 21
+// Page 1: CONFIRM — 11 params
+static const uint8_t PAGE0_COUNT = 21;
+static const uint8_t PAGE1_COUNT = 11;  // 11 params: bank(2) + scale(6) + hold(1) + octave(2)
 
 static const char* s_pageNames[] = {"COLOR", "CONFIRM"};
 
@@ -31,7 +31,7 @@ static bool isColorRowHidden(uint8_t row) {
   return (row == 5 || row == 6 || row == 9);
 }
 
-static const ColorRowDef COLOR_ROWS[20] = {
+static const ColorRowDef COLOR_ROWS[18] = {
   { CSLOT_NORMAL_FG,   0xFF, "NORMAL fg"       },  // 0
   { CSLOT_NORMAL_BG,   0xFF, "NORMAL bg"       },  // 1
   { CSLOT_ARPEG_FG,       3, "ARPfg pulse lo"  },  // 2  (FG stopped-loaded pulse)
@@ -49,9 +49,7 @@ static const ColorRowDef COLOR_ROWS[20] = {
   { CSLOT_SCALE_MODE,  0xFF, "Scale mode"      },  // 14
   { CSLOT_SCALE_CHROM, 0xFF, "Scale chromatic" },  // 15
   { CSLOT_HOLD,        0xFF, "Hold"            },  // 16
-  { CSLOT_PLAY_ACK,    0xFF, "Play"            },  // 17
-  { CSLOT_STOP,        0xFF, "Stop"            },  // 18
-  { CSLOT_OCTAVE,      0xFF, "Octave"          },  // 19
+  { CSLOT_OCTAVE,      0xFF, "Octave"          },  // 17
 };
 
 // Sine LUT: shared from HardwareConfig.h (LED_LED_SINE_LUT[256])
@@ -89,10 +87,6 @@ static LedSettingsStore s_ledDefaults() {
   d.scaleChromBlinks   = 2;
   d.scaleChromDurationMs = 200;
   d.holdFadeMs         = 300;
-  d.playBlinks         = 2;
-  d.playDurationMs     = 200;
-  d.stopBlinks         = 2;
-  d.stopDurationMs     = 200;
   d.octaveBlinks       = 3;
   d.octaveDurationMs   = 300;
   return d;
@@ -101,10 +95,10 @@ static LedSettingsStore s_ledDefaults() {
 static ColorSlotStore s_colorDefaults() {
   ColorSlotStore c;
   c.magic = COLOR_SLOT_MAGIC;
-  c.version = 1;
+  c.version = COLOR_SLOT_VERSION;
   c.reserved = 0;
   static const uint8_t presets[COLOR_SLOT_COUNT] = {
-    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 11, 5, 9
+    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 9
   };
   for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
     c.slots[i].presetId = presets[i];
@@ -156,7 +150,7 @@ uint8_t ToolLedSettings::getRowIntensity(uint8_t row) const {
     case 10: return _wk.tickFlashFg;
     case 11: return _wk.tickFlashBg;
     case 12: return _wk.bankBrightnessPct;
-    default: return 100;  // rows 13-19: fixed 100%
+    default: return 100;  // rows 13-17: fixed 100%
   }
 }
 
@@ -191,7 +185,7 @@ void ToolLedSettings::setRowIntensity(uint8_t row, uint8_t val) {
     case 10: _wk.tickFlashFg = val; break;
     case 11: _wk.tickFlashBg = val; break;
     case 12: _wk.bankBrightnessPct = val; break;
-    default: break;  // rows 13-19: not editable
+    default: break;  // rows 13-17: not editable
   }
 }
 
@@ -203,7 +197,7 @@ bool ToolLedSettings::rowHasEditableIntensity(uint8_t row) const {
 // adjustColorField — preset / hue / intensity
 // =================================================================
 void ToolLedSettings::adjustColorField(int8_t dir, bool accel) {
-  if (_cursor >= 20) return;  // timing rows handled elsewhere
+  if (_cursor >= 18) return;  // timing rows handled elsewhere
   uint8_t slotId = COLOR_ROWS[_cursor].slotId;
   ColorSlot& slot = _cwk.slots[slotId];
 
@@ -238,7 +232,7 @@ void ToolLedSettings::adjustColorField(int8_t dir, bool accel) {
 // adjustTimingParam — pulse period / tick flash duration
 // =================================================================
 void ToolLedSettings::adjustTimingParam(int8_t dir, bool accel) {
-  uint8_t timingIdx = _cursor - 20;  // 0 or 1
+  uint8_t timingIdx = _cursor - 18;  // 0, 1, or 2
   if (timingIdx == 0) {  // pulsePeriodMs 500-4000
     int step = accel ? 250 : 50;
     int val = (int)_wk.pulsePeriodMs + dir * step;
@@ -325,39 +319,13 @@ void ToolLedSettings::adjustConfirmParam(int8_t dir, bool accel) {
       _wk.holdFadeMs = (uint16_t)val;
       break;
     }
-    case 9: { // playBlinks 1-3 wrap
-      int val = (int)_wk.playBlinks + dir;
-      if (val < 1) val = 3; if (val > 3) val = 1;
-      _wk.playBlinks = (uint8_t)val;
-      break;
-    }
-    case 10: { // playDurationMs 100-500
-      int step = accel ? 100 : 50;
-      int val = (int)_wk.playDurationMs + dir * step;
-      if (val < 100) val = 100; if (val > 500) val = 500;
-      _wk.playDurationMs = (uint16_t)val;
-      break;
-    }
-    case 11: { // stopBlinks 1-3 wrap
-      int val = (int)_wk.stopBlinks + dir;
-      if (val < 1) val = 3; if (val > 3) val = 1;
-      _wk.stopBlinks = (uint8_t)val;
-      break;
-    }
-    case 12: { // stopDurationMs 100-500
-      int step = accel ? 100 : 50;
-      int val = (int)_wk.stopDurationMs + dir * step;
-      if (val < 100) val = 100; if (val > 500) val = 500;
-      _wk.stopDurationMs = (uint16_t)val;
-      break;
-    }
-    case 13: { // octaveBlinks 1-3
+    case 9: { // octaveBlinks 1-3
       int val = (int)_wk.octaveBlinks + dir;
       if (val < 1) val = 3; if (val > 3) val = 1;
       _wk.octaveBlinks = (uint8_t)val;
       break;
     }
-    case 14: { // octaveDurationMs 100-500
+    case 10: { // octaveDurationMs 100-500
       int step = accel ? 100 : 50;
       int val = (int)_wk.octaveDurationMs + dir * step;
       if (val < 100) val = 100; if (val > 500) val = 500;
@@ -393,7 +361,7 @@ bool ToolLedSettings::saveColorSlots() {
 // drawColorRow — single row with ANSI 24-bit swatch
 // =================================================================
 void ToolLedSettings::drawColorRow(uint8_t row, bool selected, bool editing) {
-  if (row >= 20) return;
+  if (row >= 18) return;
   const ColorRowDef& def = COLOR_ROWS[row];
   const ColorSlot& slot = _cwk.slots[def.slotId];
   RGBW resolved = resolveColorSlot(slot);
@@ -459,7 +427,7 @@ void ToolLedSettings::drawColorRow(uint8_t row, bool selected, bool editing) {
 // =================================================================
 void ToolLedSettings::drawDescription() {
   if (_page == 0) {
-    if (_cursor < 20) {
+    if (_cursor < 18) {
       // COLOR rows
       switch (_cursor) {
         case 0:
@@ -559,18 +527,6 @@ void ToolLedSettings::drawDescription() {
           _ui->drawFrameLine(VT_DIM "Choose a color that pops against your arp pulse." VT_RESET);
           break;
         case 17:
-          _ui->drawFrameLine(VT_BRIGHT_WHITE "Play" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Blink overlay when arp starts. Tick flashes" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "take over immediately after. Brief 'go' signal." VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Press [b] to preview." VT_RESET);
-          break;
-        case 18:
-          _ui->drawFrameLine(VT_BRIGHT_WHITE "Stop" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Blink overlay when arp stops. Same pattern as" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "play but distinct color. Press [b] to preview." VT_RESET);
-          _ui->drawFrameEmpty();
-          break;
-        case 19:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Octave" VT_RESET);
           _ui->drawFrameLine(VT_DIM "Blink overlay on current bank LED when changing" VT_RESET);
           _ui->drawFrameLine(VT_DIM "arp octave range (1-4). Press [b] to preview." VT_RESET);
@@ -578,13 +534,13 @@ void ToolLedSettings::drawDescription() {
           break;
       }
     } else {
-      // TIMING rows (20-22)
-      if (_cursor == 20) {
+      // TIMING rows (18-20)
+      if (_cursor == 18) {
         _ui->drawFrameLine(VT_BRIGHT_WHITE "Pulse Period" VT_RESET);
         _ui->drawFrameLine(VT_DIM "Duration of one full sine breathing cycle in milliseconds." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Affects all ARPEG banks (foreground + background)." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Lower = faster breath. Default 1472ms (~1.5s)." VT_RESET);
-      } else if (_cursor == 21) {
+      } else if (_cursor == 19) {
         _ui->drawFrameLine(VT_BRIGHT_WHITE "Tick Flash Duration" VT_RESET);
         _ui->drawFrameLine(VT_DIM "How long each arp step flash stays visible in milliseconds." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Shorter = snappier visual beat. Longer = more visible at" VT_RESET);
@@ -654,36 +610,12 @@ void ToolLedSettings::drawDescription() {
         _ui->drawFrameEmpty();
         break;
       case 9:
-        _ui->drawFrameLine(VT_BRIGHT_WHITE "Play \xe2\x80\x94 Blinks" VT_RESET);
-        _ui->drawFrameLine(VT_DIM "Number of flashes on play. 1-3, default 2." VT_RESET);
-        _ui->drawFrameEmpty();
-        _ui->drawFrameEmpty();
-        break;
-      case 10:
-        _ui->drawFrameLine(VT_BRIGHT_WHITE "Play \xe2\x80\x94 Duration" VT_RESET);
-        _ui->drawFrameLine(VT_DIM "Total duration of play blink overlay. 100-500ms." VT_RESET);
-        _ui->drawFrameLine(VT_DIM "Shorter = tick flashes take over faster." VT_RESET);
-        _ui->drawFrameEmpty();
-        break;
-      case 11:
-        _ui->drawFrameLine(VT_BRIGHT_WHITE "Stop \xe2\x80\x94 Blinks" VT_RESET);
-        _ui->drawFrameLine(VT_DIM "Number of flashes on stop. 1-3, default 2." VT_RESET);
-        _ui->drawFrameEmpty();
-        _ui->drawFrameEmpty();
-        break;
-      case 12:
-        _ui->drawFrameLine(VT_BRIGHT_WHITE "Stop \xe2\x80\x94 Duration" VT_RESET);
-        _ui->drawFrameLine(VT_DIM "Total duration of stop blink overlay. 100-500ms." VT_RESET);
-        _ui->drawFrameEmpty();
-        _ui->drawFrameEmpty();
-        break;
-      case 13:
         _ui->drawFrameLine(VT_BRIGHT_WHITE "Octave \xe2\x80\x94 Blinks" VT_RESET);
         _ui->drawFrameLine(VT_DIM "Flashes on current bank LED. Range 1-3." VT_RESET);
         _ui->drawFrameEmpty();
         _ui->drawFrameEmpty();
         break;
-      case 14:
+      case 10:
         _ui->drawFrameLine(VT_BRIGHT_WHITE "Octave \xe2\x80\x94 Duration" VT_RESET);
         _ui->drawFrameLine(VT_DIM "Total time for octave blinks. Range 100-500ms." VT_RESET);
         _ui->drawFrameEmpty();
@@ -709,7 +641,7 @@ void ToolLedSettings::seedPotsForCursor() {
   _pots.disable(0);
   _pots.disable(1);
 
-  if (_page == 0 && _cursor < 20) {
+  if (_page == 0 && _cursor < 18) {
     // COLOR rows: pot 1 = hue, pot 2 = intensity
     uint8_t slotId = COLOR_ROWS[_cursor].slotId;
     _potVal[0] = _cwk.slots[slotId].hueOffset;
@@ -718,13 +650,13 @@ void ToolLedSettings::seedPotsForCursor() {
       _potVal[1] = getRowIntensity(_cursor);
       _pots.seed(1, &_potVal[1], 0, 100, POT_ABSOLUTE);
     }
-  } else if (_page == 0 && _cursor == 20) {
+  } else if (_page == 0 && _cursor == 18) {
     _potVal[0] = _wk.pulsePeriodMs;
     _pots.seed(0, &_potVal[0], 500, 4000, POT_ABSOLUTE);
-  } else if (_page == 0 && _cursor == 21) {
+  } else if (_page == 0 && _cursor == 19) {
     _potVal[0] = _wk.tickFlashDurationMs;
     _pots.seed(0, &_potVal[0], 10, 100, POT_ABSOLUTE);
-  } else if (_page == 0 && _cursor == 22) {
+  } else if (_page == 0 && _cursor == 20) {
     _potVal[0] = _wk.gammaTenths;
     _pots.seed(0, &_potVal[0], 10, 30, POT_ABSOLUTE);
   } else if (_page == 1) {
@@ -741,12 +673,8 @@ void ToolLedSettings::seedPotsForCursor() {
       case 6:  _potVal[0] = _wk.scaleChromBlinks;     mn=1; mx=3; break;
       case 7:  _potVal[0] = _wk.scaleChromDurationMs; mn=100; mx=500; break;
       case 8:  _potVal[0] = _wk.holdFadeMs;           mn=100; mx=600; break;
-      case 9:  _potVal[0] = _wk.playBlinks;           mn=1; mx=3; break;
-      case 10: _potVal[0] = _wk.playDurationMs;       mn=100; mx=500; break;
-      case 11: _potVal[0] = _wk.stopBlinks;           mn=1; mx=3; break;
-      case 12: _potVal[0] = _wk.stopDurationMs;       mn=100; mx=500; break;
-      case 13: _potVal[0] = _wk.octaveBlinks;         mn=1; mx=3; break;
-      case 14: _potVal[0] = _wk.octaveDurationMs;     mn=100; mx=500; break;
+      case 9:  _potVal[0] = _wk.octaveBlinks;         mn=1; mx=3; break;
+      case 10: _potVal[0] = _wk.octaveDurationMs;     mn=100; mx=500; break;
       default: return;
     }
     _pots.seed(0, &_potVal[0], mn, mx, POT_ABSOLUTE);
@@ -757,7 +685,7 @@ void ToolLedSettings::seedPotsForCursor() {
 bool ToolLedSettings::applyPotValues() {
   bool changed = false;
 
-  if (_page == 0 && _cursor < 20) {
+  if (_page == 0 && _cursor < 18) {
     uint8_t slotId = COLOR_ROWS[_cursor].slotId;
     if (_pots.isActive(0) && (int8_t)_potVal[0] != _cwk.slots[slotId].hueOffset) {
       _cwk.slots[slotId].hueOffset = (int8_t)_potVal[0];
@@ -768,15 +696,15 @@ bool ToolLedSettings::applyPotValues() {
       setRowIntensity(_cursor, (uint8_t)_potVal[1]);
       changed = true;
     }
-  } else if (_page == 0 && _cursor == 20) {
+  } else if (_page == 0 && _cursor == 18) {
     if (_pots.isActive(0) && (uint16_t)_potVal[0] != _wk.pulsePeriodMs) {
       _wk.pulsePeriodMs = (uint16_t)_potVal[0]; changed = true;
     }
-  } else if (_page == 0 && _cursor == 21) {
+  } else if (_page == 0 && _cursor == 19) {
     if (_pots.isActive(0) && (uint8_t)_potVal[0] != _wk.tickFlashDurationMs) {
       _wk.tickFlashDurationMs = (uint8_t)_potVal[0]; changed = true;
     }
-  } else if (_page == 0 && _cursor == 22) {
+  } else if (_page == 0 && _cursor == 20) {
     if (_pots.isActive(0) && (uint8_t)_potVal[0] != _wk.gammaTenths) {
       _wk.gammaTenths = (uint8_t)_potVal[0]; changed = true;
     }
@@ -792,12 +720,8 @@ bool ToolLedSettings::applyPotValues() {
       case 6:  if (_wk.scaleChromBlinks != v)     { _wk.scaleChromBlinks = v; changed=true; } break;
       case 7:  if (_wk.scaleChromDurationMs != v) { _wk.scaleChromDurationMs = v; changed=true; } break;
       case 8:  if (_wk.holdFadeMs != v)           { _wk.holdFadeMs = v; changed=true; } break;
-      case 9:  if (_wk.playBlinks != v)           { _wk.playBlinks = v; changed=true; } break;
-      case 10: if (_wk.playDurationMs != v)       { _wk.playDurationMs = v; changed=true; } break;
-      case 11: if (_wk.stopBlinks != v)           { _wk.stopBlinks = v; changed=true; } break;
-      case 12: if (_wk.stopDurationMs != v)       { _wk.stopDurationMs = v; changed=true; } break;
-      case 13: if (_wk.octaveBlinks != v)         { _wk.octaveBlinks = v; changed=true; } break;
-      case 14: if (_wk.octaveDurationMs != v)     { _wk.octaveDurationMs = v; changed=true; } break;
+      case 9:  if (_wk.octaveBlinks != v)         { _wk.octaveBlinks = v; changed=true; } break;
+      case 10: if (_wk.octaveDurationMs != v)     { _wk.octaveDurationMs = v; changed=true; } break;
       default: break;
     }
   }
@@ -809,9 +733,9 @@ bool ToolLedSettings::applyPotValues() {
 // =================================================================
 uint8_t ToolLedSettings::mapCursorToPreviewRow() const {
   if (_page == 0) {
-    if (_cursor < 20) return _cursor;
-    if (_cursor == 20) return 2;   // pulse period → arpeg preview
-    if (_cursor == 21) return 10;  // tick flash duration → tick flash preview
+    if (_cursor < 18) return _cursor;
+    if (_cursor == 18) return 2;   // pulse period → arpeg preview
+    if (_cursor == 19) return 10;  // tick flash duration → tick flash preview
   } else {
     // CONFIRM page: map cursor to relevant color row
     switch (_cursor) {
@@ -820,9 +744,7 @@ uint8_t ToolLedSettings::mapCursorToPreviewRow() const {
       case 4: case 5: return 14;    // scale mode
       case 6: case 7: return 15;    // scale chromatic
       case 8: return 16;              // hold
-      case 9: case 10: return 17;   // play
-      case 11: case 12: return 18;  // stop
-      case 13: case 14: return 19;  // octave
+      case 9: case 10: return 17;   // octave
     }
   }
   return 0xFF;
@@ -968,28 +890,6 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
       break;
     }
     case 17: {
-      // Play: double blink overlay
-      RGBW playCol = resolveColorSlot(_cwk.slots[CSLOT_PLAY_ACK]);
-      RGBW arpCol = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_FG]);
-      if (elapsed >= _wk.playDurationMs) { _prevState = PREV_IDLE; break; }
-      _leds->previewSetPixel(3, arpCol, getRowIntensity(6));  // Static FG arp playing
-      uint16_t unitMs = _wk.playDurationMs / (_wk.playBlinks * 2);
-      bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-      if (on) _leds->previewSetPixel(4, playCol, 100);
-      break;
-    }
-    case 18: {
-      // Stop: double blink overlay
-      RGBW stopCol = resolveColorSlot(_cwk.slots[CSLOT_STOP]);
-      RGBW arpCol = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_FG]);
-      if (elapsed >= _wk.stopDurationMs) { _prevState = PREV_IDLE; break; }
-      _leds->previewSetPixel(3, arpCol, getRowIntensity(6));
-      uint16_t unitMs = _wk.stopDurationMs / (_wk.stopBlinks * 2);
-      bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-      if (on) _leds->previewSetPixel(4, stopCol, 100);
-      break;
-    }
-    case 19: {
       // Octave: blink on single LED (not 2 LEDs)
       RGBW octCol = resolveColorSlot(_cwk.slots[CSLOT_OCTAVE]);
       RGBW normCol = resolveColorSlot(_cwk.slots[CSLOT_NORMAL_FG]);
@@ -1018,7 +918,7 @@ void ToolLedSettings::updatePreview(unsigned long now) {
     return;
   }
 
-  // Continuous preview: only on page 0, rows 0-9 (normal + arp stop/play)
+  // Continuous preview: only on page 0, rows 0-9 (normal + arp stopped/playing)
   if (_page == 0 && _cursor <= 9) {
     renderContinuousPreview(now);
   } else {
@@ -1156,7 +1056,7 @@ void ToolLedSettings::run() {
         if (_cursor > 0) _cursor--;
         else _cursor = count - 1;
         // Skip hidden color rows on page 0
-        while (_page == 0 && _cursor < 20 && isColorRowHidden(_cursor)) {
+        while (_page == 0 && _cursor < 18 && isColorRowHidden(_cursor)) {
           if (_cursor > 0) _cursor--; else _cursor = count - 1;
         }
         _colorField = 0;
@@ -1165,7 +1065,7 @@ void ToolLedSettings::run() {
       } else if (ev.type == NAV_DOWN) {
         if (_cursor < count - 1) _cursor++;
         else _cursor = 0;
-        while (_page == 0 && _cursor < 20 && isColorRowHidden(_cursor)) {
+        while (_page == 0 && _cursor < 18 && isColorRowHidden(_cursor)) {
           if (_cursor < count - 1) _cursor++; else _cursor = 0;
         }
         _colorField = 0;
@@ -1178,7 +1078,7 @@ void ToolLedSettings::run() {
       }
     } else {
       // --- Editing ---
-      if (_page == 0 && _cursor < 20) {
+      if (_page == 0 && _cursor < 18) {
         // COLOR row: ◄► = preset only (pot handles hue + intensity)
         if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
           int8_t dir = ev.type == NAV_RIGHT ? +1 : -1;
@@ -1202,7 +1102,7 @@ void ToolLedSettings::run() {
           originalCwk = _cwk;
           screenDirty = true;
         }
-      } else if (_page == 0 && _cursor >= 20) {
+      } else if (_page == 0 && _cursor >= 18) {
         // Timing rows: ◄► adjust + reseed pot to prevent fight
         if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
           adjustTimingParam(ev.type == NAV_RIGHT ? +1 : -1, ev.accelerated);
@@ -1268,7 +1168,7 @@ void ToolLedSettings::run() {
           drawColorRow(r, sel, edt);
         }
         _ui->drawSection("EVENTS");
-        for (uint8_t r = 10; r < 20; r++) {
+        for (uint8_t r = 10; r < 18; r++) {
           bool sel = (_cursor == r);
           bool edt = sel && _editing;
           drawColorRow(r, sel, edt);
@@ -1280,7 +1180,7 @@ void ToolLedSettings::run() {
 
         // Pulse period
         {
-          bool sel = (_cursor == 20);
+          bool sel = (_cursor == 18);
           bool edt = sel && _editing;
           snprintf(buf, sizeof(buf), "%d ms", _wk.pulsePeriodMs);
           if (edt) {
@@ -1294,7 +1194,7 @@ void ToolLedSettings::run() {
 
         // Tick flash duration
         {
-          bool sel = (_cursor == 21);
+          bool sel = (_cursor == 19);
           bool edt = sel && _editing;
           snprintf(buf, sizeof(buf), "%d ms", _wk.tickFlashDurationMs);
           if (edt) {
@@ -1308,7 +1208,7 @@ void ToolLedSettings::run() {
 
         // Gamma curve
         {
-          bool sel = (_cursor == 22);
+          bool sel = (_cursor == 20);
           bool edt = sel && _editing;
           snprintf(buf, sizeof(buf), "%.1f", (float)_wk.gammaTenths / 10.0f);
           if (edt) {
@@ -1363,25 +1263,11 @@ void ToolLedSettings::run() {
         drawParam(8, "Fade duration:", buf);
         _ui->drawFrameEmpty();
 
-        _ui->drawSection("PLAY");
-        snprintf(buf, sizeof(buf), "%d", _wk.playBlinks);
-        drawParam(9, "Blinks:", buf);
-        snprintf(buf, sizeof(buf), "%d ms", _wk.playDurationMs);
-        drawParam(10, "Duration:", buf);
-        _ui->drawFrameEmpty();
-
-        _ui->drawSection("STOP");
-        snprintf(buf, sizeof(buf), "%d", _wk.stopBlinks);
-        drawParam(11, "Blinks:", buf);
-        snprintf(buf, sizeof(buf), "%d ms", _wk.stopDurationMs);
-        drawParam(12, "Duration:", buf);
-        _ui->drawFrameEmpty();
-
         _ui->drawSection("OCTAVE");
         snprintf(buf, sizeof(buf), "%d", _wk.octaveBlinks);
-        drawParam(13, "Blinks:", buf);
+        drawParam(9, "Blinks:", buf);
         snprintf(buf, sizeof(buf), "%d ms", _wk.octaveDurationMs);
-        drawParam(14, "Duration:", buf);
+        drawParam(10, "Duration:", buf);
       }
 
       _ui->drawFrameEmpty();
@@ -1403,7 +1289,7 @@ void ToolLedSettings::run() {
       if (_confirmDefaults) {
         _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
       } else if (_editing) {
-        if (_page == 0 && _cursor < 20) {
+        if (_page == 0 && _cursor < 18) {
           _ui->drawControlBar(VT_DIM "[</>] PRESET  [P1] HUE  [P2] INT  [RET] SAVE  [q] CANCEL" VT_RESET);
         } else {
           _ui->drawControlBar(VT_DIM "[</>] ADJUST  [RET] SAVE  [q] CANCEL" VT_RESET);

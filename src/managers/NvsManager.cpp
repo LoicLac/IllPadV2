@@ -58,10 +58,6 @@ NvsManager::NvsManager()
   _ledSettings.scaleChromBlinks = 2;
   _ledSettings.scaleChromDurationMs = 200;
   _ledSettings.holdFadeMs = 300;
-  _ledSettings.playBlinks = 2;
-  _ledSettings.playDurationMs = 200;
-  _ledSettings.stopBlinks = 2;
-  _ledSettings.stopDurationMs = 200;
   _ledSettings.octaveBlinks = 3;
   _ledSettings.octaveDurationMs = 300;
 
@@ -70,7 +66,7 @@ NvsManager::NvsManager()
   _colorSlots.version = 1;
   _colorSlots.reserved = 0;
   static const uint8_t defaultPresets[COLOR_SLOT_COUNT] = {
-    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 11, 5, 9
+    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 9
   };
   for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
     _colorSlots.slots[i].presetId = defaultPresets[i];
@@ -503,7 +499,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
                           uint8_t* padOrder, uint8_t* bankPads,
                           uint8_t* rootPads, uint8_t* modePads,
                           uint8_t& chromaticPad, uint8_t& holdPad,
-                          uint8_t& playStopPad, uint8_t* octavePads,
+                          uint8_t* octavePads,
                           PotRouter& potRouter, SettingsStore& settings) {
   Preferences prefs;
 
@@ -707,11 +703,10 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
                               EEPROM_MAGIC, ARPPAD_VERSION, &aps, sizeof(aps))) {
       validateArpPadStore(aps);
       holdPad     = aps.holdPad;
-      playStopPad = aps.playStopPad;
       memcpy(octavePads, aps.octavePads, 4);
       #if DEBUG_SERIAL
-      Serial.printf("[NVS] Arp pads loaded (v2 store): hold=%d ps=%d oct=%d,%d,%d,%d\n",
-                    holdPad, playStopPad, octavePads[0], octavePads[1],
+      Serial.printf("[NVS] Arp pads loaded (v2 store): hold=%d oct=%d,%d,%d,%d\n",
+                    holdPad, octavePads[0], octavePads[1],
                     octavePads[2], octavePads[3]);
       #endif
     }

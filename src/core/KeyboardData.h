@@ -146,7 +146,7 @@ static const char* const COLOR_PRESET_NAMES[COLOR_PRESET_COUNT] = {
 // =================================================================
 // Color Slots (Tool 7 COLOR page)
 // =================================================================
-#define COLOR_SLOT_COUNT       13
+#define COLOR_SLOT_COUNT       11
 #define COLOR_SLOT_NVS_KEY     "ledcolors"
 #define COLOR_SLOT_MAGIC       0xC010
 
@@ -161,8 +161,6 @@ enum ColorSlotId : uint8_t {
   CSLOT_SCALE_MODE,
   CSLOT_SCALE_CHROM,
   CSLOT_HOLD,
-  CSLOT_PLAY_ACK,
-  CSLOT_STOP,
   CSLOT_OCTAVE
 };
 
@@ -232,7 +230,7 @@ inline RGBW resolveColorSlot(const ColorSlot& slot) {
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       3
+#define LED_SETTINGS_VERSION       4
 
 struct LedSettingsStore {
   uint16_t magic;
@@ -266,10 +264,6 @@ struct LedSettingsStore {
   uint8_t  scaleChromBlinks;      // default 2
   uint16_t scaleChromDurationMs;  // default 200
   uint16_t holdFadeMs;            // default 300 (fade IN for ON, fade OUT for OFF)
-  uint8_t  playBlinks;            // 1-3, default 2
-  uint16_t playDurationMs;        // 100-500, default 200
-  uint8_t  stopBlinks;            // 1-3, default 2
-  uint16_t stopDurationMs;        // 100-500, default 200
   uint8_t  octaveBlinks;          // default 3
   uint16_t octaveDurationMs;      // default 300
 };
@@ -375,16 +369,15 @@ struct ScalePadStore {
 static_assert(sizeof(ScalePadStore) <= NVS_BLOB_MAX_SIZE, "ScalePadStore exceeds NVS blob max");
 
 #define ARPPAD_NVS_KEY      "pads"
-#define ARPPAD_VERSION      1
+#define ARPPAD_VERSION      2
 
 struct ArpPadStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  reserved;
   uint8_t  holdPad;
-  uint8_t  playStopPad;
   uint8_t  octavePads[4];
-  uint8_t  _pad[2];      // alignment to 12 bytes
+  uint8_t  _pad[3];      // alignment to 12 bytes
 };
 static_assert(sizeof(ArpPadStore) <= NVS_BLOB_MAX_SIZE, "ArpPadStore exceeds NVS blob max");
 
@@ -400,7 +393,7 @@ struct BankTypeStore {
 };
 static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds NVS blob max");
 
-#define COLOR_SLOT_VERSION  1
+#define COLOR_SLOT_VERSION  2
 
 // =================================================================
 // PotTarget — all possible pot-controlled parameters
@@ -524,7 +517,6 @@ inline void validateScalePadStore(ScalePadStore& s) {
 
 inline void validateArpPadStore(ArpPadStore& s) {
   if (s.holdPad >= NUM_KEYS) s.holdPad = 23;
-  if (s.playStopPad >= NUM_KEYS) s.playStopPad = 24;
   for (uint8_t i = 0; i < 4; i++) {
     if (s.octavePads[i] >= NUM_KEYS) s.octavePads[i] = 25 + i;
   }
@@ -566,10 +558,6 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
   if (s.scaleChromBlinks < 1 || s.scaleChromBlinks > 3) s.scaleChromBlinks = 2;
   if (s.scaleChromDurationMs < 100 || s.scaleChromDurationMs > 500) s.scaleChromDurationMs = 200;
   if (s.holdFadeMs < 100 || s.holdFadeMs > 600) s.holdFadeMs = 300;
-  if (s.playBlinks < 1 || s.playBlinks > 3) s.playBlinks = 2;
-  if (s.playDurationMs < 100 || s.playDurationMs > 500) s.playDurationMs = 200;
-  if (s.stopBlinks < 1 || s.stopBlinks > 3) s.stopBlinks = 2;
-  if (s.stopDurationMs < 100 || s.stopDurationMs > 500) s.stopDurationMs = 200;
   if (s.octaveBlinks < 1 || s.octaveBlinks > 3) s.octaveBlinks = 3;
   if (s.octaveDurationMs < 100 || s.octaveDurationMs > 500) s.octaveDurationMs = 300;
 }

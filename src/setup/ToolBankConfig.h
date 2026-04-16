@@ -29,7 +29,7 @@ private:
   // Pot navigation
   SetupPotInput _pots;
   int32_t _potBankIdx;       // 0-7 (nav mode)
-  int32_t _potComboState;    // 0-3 combined (edit mode)
+  int32_t _potComboState;    // 0-2 combined (edit mode)
 };
 
 #endif // TOOL_BANK_CONFIG_H

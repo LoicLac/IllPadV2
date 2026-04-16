@@ -21,9 +21,7 @@ enum ConfirmType : uint8_t {
   CONFIRM_SCALE_CHROM  = 4,
   CONFIRM_HOLD_ON      = 5,
   CONFIRM_HOLD_OFF     = 6,
-  CONFIRM_PLAY         = 7,
-  CONFIRM_STOP         = 8,
-  CONFIRM_OCTAVE       = 9,
+  CONFIRM_OCTAVE       = 7,
 };
 
 class LedController {
@@ -131,7 +129,7 @@ private:
   RGBW _colArpFg, _colArpBg;
   RGBW _colTickFlash;
   RGBW _colBankSwitch, _colScaleRoot, _colScaleMode, _colScaleChrom;
-  RGBW _colHold, _colPlayAck, _colStop, _colOctave;
+  RGBW _colHold, _colOctave;
 
   // LED settings (0-100 perceptual %)
   uint8_t  _normalFgIntensity;
@@ -153,10 +151,6 @@ private:
   uint8_t  _scaleChromBlinks;
   uint16_t _scaleChromDurationMs;
   uint16_t _holdFadeMs;
-  uint8_t  _playBlinks;
-  uint16_t _playDurationMs;
-  uint8_t  _stopBlinks;
-  uint16_t _stopDurationMs;
   uint8_t  _octaveBlinks;
   uint16_t _octaveDurationMs;
 

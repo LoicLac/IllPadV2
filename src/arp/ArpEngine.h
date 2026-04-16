@@ -8,34 +8,28 @@
 class MidiTransport;
 
 // =================================================================
-// ArpState — named states derived from boolean flags
+// ArpState — named states derived from runtime flags
 // =================================================================
-// Read-only classification of the 4 flags (_positionCount, _holdOn,
-// _playing, _waitingForQuantize). Does NOT replace the flags —
+// Read-only classification. Does NOT replace the flags —
 // just names the current combination for clearer control flow.
 
 enum class ArpState {
   IDLE,                // _positionCount == 0
-  WAITING_QUANTIZE,    // waiting for beat/bar boundary before first step
-  PLAYING,             // actively stepping (or HOLD OFF auto-play)
-  HELD_STOPPED         // _holdOn && !_playing — waiting for play/stop pad
+  WAITING_QUANTIZE,    // waiting for beat boundary before first step
+  PLAYING,             // actively stepping (OFF auto-play or ON captured)
 };
 
 // =================================================================
 // Event Queue — time-based noteOn/noteOff scheduling
 // =================================================================
-// Enables gate length (noteOff delayed), shuffle (noteOn delayed),
-// and note overlap (multiple notes ringing simultaneously).
-// Max 64 pending events per engine allows extreme overlap scenarios
-// (e.g. gate > 1.0 at fast divisions = many notes ringing at once).
 
 static const uint8_t MAX_PENDING_EVENTS = 64;
 
 struct PendingEvent {
-  uint32_t fireTimeUs;   // micros() timestamp when this event should fire
-  uint8_t  note;         // MIDI note number (0-127)
+  uint32_t fireTimeUs;
+  uint8_t  note;
   uint8_t  velocity;     // 0 = noteOff, >0 = noteOn
-  bool     active;       // true = slot in use, false = free for reuse
+  bool     active;
 };
 
 // =================================================================
@@ -53,10 +47,10 @@ public:
   void setDivision(ArpDivision div);
   void setGateLength(float gate);              // 0.0-1.0 (or beyond for overlap)
   void setShuffleDepth(float depth);           // 0.0-1.0
-  void setShuffleTemplate(uint8_t tmpl);       // 0-4, index into groove templates
+  void setShuffleTemplate(uint8_t tmpl);       // 0-9, index into groove templates
   void setBaseVelocity(uint8_t vel);           // 1-127
   void setVelocityVariation(uint8_t pct);      // 0-100
-  void setStartMode(uint8_t mode);             // ArpStartMode (0=immediate, 1=beat, 2=bar)
+  void setStartMode(uint8_t mode);             // ArpStartMode (0=immediate, 1=beat)
 
   // --- Pile management ---
   // Stores padOrder positions (0-47), NOT MIDI notes.
@@ -69,28 +63,24 @@ public:
   void setScaleConfig(const ScaleConfig& scale);
   void setPadOrder(const uint8_t* padOrder);
 
-  // --- Hold + Transport ---
-  void setHold(bool on);
-  bool isHoldOn() const;
-  void playStop(MidiTransport& transport);     // Toggle, restart from beginning
+  // --- Capture (OFF/ON switch) ---
+  // OFF→ON (capture): pile snapshot, arp continues. If paused pile exists, resume.
+  // ON→OFF (release): if fingers down (excl. holdPad) → pile cleared, live mode.
+  //                    if no fingers → pile kept, arp paused (resume on next ON).
+  void setCaptured(bool captured, MidiTransport& transport,
+                   const uint8_t* keyIsPressed, uint8_t holdPadIdx);
+  bool isCaptured() const;
   bool isPlaying() const;
 
   // --- Core tick (called by ArpScheduler when a step fires) ---
-  // stepDurationUs = real-time duration of one step in microseconds,
-  // computed by ArpScheduler from BPM and division.
-  // globalTick = absolute clock tick (for quantize boundary check).
-  // currentTick = per-step synthesized tick (for burst handling).
   void tick(MidiTransport& transport, uint32_t stepDurationUs,
             uint32_t currentTick, uint32_t globalTick);
 
   // --- Event processing (called every loop iteration by ArpScheduler) ---
-  // Fires any pending noteOn/noteOff events whose time has arrived.
-  // This is the real-time heart of the gate/shuffle system.
   void processEvents(MidiTransport& transport);
 
   // --- Emergency flush (called on stop, clear, etc.) ---
-  // Immediately fires all pending noteOffs and sweeps refcount to zero.
-  // Guarantees no stuck notes in the DAW.
+  // Immediately fires all pending noteOffs, sweeps refcount, sets _playing=false.
   void flushPendingNoteOffs(MidiTransport& transport);
 
   // --- Queries ---
@@ -103,7 +93,7 @@ public:
   uint8_t     getShuffleTemplate() const;
   uint8_t     getBaseVelocity() const;
   uint8_t     getVelocityVariation() const;
-  bool        consumeTickFlash();   // Returns true once after each arp step, then resets
+  bool        consumeTickFlash();
 
 private:
   // --- Configuration ---
@@ -113,59 +103,45 @@ private:
   ArpDivision _division;
   float       _gateLength;
   float       _shuffleDepth;
-  uint8_t     _shuffleTemplate;    // 0-4, index into SHUFFLE_TEMPLATES[]
+  uint8_t     _shuffleTemplate;
   uint8_t     _baseVelocity;
   uint8_t     _velocityVariation;
 
   // --- Note pile (stores padOrder positions 0-47, NOT MIDI notes) ---
-  uint8_t _positions[MAX_ARP_NOTES];      // Sorted by padOrder position
+  uint8_t _positions[MAX_ARP_NOTES];
   uint8_t _positionCount;
-  uint8_t _positionOrder[MAX_ARP_NOTES];  // Chronological add order (for ARP_ORDER)
+  uint8_t _positionOrder[MAX_ARP_NOTES];
   uint8_t _orderCount;
 
-  // --- Built sequence (positions × octaves, resolved at tick time) ---
-  uint8_t _sequence[MAX_ARP_SEQUENCE];    // Encoded: pos + octave * 48
+  // --- Built sequence (positions x octaves, resolved at tick time) ---
+  uint8_t _sequence[MAX_ARP_SEQUENCE];
   uint8_t _sequenceLen;
   bool    _sequenceDirty;
 
   // --- Scale context for tick-time resolution ---
   ScaleConfig    _scale;
-  const uint8_t* _padOrder;   // Pointer to global padOrder[48]
+  const uint8_t* _padOrder;
 
   // --- Playback state ---
   int16_t _stepIndex;
   bool    _playing;
-  bool    _holdOn;
+  bool    _captured;      // true = ON (pile frozen), false = OFF (live)
+  bool    _pausedPile;    // pile preserved after ON→OFF with no fingers
 
-  // --- Event queue (static array, no heap allocation) ---
-  // Each tick schedules up to 2 events (1 noteOn + 1 noteOff).
-  // With long gate or fast division, many events coexist = overlap.
+  // --- Event queue ---
   PendingEvent _events[MAX_PENDING_EVENTS];
 
   // --- Reference counting for overlapping notes ---
-  // Tracks how many active "instances" of each MIDI note are ringing.
-  // MIDI noteOn is only sent when refcount goes 0→1 (first instance).
-  // MIDI noteOff is only sent when refcount goes 1→0 (last instance ends).
-  // This prevents the classic overlap bug where a late noteOff kills
-  // a note that was just re-triggered by a newer step.
   uint8_t _noteRefCount[128];
 
   // --- Shuffle state ---
-  // Step counter increments each arp step. Resets on:
-  //   - play/stop toggle
-  //   - pile goes from 0 to 1 note
-  //   - pattern change
-  // Used as index into groove template: template[counter % 16]
-  uint16_t _shuffleStepCounter;  // Only used modulo 16, uint16_t avoids groove reset at 255
-  bool    _tickFlash;            // Set true on each tick(), consumed by LedController
-  bool    _waitingForQuantize;  // True after play until quantize boundary reached
-  uint8_t _quantizeMode;        // ArpStartMode (0=immediate, 1=beat, 2=bar)
+  uint16_t _shuffleStepCounter;
+  bool    _tickFlash;
+  bool    _waitingForQuantize;
+  uint8_t _quantizeMode;        // ArpStartMode (0=immediate, 1=beat)
 
-  // B-001 + B-CODE-1 fix (2026-04-07): sentinel-based boundary crossing detection.
-  // Replaces the (globalTick % boundary == 0) exact-equality check that could
-  // skip a boundary when ClockManager::generateTicks() catches up multiple ticks
-  // in one call (up to 4 — see ClockManager.cpp:181-203).
-  // Value 0xFFFFFFFF = "fresh wait, fire on next observed tick" (sentinel).
+  // Boundary crossing detection for quantized start.
+  // Value 0xFFFFFFFF = sentinel: first tick initializes tracking.
   uint32_t _lastDispatchedGlobalTick;
 
   // --- State classification ---
@@ -179,11 +155,7 @@ private:
   uint8_t effectiveOctaveRange() const;
 
   // --- Event helpers ---
-  // Find a free slot in _events[] and schedule. Returns false if queue full.
   bool scheduleEvent(uint32_t fireTimeUs, uint8_t note, uint8_t velocity);
-
-  // Reference-counted MIDI send. Only sends actual MIDI message
-  // on refcount transitions (0→1 for noteOn, 1→0 for noteOff).
   void refCountNoteOn(MidiTransport& transport, uint8_t note, uint8_t velocity);
   void refCountNoteOff(MidiTransport& transport, uint8_t note);
 };
