@@ -144,7 +144,7 @@ void PotRouter::getRangeForTarget(PotTarget t, uint16_t& lo, uint16_t& hi) {
     case TARGET_GATE_LENGTH:        lo = 0; hi = 4095; break;
     case TARGET_SHUFFLE_DEPTH:      lo = 0; hi = 4095; break;
     case TARGET_DIVISION:           lo = 0; hi = 8; break;
-    case TARGET_PATTERN:            lo = 0; hi = 4; break;
+    case TARGET_PATTERN:            lo = 0; hi = NUM_ARP_PATTERNS - 1; break;
     case TARGET_SHUFFLE_TEMPLATE:   lo = 0; hi = NUM_SHUFFLE_TEMPLATES - 1; break;
     case TARGET_BASE_VELOCITY:      lo = 1; hi = 127; break;
     case TARGET_VELOCITY_VARIATION: lo = 0; hi = 100; break;
@@ -266,7 +266,7 @@ void PotRouter::seedCatchValues(bool keepGlobalCatch) {
         norm = (float)_division / 8.0f;
         break;
       case TARGET_PATTERN:
-        norm = (float)_pattern / 4.0f;
+        norm = (float)_pattern / (float)(NUM_ARP_PATTERNS - 1);
         break;
       case TARGET_SHUFFLE_TEMPLATE:
         norm = (float)_shuffleTemplate / (float)(NUM_SHUFFLE_TEMPLATES - 1);
@@ -451,8 +451,8 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       break;
     }
     case TARGET_PATTERN: {
-      uint8_t pat = (uint8_t)adcToRange(adc, 0, 4);
-      if (pat > 4) pat = 4;
+      uint8_t pat = (uint8_t)adcToRange(adc, 0, NUM_ARP_PATTERNS - 1);
+      if (pat >= NUM_ARP_PATTERNS) pat = NUM_ARP_PATTERNS - 1;
       _pattern = (ArpPattern)pat;
       break;
     }

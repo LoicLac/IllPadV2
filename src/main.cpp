@@ -827,7 +827,11 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     static uint8_t  s_dbgShufTpl  = 0xFF;
 
     static const char* s_divNames[] = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64"};
-    static const char* s_patNames[] = {"Up","Down","UpDown","Random","Order"};
+    static const char* s_patNames[] = {
+      "Up","Down","UpDown","Random","Order",
+      "Cascade","Converge","Diverge","PedalUp",
+      "UpOct","DownOct","Chord","OctWave","OctBounce","Probability"
+    };
 
     float    shape   = s_potRouter.getResponseShape();
     uint16_t slew    = s_potRouter.getSlewRate();
@@ -861,7 +865,7 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     if ((int)(gate * 100) != (int)(s_dbgGate * 100))       { Serial.printf("[POT] Gate=%.2f\n", gate); s_dbgGate = gate; }
     if ((int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) { Serial.printf("[POT] ShufDepth=%.2f\n", shufDep); s_dbgShufDep = shufDep; }
     if (div != s_dbgDiv)     { Serial.printf("[POT] Division=%s\n", div < 9 ? s_divNames[div] : "?"); s_dbgDiv = div; }
-    if (pat != s_dbgPat)     { Serial.printf("[POT] Pattern=%s\n", pat < 5 ? s_patNames[pat] : "?"); s_dbgPat = pat; }
+    if (pat != s_dbgPat)     { Serial.printf("[POT] Pattern=%s\n", pat < NUM_ARP_PATTERNS ? s_patNames[pat] : "?"); s_dbgPat = pat; }
     if (shufTpl != s_dbgShufTpl) { Serial.printf("[POT] ShufTpl=%u\n", shufTpl); s_dbgShufTpl = shufTpl; }
   }
   #endif

@@ -296,9 +296,9 @@ void ToolPotMapping::printTargetDescription(PotTarget t) {
       _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter." VT_RESET);
       break;
     case TARGET_PATTERN:
-      _ui->drawFrameLine(VT_BRIGHT_WHITE "Pattern" VT_RESET VT_DIM "  --  Arp playback direction" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Up / Down / UpDown / Random / Order (insertion order)." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Changing pattern resets shuffle step counter." VT_RESET);
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Pattern" VT_RESET VT_DIM "  --  Arp playback shape (15 patterns)" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Up Down UpDown Random Order | Cascade Converge Diverge PedalUp" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "UpOct DownOct Chord OctWave OctBounce Probability" VT_RESET);
       _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter." VT_RESET);
       break;
     case TARGET_BASE_VELOCITY:

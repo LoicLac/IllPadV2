@@ -309,12 +309,22 @@ struct BankSlot {
 // =================================================================
 
 enum ArpPattern : uint8_t {
-  ARP_UP       = 0,
-  ARP_DOWN     = 1,
-  ARP_UP_DOWN  = 2,
-  ARP_RANDOM   = 3,
-  ARP_ORDER    = 4,
-  NUM_ARP_PATTERNS = 5
+  ARP_UP             = 0,
+  ARP_DOWN           = 1,
+  ARP_UP_DOWN        = 2,
+  ARP_RANDOM         = 3,
+  ARP_ORDER          = 4,
+  ARP_CASCADE        = 5,
+  ARP_CONVERGE       = 6,
+  ARP_DIVERGE        = 7,
+  ARP_PEDAL_UP       = 8,
+  ARP_UP_OCTAVE      = 9,
+  ARP_DOWN_OCTAVE    = 10,
+  ARP_CHORD          = 11,
+  ARP_OCTAVE_WAVE    = 12,
+  ARP_OCTAVE_BOUNCE  = 13,
+  ARP_PROBABILITY    = 14,
+  NUM_ARP_PATTERNS   = 15
 };
 
 enum ArpDivision : uint8_t {

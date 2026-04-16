@@ -176,6 +176,7 @@ private:
 
   // --- Sequence building ---
   void rebuildSequence();
+  uint8_t effectiveOctaveRange() const;
 
   // --- Event helpers ---
   // Find a free slot in _events[] and schedule. Returns false if queue full.
