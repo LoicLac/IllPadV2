@@ -72,8 +72,10 @@ static uint8_t s_padOrder[NUM_KEYS];
 static uint8_t s_lastKeys[NUM_KEYS];
 
 // Play/Stop pad (ARPEG only, always active — not gated by button hold)
-static uint8_t s_playStopPad = 24;  // Default, overwritten by NVS
-static bool    s_lastPlayStopState = false;
+static uint8_t  s_playStopPad = 24;  // Default, overwritten by NVS
+static bool     s_lastPlayStopState = false;
+static uint32_t s_playStopPressTime = 0;
+static bool     s_playStopCleared   = true;  // Start true to prevent false trigger at boot
 
 // Double-tap detection (ARPEG HOLD mode)
 static uint32_t s_lastPressTime[NUM_KEYS];
@@ -675,6 +677,8 @@ static void handlePlayStopPad(const SharedKeyboardState& state,
   if (s_playStopPad < NUM_KEYS && psSlot.type == BANK_ARPEG
       && psSlot.arpEngine && holdForPS) {
     bool psPressed = state.keyIsPressed[s_playStopPad];
+
+    // Press edge: toggle play/stop (instant)
     if (psPressed && !s_lastPlayStopState) {
       psSlot.arpEngine->playStop(s_transport);
       if (psSlot.arpEngine->isPlaying()) {
@@ -682,7 +686,21 @@ static void handlePlayStopPad(const SharedKeyboardState& state,
       } else {
         s_leds.triggerConfirm(CONFIRM_STOP);
       }
+      s_playStopPressTime = millis();
+      s_playStopCleared = false;
     }
+
+    // Long press (>500ms): clear arp pile
+    if (psPressed && !s_playStopCleared
+        && (millis() - s_playStopPressTime) >= 500) {
+      psSlot.arpEngine->clearAllNotes(s_transport);
+      s_leds.triggerConfirm(CONFIRM_STOP);
+      s_playStopCleared = true;
+      #if DEBUG_SERIAL
+      Serial.println("[ARP] Play/Stop long-press: pile cleared");
+      #endif
+    }
+
     s_lastPlayStopState = psPressed;
   } else {
     // Not ARPEG or HOLD OFF: reset edge detection so it triggers correctly when switching
