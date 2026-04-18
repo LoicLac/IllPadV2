@@ -369,9 +369,33 @@ NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never bl
 - **Pressure tuning constants** in HardwareConfig.h (thresholds, smoothing, slew, I2C clock).
 - **platformio.ini** (unless adding lib_deps).
 
-## CRITICAL — KEEP IN SYNC
+## CRITICAL — READ FIRST, KEEP IN SYNC
 
-- **`docs/reference/architecture-briefing.md`** — runtime data flows, inter-core sync points, invariants, dirty flags. Used by subagents (testmusicien, audit) and new sessions for quick context. **Update when you change a function in any of the 5 documented flows** (pad→MIDI, arp tick, bank switch, scale change, pot→param).
+### `docs/reference/architecture-briefing.md` — navigation index for this codebase
+
+**Read-first protocol (D).** Before modifying any file in this repo, consult
+the briefing. Start at §0 Scope Triage — three questions route you to the
+right subset of sections :
+
+- **Exploring / designing** (open-ended, e.g. "add a loop mode") → load §1
+  Mental Models + §2 Flows + §4 Setup↔Runtime + §5 Patterns + §6 Affinity
+  Matrix. Read broadly. Don't look for a recipe.
+- **Tight modification** (one param, one bug) → check §3 Task Index. If
+  found, follow it. If not, use §8 Domain Entry Points + relevant §2 flow.
+- **Unsure** → read §0 and triage yourself.
+
+The briefing is an index, not decorative documentation. It exists to let a
+session read 2-4 files instead of grepping the whole codebase. Skipping it
+produces brittle changes and wastes context.
+
+**Keep-in-sync protocol (F).** If you modify a function or pattern
+referenced in §2 (Flows), §4 (Setup↔Runtime contracts), §5 (Patterns), or
+§8 (Domain Entry Points), update the corresponding section in the SAME
+commit. A stale briefing is a bug.
+
+Exceptions : typo fixes, comment edits, log-only changes, refactors internal
+to a function (signature unchanged) do not require briefing updates. Only
+semantic or structural changes do.
 - **`docs/reference/vt100-design-guide.md`** — VT100 terminal aesthetic spec: Unicode box drawing, color palette, navigation patterns, frame primitives, grid system, save feedback, Python script conventions. Part 1 is generic (reusable across instruments), Part 2 is ILLPAD-specific (tool layouts, role categories, amber palette). **Read before touching any setup UI code. Update when adding new visual patterns or changing the aesthetic.**
 - **`docs/reference/nvs-reference.md`** — NVS Store struct catalog, load/save/check patterns, how to add a namespace. **Read before touching any NVS code. Update when adding a new Store struct or namespace.**
 - **`ItermCode/vt100_serial_terminal.py`** — the Python serial terminal is the only way to interact with setup mode. When setup tools (`src/setup/`) change input handling, escape sequences, line endings, or VT100 rendering, **always verify and update the terminal script**. The two must stay synchronised (e.g., arrow key atomic send, line ending normalization, DEC 2026 sync support).
