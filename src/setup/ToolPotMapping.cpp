@@ -521,13 +521,13 @@ void ToolPotMapping::drawScreen() {
 
   // Control bar
   if (_confirmDefaults) {
-    _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
+    _ui->drawControlBar(CBAR_CONFIRM_ANY);
   } else if (_confirmSteal) {
-    _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
+    _ui->drawControlBar(CBAR_CONFIRM_ANY);
   } else if (_ccEditing) {
-    _ui->drawControlBar(VT_DIM "[</>] CC#  [P1] sweep  [RET] CONFIRM  [q] CANCEL" VT_RESET);
+    _ui->drawControlBar(VT_DIM "[</>] CC#  [P1] sweep" CBAR_SEP "[RET] CONFIRM" CBAR_SEP "[q] CANCEL" VT_RESET);
   } else if (_editing) {
-    _ui->drawControlBar(VT_DIM "[</>] CYCLE POOL  [P1] scroll  [RET] ASSIGN  [q] CANCEL" VT_RESET);
+    _ui->drawControlBar(VT_DIM "[</>] CYCLE POOL" CBAR_SEP "[RET] ASSIGN" CBAR_SEP "[q] CANCEL" VT_RESET);
   } else {
     {
       char ctrlBuf[128];
@@ -586,11 +586,8 @@ void ToolPotMapping::run() {
     _pots.update();
     _leds->update();
 
-    // --- Pot edit handling ---
-    if (_editing && !_ccEditing && _pots.getMove(0)) {
-      _poolIdx = (uint8_t)_potPoolIdx;
-      screenDirty = true;
-    } else if (_ccEditing && _pots.getMove(0)) {
+    // --- Pot edit handling (CC# sub-mode only — pool cycling is keyboard-only) ---
+    if (_ccEditing && _pots.getMove(0)) {
       _ccNumber = (uint8_t)_potCcNum;
       screenDirty = true;
     }
@@ -610,7 +607,8 @@ void ToolPotMapping::run() {
 
     // --- Defaults confirmation ---
     if (_confirmDefaults) {
-      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+      ConfirmResult r = SetupUI::parseConfirm(ev);
+      if (r == CONFIRM_YES) {
         if (_contextNormal) {
           memcpy(_wk.normalMap, PotRouter::DEFAULT_MAPPING.normalMap,
                  sizeof(PotMapping) * POT_MAPPING_SLOTS);
@@ -624,7 +622,7 @@ void ToolPotMapping::run() {
         _confirmDefaults = false;
         buildPool();
         screenDirty = true;
-      } else if (ev.type != NAV_NONE) {
+      } else if (r == CONFIRM_NO) {
         _confirmDefaults = false;
         screenDirty = true;
       }
@@ -634,7 +632,8 @@ void ToolPotMapping::run() {
 
     // --- Steal confirmation ---
     if (_confirmSteal) {
-      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+      ConfirmResult r = SetupUI::parseConfirm(ev);
+      if (r == CONFIRM_YES) {
         PotMapping* map = currentMap();
         uint8_t slot = cursorToSlot();
         PotMapping backupSource = map[_stealSourceSlot];
@@ -655,7 +654,7 @@ void ToolPotMapping::run() {
           _confirmSteal = false;
         }
         screenDirty = true;
-      } else if (ev.type != NAV_NONE) {
+      } else if (r == CONFIRM_NO) {
         _confirmSteal = false;
         screenDirty = true;
       }
@@ -715,9 +714,8 @@ void ToolPotMapping::run() {
         } else {
           currentMap()[slot] = {TARGET_EMPTY, 0};
         }
-        // Re-seed pot for pool navigation (back from CC# cancel)
-        _potPoolIdx = _poolIdx;
-        _pots.seed(0, &_potPoolIdx, 0, _poolCount - 1, POT_RELATIVE, _poolCount * 2);
+        // Pot disabled — pool cycling is keyboard-only
+        _pots.disable(0);
         screenDirty = true;
       }
       delay(5);
@@ -770,26 +768,22 @@ void ToolPotMapping::run() {
             break;
           }
         }
-        // Seed pot for pool navigation
-        _potPoolIdx = _poolIdx;
-        _pots.seed(0, &_potPoolIdx, 0, _poolCount - 1, POT_RELATIVE, _poolCount * 2);
+        _pots.disable(0);  // Pool cycling is keyboard-only
         screenDirty = true;
       }
     } else {
-      // Editing: Left/Right = cycle pool
+      // Editing: Left/Right = cycle pool (keyboard only)
       if (ev.type == NAV_LEFT) {
         if (_poolCount > 0) {
           if (_poolIdx == 0) _poolIdx = _poolCount - 1;
           else _poolIdx--;
         }
-        _potPoolIdx = _poolIdx;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_RIGHT) {
         if (_poolCount > 0) {
           _poolIdx++;
           if (_poolIdx >= _poolCount) _poolIdx = 0;
         }
-        _potPoolIdx = _poolIdx;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         assignCurrentTarget();

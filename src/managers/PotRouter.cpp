@@ -253,11 +253,11 @@ void PotRouter::seedCatchValues(bool keepGlobalCatch) {
         norm = (float)_pitchBend / 16383.0f;
         break;
       case TARGET_GATE_LENGTH:
-        // Inverse of piecewise: gate 0.05-1.0 → 0-75%, gate 1.0-3.0 → 75-100%
+        // Inverse of piecewise: gate 0.005-1.0 → 0-50%, gate 1.0-8.0 → 50-100%
         if (_gateLength <= 1.0f)
-          norm = (_gateLength - 0.05f) / 0.95f * 0.75f;
+          norm = (_gateLength - 0.005f) / 0.995f * 0.5f;
         else
-          norm = 0.75f + (_gateLength - 1.0f) / 2.0f * 0.25f;
+          norm = 0.5f + (_gateLength - 1.0f) / 7.0f * 0.5f;
         break;
       case TARGET_SHUFFLE_DEPTH:
         norm = _shuffleDepth;
@@ -576,15 +576,15 @@ float PotRouter::adcToFloat(float adc) const {
   return v;
 }
 
-// Piecewise gate mapping: 0-75% pot = 0.05-1.0, 75-100% pot = 1.0-3.0
+// Piecewise gate mapping: 0-50% pot = 0.005-1.0, 50-100% pot = 1.0-8.0
 float PotRouter::adcToGate(float adc) const {
   float norm = adc / 4095.0f;
   if (norm < 0.0f) norm = 0.0f;
   if (norm > 1.0f) norm = 1.0f;
-  if (norm <= 0.75f) {
-    return 0.05f + norm * (0.95f / 0.75f);  // 0.05 → 1.0
+  if (norm <= 0.5f) {
+    return 0.005f + norm * (0.995f / 0.5f);  // 0.005 → 1.0
   }
-  return 1.0f + (norm - 0.75f) * (2.0f / 0.25f);  // 1.0 → 3.0
+  return 1.0f + (norm - 0.5f) * (7.0f / 0.5f);  // 1.0 → 8.0
 }
 
 bool PotRouter::isPerBankTarget(PotTarget t) const {

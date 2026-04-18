@@ -68,9 +68,8 @@ private:
   void samplePotBaselines();
   int8_t detectMovedPot(bool btnLeftHeld);
 
-  // Pot navigation (edit mode only — pool + CC#)
+  // Pot input (CC# edit only — all nav is keyboard-driven)
   SetupPotInput _pots;
-  int32_t _potPoolIdx;     // Pool index (edit mode)
   int32_t _potCcNum;       // CC# 0-127 (CC edit mode)
 
   // NVS

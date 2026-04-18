@@ -3,8 +3,30 @@
 
 #include <stdint.h>
 #include "../core/HardwareConfig.h"
+#include "InputParser.h"
 
 class LedController;
+
+// =================================================================
+// Confirmation result — used by parseConfirm() to unify y/n handlers
+// =================================================================
+enum ConfirmResult : uint8_t {
+  CONFIRM_PENDING = 0,   // no decisive input yet — keep prompt visible
+  CONFIRM_YES     = 1,   // user pressed y/Y
+  CONFIRM_NO      = 2,   // any other key → cancel (preserves legacy behavior)
+};
+
+// =================================================================
+// Control bar templates — unified across tools
+// Pair each with the matching parseConfirm*() semantics in the handler.
+// =================================================================
+// Loose confirm: y/Y = yes, any other key cancels (most tools)
+#define CBAR_CONFIRM_ANY     "\033[2m[y] confirm  [any] cancel\033[0m"
+// Strict confirm: y/Y = yes, n/N = no, everything else ignored (Calibration, reboot)
+#define CBAR_CONFIRM_STRICT  "\033[1m[y] YES  [n] NO\033[0m"
+// Group separator for control bars — use between logical groups of keys
+// Usage:  VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT" CBAR_SEP "[q] EXIT" VT_RESET
+#define CBAR_SEP             "  \xe2\x94\x82  "  // 2sp + │ + 2sp
 
 // =================================================================
 // VT100 ANSI Escape Codes
@@ -62,6 +84,13 @@ class LedController;
 #define UNI_CT  "\xe2\x94\xac"  // ┬
 #define UNI_CB  "\xe2\x94\xb4"  // ┴
 #define UNI_CX  "\xe2\x94\xbc"  // ┼
+
+// Cockpit accents (Apollo panel)
+#define UNI_RIVET  "\xe2\x97\x89"  // ◉ (fisheye) — rivet/bolt head
+#define UNI_LED_ON   "\xe2\x97\x8f"  // ● BLACK CIRCLE — lit indicator
+#define UNI_LED_OFF  "\xe2\x97\x8b"  // ○ WHITE CIRCLE — dim indicator
+#define UNI_BAR_FULL "\xe2\x96\x88"  // █ FULL BLOCK — gauge filled
+#define UNI_BAR_EMPTY "\xe2\x96\x91" // ░ LIGHT SHADE — gauge empty
 
 // iTerm2 proprietary sequences
 #define ITERM_SET_BG       "\033]1337;SetColors=bg=1a0e00\007"
@@ -146,8 +175,43 @@ public:
   // Flash reverse-video header pulse + LED flash (120ms inline)
   void flashSaved();
 
-  // --- Legacy header (kept for backward compat during migration) ---
-  void drawHeader(const char* title, const char* rightText);
+  // --- Confirmation input parsing ---
+  // Factors the inline y/n handler duplicated across all tools.
+  // Preserves legacy "any key cancels" semantics:
+  //   - NAV_NONE           → CONFIRM_PENDING
+  //   - NAV_CHAR y/Y       → CONFIRM_YES
+  //   - anything else      → CONFIRM_NO
+  // Callers still own the prompt rendering.
+  static ConfirmResult parseConfirm(const NavEvent& ev);
+
+  // =================================================================
+  // Cockpit primitives — Apollo-inspired panel accents
+  // =================================================================
+
+  // Step indicator breadcrumb rendered as a full frame line.
+  // Layout:  (1) LABEL ─▸ (2) LABEL ─▸ [[3 LABEL]] ─▸ (4) LABEL ─▸ ...
+  // - current step is highlighted reverse-cyan-bold
+  // - past steps dim green (completed)
+  // - future steps dim white
+  void drawStepIndicator(const char* const* labels, uint8_t count, uint8_t current);
+
+  // Labelled gauge bar: "  LABEL   [████░░░░░░░░░]  NN%"
+  // percent 0..100, label left-aligned, bar right of label, % value at far right.
+  // If selected=true, label + bar are rendered in cyan (cursor highlight).
+  void drawGaugeLine(const char* label, uint8_t percent, bool selected = false);
+
+  // Segmented readout ("Nixie-style") for a single headline value.
+  // Draws 3 successive frame lines : top border, digits row with unit, bottom border.
+  // digits=3 renders ┌───┬───┬───┐, etc. value auto-padded with leading zeros.
+  void drawSegmentedValue(const char* label, uint32_t value, uint8_t digits, const char* unit);
+
+  // Status cluster — a row of ●/○ indicators with inline labels.
+  // Rendered as a single frame line. Lit items use VT_GREEN, unlit VT_DIM.
+  struct StatusItem {
+    const char* label;
+    bool        lit;
+  };
+  void drawStatusCluster(const StatusItem* items, uint8_t count);
 
   // --- Main menu ---
   void printMainMenu();
@@ -163,14 +227,10 @@ public:
                 uint16_t measuredDeltas[], bool done[], int activeKey,
                 uint16_t activeDelta, bool activeIsDone, uint8_t orderMap[]);
 
-  // --- Pad roles grid (colored 5-char labels) ---
-  void drawRolesGrid(const uint8_t roleMap[], const char roleLabels[][6], int activeKey);
-
   // --- LED feedback ---
   void showToolActive(uint8_t toolIndex);
   void showPadFeedback(uint8_t padIndex);
   void showCollision(uint8_t padIndex);
-  void showSaved();  // LED-only (legacy). Prefer flashSaved() for VT100+LED.
 
 private:
   LedController* _leds;

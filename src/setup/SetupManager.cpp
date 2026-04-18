@@ -127,7 +127,7 @@ void SetupManager::run() {
         _ui.drawFrameEmpty();
         _ui.drawFrameLine(VT_YELLOW "Reboot and exit setup?" VT_RESET);
         _ui.drawFrameEmpty();
-        _ui.drawControlBar(VT_BOLD "[y] YES  [n] NO" VT_RESET);
+        _ui.drawControlBar(CBAR_CONFIRM_STRICT);
         _ui.vtFrameEnd();
         // Wait for y/n
         InputParser confirmInput;

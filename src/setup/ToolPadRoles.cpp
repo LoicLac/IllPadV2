@@ -3,36 +3,11 @@
 #include "SetupUI.h"
 #include "../core/CapacitiveKeyboard.h"
 #include "../core/LedController.h"
-#include "../core/PotFilter.h"
 #include "../core/KeyboardData.h"
 #include "../managers/NvsManager.h"
 #include <Arduino.h>
 #include <Preferences.h>
 #include <string.h>
-
-// =================================================================
-// Pool linearisation for pot navigation
-// 6 lines: Clear(1) + Bank(8) + Root(7) + Mode(8) + Octave(4) + Hold(1) = 29
-// =================================================================
-static const uint8_t POOL_OFFSETS[] = {0, 1, 9, 16, 24, 28, 29};
-static const uint8_t TOTAL_POOL_ITEMS = 29;
-
-static void linearToPool(int32_t linear, uint8_t& line, uint8_t& idx) {
-  for (uint8_t i = 0; i < 6; i++) {
-    if (linear < POOL_OFFSETS[i + 1]) {
-      line = i;
-      idx = (uint8_t)(linear - POOL_OFFSETS[i]);
-      return;
-    }
-  }
-  line = 5;
-  idx = 0;
-}
-
-static int32_t poolToLinear(uint8_t line, uint8_t idx) {
-  if (line >= 6) return TOTAL_POOL_ITEMS - 1;
-  return POOL_OFFSETS[line] + idx;
-}
 
 // =================================================================
 // Short labels for pool items
@@ -88,7 +63,6 @@ ToolPadRoles::ToolPadRoles()
     _wkChromPad(0xFF), _wkHoldPad(0xFF),
     _gridRow(0), _gridCol(0), _editing(false),
     _poolLine(0), _poolIdx(0),
-    _confirmSteal(false), _stealFromPad(0xFF),
     _confirmDefaults(false), _confirmClearAll(false), _nvsSaved(false)
 {
   memset(_wkBankPads, 0xFF, sizeof(_wkBankPads));
@@ -481,12 +455,6 @@ void ToolPadRoles::printPadDescription(uint8_t pad) {
 // =================================================================
 
 void ToolPadRoles::drawInfoPanel() {
-  if (_confirmSteal) {
-    _ui->drawFrameLine(VT_YELLOW "Already assigned to pad %d. Replace? (y/n)" VT_RESET,
-                       _stealFromPad + 1);
-    return;
-  }
-
   if (_confirmDefaults) {
     _ui->drawFrameLine(VT_YELLOW "Reset all roles to factory defaults? (y/n)" VT_RESET);
     return;
@@ -512,15 +480,15 @@ void ToolPadRoles::drawInfoPanel() {
 // =================================================================
 
 void ToolPadRoles::drawControlBar() {
-  if (_confirmSteal || _confirmDefaults || _confirmClearAll) {
-    _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
+  if (_confirmDefaults || _confirmClearAll) {
+    _ui->drawControlBar(CBAR_CONFIRM_ANY);
     return;
   }
 
   if (_editing) {
-    _ui->drawControlBar(VT_DIM "[^v<>] browse  [P1] scroll  [RET] assign  [q] cancel" VT_RESET);
+    _ui->drawControlBar(VT_DIM "[^v<>] BROWSE" CBAR_SEP "[RET] ASSIGN" CBAR_SEP "[q] CANCEL" VT_RESET);
   } else {
-    _ui->drawControlBar(VT_DIM "[^v<>] NAV  [P1] scroll  [RET] EDIT  [TOUCH] JUMP  [d] DFLT  [r] CLEAR  [q] EXIT" VT_RESET);
+    _ui->drawControlBar(VT_DIM "[^v<>] NAV  [TOUCH] JUMP" CBAR_SEP "[RET] EDIT  [d] DFLT  [r] CLEAR" CBAR_SEP "[q] EXIT" VT_RESET);
   }
 }
 
@@ -609,43 +577,20 @@ void ToolPadRoles::run() {
   _editing = false;
   _poolLine = 0;
   _poolIdx = 0;
-  _confirmSteal = false;
-  _stealFromPad = 0xFF;
   _confirmDefaults = false;
   _confirmClearAll = false;
 
   captureBaselines(*_keyboard, _refBaselines);
 
-  // Seed pot for grid navigation
-  _potNavIdx = _gridRow * 12 + _gridCol;
-  _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
-
   _ui->vtClear();
   bool screenDirty = true;
 
   while (true) {
-    PotFilter::updateAll();
-    _pots.update();
     _leds->update();
     _keyboard->pollAllSensorData();
 
-
-    // --- Pot navigation ---
-    if (!_confirmSteal && !_confirmDefaults && !_confirmClearAll) {
-      if (!_editing && _pots.getMove(0)) {
-        // Grid mode: pot drives linearized index
-        _gridRow = (uint8_t)(_potNavIdx / 12);
-        _gridCol = (uint8_t)(_potNavIdx % 12);
-        screenDirty = true;
-      } else if (_editing && _pots.getMove(0)) {
-        // Pool mode: pot drives linearized pool index
-        linearToPool(_potPoolLinear, _poolLine, _poolIdx);
-        screenDirty = true;
-      }
-    }
-
     // --- Touch detection (jump to cell) ---
-    if (!_confirmSteal && !_confirmDefaults && !_confirmClearAll) {
+    if (!_confirmDefaults && !_confirmClearAll) {
       int detected = detectActiveKey(*_keyboard, _refBaselines);
       if (detected >= 0) {
         uint8_t newRow = (uint8_t)(detected / 12);
@@ -653,11 +598,6 @@ void ToolPadRoles::run() {
         if (newRow != _gridRow || newCol != _gridCol) {
           if (_editing) {
             _editing = false;
-            // Re-seed pot for grid mode
-            _potNavIdx = newRow * 12 + newCol;
-            _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
-          } else {
-            _potNavIdx = newRow * 12 + newCol;  // Sync pot target
           }
           _gridRow = newRow;
           _gridCol = newCol;
@@ -670,14 +610,15 @@ void ToolPadRoles::run() {
 
     // --- Defaults confirmation sub-mode ---
     if (_confirmDefaults) {
-      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+      ConfirmResult r = SetupUI::parseConfirm(ev);
+      if (r == CONFIRM_YES) {
         resetToDefaults();
         if (saveAll()) {
           _ui->flashSaved();
         }
         _confirmDefaults = false;
         screenDirty = true;
-      } else if (ev.type != NAV_NONE) {
+      } else if (r == CONFIRM_NO) {
         _confirmDefaults = false;
         screenDirty = true;
       }
@@ -692,44 +633,16 @@ void ToolPadRoles::run() {
 
     // --- Clear-all confirmation sub-mode ---
     if (_confirmClearAll) {
-      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+      ConfirmResult r = SetupUI::parseConfirm(ev);
+      if (r == CONFIRM_YES) {
         clearAllRoles();
         if (saveAll()) {
           _ui->flashSaved();
         }
         _confirmClearAll = false;
         screenDirty = true;
-      } else if (ev.type != NAV_NONE) {
+      } else if (r == CONFIRM_NO) {
         _confirmClearAll = false;
-        screenDirty = true;
-      }
-      if (screenDirty) {
-        buildRoleMap();
-        drawScreen();
-        screenDirty = false;
-      }
-      delay(5);
-      continue;
-    }
-
-    // --- Steal confirmation sub-mode ---
-    if (_confirmSteal) {
-      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
-        clearRole(_stealFromPad);
-        int pad = _gridRow * 12 + _gridCol;
-        clearRole((uint8_t)pad);
-        assignRole((uint8_t)pad, _poolLine, _poolIdx);
-        if (saveAll()) {
-          _ui->flashSaved();
-          _editing = false;
-          // Re-seed pot for grid mode
-          _potNavIdx = _gridRow * 12 + _gridCol;
-          _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
-        }
-        _confirmSteal = false;
-        screenDirty = true;
-      } else if (ev.type != NAV_NONE) {
-        _confirmSteal = false;
         screenDirty = true;
       }
       if (screenDirty) {
@@ -745,9 +658,6 @@ void ToolPadRoles::run() {
     if (ev.type == NAV_QUIT) {
       if (_editing) {
         _editing = false;
-        // Re-seed pot for grid mode
-        _potNavIdx = _gridRow * 12 + _gridCol;
-        _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
         screenDirty = true;
       } else {
         _ui->vtClear();
@@ -801,13 +711,9 @@ void ToolPadRoles::run() {
         PadRole role = getRoleForPad((uint8_t)pad);
         _poolLine = role.line;
         _poolIdx = role.index;
-        // Seed pot for pool navigation
-        _potPoolLinear = poolToLinear(_poolLine, _poolIdx);
-        _pots.seed(0, &_potPoolLinear, 0, TOTAL_POOL_ITEMS - 1, POT_RELATIVE, TOTAL_POOL_ITEMS * 2);
         screenDirty = true;
       }
       if (arrowMoved) {
-        _potNavIdx = _gridRow * 12 + _gridCol;  // Sync pot target
         screenDirty = true;
       }
     } else {
@@ -847,32 +753,25 @@ void ToolPadRoles::run() {
           if (saveAll()) {
             _ui->flashSaved();
             _editing = false;
-            // Re-seed pot for grid mode
-            _potNavIdx = _gridRow * 12 + _gridCol;
-            _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
           }
           screenDirty = true;
         } else {
+          // Steal silencieux : si le role est deja pris par un autre pad,
+          // on le libere directement sans demander confirmation.
           uint8_t owner = findPadWithRole(_poolLine, _poolIdx);
           if (owner < NUM_KEYS && owner != (uint8_t)pad) {
-            _confirmSteal = true;
-            _stealFromPad = owner;
-          } else {
-            clearRole((uint8_t)pad);
-            assignRole((uint8_t)pad, _poolLine, _poolIdx);
-            if (saveAll()) {
-              _ui->flashSaved();
-              _editing = false;
-              // Re-seed pot for grid mode
-              _potNavIdx = _gridRow * 12 + _gridCol;
-              _pots.seed(0, &_potNavIdx, 0, 47, POT_RELATIVE);
-            }
+            clearRole(owner);
+          }
+          clearRole((uint8_t)pad);
+          assignRole((uint8_t)pad, _poolLine, _poolIdx);
+          if (saveAll()) {
+            _ui->flashSaved();
+            _editing = false;
           }
           screenDirty = true;
         }
       }
       if (poolArrowMoved) {
-        _potPoolLinear = poolToLinear(_poolLine, _poolIdx);  // Sync pot target
         screenDirty = true;
       }
     }

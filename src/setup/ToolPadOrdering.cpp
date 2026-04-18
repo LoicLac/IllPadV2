@@ -11,6 +11,12 @@
 #include <string.h>
 
 // =================================================================
+// Step indicator — Apollo breadcrumb across every phase
+// =================================================================
+static const char* ORD_STEPS[] = { "REVIEW", "MEAS", "RECAP" };
+static const uint8_t ORD_STEP_COUNT = sizeof(ORD_STEPS) / sizeof(ORD_STEPS[0]);
+
+// =================================================================
 // Constructor
 // =================================================================
 
@@ -118,6 +124,8 @@ void ToolPadOrdering::run() {
         _ui->vtFrameStart();
         _ui->drawConsoleHeader("TOOL 2: PAD ORDERING", nvsSaved);
         _ui->drawFrameEmpty();
+        _ui->drawStepIndicator(ORD_STEPS, ORD_STEP_COUNT, 0);  // REVIEW
+        _ui->drawFrameEmpty();
         _ui->drawSection("CURRENT ORDERING");
         _ui->drawFrameEmpty();
 
@@ -137,16 +145,17 @@ void ToolPadOrdering::run() {
         _ui->drawFrameEmpty();
 
         if (confirmDefaults) {
-          _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
+          _ui->drawControlBar(CBAR_CONFIRM_ANY);
         } else {
-          _ui->drawControlBar(VT_DIM "[RET] RE-ORDER FROM SCRATCH  [d] DFLT  [q] KEEP CURRENT" VT_RESET);
+          _ui->drawControlBar(VT_DIM "[RET] RE-ORDER FROM SCRATCH  [d] DFLT" CBAR_SEP "[q] KEEP CURRENT" VT_RESET);
         }
         _ui->vtFrameEnd();
       }
 
       // --- Defaults confirmation ---
       if (confirmDefaults) {
-        if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+        ConfirmResult r = SetupUI::parseConfirm(ev);
+        if (r == CONFIRM_YES) {
           for (int i = 0; i < NUM_KEYS; i++) {
             existingOrder[i] = (uint8_t)i;
           }
@@ -156,7 +165,7 @@ void ToolPadOrdering::run() {
           }
           confirmDefaults = false;
           screenDirty = true;
-        } else if (ev.type != NAV_NONE) {
+        } else if (r == CONFIRM_NO) {
           confirmDefaults = false;
           screenDirty = true;
         }
@@ -238,6 +247,8 @@ void ToolPadOrdering::run() {
         snprintf(info, sizeof(info), "TOOL 2: PAD ORDERING  %d/%d", assignedCount, NUM_KEYS);
         _ui->drawConsoleHeader(info, nvsSaved);
         _ui->drawFrameEmpty();
+        _ui->drawStepIndicator(ORD_STEPS, ORD_STEP_COUNT, 1);  // MEAS
+        _ui->drawFrameEmpty();
 
         _ui->drawSection("TOUCH PADS FROM LOWEST TO HIGHEST");
         _ui->drawFrameEmpty();
@@ -276,14 +287,15 @@ void ToolPadOrdering::run() {
         } else if (confirmReset) {
           _ui->drawControlBar(VT_DIM "Clear all assignments and start over? [y/n]" VT_RESET);
         } else {
-          _ui->drawControlBar(VT_DIM "[TOUCH] auto-assign  [u] UNDO  [r] RESET  [d] DFLT  [s] SAVE  [q] ABORT" VT_RESET);
+          _ui->drawControlBar(VT_DIM "[TOUCH] auto-assign" CBAR_SEP "[u] UNDO  [r] RESET  [d] DFLT  [s] SAVE" CBAR_SEP "[q] ABORT" VT_RESET);
         }
         _ui->vtFrameEnd();
       }
 
       // Handle keyboard input
       if (confirmDefaults) {
-        if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+        ConfirmResult r = SetupUI::parseConfirm(ev);
+        if (r == CONFIRM_YES) {
           for (int i = 0; i < NUM_KEYS; i++) {
             orderMap[i] = (uint8_t)i;
             assigned[i] = true;
@@ -298,13 +310,14 @@ void ToolPadOrdering::run() {
           _ui->vtClear();
           state = ORD_DONE;
           confirmDefaults = false;
-        } else if (ev.type != NAV_NONE) {
+        } else if (r == CONFIRM_NO) {
           confirmDefaults = false;
           lastRefresh = 0;
         }
       }
       else if (confirmReset) {
-        if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+        ConfirmResult r = SetupUI::parseConfirm(ev);
+        if (r == CONFIRM_YES) {
           memset(orderMap, 0xFF, sizeof(orderMap));
           memset(assigned, 0, sizeof(assigned));
           assignedCount = 0;
@@ -312,7 +325,7 @@ void ToolPadOrdering::run() {
           lastActiveKey = -1;
           confirmReset = false;
           lastRefresh = 0;
-        } else if (ev.type != NAV_NONE) {
+        } else if (r == CONFIRM_NO) {
           confirmReset = false;
           lastRefresh = 0;
         }
@@ -362,6 +375,8 @@ void ToolPadOrdering::run() {
         _ui->vtFrameStart();
         _ui->drawConsoleHeader("TOOL 2: PAD ORDERING  COMPLETE", nvsSaved);
         _ui->drawFrameEmpty();
+        _ui->drawStepIndicator(ORD_STEPS, ORD_STEP_COUNT, 2);  // RECAP
+        _ui->drawFrameEmpty();
         _ui->drawSection("FINAL ORDERING");
         _ui->drawFrameEmpty();
 
@@ -377,7 +392,7 @@ void ToolPadOrdering::run() {
         }
         _ui->drawFrameEmpty();
 
-        _ui->drawControlBar(VT_DIM "[RET] SAVE  [r] REDO ALL  [q] BACK TO MENU" VT_RESET);
+        _ui->drawControlBar(VT_DIM "[RET] SAVE  [r] REDO ALL" CBAR_SEP "[q] BACK TO MENU" VT_RESET);
         _ui->vtFrameEnd();
       }
 

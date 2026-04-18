@@ -2,7 +2,6 @@
 #define TOOL_SETTINGS_H
 
 #include <stdint.h>
-#include "SetupPotInput.h"
 
 class CapacitiveKeyboard;
 class LedController;
@@ -24,14 +23,6 @@ private:
   CapacitiveKeyboard* _keyboard;
   LedController*      _leds;
   SetupUI*            _ui;
-
-  // Pot navigation
-  SetupPotInput _pots;
-  int32_t _potCursorIdx;     // 0-7 param index (nav mode)
-  int32_t _potEditVal;       // Value being edited (edit mode)
-
-  void seedPotForEdit(const SettingsStore& wk, uint8_t param);
-  void applyPotEdit(SettingsStore& wk, uint8_t param);
 };
 
 #endif // TOOL_SETTINGS_H

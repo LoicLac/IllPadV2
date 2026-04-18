@@ -107,7 +107,7 @@ struct PotParamsStore {
 // =================================================================
 
 struct ArpPotStore {
-  uint16_t gateRaw;       // gate × 4095 (range 0-12285, i.e. 0.0-3.0; floor 0.05 on load)
+  uint16_t gateRaw;       // gate × 4095 (range 0-32760, i.e. 0.0-8.0; floor 0.005 on load)
   uint16_t shuffleDepthRaw;  // 0-4095 (maps to 0.0-1.0)
   uint8_t  division;      // ArpDivision enum (0-8)
   uint8_t  pattern;       // ArpPattern enum (0-4)
@@ -146,7 +146,7 @@ static const char* const COLOR_PRESET_NAMES[COLOR_PRESET_COUNT] = {
 // =================================================================
 // Color Slots (Tool 7 COLOR page)
 // =================================================================
-#define COLOR_SLOT_COUNT       11
+#define COLOR_SLOT_COUNT       12
 #define COLOR_SLOT_NVS_KEY     "ledcolors"
 #define COLOR_SLOT_MAGIC       0xC010
 
@@ -160,7 +160,8 @@ enum ColorSlotId : uint8_t {
   CSLOT_SCALE_ROOT,
   CSLOT_SCALE_MODE,
   CSLOT_SCALE_CHROM,
-  CSLOT_HOLD,
+  CSLOT_HOLD_ON,
+  CSLOT_HOLD_OFF,
   CSLOT_OCTAVE
 };
 
@@ -230,7 +231,7 @@ inline RGBW resolveColorSlot(const ColorSlot& slot) {
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       4
+#define LED_SETTINGS_VERSION       5
 
 struct LedSettingsStore {
   uint16_t magic;
@@ -263,7 +264,8 @@ struct LedSettingsStore {
   uint16_t scaleModeDurationMs;   // default 200
   uint8_t  scaleChromBlinks;      // default 2
   uint16_t scaleChromDurationMs;  // default 200
-  uint16_t holdFadeMs;            // default 300 (fade IN for ON, fade OUT for OFF)
+  uint16_t holdOnFadeMs;          // default 500, 0-1000 (fade IN on capture OFF->ON)
+  uint16_t holdOffFadeMs;         // default 500, 0-1000 (fade OUT on release ON->OFF)
   uint8_t  octaveBlinks;          // default 3
   uint16_t octaveDurationMs;      // default 300
 };
@@ -382,18 +384,21 @@ struct ArpPadStore {
 static_assert(sizeof(ArpPadStore) <= NVS_BLOB_MAX_SIZE, "ArpPadStore exceeds NVS blob max");
 
 #define BANKTYPE_NVS_KEY_V2  "config"
-#define BANKTYPE_VERSION     1
+#define BANKTYPE_VERSION     2   // 1->2 : ajout scaleGroup[]
+
+#define NUM_SCALE_GROUPS     4   // A, B, C, D (0 = none / banque independante)
 
 struct BankTypeStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  reserved;
-  uint8_t  types[NUM_BANKS];     // BankType enum cast
-  uint8_t  quantize[NUM_BANKS];  // ArpStartMode enum
+  uint8_t  types[NUM_BANKS];       // BankType enum cast
+  uint8_t  quantize[NUM_BANKS];    // ArpStartMode enum
+  uint8_t  scaleGroup[NUM_BANKS];  // 0 = none, 1..NUM_SCALE_GROUPS = A..D
 };
 static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds NVS blob max");
 
-#define COLOR_SLOT_VERSION  2
+#define COLOR_SLOT_VERSION  3
 
 // =================================================================
 // PotTarget — all possible pot-controlled parameters
@@ -504,6 +509,7 @@ inline void validateBankTypeStore(BankTypeStore& s) {
     if (s.types[i] == BANK_ARPEG) arpCount++;
     if (arpCount > MAX_ARP_BANKS) s.types[i] = BANK_NORMAL;
     if (s.quantize[i] >= NUM_ARP_START_MODES) s.quantize[i] = DEFAULT_ARP_START_MODE;
+    if (s.scaleGroup[i] > NUM_SCALE_GROUPS) s.scaleGroup[i] = 0;
   }
 }
 
@@ -557,7 +563,8 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
   if (s.scaleModeDurationMs < 100 || s.scaleModeDurationMs > 500) s.scaleModeDurationMs = 200;
   if (s.scaleChromBlinks < 1 || s.scaleChromBlinks > 3) s.scaleChromBlinks = 2;
   if (s.scaleChromDurationMs < 100 || s.scaleChromDurationMs > 500) s.scaleChromDurationMs = 200;
-  if (s.holdFadeMs < 100 || s.holdFadeMs > 600) s.holdFadeMs = 300;
+  if (s.holdOnFadeMs > 1000) s.holdOnFadeMs = 500;
+  if (s.holdOffFadeMs > 1000) s.holdOffFadeMs = 500;
   if (s.octaveBlinks < 1 || s.octaveBlinks > 3) s.octaveBlinks = 3;
   if (s.octaveDurationMs < 100 || s.octaveDurationMs > 500) s.octaveDurationMs = 300;
 }

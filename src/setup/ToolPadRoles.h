@@ -4,7 +4,6 @@
 #include <stdint.h>
 #include "../core/HardwareConfig.h"
 #include "InputParser.h"
-#include "SetupPotInput.h"
 
 class CapacitiveKeyboard;
 class LedController;
@@ -70,16 +69,9 @@ private:
   bool    _editing;       // true = pool navigation mode
   uint8_t _poolLine;      // 0=clear, 1=bank, 2=root, 3=mode, 4=octave, 5=hold
   uint8_t _poolIdx;       // index within current pool line
-  bool    _confirmSteal;  // true = waiting for y/n steal confirmation
-  uint8_t _stealFromPad;  // pad that currently owns the role being stolen
   bool    _confirmDefaults;  // true = waiting for y/n defaults confirmation
   bool    _confirmClearAll;  // true = waiting for y/n clear-all confirmation
   bool    _nvsSaved;         // NVS status for header badge
-
-  // Pot navigation
-  SetupPotInput _pots;
-  int32_t _potNavIdx;        // Linearized grid index 0-47 (RELATIVE)
-  int32_t _potPoolLinear;    // Linearized pool index 0-28 (RELATIVE)
 
   // Touch detection baselines
   uint16_t _refBaselines[NUM_KEYS];

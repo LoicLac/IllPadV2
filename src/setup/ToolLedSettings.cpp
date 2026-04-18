@@ -12,8 +12,8 @@
 // =================================================================
 // Page 0: COLOR (18 rows) + TIMING (3 rows) = 21
 // Page 1: CONFIRM — 11 params
-static const uint8_t PAGE0_COUNT = 21;
-static const uint8_t PAGE1_COUNT = 11;  // 11 params: bank(2) + scale(6) + hold(1) + octave(2)
+static const uint8_t PAGE0_COUNT = 22;  // COLOR_ROWS(19) + TIMING(3: pulse, tickFlashDur, gamma)
+static const uint8_t PAGE1_COUNT = 12;  // 12 params: bank(2) + scale(6) + hold(2: ON+OFF) + octave(2)
 
 static const char* s_pageNames[] = {"COLOR", "CONFIRM"};
 
@@ -31,7 +31,7 @@ static bool isColorRowHidden(uint8_t row) {
   return (row == 5 || row == 6 || row == 9);
 }
 
-static const ColorRowDef COLOR_ROWS[18] = {
+static const ColorRowDef COLOR_ROWS[19] = {
   { CSLOT_NORMAL_FG,   0xFF, "NORMAL fg"       },  // 0
   { CSLOT_NORMAL_BG,   0xFF, "NORMAL bg"       },  // 1
   { CSLOT_ARPEG_FG,       3, "ARPfg pulse lo"  },  // 2  (FG stopped-loaded pulse)
@@ -48,8 +48,9 @@ static const ColorRowDef COLOR_ROWS[18] = {
   { CSLOT_SCALE_ROOT,  0xFF, "Scale root"      },  // 13
   { CSLOT_SCALE_MODE,  0xFF, "Scale mode"      },  // 14
   { CSLOT_SCALE_CHROM, 0xFF, "Scale chromatic" },  // 15
-  { CSLOT_HOLD,        0xFF, "Hold"            },  // 16
-  { CSLOT_OCTAVE,      0xFF, "Octave"          },  // 17
+  { CSLOT_HOLD_ON,     0xFF, "Hold ON (fade in)"  }, // 16
+  { CSLOT_HOLD_OFF,    0xFF, "Hold OFF (fade out)"}, // 17
+  { CSLOT_OCTAVE,      0xFF, "Octave"          },  // 18
 };
 
 // Sine LUT: shared from HardwareConfig.h (LED_LED_SINE_LUT[256])
@@ -86,7 +87,8 @@ static LedSettingsStore s_ledDefaults() {
   d.scaleModeDurationMs = 200;
   d.scaleChromBlinks   = 2;
   d.scaleChromDurationMs = 200;
-  d.holdFadeMs         = 300;
+  d.holdOnFadeMs       = 500;
+  d.holdOffFadeMs      = 500;
   d.octaveBlinks       = 3;
   d.octaveDurationMs   = 300;
   return d;
@@ -98,7 +100,7 @@ static ColorSlotStore s_colorDefaults() {
   c.version = COLOR_SLOT_VERSION;
   c.reserved = 0;
   static const uint8_t presets[COLOR_SLOT_COUNT] = {
-    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 9
+    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 4, 9
   };
   for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
     c.slots[i].presetId = presets[i];
@@ -197,7 +199,7 @@ bool ToolLedSettings::rowHasEditableIntensity(uint8_t row) const {
 // adjustColorField — preset / hue / intensity
 // =================================================================
 void ToolLedSettings::adjustColorField(int8_t dir, bool accel) {
-  if (_cursor >= 18) return;  // timing rows handled elsewhere
+  if (_cursor >= 19) return;  // timing rows handled elsewhere
   uint8_t slotId = COLOR_ROWS[_cursor].slotId;
   ColorSlot& slot = _cwk.slots[slotId];
 
@@ -312,20 +314,27 @@ void ToolLedSettings::adjustConfirmParam(int8_t dir, bool accel) {
       _wk.scaleChromDurationMs = (uint16_t)val;
       break;
     }
-    case 8: { // holdFadeMs 100-600
+    case 8: { // holdOnFadeMs 0-1000
       int step = accel ? 100 : 50;
-      int val = (int)_wk.holdFadeMs + dir * step;
-      if (val < 100) val = 100; if (val > 600) val = 600;
-      _wk.holdFadeMs = (uint16_t)val;
+      int val = (int)_wk.holdOnFadeMs + dir * step;
+      if (val < 0) val = 0; if (val > 1000) val = 1000;
+      _wk.holdOnFadeMs = (uint16_t)val;
       break;
     }
-    case 9: { // octaveBlinks 1-3
+    case 9: { // holdOffFadeMs 0-1000
+      int step = accel ? 100 : 50;
+      int val = (int)_wk.holdOffFadeMs + dir * step;
+      if (val < 0) val = 0; if (val > 1000) val = 1000;
+      _wk.holdOffFadeMs = (uint16_t)val;
+      break;
+    }
+    case 10: { // octaveBlinks 1-3
       int val = (int)_wk.octaveBlinks + dir;
       if (val < 1) val = 3; if (val > 3) val = 1;
       _wk.octaveBlinks = (uint8_t)val;
       break;
     }
-    case 10: { // octaveDurationMs 100-500
+    case 11: { // octaveDurationMs 100-500
       int step = accel ? 100 : 50;
       int val = (int)_wk.octaveDurationMs + dir * step;
       if (val < 100) val = 100; if (val > 500) val = 500;
@@ -361,7 +370,7 @@ bool ToolLedSettings::saveColorSlots() {
 // drawColorRow — single row with ANSI 24-bit swatch
 // =================================================================
 void ToolLedSettings::drawColorRow(uint8_t row, bool selected, bool editing) {
-  if (row >= 18) return;
+  if (row >= 19) return;
   const ColorRowDef& def = COLOR_ROWS[row];
   const ColorSlot& slot = _cwk.slots[def.slotId];
   RGBW resolved = resolveColorSlot(slot);
@@ -427,7 +436,7 @@ void ToolLedSettings::drawColorRow(uint8_t row, bool selected, bool editing) {
 // =================================================================
 void ToolLedSettings::drawDescription() {
   if (_page == 0) {
-    if (_cursor < 18) {
+    if (_cursor < 19) {
       // COLOR rows
       switch (_cursor) {
         case 0:
@@ -521,12 +530,18 @@ void ToolLedSettings::drawDescription() {
           _ui->drawFrameLine(VT_DIM "play. Press [b] to preview." VT_RESET);
           break;
         case 16:
-          _ui->drawFrameLine(VT_BRIGHT_WHITE "Hold" VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Flash when toggling HOLD mode on an arpeggiator bank." VT_RESET);
-          _ui->drawFrameLine(VT_DIM "A clear visual cue that your held notes are locked in." VT_RESET);
-          _ui->drawFrameLine(VT_DIM "Choose a color that pops against your arp pulse." VT_RESET);
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Hold ON (fade in)" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Color of the fade IN when capturing arp (OFF->ON)." VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Duration set in CONFIRM page (0-1000ms)." VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Press [b] to preview." VT_RESET);
           break;
         case 17:
+          _ui->drawFrameLine(VT_BRIGHT_WHITE "Hold OFF (fade out)" VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Color of the fade OUT when releasing arp (ON->OFF)." VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Can differ from Hold ON for directional feedback." VT_RESET);
+          _ui->drawFrameLine(VT_DIM "Press [b] to preview." VT_RESET);
+          break;
+        case 18:
           _ui->drawFrameLine(VT_BRIGHT_WHITE "Octave" VT_RESET);
           _ui->drawFrameLine(VT_DIM "Blink overlay on current bank LED when changing" VT_RESET);
           _ui->drawFrameLine(VT_DIM "arp octave range (1-4). Press [b] to preview." VT_RESET);
@@ -534,13 +549,13 @@ void ToolLedSettings::drawDescription() {
           break;
       }
     } else {
-      // TIMING rows (18-20)
-      if (_cursor == 18) {
+      // TIMING rows (19-21)
+      if (_cursor == 19) {
         _ui->drawFrameLine(VT_BRIGHT_WHITE "Pulse Period" VT_RESET);
         _ui->drawFrameLine(VT_DIM "Duration of one full sine breathing cycle in milliseconds." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Affects all ARPEG banks (foreground + background)." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Lower = faster breath. Default 1472ms (~1.5s)." VT_RESET);
-      } else if (_cursor == 19) {
+      } else if (_cursor == 20) {
         _ui->drawFrameLine(VT_BRIGHT_WHITE "Tick Flash Duration" VT_RESET);
         _ui->drawFrameLine(VT_DIM "How long each arp step flash stays visible in milliseconds." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Shorter = snappier visual beat. Longer = more visible at" VT_RESET);
@@ -641,7 +656,7 @@ void ToolLedSettings::seedPotsForCursor() {
   _pots.disable(0);
   _pots.disable(1);
 
-  if (_page == 0 && _cursor < 18) {
+  if (_page == 0 && _cursor < 19) {
     // COLOR rows: pot 1 = hue, pot 2 = intensity
     uint8_t slotId = COLOR_ROWS[_cursor].slotId;
     _potVal[0] = _cwk.slots[slotId].hueOffset;
@@ -650,13 +665,13 @@ void ToolLedSettings::seedPotsForCursor() {
       _potVal[1] = getRowIntensity(_cursor);
       _pots.seed(1, &_potVal[1], 0, 100, POT_ABSOLUTE);
     }
-  } else if (_page == 0 && _cursor == 18) {
+  } else if (_page == 0 && _cursor == 19) {
     _potVal[0] = _wk.pulsePeriodMs;
     _pots.seed(0, &_potVal[0], 500, 4000, POT_ABSOLUTE);
-  } else if (_page == 0 && _cursor == 19) {
+  } else if (_page == 0 && _cursor == 20) {
     _potVal[0] = _wk.tickFlashDurationMs;
     _pots.seed(0, &_potVal[0], 10, 100, POT_ABSOLUTE);
-  } else if (_page == 0 && _cursor == 20) {
+  } else if (_page == 0 && _cursor == 21) {
     _potVal[0] = _wk.gammaTenths;
     _pots.seed(0, &_potVal[0], 10, 30, POT_ABSOLUTE);
   } else if (_page == 1) {
@@ -672,9 +687,10 @@ void ToolLedSettings::seedPotsForCursor() {
       case 5:  _potVal[0] = _wk.scaleModeDurationMs;  mn=100; mx=500; break;
       case 6:  _potVal[0] = _wk.scaleChromBlinks;     mn=1; mx=3; break;
       case 7:  _potVal[0] = _wk.scaleChromDurationMs; mn=100; mx=500; break;
-      case 8:  _potVal[0] = _wk.holdFadeMs;           mn=100; mx=600; break;
-      case 9:  _potVal[0] = _wk.octaveBlinks;         mn=1; mx=3; break;
-      case 10: _potVal[0] = _wk.octaveDurationMs;     mn=100; mx=500; break;
+      case 8:  _potVal[0] = _wk.holdOnFadeMs;         mn=0; mx=1000; break;
+      case 9:  _potVal[0] = _wk.holdOffFadeMs;        mn=0; mx=1000; break;
+      case 10: _potVal[0] = _wk.octaveBlinks;         mn=1; mx=3; break;
+      case 11: _potVal[0] = _wk.octaveDurationMs;     mn=100; mx=500; break;
       default: return;
     }
     _pots.seed(0, &_potVal[0], mn, mx, POT_ABSOLUTE);
@@ -685,7 +701,7 @@ void ToolLedSettings::seedPotsForCursor() {
 bool ToolLedSettings::applyPotValues() {
   bool changed = false;
 
-  if (_page == 0 && _cursor < 18) {
+  if (_page == 0 && _cursor < 19) {
     uint8_t slotId = COLOR_ROWS[_cursor].slotId;
     if (_pots.isActive(0) && (int8_t)_potVal[0] != _cwk.slots[slotId].hueOffset) {
       _cwk.slots[slotId].hueOffset = (int8_t)_potVal[0];
@@ -696,15 +712,15 @@ bool ToolLedSettings::applyPotValues() {
       setRowIntensity(_cursor, (uint8_t)_potVal[1]);
       changed = true;
     }
-  } else if (_page == 0 && _cursor == 18) {
+  } else if (_page == 0 && _cursor == 19) {
     if (_pots.isActive(0) && (uint16_t)_potVal[0] != _wk.pulsePeriodMs) {
       _wk.pulsePeriodMs = (uint16_t)_potVal[0]; changed = true;
     }
-  } else if (_page == 0 && _cursor == 19) {
+  } else if (_page == 0 && _cursor == 20) {
     if (_pots.isActive(0) && (uint8_t)_potVal[0] != _wk.tickFlashDurationMs) {
       _wk.tickFlashDurationMs = (uint8_t)_potVal[0]; changed = true;
     }
-  } else if (_page == 0 && _cursor == 20) {
+  } else if (_page == 0 && _cursor == 21) {
     if (_pots.isActive(0) && (uint8_t)_potVal[0] != _wk.gammaTenths) {
       _wk.gammaTenths = (uint8_t)_potVal[0]; changed = true;
     }
@@ -719,9 +735,10 @@ bool ToolLedSettings::applyPotValues() {
       case 5:  if (_wk.scaleModeDurationMs != v)  { _wk.scaleModeDurationMs = v; changed=true; } break;
       case 6:  if (_wk.scaleChromBlinks != v)     { _wk.scaleChromBlinks = v; changed=true; } break;
       case 7:  if (_wk.scaleChromDurationMs != v) { _wk.scaleChromDurationMs = v; changed=true; } break;
-      case 8:  if (_wk.holdFadeMs != v)           { _wk.holdFadeMs = v; changed=true; } break;
-      case 9:  if (_wk.octaveBlinks != v)         { _wk.octaveBlinks = v; changed=true; } break;
-      case 10: if (_wk.octaveDurationMs != v)     { _wk.octaveDurationMs = v; changed=true; } break;
+      case 8:  if (_wk.holdOnFadeMs != v)         { _wk.holdOnFadeMs = v; changed=true; } break;
+      case 9:  if (_wk.holdOffFadeMs != v)        { _wk.holdOffFadeMs = v; changed=true; } break;
+      case 10: if (_wk.octaveBlinks != v)         { _wk.octaveBlinks = v; changed=true; } break;
+      case 11: if (_wk.octaveDurationMs != v)     { _wk.octaveDurationMs = v; changed=true; } break;
       default: break;
     }
   }
@@ -733,18 +750,19 @@ bool ToolLedSettings::applyPotValues() {
 // =================================================================
 uint8_t ToolLedSettings::mapCursorToPreviewRow() const {
   if (_page == 0) {
-    if (_cursor < 18) return _cursor;
-    if (_cursor == 18) return 2;   // pulse period → arpeg preview
-    if (_cursor == 19) return 10;  // tick flash duration → tick flash preview
+    if (_cursor < 19) return _cursor;
+    if (_cursor == 19) return 2;   // pulse period → arpeg preview
+    if (_cursor == 20) return 10;  // tick flash duration → tick flash preview
   } else {
     // CONFIRM page: map cursor to relevant color row
     switch (_cursor) {
-      case 0: case 1: return 12;    // bank switch
-      case 2: case 3: return 13;    // scale root
-      case 4: case 5: return 14;    // scale mode
-      case 6: case 7: return 15;    // scale chromatic
-      case 8: return 16;              // hold
-      case 9: case 10: return 17;   // octave
+      case 0: case 1: return 12;       // bank switch
+      case 2: case 3: return 13;       // scale root
+      case 4: case 5: return 14;       // scale mode
+      case 6: case 7: return 15;       // scale chromatic
+      case 8: return 16;                // hold ON (fade in)
+      case 9: return 17;                // hold OFF (fade out)
+      case 10: case 11: return 18;     // octave
     }
   }
   return 0xFF;
@@ -868,28 +886,30 @@ void ToolLedSettings::renderEventPreview(unsigned long now) {
       break;
     }
     case 16: {
-      // Hold: fade IN then fade OUT on LED 4 (latch effect)
-      RGBW holdCol = resolveColorSlot(_cwk.slots[CSLOT_HOLD]);
+      // Hold ON: fade IN on LED 4 (capture OFF->ON)
+      RGBW holdOnCol = resolveColorSlot(_cwk.slots[CSLOT_HOLD_ON]);
       RGBW arpCol = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_FG]);
-      uint16_t totalDur = _wk.holdFadeMs * 2 + 200;  // fade in + pause + fade out
-      if (elapsed >= totalDur) { _prevState = PREV_IDLE; break; }
+      uint16_t dur = _wk.holdOnFadeMs;
+      if (dur == 0) dur = 1;  // guard division; near-instant
+      if (elapsed >= dur) { _prevState = PREV_IDLE; break; }
       _leds->previewSetPixel(3, arpCol, getRowIntensity(2));  // Static FG arp context
-      if (elapsed < _wk.holdFadeMs) {
-        // Fade IN
-        uint8_t pct = (uint8_t)((uint32_t)elapsed * 100 / _wk.holdFadeMs);
-        _leds->previewSetPixel(4, holdCol, pct);
-      } else if (elapsed < _wk.holdFadeMs + 200) {
-        // Brief pause at full
-        _leds->previewSetPixel(4, holdCol, 100);
-      } else {
-        // Fade OUT
-        uint16_t fadeElapsed = elapsed - _wk.holdFadeMs - 200;
-        uint8_t pct = (uint8_t)((uint32_t)(_wk.holdFadeMs - fadeElapsed) * 100 / _wk.holdFadeMs);
-        _leds->previewSetPixel(4, holdCol, pct);
-      }
+      uint8_t pct = (uint8_t)((uint32_t)elapsed * 100 / dur);
+      _leds->previewSetPixel(4, holdOnCol, pct);
       break;
     }
     case 17: {
+      // Hold OFF: fade OUT on LED 4 (release ON->OFF)
+      RGBW holdOffCol = resolveColorSlot(_cwk.slots[CSLOT_HOLD_OFF]);
+      RGBW arpCol = resolveColorSlot(_cwk.slots[CSLOT_ARPEG_FG]);
+      uint16_t dur = _wk.holdOffFadeMs;
+      if (dur == 0) dur = 1;  // guard division; near-instant
+      if (elapsed >= dur) { _prevState = PREV_IDLE; break; }
+      _leds->previewSetPixel(3, arpCol, getRowIntensity(2));  // Static FG arp context
+      uint8_t pct = (uint8_t)((uint32_t)(dur - elapsed) * 100 / dur);
+      _leds->previewSetPixel(4, holdOffCol, pct);
+      break;
+    }
+    case 18: {
       // Octave: blink on single LED (not 2 LEDs)
       RGBW octCol = resolveColorSlot(_cwk.slots[CSLOT_OCTAVE]);
       RGBW normCol = resolveColorSlot(_cwk.slots[CSLOT_NORMAL_FG]);
@@ -995,7 +1015,8 @@ void ToolLedSettings::run() {
 
     // --- Defaults confirmation ---
     if (_confirmDefaults) {
-      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+      ConfirmResult r = SetupUI::parseConfirm(ev);
+      if (r == CONFIRM_YES) {
         _wk = s_ledDefaults();
         _cwk = s_colorDefaults();
         _nvsSaved = saveLedSettings() && saveColorSlots();
@@ -1004,7 +1025,7 @@ void ToolLedSettings::run() {
         _ui->flashSaved();
         _confirmDefaults = false;
         screenDirty = true;
-      } else if (ev.type != NAV_NONE) {
+      } else if (r == CONFIRM_NO) {
         _confirmDefaults = false;
         screenDirty = true;
       }
@@ -1056,7 +1077,7 @@ void ToolLedSettings::run() {
         if (_cursor > 0) _cursor--;
         else _cursor = count - 1;
         // Skip hidden color rows on page 0
-        while (_page == 0 && _cursor < 18 && isColorRowHidden(_cursor)) {
+        while (_page == 0 && _cursor < 19 && isColorRowHidden(_cursor)) {
           if (_cursor > 0) _cursor--; else _cursor = count - 1;
         }
         _colorField = 0;
@@ -1065,7 +1086,7 @@ void ToolLedSettings::run() {
       } else if (ev.type == NAV_DOWN) {
         if (_cursor < count - 1) _cursor++;
         else _cursor = 0;
-        while (_page == 0 && _cursor < 18 && isColorRowHidden(_cursor)) {
+        while (_page == 0 && _cursor < 19 && isColorRowHidden(_cursor)) {
           if (_cursor < count - 1) _cursor++; else _cursor = 0;
         }
         _colorField = 0;
@@ -1078,7 +1099,7 @@ void ToolLedSettings::run() {
       }
     } else {
       // --- Editing ---
-      if (_page == 0 && _cursor < 18) {
+      if (_page == 0 && _cursor < 19) {
         // COLOR row: ◄► = preset only (pot handles hue + intensity)
         if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
           int8_t dir = ev.type == NAV_RIGHT ? +1 : -1;
@@ -1102,7 +1123,7 @@ void ToolLedSettings::run() {
           originalCwk = _cwk;
           screenDirty = true;
         }
-      } else if (_page == 0 && _cursor >= 18) {
+      } else if (_page == 0 && _cursor >= 19) {
         // Timing rows: ◄► adjust + reseed pot to prevent fight
         if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
           adjustTimingParam(ev.type == NAV_RIGHT ? +1 : -1, ev.accelerated);
@@ -1168,7 +1189,7 @@ void ToolLedSettings::run() {
           drawColorRow(r, sel, edt);
         }
         _ui->drawSection("EVENTS");
-        for (uint8_t r = 10; r < 18; r++) {
+        for (uint8_t r = 10; r < 19; r++) {
           bool sel = (_cursor == r);
           bool edt = sel && _editing;
           drawColorRow(r, sel, edt);
@@ -1180,7 +1201,7 @@ void ToolLedSettings::run() {
 
         // Pulse period
         {
-          bool sel = (_cursor == 18);
+          bool sel = (_cursor == 19);
           bool edt = sel && _editing;
           snprintf(buf, sizeof(buf), "%d ms", _wk.pulsePeriodMs);
           if (edt) {
@@ -1194,7 +1215,7 @@ void ToolLedSettings::run() {
 
         // Tick flash duration
         {
-          bool sel = (_cursor == 19);
+          bool sel = (_cursor == 20);
           bool edt = sel && _editing;
           snprintf(buf, sizeof(buf), "%d ms", _wk.tickFlashDurationMs);
           if (edt) {
@@ -1208,7 +1229,7 @@ void ToolLedSettings::run() {
 
         // Gamma curve
         {
-          bool sel = (_cursor == 20);
+          bool sel = (_cursor == 21);
           bool edt = sel && _editing;
           snprintf(buf, sizeof(buf), "%.1f", (float)_wk.gammaTenths / 10.0f);
           if (edt) {
@@ -1259,15 +1280,17 @@ void ToolLedSettings::run() {
         _ui->drawFrameEmpty();
 
         _ui->drawSection("HOLD");
-        snprintf(buf, sizeof(buf), "%d ms", _wk.holdFadeMs);
-        drawParam(8, "Fade duration:", buf);
+        snprintf(buf, sizeof(buf), "%d ms", _wk.holdOnFadeMs);
+        drawParam(8, "Fade IN (ON):", buf);
+        snprintf(buf, sizeof(buf), "%d ms", _wk.holdOffFadeMs);
+        drawParam(9, "Fade OUT (OFF):", buf);
         _ui->drawFrameEmpty();
 
         _ui->drawSection("OCTAVE");
         snprintf(buf, sizeof(buf), "%d", _wk.octaveBlinks);
-        drawParam(9, "Blinks:", buf);
+        drawParam(10, "Blinks:", buf);
         snprintf(buf, sizeof(buf), "%d ms", _wk.octaveDurationMs);
-        drawParam(10, "Duration:", buf);
+        drawParam(11, "Duration:", buf);
       }
 
       _ui->drawFrameEmpty();
@@ -1287,12 +1310,12 @@ void ToolLedSettings::run() {
 
       // --- Control bar ---
       if (_confirmDefaults) {
-        _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
+        _ui->drawControlBar(CBAR_CONFIRM_ANY);
       } else if (_editing) {
-        if (_page == 0 && _cursor < 18) {
-          _ui->drawControlBar(VT_DIM "[</>] PRESET  [P1] HUE  [P2] INT  [RET] SAVE  [q] CANCEL" VT_RESET);
+        if (_page == 0 && _cursor < 19) {
+          _ui->drawControlBar(VT_DIM "[</>] PRESET  [P1] HUE  [P2] INT" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
         } else {
-          _ui->drawControlBar(VT_DIM "[</>] ADJUST  [RET] SAVE  [q] CANCEL" VT_RESET);
+          _ui->drawControlBar(VT_DIM "[</>] ADJUST" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
         }
       } else {
         char ctrlBuf[256];

@@ -41,7 +41,12 @@ public:
   void setBankSlots(const BankSlot* slots);
 
   // Confirmations
-  void triggerConfirm(ConfirmType type, uint8_t param = 0);
+  // ledMask: 0 = target _currentBank only (default / legacy behavior).
+  // Non-zero = bitmask of LEDs to blink simultaneously. Honored by:
+  //   - SCALE_ROOT/MODE/CHROM (scale group propagation)
+  //   - HOLD_ON/HOLD_OFF     (LEFT + double-tap bank pad pause/resume, can target BG bank)
+  // Other confirmation types ignore the mask.
+  void triggerConfirm(ConfirmType type, uint8_t param = 0, uint8_t ledMask = 0);
 
   // Bargraph persistence
   void setPotBarDuration(uint16_t ms);
@@ -129,7 +134,7 @@ private:
   RGBW _colArpFg, _colArpBg;
   RGBW _colTickFlash;
   RGBW _colBankSwitch, _colScaleRoot, _colScaleMode, _colScaleChrom;
-  RGBW _colHold, _colOctave;
+  RGBW _colHoldOn, _colHoldOff, _colOctave;
 
   // LED settings (0-100 perceptual %)
   uint8_t  _normalFgIntensity;
@@ -150,7 +155,8 @@ private:
   uint16_t _scaleModeDurationMs;
   uint8_t  _scaleChromBlinks;
   uint16_t _scaleChromDurationMs;
-  uint16_t _holdFadeMs;
+  uint16_t _holdOnFadeMs;
+  uint16_t _holdOffFadeMs;
   uint8_t  _octaveBlinks;
   uint16_t _octaveDurationMs;
 
@@ -161,6 +167,7 @@ private:
   ConfirmType   _confirmType;
   unsigned long _confirmStart;
   uint8_t       _confirmParam;
+  uint8_t       _confirmLedMask;  // 0 = use _currentBank; non-zero = bitmask (SCALE_*, HOLD_ON/OFF)
 
   // Bargraph
   uint16_t _potBarDurationMs;

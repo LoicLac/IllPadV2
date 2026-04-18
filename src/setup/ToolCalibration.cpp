@@ -20,6 +20,12 @@ static const char* sensitivityNames[] = {
 static const int NUM_SENSITIVITY_LEVELS = sizeof(sensitivityTargets) / sizeof(uint16_t);
 
 // =================================================================
+// Step indicator — Apollo-style breadcrumb shown in the header of every phase
+// =================================================================
+static const char* CAL_STEPS[] = { "SENS", "STAB", "MEAS", "RECAP" };
+static const uint8_t CAL_STEP_COUNT = sizeof(CAL_STEPS) / sizeof(CAL_STEPS[0]);
+
+// =================================================================
 // Constructor
 // =================================================================
 
@@ -89,6 +95,8 @@ static bool runStabilizationPhase(
       snprintf(headerBuf, sizeof(headerBuf), "TOOL 1: %s  %s (%u)", title, sensitivityLabel, targetBaseline);
       ui.drawConsoleHeader(headerBuf, true);
       ui.drawFrameEmpty();
+      ui.drawStepIndicator(CAL_STEPS, CAL_STEP_COUNT, 1);  // STAB
+      ui.drawFrameEmpty();
       ui.drawSection("GRID");
 
       ui.drawGrid(GRID_BASELINE, targetBaseline, currentBaselines, nullptr, nullptr, -1, 0, false, nullptr);
@@ -101,7 +109,7 @@ static bool runStabilizationPhase(
         ui.drawFrameLine("Stability: " VT_YELLOW "Settling... %d/%d" VT_RESET, stableCount, NUM_KEYS);
       }
       ui.drawFrameEmpty();
-      ui.drawControlBar(VT_DIM "[RET] CONTINUE  [q] ABORT" VT_RESET);
+      ui.drawControlBar(VT_DIM "[RET] CONTINUE" CBAR_SEP "[q] ABORT" VT_RESET);
       ui.vtFrameEnd();
     }
 
@@ -217,6 +225,8 @@ void ToolCalibration::run() {
         _ui->vtFrameStart();
         _ui->drawConsoleHeader("TOOL 1: PRESSURE CALIBRATION", nvsSaved);
         _ui->drawFrameEmpty();
+        _ui->drawStepIndicator(CAL_STEPS, CAL_STEP_COUNT, 0);  // SENS
+        _ui->drawFrameEmpty();
         _ui->drawSection("SENSITIVITY PRESETS");
         _ui->drawFrameEmpty();
         for (int i = 0; i < NUM_SENSITIVITY_LEVELS; i++) {
@@ -233,7 +243,7 @@ void ToolCalibration::run() {
         _ui->drawFrameLine(VT_DIM "Select a sensitivity preset, then press Enter to start." VT_RESET);
         _ui->drawFrameLine(VT_DIM "Higher sensitivity = more range but may clip on thick pads." VT_RESET);
         _ui->drawFrameEmpty();
-        _ui->drawControlBar(VT_DIM "[1-3] SELECT  [RET] CONFIRM  [q] BACK" VT_RESET);
+        _ui->drawControlBar(VT_DIM "[1-3] SELECT" CBAR_SEP "[RET] CONFIRM" CBAR_SEP "[q] BACK" VT_RESET);
         _ui->vtFrameEnd();
       }
       break;
@@ -299,6 +309,8 @@ void ToolCalibration::run() {
         snprintf(info, sizeof(info), "TOOL 1: CALIBRATION  %d/%d", doneCount, NUM_KEYS);
         _ui->drawConsoleHeader(info, nvsSaved);
         _ui->drawFrameEmpty();
+        _ui->drawStepIndicator(CAL_STEPS, CAL_STEP_COUNT, 2);  // MEAS
+        _ui->drawFrameEmpty();
         _ui->drawSection("GRID");
 
         _ui->drawGrid(GRID_MEASUREMENT, 0, referenceBaselines, measuredDeltas, calibrated,
@@ -315,7 +327,7 @@ void ToolCalibration::run() {
             _ui->drawFrameLine(VT_YELLOW "Discard %d calibrated pads?" VT_RESET, doneCount);
           }
           _ui->drawFrameEmpty();
-          _ui->drawControlBar(VT_BOLD "[y] YES  [n] NO" VT_RESET);
+          _ui->drawControlBar(CBAR_CONFIRM_STRICT);
         } else {
           if (justReset) {
             _ui->drawFrameLine(VT_CYAN "Key %d" VT_RESET VT_YELLOW " reset -- touch again to recalibrate" VT_RESET, resetKey);
@@ -356,7 +368,7 @@ void ToolCalibration::run() {
             _ui->drawFrameLine("Progress: 0/%d", NUM_KEYS);
           }
           _ui->drawFrameEmpty();
-          _ui->drawControlBar(VT_DIM "[RET] VALIDATE ALL  [q] ABORT" VT_RESET);
+          _ui->drawControlBar(VT_DIM "[RET] VALIDATE ALL" CBAR_SEP "[q] ABORT" VT_RESET);
         }
         _ui->vtFrameEnd();
       }
@@ -431,6 +443,8 @@ void ToolCalibration::run() {
         _ui->vtFrameStart();
         _ui->drawConsoleHeader("TOOL 1: CALIBRATION COMPLETE", nvsSaved);
         _ui->drawFrameEmpty();
+        _ui->drawStepIndicator(CAL_STEPS, CAL_STEP_COUNT, 3);  // RECAP
+        _ui->drawFrameEmpty();
         _ui->drawSection("GRID");
 
         _ui->drawGrid(GRID_MEASUREMENT, 0, referenceBaselines, measuredDeltas, calibrated, -1, 0, false, nullptr);
@@ -453,9 +467,9 @@ void ToolCalibration::run() {
         }
         _ui->drawFrameEmpty();
         if (st.count > 0) {
-          _ui->drawControlBar(VT_DIM "[RET] SAVE  [r] REDO ALL  [q] BACK" VT_RESET);
+          _ui->drawControlBar(VT_DIM "[RET] SAVE  [r] REDO ALL" CBAR_SEP "[q] BACK" VT_RESET);
         } else {
-          _ui->drawControlBar(VT_DIM "[r] REDO ALL  [q] BACK" VT_RESET);
+          _ui->drawControlBar(VT_DIM "[r] REDO ALL" CBAR_SEP "[q] BACK" VT_RESET);
         }
         _ui->vtFrameEnd();
       }

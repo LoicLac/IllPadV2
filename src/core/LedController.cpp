@@ -20,7 +20,7 @@ LedController::LedController()
     _colTickFlash(COLOR_PRESETS[0]),
     _colBankSwitch(COLOR_PRESETS[0]), _colScaleRoot(COLOR_PRESETS[6]),
     _colScaleMode(COLOR_PRESETS[7]), _colScaleChrom(COLOR_PRESETS[7]),
-    _colHold(COLOR_PRESETS[4]), _colOctave(COLOR_PRESETS[9]),
+    _colHoldOn(COLOR_PRESETS[4]), _colHoldOff(COLOR_PRESETS[4]), _colOctave(COLOR_PRESETS[9]),
     _normalFgIntensity(85), _normalBgIntensity(10),
     _fgArpStopMin(30), _fgArpStopMax(100),
     _fgArpPlayMin(30), _fgArpPlayMax(80),
@@ -32,11 +32,12 @@ LedController::LedController()
     _scaleRootBlinks(2), _scaleRootDurationMs(200),
     _scaleModeBlinks(2), _scaleModeDurationMs(200),
     _scaleChromBlinks(2), _scaleChromDurationMs(200),
-    _holdFadeMs(300),
+    _holdOnFadeMs(500), _holdOffFadeMs(500),
     _octaveBlinks(3), _octaveDurationMs(300),
     _confirmType(CONFIRM_NONE),
     _confirmStart(0),
     _confirmParam(0),
+    _confirmLedMask(0),
     _potBarDurationMs(LED_BARGRAPH_DURATION_DEFAULT),
     _showingPotBar(false),
     _potBarRealLevel(0),
@@ -371,8 +372,10 @@ bool LedController::renderConfirmation(unsigned long now) {
       if (elapsed >= _scaleChromDurationMs) { _confirmType = CONFIRM_NONE; return false; }
       return true;
     case CONFIRM_HOLD_ON:
+      if (elapsed >= _holdOnFadeMs) { _confirmType = CONFIRM_NONE; return false; }
+      return true;
     case CONFIRM_HOLD_OFF:
-      if (elapsed >= _holdFadeMs) { _confirmType = CONFIRM_NONE; return false; }
+      if (elapsed >= _holdOffFadeMs) { _confirmType = CONFIRM_NONE; return false; }
       return true;
     case CONFIRM_OCTAVE:
       if (elapsed >= _octaveDurationMs) { _confirmType = CONFIRM_NONE; return false; }
@@ -506,36 +509,63 @@ void LedController::renderNormalDisplay(unsigned long now) {
       case CONFIRM_SCALE_ROOT: {
         uint16_t unitMs = _scaleRootDurationMs / (_scaleRootBlinks * 2);
         bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-        if (on) setPixel(_currentBank, _colScaleRoot, 100);
-        else _strip.setPixelColor(_currentBank, 0);
+        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
+        for (uint8_t led = 0; led < NUM_LEDS; led++) {
+          if (!(mask & (1 << led))) continue;
+          if (on) setPixel(led, _colScaleRoot, 100);
+          else    _strip.setPixelColor(led, 0);
+        }
         break;
       }
       case CONFIRM_SCALE_MODE: {
         uint16_t unitMs = _scaleModeDurationMs / (_scaleModeBlinks * 2);
         bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-        if (on) setPixel(_currentBank, _colScaleMode, 100);
-        else _strip.setPixelColor(_currentBank, 0);
+        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
+        for (uint8_t led = 0; led < NUM_LEDS; led++) {
+          if (!(mask & (1 << led))) continue;
+          if (on) setPixel(led, _colScaleMode, 100);
+          else    _strip.setPixelColor(led, 0);
+        }
         break;
       }
       case CONFIRM_SCALE_CHROM: {
         uint16_t unitMs = _scaleChromDurationMs / (_scaleChromBlinks * 2);
         bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-        if (on) setPixel(_currentBank, _colScaleChrom, 100);
-        else _strip.setPixelColor(_currentBank, 0);
+        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
+        for (uint8_t led = 0; led < NUM_LEDS; led++) {
+          if (!(mask & (1 << led))) continue;
+          if (on) setPixel(led, _colScaleChrom, 100);
+          else    _strip.setPixelColor(led, 0);
+        }
         break;
       }
       case CONFIRM_HOLD_ON: {
-        // Fade IN: 0% -> 100% over holdFadeMs
-        uint8_t fadePct = (uint8_t)((uint32_t)elapsed * 100 / _holdFadeMs);
-        if (fadePct > 100) fadePct = 100;
-        setPixel(_currentBank, _colHold, fadePct);
+        // Fade IN: 0% -> 100% over _holdOnFadeMs.
+        // LED target: ledMask if non-zero (used by LEFT+double-tap bank pad
+        // pause/resume, can target any bank FG/BG), else current bank (hold pad).
+        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
+        uint8_t fadePct;
+        if (_holdOnFadeMs == 0) {
+          fadePct = 100;
+        } else {
+          uint32_t tmp = (uint32_t)elapsed * 100 / _holdOnFadeMs;
+          fadePct = (tmp > 100) ? 100 : (uint8_t)tmp;
+        }
+        for (uint8_t led = 0; led < NUM_LEDS; led++) {
+          if (mask & (1 << led)) setPixel(led, _colHoldOn, fadePct);
+        }
         break;
       }
       case CONFIRM_HOLD_OFF: {
-        // Fade OUT: 100% -> 0% over holdFadeMs
-        if (elapsed > _holdFadeMs) elapsed = _holdFadeMs;  // clamp to prevent underflow
-        uint8_t fadePct = (uint8_t)((uint32_t)(_holdFadeMs - elapsed) * 100 / _holdFadeMs);
-        setPixel(_currentBank, _colHold, fadePct);
+        // Fade OUT: 100% -> 0% over _holdOffFadeMs.
+        // LED target: ledMask if non-zero, else current bank.
+        if (_holdOffFadeMs == 0) break;  // instant: no overlay
+        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
+        unsigned long e = (elapsed > _holdOffFadeMs) ? _holdOffFadeMs : elapsed;
+        uint8_t fadePct = (uint8_t)((uint32_t)(_holdOffFadeMs - e) * 100 / _holdOffFadeMs);
+        for (uint8_t led = 0; led < NUM_LEDS; led++) {
+          if (mask & (1 << led)) setPixel(led, _colHoldOff, fadePct);
+        }
         break;
       }
       case CONFIRM_OCTAVE: {
@@ -576,10 +606,11 @@ void LedController::setBankSlots(const BankSlot* slots) {
 // Confirmation Blinks
 // =================================================================
 
-void LedController::triggerConfirm(ConfirmType type, uint8_t param) {
-  _confirmType = type;
-  _confirmStart = millis();
-  _confirmParam = param;
+void LedController::triggerConfirm(ConfirmType type, uint8_t param, uint8_t ledMask) {
+  _confirmType    = type;
+  _confirmStart   = millis();
+  _confirmParam   = param;
+  _confirmLedMask = ledMask;
 }
 
 void LedController::setPotBarDuration(uint16_t ms) {
@@ -611,7 +642,8 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
   _scaleModeDurationMs = s.scaleModeDurationMs;
   _scaleChromBlinks = s.scaleChromBlinks;
   _scaleChromDurationMs = s.scaleChromDurationMs;
-  _holdFadeMs = s.holdFadeMs;
+  _holdOnFadeMs = s.holdOnFadeMs;
+  _holdOffFadeMs = s.holdOffFadeMs;
   _octaveBlinks = s.octaveBlinks;
   _octaveDurationMs = s.octaveDurationMs;
   rebuildGammaLut(s.gammaTenths > 0 ? s.gammaTenths : 20);
@@ -627,7 +659,8 @@ void LedController::loadColorSlots(const ColorSlotStore& store) {
   _colScaleRoot  = resolveColorSlot(store.slots[CSLOT_SCALE_ROOT]);
   _colScaleMode  = resolveColorSlot(store.slots[CSLOT_SCALE_MODE]);
   _colScaleChrom = resolveColorSlot(store.slots[CSLOT_SCALE_CHROM]);
-  _colHold       = resolveColorSlot(store.slots[CSLOT_HOLD]);
+  _colHoldOn     = resolveColorSlot(store.slots[CSLOT_HOLD_ON]);
+  _colHoldOff    = resolveColorSlot(store.slots[CSLOT_HOLD_OFF]);
   _colOctave     = resolveColorSlot(store.slots[CSLOT_OCTAVE]);
 }
 

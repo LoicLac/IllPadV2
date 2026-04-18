@@ -57,16 +57,17 @@ NvsManager::NvsManager()
   _ledSettings.scaleModeDurationMs = 200;
   _ledSettings.scaleChromBlinks = 2;
   _ledSettings.scaleChromDurationMs = 200;
-  _ledSettings.holdFadeMs = 300;
+  _ledSettings.holdOnFadeMs = 500;
+  _ledSettings.holdOffFadeMs = 500;
   _ledSettings.octaveBlinks = 3;
   _ledSettings.octaveDurationMs = 300;
 
   // Default color slots
   _colorSlots.magic = COLOR_SLOT_MAGIC;
-  _colorSlots.version = 1;
+  _colorSlots.version = COLOR_SLOT_VERSION;
   _colorSlots.reserved = 0;
   static const uint8_t defaultPresets[COLOR_SLOT_COUNT] = {
-    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 9
+    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 4, 9
   };
   for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
     _colorSlots.slots[i].presetId = defaultPresets[i];
@@ -533,20 +534,53 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     prefs.end();
   }
 
-  // --- Bank types + quantize modes ---
+  // --- Bank types + quantize modes + scale groups ---
   memset(_loadedQuantize, DEFAULT_ARP_START_MODE, NUM_BANKS);
+  memset(_loadedScaleGroup, 0, NUM_BANKS);
   {
     BankTypeStore bts;
     if (NvsManager::loadBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
                               EEPROM_MAGIC, BANKTYPE_VERSION, &bts, sizeof(bts))) {
       validateBankTypeStore(bts);
       for (uint8_t i = 0; i < NUM_BANKS; i++) {
-        banks[i].type = (BankType)bts.types[i];
-        _loadedQuantize[i] = bts.quantize[i];
+        banks[i].type        = (BankType)bts.types[i];
+        _loadedQuantize[i]   = bts.quantize[i];
+        _loadedScaleGroup[i] = bts.scaleGroup[i];
       }
       #if DEBUG_SERIAL
-      Serial.println("[NVS] Bank types + quantize loaded (v2 store).");
+      Serial.println("[NVS] Bank types + quantize + scale groups loaded (v2 store).");
       #endif
+    } else {
+      // Premier boot / NVS vierge : defaults usine = 4 NORMAL + 4 ARPEG,
+      // group A sur banques 1,2 (NORMAL) et 5,6 (ARPEG). Identique au reset 'd' de Tool 4.
+      for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        banks[i].type        = (i < 4) ? BANK_NORMAL : BANK_ARPEG;
+        _loadedQuantize[i]   = DEFAULT_ARP_START_MODE;
+        _loadedScaleGroup[i] = (i == 0 || i == 1 || i == 4 || i == 5) ? 1 : 0;
+      }
+      #if DEBUG_SERIAL
+      Serial.println("[NVS] BankTypeStore absent/invalide - defaults usine appliques.");
+      #endif
+    }
+  }
+
+  // --- Scale group propagation (leader wins) ---
+  // Le premier membre de chaque groupe fait foi. Evite l'incoherence si des blobs
+  // scale ont derive avant l'assignation d'un groupe. Pas de queueScaleWrite au boot :
+  // la propagation live realignera NVS au premier changement.
+  for (uint8_t g = 1; g <= NUM_SCALE_GROUPS; g++) {
+    int8_t leader = -1;
+    for (uint8_t i = 0; i < NUM_BANKS; i++) {
+      if (_loadedScaleGroup[i] != g) continue;
+      if (leader < 0) {
+        leader = i;
+      } else {
+        banks[i].scale = banks[leader].scale;
+        #if DEBUG_SERIAL
+        Serial.printf("[NVS] Group %c: bank %d adopte scale de bank %d\n",
+                      'A' + g - 1, i, leader);
+        #endif
+      }
     }
   }
 
@@ -783,7 +817,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   potRouter.loadStoredPerBank(
     _pendingBaseVel[currentBank], _pendingVelVar[currentBank],
     _pendingPitchBend[currentBank],
-    max(0.05f, (float)arp.gateRaw / 4095.0f),
+    max(0.005f, (float)arp.gateRaw / 4095.0f),
     (float)arp.shuffleDepthRaw / 4095.0f,
     (ArpDivision)arp.division, (ArpPattern)arp.pattern,
     arp.shuffleTemplate
@@ -803,6 +837,15 @@ uint8_t NvsManager::getLoadedQuantizeMode(uint8_t bank) const {
 
 void NvsManager::setLoadedQuantizeMode(uint8_t bank, uint8_t mode) {
   if (bank < NUM_BANKS) _loadedQuantize[bank] = mode;
+}
+
+uint8_t NvsManager::getLoadedScaleGroup(uint8_t bank) const {
+  if (bank >= NUM_BANKS) return 0;
+  return _loadedScaleGroup[bank];
+}
+
+void NvsManager::setLoadedScaleGroup(uint8_t bank, uint8_t group) {
+  if (bank < NUM_BANKS && group <= NUM_SCALE_GROUPS) _loadedScaleGroup[bank] = group;
 }
 
 const ArpPotStore& NvsManager::getLoadedArpParams(uint8_t bankIdx) const {

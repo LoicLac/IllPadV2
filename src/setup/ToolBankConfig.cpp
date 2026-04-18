@@ -1,6 +1,5 @@
 #include "ToolBankConfig.h"
 #include "../core/LedController.h"
-#include "../core/PotFilter.h"
 #include "../managers/NvsManager.h"
 #include "SetupUI.h"
 #include "InputParser.h"
@@ -8,6 +7,7 @@
 #include <Preferences.h>
 
 static const char* QUANTIZE_NAMES[] = {"Immediate", "Beat"};
+static const char  GROUP_LABELS[NUM_SCALE_GROUPS + 1] = {'-', 'A', 'B', 'C', 'D'};
 
 ToolBankConfig::ToolBankConfig()
   : _leds(nullptr), _nvs(nullptr), _ui(nullptr), _banks(nullptr) {}
@@ -22,20 +22,25 @@ void ToolBankConfig::begin(LedController* leds, NvsManager* nvs, SetupUI* ui, Ba
 // =================================================================
 // saveConfig — write types + quantize to NVS, update live banks
 // =================================================================
-bool ToolBankConfig::saveConfig(const BankType* types, const uint8_t* quantize) {
+bool ToolBankConfig::saveConfig(const BankType* types, const uint8_t* quantize, const uint8_t* groups) {
   BankTypeStore bts;
   bts.magic = EEPROM_MAGIC;
   bts.version = BANKTYPE_VERSION;
   bts.reserved = 0;
   for (uint8_t i = 0; i < NUM_BANKS; i++) bts.types[i] = (uint8_t)types[i];
   memcpy(bts.quantize, quantize, NUM_BANKS);
+  memcpy(bts.scaleGroup, groups, NUM_BANKS);
+  validateBankTypeStore(bts);
 
   if (!NvsManager::saveBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2, &bts, sizeof(bts)))
     return false;
 
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    _banks[i].type = types[i];
-    if (_nvs) _nvs->setLoadedQuantizeMode(i, quantize[i]);
+    _banks[i].type = (BankType)bts.types[i];
+    if (_nvs) {
+      _nvs->setLoadedQuantizeMode(i, bts.quantize[i]);
+      _nvs->setLoadedScaleGroup(i, bts.scaleGroup[i]);
+    }
   }
   return true;
 }
@@ -65,9 +70,11 @@ void ToolBankConfig::run() {
 
   BankType wkTypes[NUM_BANKS];
   uint8_t  wkQuantize[NUM_BANKS];
+  uint8_t  wkGroups[NUM_BANKS];
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     wkTypes[i] = _banks[i].type;
     wkQuantize[i] = _nvs ? _nvs->getLoadedQuantizeMode(i) : DEFAULT_ARP_START_MODE;
+    wkGroups[i] = _nvs ? _nvs->getLoadedScaleGroup(i) : 0;
   }
 
   // Override from NVS if valid v2 store exists
@@ -79,8 +86,9 @@ void ToolBankConfig::run() {
       nvsSaved = true;
       validateBankTypeStore(bts);
       for (uint8_t i = 0; i < NUM_BANKS; i++) {
-        wkTypes[i] = (BankType)bts.types[i];
+        wkTypes[i]    = (BankType)bts.types[i];
         wkQuantize[i] = bts.quantize[i];
+        wkGroups[i]   = bts.scaleGroup[i];
       }
     }
   }
@@ -88,8 +96,10 @@ void ToolBankConfig::run() {
   // Snapshot NVS-loaded values for cancel-edit restore
   BankType savedTypes[NUM_BANKS];
   uint8_t  savedQuantize[NUM_BANKS];
-  memcpy(savedTypes, wkTypes, sizeof(savedTypes));
+  uint8_t  savedGroups[NUM_BANKS];
+  memcpy(savedTypes,    wkTypes,    sizeof(savedTypes));
   memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
+  memcpy(savedGroups,   wkGroups,   sizeof(savedGroups));
 
   Serial.print(ITERM_RESIZE);
 
@@ -101,45 +111,10 @@ void ToolBankConfig::run() {
   bool errorShown = false;
   unsigned long errorTime = 0;
 
-  // Seed pot for bank navigation
-  _potBankIdx = cursor;
-  _pots.seed(0, &_potBankIdx, 0, NUM_BANKS - 1, POT_RELATIVE, 16);
-
   _ui->vtClear();
 
   while (true) {
-    PotFilter::updateAll();
-    _pots.update();
     if (_leds) _leds->update();
-
-    // --- Pot navigation ---
-    if (!confirmDefaults) {
-      if (!editing && _pots.getMove(0)) {
-        cursor = (uint8_t)_potBankIdx;
-        screenDirty = true;
-      } else if (editing && _pots.getMove(0)) {
-        // Combined state pot: apply type/quantize
-        if (_potComboState > 0) {
-          // Check 4-ARPEG limit (exclude current bank)
-          uint8_t arpCount = 0;
-          for (uint8_t i = 0; i < NUM_BANKS; i++)
-            if (i != cursor && wkTypes[i] == BANK_ARPEG) arpCount++;
-          if (arpCount >= 4) {
-            _potComboState = 0;  // Force back to NORMAL
-            errorShown = true;
-            errorTime = millis();
-          }
-        }
-        if (_potComboState == 0) {
-          wkTypes[cursor] = BANK_NORMAL;
-          wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
-        } else {
-          wkTypes[cursor] = BANK_ARPEG;
-          wkQuantize[cursor] = _potComboState - 1;
-        }
-        screenDirty = true;
-      }
-    }
 
     NavEvent ev = input.update();
 
@@ -150,21 +125,25 @@ void ToolBankConfig::run() {
 
     // --- Defaults confirmation ---
     if (confirmDefaults) {
-      if (ev.type == NAV_CHAR && (ev.ch == 'y' || ev.ch == 'Y')) {
+      ConfirmResult r = SetupUI::parseConfirm(ev);
+      if (r == CONFIRM_YES) {
         for (uint8_t i = 0; i < NUM_BANKS; i++) {
-          wkTypes[i] = (i < 4) ? BANK_NORMAL : BANK_ARPEG;
+          wkTypes[i]    = (i < 4) ? BANK_NORMAL : BANK_ARPEG;
           wkQuantize[i] = ARP_START_IMMEDIATE;
+          // Group A : 2 premieres NORMAL (0,1) + 2 premieres ARPEG (4,5). Autres = -
+          wkGroups[i]   = (i == 0 || i == 1 || i == 4 || i == 5) ? 1 : 0;
         }
-        if (saveConfig(wkTypes, wkQuantize)) {
-          memcpy(savedTypes, wkTypes, sizeof(savedTypes));
+        if (saveConfig(wkTypes, wkQuantize, wkGroups)) {
+          memcpy(savedTypes,    wkTypes,    sizeof(savedTypes));
           memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
+          memcpy(savedGroups,   wkGroups,   sizeof(savedGroups));
           nvsSaved = true;
           _ui->flashSaved();
         }
         confirmDefaults = false;
         editing = false;
         screenDirty = true;
-      } else if (ev.type != NAV_NONE) {
+      } else if (r == CONFIRM_NO) {
         confirmDefaults = false;
         screenDirty = true;
       }
@@ -175,12 +154,10 @@ void ToolBankConfig::run() {
     // --- Main navigation ---
     if (ev.type == NAV_QUIT) {
       if (editing) {
-        wkTypes[cursor] = savedTypes[cursor];
+        wkTypes[cursor]    = savedTypes[cursor];
         wkQuantize[cursor] = savedQuantize[cursor];
+        wkGroups[cursor]   = savedGroups[cursor];
         editing = false;
-        // Re-seed pot for nav mode
-        _potBankIdx = cursor;
-        _pots.seed(0, &_potBankIdx, 0, NUM_BANKS - 1, POT_RELATIVE, 16);
         screenDirty = true;
       } else {
         _ui->vtClear();
@@ -197,18 +174,13 @@ void ToolBankConfig::run() {
       if (ev.type == NAV_UP) {
         if (cursor > 0) cursor--;
         else cursor = NUM_BANKS - 1;
-        _potBankIdx = cursor;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_DOWN) {
         if (cursor < NUM_BANKS - 1) cursor++;
         else cursor = 0;
-        _potBankIdx = cursor;  // Sync pot target
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         editing = true;
-        // Seed pot for combined state cycle
-        _potComboState = (wkTypes[cursor] == BANK_NORMAL) ? 0 : 1 + wkQuantize[cursor];
-        _pots.seed(0, &_potComboState, 0, 2, POT_RELATIVE, 8);
         screenDirty = true;
       }
     } else {
@@ -238,7 +210,6 @@ void ToolBankConfig::run() {
           wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
           errorShown = false;
         }
-        _potComboState = (wkTypes[cursor] == BANK_NORMAL) ? 0 : 1 + wkQuantize[cursor];
         screenDirty = true;
       } else if (ev.type == NAV_LEFT) {
         if (wkTypes[cursor] == BANK_NORMAL) {
@@ -265,18 +236,23 @@ void ToolBankConfig::run() {
           wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
           errorShown = false;
         }
-        _potComboState = (wkTypes[cursor] == BANK_NORMAL) ? 0 : 1 + wkQuantize[cursor];
+        screenDirty = true;
+      } else if (ev.type == NAV_UP) {
+        // Cycle group forward : -, A, B, C, D, -
+        wkGroups[cursor] = (wkGroups[cursor] + 1) % (NUM_SCALE_GROUPS + 1);
+        screenDirty = true;
+      } else if (ev.type == NAV_DOWN) {
+        // Cycle group backward : -, D, C, B, A, -
+        wkGroups[cursor] = (wkGroups[cursor] + NUM_SCALE_GROUPS) % (NUM_SCALE_GROUPS + 1);
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
-        if (saveConfig(wkTypes, wkQuantize)) {
-          memcpy(savedTypes, wkTypes, sizeof(savedTypes));
+        if (saveConfig(wkTypes, wkQuantize, wkGroups)) {
+          memcpy(savedTypes,    wkTypes,    sizeof(savedTypes));
           memcpy(savedQuantize, wkQuantize, sizeof(savedQuantize));
+          memcpy(savedGroups,   wkGroups,   sizeof(savedGroups));
           editing = false;
           nvsSaved = true;
           _ui->flashSaved();
-          // Re-seed pot for nav mode
-          _potBankIdx = cursor;
-          _pots.seed(0, &_potBankIdx, 0, NUM_BANKS - 1, POT_RELATIVE, 16);
           screenDirty = true;
         }
       }
@@ -307,37 +283,66 @@ void ToolBankConfig::run() {
         bool isEditing = selected && editing;
         bool isArpeg = (wkTypes[i] == BANK_ARPEG);
 
-        char line[128];
+        char line[160];
         int pos = 0;
+        int visibleLen = 0;  // caracteres visibles (hors codes VT)
 
-        // Selection indicator
+        // Selection indicator (2 chars visibles)
         if (selected) {
           pos += snprintf(line + pos, sizeof(line) - pos, VT_CYAN VT_BOLD "> " VT_RESET);
         } else {
           pos += snprintf(line + pos, sizeof(line) - pos, "  ");
         }
+        visibleLen += 2;
 
-        // Bank label
+        // Bank label (10 chars visibles : "Bank N    ")
         pos += snprintf(line + pos, sizeof(line) - pos, "Bank %d    ", i + 1);
+        visibleLen += 10;
 
         // Type + quantize — editing shows [brackets] + cyan
         if (isEditing) {
           if (isArpeg) {
             pos += snprintf(line + pos, sizeof(line) - pos,
                             VT_CYAN VT_BOLD "[ARPEG ─ %s]" VT_RESET, QUANTIZE_NAMES[wkQuantize[i]]);
+            visibleLen += 10 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);  // "[ARPEG ─ X]" : ─ = 1 char visible
           } else {
             pos += snprintf(line + pos, sizeof(line) - pos, VT_CYAN VT_BOLD "[NORMAL]" VT_RESET);
+            visibleLen += 8;  // "[NORMAL]"
           }
         } else {
           if (isArpeg) {
             pos += snprintf(line + pos, sizeof(line) - pos,
-                            selected ? VT_CYAN "ARPEG" VT_RESET "  " : "ARPEG   ");
+                            selected ? VT_CYAN "ARPEG" VT_RESET "   " : "ARPEG   ");
+            visibleLen += 8;  // "ARPEG   "
             pos += snprintf(line + pos, sizeof(line) - pos,
                             "    Quantize: %s", QUANTIZE_NAMES[wkQuantize[i]]);
+            visibleLen += 14 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);  // "    Quantize: X"
           } else {
             pos += snprintf(line + pos, sizeof(line) - pos,
-                            selected ? VT_CYAN "NORMAL" VT_RESET " " : "NORMAL  ");
+                            selected ? VT_CYAN "NORMAL" VT_RESET "  " : "NORMAL  ");
+            visibleLen += 8;  // "NORMAL  "
           }
+        }
+
+        // Padding jusqu'a colonne Group (position visible 50)
+        const int GROUP_COL = 50;
+        while (visibleLen < GROUP_COL && pos < (int)sizeof(line) - 32) {
+          line[pos++] = ' ';
+          visibleLen++;
+        }
+
+        // Colonne Group : "Group: X" avec letter highlighted en edit mode
+        if (isEditing) {
+          pos += snprintf(line + pos, sizeof(line) - pos,
+                          "Group: " VT_CYAN VT_BOLD "%c" VT_RESET,
+                          GROUP_LABELS[wkGroups[i]]);
+        } else if (selected) {
+          pos += snprintf(line + pos, sizeof(line) - pos,
+                          "Group: " VT_CYAN "%c" VT_RESET,
+                          GROUP_LABELS[wkGroups[i]]);
+        } else {
+          pos += snprintf(line + pos, sizeof(line) - pos,
+                          "Group: %c", GROUP_LABELS[wkGroups[i]]);
         }
 
         _ui->drawFrameLine("%s", line);
@@ -349,7 +354,7 @@ void ToolBankConfig::run() {
       _ui->drawSection("INFO");
 
       if (confirmDefaults) {
-        _ui->drawFrameLine(VT_YELLOW "Reset to defaults? Banks 1-4 NORMAL, 5-8 ARPEG, all Immediate. (y/n)" VT_RESET);
+        _ui->drawFrameLine(VT_YELLOW "Reset to defaults? Banks 1-4 NORMAL, 5-8 ARPEG, Immediate, group A = banks 1/2/5/6. (y/n)" VT_RESET);
         _ui->drawFrameEmpty();
         _ui->drawFrameEmpty();
         _ui->drawFrameEmpty();
@@ -379,11 +384,11 @@ void ToolBankConfig::run() {
 
       // Control bar
       if (confirmDefaults) {
-        _ui->drawControlBar(VT_DIM "[y] confirm  [any] cancel" VT_RESET);
+        _ui->drawControlBar(CBAR_CONFIRM_ANY);
       } else if (editing) {
-        _ui->drawControlBar(VT_DIM "[</>] CHANGE  [P1] cycle  [RET] SAVE  [q] CANCEL" VT_RESET);
+        _ui->drawControlBar(VT_DIM "[</>] TYPE  [^v] GROUP" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
       } else {
-        _ui->drawControlBar(VT_DIM "[^v] NAV  [P1] scroll  [RET] EDIT  [d] DFLT  [q] EXIT" VT_RESET);
+        _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT  [d] DFLT" CBAR_SEP "[q] EXIT" VT_RESET);
       }
 
       _ui->vtFrameEnd();

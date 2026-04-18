@@ -42,6 +42,10 @@ public:
   uint8_t getLoadedQuantizeMode(uint8_t bank) const;
   void    setLoadedQuantizeMode(uint8_t bank, uint8_t mode);
 
+  // Access loaded scale group (per-bank, 0=none, 1..NUM_SCALE_GROUPS=A..D)
+  uint8_t getLoadedScaleGroup(uint8_t bank) const;
+  void    setLoadedScaleGroup(uint8_t bank, uint8_t group);
+
   // Access loaded arp params (for ArpEngine init at boot, after loadAll)
   const ArpPotStore& getLoadedArpParams(uint8_t bankIdx) const;
 
@@ -99,7 +103,8 @@ private:
   uint8_t     _pendingVelVar[NUM_BANKS];
   uint16_t    _pendingPitchBend[NUM_BANKS];
   ArpPotStore _pendingArpPot[NUM_BANKS];
-  uint8_t     _loadedQuantize[NUM_BANKS];  // ArpStartMode per bank (loaded at boot)
+  uint8_t     _loadedQuantize[NUM_BANKS];    // ArpStartMode per bank (loaded at boot)
+  uint8_t     _loadedScaleGroup[NUM_BANKS];  // 0=none, 1..NUM_SCALE_GROUPS=A..D (loaded at boot)
   uint16_t    _pendingTempo;
   uint8_t     _pendingLedBright;
   uint8_t     _pendingPadSens;
