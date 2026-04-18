@@ -184,8 +184,31 @@ void ToolControlPads::_handlePropEdit(const NavEvent& ev) {
       break;
   }
 }
-void ToolControlPads::_handleConfirmRemove(const NavEvent&)   { }
-void ToolControlPads::_handleConfirmDefaults(const NavEvent&) { }
+void ToolControlPads::_handleConfirmRemove(const NavEvent& ev) {
+  ConfirmResult r = SetupUI::parseConfirm(ev);
+  if (r == CONFIRM_YES) {
+    _removeSlotForPad(_cursorPad);
+    _uiMode = UI_GRID_NAV;
+    _screenDirty = true;
+  } else if (r == CONFIRM_NO) {
+    _uiMode = UI_GRID_NAV;
+    _screenDirty = true;
+  }
+  // PENDING → stay
+}
+
+void ToolControlPads::_handleConfirmDefaults(const NavEvent& ev) {
+  ConfirmResult r = SetupUI::parseConfirm(ev);
+  if (r == CONFIRM_YES) {
+    _resetAll();
+    _uiMode = UI_GRID_NAV;
+    _cursorPad = 0;
+    _screenDirty = true;
+  } else if (r == CONFIRM_NO) {
+    _uiMode = UI_GRID_NAV;
+    _screenDirty = true;
+  }
+}
 
 int8_t ToolControlPads::_findSlot(uint8_t padIdx) const {
   for (uint8_t i = 0; i < _wk.count; i++) {
@@ -413,6 +436,18 @@ void ToolControlPads::_drawSelected() {
   }
 }
 void ToolControlPads::_drawInfo() {
+  if (_uiMode == UI_CONFIRM_REMOVE) {
+    _ui->drawFrameLine(VT_YELLOW "Remove control pad #%d? (y/n)" VT_RESET,
+                       (int)_cursorPad + 1);
+    _ui->drawFrameEmpty();
+    return;
+  }
+  if (_uiMode == UI_CONFIRM_DEFAULTS) {
+    _ui->drawFrameLine(VT_YELLOW "Reset ALL control pads to empty? (y/n)" VT_RESET);
+    _ui->drawFrameEmpty();
+    return;
+  }
+
   if (_flashActive()) {
     _ui->drawFrameLine(VT_YELLOW "%s" VT_RESET, _flashMsg);
     _ui->drawFrameEmpty();
