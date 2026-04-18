@@ -65,7 +65,13 @@ void ControlPadManager::update(const SharedKeyboardState& state,
 
   if (leftPressEdge)   _handleLeftPress(state);
   if (leftReleaseEdge) _handleLeftRelease(state, currentBankChannel);
-  if (bankSwitchEdge)  _handleBankSwitch(_lastChannel, currentBankChannel, state);
+  // Bank-switch handoff only fires when LEFT is fully off (not during LEFT-held
+  // instant NORMAL switches, not duplicating LEFT-release re-sync). See
+  // ControlPadManager design review C1+C2 : concurrent edges produce ghost CCs
+  // otherwise.
+  if (bankSwitchEdge && !leftHeld && !leftReleaseEdge) {
+    _handleBankSwitch(_lastChannel, currentBankChannel, state);
+  }
 
   if (!leftHeld) {
     for (uint8_t s = 0; s < _count; s++) {
@@ -98,7 +104,7 @@ void ControlPadManager::_processSlot(uint8_t s,
       if (pressed && !wasPressed) {
         _emit(slot, targetCh, 127);
       } else if (!pressed && wasPressed) {
-        _emit(slot, targetCh, 0);
+        if (slot.lastCcValue > 0) _emit(slot, targetCh, 0);
       }
       break;
     }
