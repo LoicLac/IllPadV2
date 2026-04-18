@@ -301,6 +301,61 @@ struct BankSlot {
 };
 
 // =================================================================
+// Control Pads — Tool 4 (CC output via cross-bank pads)
+// =================================================================
+
+const uint16_t CONTROLPAD_MAGIC   = 0xBEEF;
+const uint8_t  CONTROLPAD_VERSION = 1;
+const uint8_t  MAX_CONTROL_PADS   = 12;
+const uint8_t  CTRL_PAD_INVALID   = 0xFF;  // sentinel for corrupted/skipped entry
+
+enum ControlPadMode : uint8_t {
+  CTRL_MODE_MOMENTARY  = 0,
+  CTRL_MODE_LATCH      = 1,
+  CTRL_MODE_CONTINUOUS = 2,
+};
+
+enum ControlPadRelease : uint8_t {
+  CTRL_RELEASE_TO_ZERO = 0,   // release → CC=0 (gate semantic)
+  CTRL_RELEASE_HOLD    = 1,   // release → CC stays (setter semantic)
+};
+
+struct ControlPadEntry {
+  uint8_t padIndex;     // 0-47, or CTRL_PAD_INVALID when validator flagged
+  uint8_t ccNumber;     // 0-127
+  uint8_t channel;      // 0 = follow bank, 1-16 = fixed MIDI channel (user-facing)
+  uint8_t mode;         // ControlPadMode
+  uint8_t deadzone;     // 0-126, CONTINUOUS only
+  uint8_t releaseMode;  // ControlPadRelease, CONTINUOUS only
+};
+
+struct ControlPadStore {
+  uint16_t magic;
+  uint8_t  version;
+  uint8_t  count;
+  ControlPadEntry entries[MAX_CONTROL_PADS];
+};
+
+#define CONTROLPAD_NVS_NAMESPACE "illpad_ctrl"
+#define CONTROLPAD_NVS_KEY       "pads"
+
+inline void validateControlPadStore(ControlPadStore& s) {
+  if (s.count > MAX_CONTROL_PADS) s.count = MAX_CONTROL_PADS;
+  for (uint8_t i = 0; i < s.count; i++) {
+    auto& e = s.entries[i];
+    if (e.padIndex >= NUM_KEYS)  e.padIndex = CTRL_PAD_INVALID;
+    if (e.ccNumber > 127)        e.ccNumber = 127;
+    if (e.channel > 16)          e.channel = 0;
+    if (e.mode > 2)              e.mode = CTRL_MODE_MOMENTARY;
+    if (e.deadzone > 126)        e.deadzone = 0;
+    if (e.releaseMode > 1)       e.releaseMode = CTRL_RELEASE_TO_ZERO;
+    if (e.mode == CTRL_MODE_LATCH && e.channel == 0) {
+      e.mode = CTRL_MODE_MOMENTARY;  // LATCH needs fixed channel
+    }
+  }
+}
+
+// =================================================================
 // V2 — Arp Enums
 // =================================================================
 
@@ -464,6 +519,7 @@ struct PotMappingStore {
 static_assert(sizeof(CalDataStore) <= NVS_BLOB_MAX_SIZE, "CalDataStore exceeds NVS blob max");
 static_assert(sizeof(NoteMapStore) <= NVS_BLOB_MAX_SIZE, "NoteMapStore exceeds NVS blob max");
 static_assert(sizeof(BankPadStore) <= NVS_BLOB_MAX_SIZE, "BankPadStore exceeds NVS blob max");
+static_assert(sizeof(ControlPadStore) <= NVS_BLOB_MAX_SIZE, "ControlPadStore exceeds NVS blob max");
 static_assert(sizeof(SettingsStore) <= NVS_BLOB_MAX_SIZE, "SettingsStore exceeds NVS blob max");
 static_assert(sizeof(PotParamsStore) <= NVS_BLOB_MAX_SIZE, "PotParamsStore exceeds NVS blob max");  // F-CODE-4
 static_assert(sizeof(ArpPotStore) <= NVS_BLOB_MAX_SIZE, "ArpPotStore exceeds NVS blob max");        // F-CODE-4
@@ -639,18 +695,19 @@ static constexpr NvsDescriptor NVS_DESCRIPTORS[] = {
   { BANKPAD_NVS_NAMESPACE,     BANKPAD_NVS_KEY,        EEPROM_MAGIC,    BANKPAD_VERSION,      (uint16_t)sizeof(BankPadStore)      },  // 2: T3a
   { SCALE_PAD_NVS_NAMESPACE,   SCALEPAD_NVS_KEY,       EEPROM_MAGIC,    SCALEPAD_VERSION,     (uint16_t)sizeof(ScalePadStore)     },  // 3: T3b
   { ARP_PAD_NVS_NAMESPACE,     ARPPAD_NVS_KEY,         EEPROM_MAGIC,    ARPPAD_VERSION,       (uint16_t)sizeof(ArpPadStore)       },  // 4: T3c
-  { BANKTYPE_NVS_NAMESPACE,    BANKTYPE_NVS_KEY_V2,    EEPROM_MAGIC,    BANKTYPE_VERSION,     (uint16_t)sizeof(BankTypeStore)     },  // 5: T4
-  { SETTINGS_NVS_NAMESPACE,    SETTINGS_NVS_KEY,       EEPROM_MAGIC,    SETTINGS_VERSION,     (uint16_t)sizeof(SettingsStore)     },  // 6: T5
-  { POTMAP_NVS_NAMESPACE,      POTMAP_NVS_KEY,         EEPROM_MAGIC,    POTMAP_VERSION,       (uint16_t)sizeof(PotMappingStore)   },  // 7: T6
-  { POTFILTER_NVS_NAMESPACE,   POTFILTER_NVS_KEY,      EEPROM_MAGIC,    POT_FILTER_VERSION,   (uint16_t)sizeof(PotFilterStore)    },  // 8: PotFilter (Monitor in T6)
-  { LED_SETTINGS_NVS_NAMESPACE,LED_SETTINGS_NVS_KEY,   EEPROM_MAGIC,    LED_SETTINGS_VERSION, (uint16_t)sizeof(LedSettingsStore)  },  // 9: T7a
-  { LED_SETTINGS_NVS_NAMESPACE,COLOR_SLOT_NVS_KEY,     COLOR_SLOT_MAGIC,COLOR_SLOT_VERSION,   (uint16_t)sizeof(ColorSlotStore)    },  // 10: T7b
+  { CONTROLPAD_NVS_NAMESPACE,  CONTROLPAD_NVS_KEY,     CONTROLPAD_MAGIC,CONTROLPAD_VERSION,   (uint16_t)sizeof(ControlPadStore)   },  // 5: T4 NEW
+  { BANKTYPE_NVS_NAMESPACE,    BANKTYPE_NVS_KEY_V2,    EEPROM_MAGIC,    BANKTYPE_VERSION,     (uint16_t)sizeof(BankTypeStore)     },  // 6: T5
+  { SETTINGS_NVS_NAMESPACE,    SETTINGS_NVS_KEY,       EEPROM_MAGIC,    SETTINGS_VERSION,     (uint16_t)sizeof(SettingsStore)     },  // 7: T6
+  { POTMAP_NVS_NAMESPACE,      POTMAP_NVS_KEY,         EEPROM_MAGIC,    POTMAP_VERSION,       (uint16_t)sizeof(PotMappingStore)   },  // 8: T7a
+  { POTFILTER_NVS_NAMESPACE,   POTFILTER_NVS_KEY,      EEPROM_MAGIC,    POT_FILTER_VERSION,   (uint16_t)sizeof(PotFilterStore)    },  // 9: T7b (Monitor in T7)
+  { LED_SETTINGS_NVS_NAMESPACE,LED_SETTINGS_NVS_KEY,   EEPROM_MAGIC,    LED_SETTINGS_VERSION, (uint16_t)sizeof(LedSettingsStore)  },  // 10: T8a
+  { LED_SETTINGS_NVS_NAMESPACE,COLOR_SLOT_NVS_KEY,     COLOR_SLOT_MAGIC,COLOR_SLOT_VERSION,   (uint16_t)sizeof(ColorSlotStore)    },  // 11: T8b
 };
 static constexpr uint8_t NVS_DESCRIPTOR_COUNT = sizeof(NVS_DESCRIPTORS) / sizeof(NVS_DESCRIPTORS[0]);
 
 // Tool-to-descriptor mapping: each tool checks descriptors in range [first, last] inclusive
-// T3 spans 3 (bankpad+scalepad+arppad), T6 spans 2 (potmapping+potfilter), T7 spans 2 (ledsettings+colorslots)
-static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 5, 6, 7, 9 };   // T1..T7
-static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 8, 10 };  // T6=7-8 (PotMapping+PotFilter), T7=9-10 (LedSettings+ColorSlots) — F-CODE-5 (audit 2026-04-07)
+// T3 spans 3 (bankpad+scalepad+arppad), T7 spans 2 (potmapping+potfilter), T8 spans 2 (ledsettings+colorslots)
+static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 5, 6, 7, 8, 10 };   // T1..T8
+static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 7, 9, 11 };   // T4=5 (ctrl single), shifts +1 after
 
 #endif // KEYBOARD_DATA_H
