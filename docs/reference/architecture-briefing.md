@@ -109,6 +109,7 @@ Core 0: MPR121 I2C poll → pressure pipeline → s_buffers[writeIdx]
 Core 1: state = s_buffers[s_active.load(acquire)]
         → MIDI block runs ONLY if !bankManager.isHolding() && !scaleManager.isHolding()
         → edge detect (pressed && !wasPressed)
+        → skip if s_controlPadManager.isControlPad(i) (control pads emit CC, not notes)
         → velocity = baseVelocity ± random(variation)
         → MidiEngine::noteOn(padIndex, vel, padOrder, scale)
           → ScaleResolver::resolve() → MIDI note
@@ -172,6 +173,9 @@ switchToBank() calls [BankManager.cpp:181-210]:
     — reseeds stored values; global targets keep catch state (tempo, shape…)
     — per-bank targets lose catch (will be uncaught by step 10)
 10. resetPerBankCatch() — uncatch per-bank only [reloadPerBankParams:598]
+11. ControlPadManager.update() detects bank switch edge on next frame,
+    runs per-mode handoff (gate-family : CC=0 on old channel + re-sync
+    on new channel ; setter : silent preserve of old-channel value).
 ```
 
 #### LEFT + Bank Pad: deferral and double-tap Play/Stop toggle
@@ -304,13 +308,14 @@ setup Tools. Walk through these tables before ANY user-configurable change.
 | Pad ordering (physique → rank 0-47) | `NoteMapStore` | Tool 2 ToolPadOrdering | `illpad_nmap` / `pads` | `padOrder[48]` consommé partout — statique après setup. |
 | Bank pads (8 control pads) | `BankPadStore` | Tool 3 ToolPadRoles | `illpad_bpad` / `pads` | Nouveau rôle → Tool 3 collision check + category color ; consommateur runtime (BankManager) |
 | Scale pads (7 root + 7 mode + 1 chrom) | `ScalePadStore` | Tool 3 ToolPadRoles | `illpad_spad` / `pads` | Étendre catégorie → Tool 3 grid + ScaleManager |
+| Control pad assignments (12 sparse entries) | `ControlPadStore` | Tool 4 ToolControlPads | `illpad_ctrl` / `pads` | Nouveau PotTarget équivalent : add entry + Tool 4 edit ; consumed at boot via ControlPadManager::applyStore |
 | Arp pads (1 hold + 4 octave) | `ArpPadStore` | Tool 3 ToolPadRoles | `illpad_apad` / `pads` | Ajouter un pad de contrôle ARPEG → Tool 3 + main.cpp handleHoldPad + ScaleManager |
-| Bank types + quantize mode + scaleGroup | `BankTypeStore` | Tool 4 ToolBankConfig | `illpad_btype` / `config` | Nouveau `BankType` (ex: LOOP) → Tool 4 type cycle + ArpEngine assignment ([main.cpp:345-362](../../src/main.cpp:345)) + LED state machine + `validateBankTypeStore()` |
-| Global settings (profile, AT rate, BLE, clock, doubleTap, bargraph, panic, batCal) | `SettingsStore` | Tool 5 ToolSettings | `illpad_set` / `settings` | Nouveau field → Tool 5 case switch + validator + bump version + apply dans `main.cpp` setup() ([main.cpp:329-339](../../src/main.cpp:329)) |
-| Pot bindings (user-configurable pot → parameter) | `PotMappingStore` (normalMap + arpegMap) | Tool 6 ToolPotMapping | `illpad_pmap` / `mapping` | Nouveau `PotTarget` enum → pool line, label+color, `getDiscreteSteps()`, `isPerBankTarget()`, `applyBinding()` case |
-| Pot filter tuning (snap, deadband, sleep, wake) | `PotFilterStore` | **none** (descriptor in T6 "Monitor" range but no UI) | `illpad_pflt` / `config` | **Friction zone** : modifiable only via code + flash. Intent "Monitor in T6" unimplemented. |
-| LED intensities + timings + confirm blinks + gamma | `LedSettingsStore` | Tool 7 ToolLedSettings | `illpad_lset` / `settings` | Nouveau `ConfirmType` → struct field (durationMs + blinkCount) + Tool 7 CONFIRM page + `renderConfirmation()` dispatch |
-| Color slots (13 preset+hue) | `ColorSlotStore` | Tool 7 ToolLedSettings | `illpad_lset` / `colors` | Ajouter un slot → `COLOR_SLOT_COUNT` + Tool 7 color grid + `resolveColorSlot()` |
+| Bank types + quantize mode + scaleGroup | `BankTypeStore` | Tool 5 ToolBankConfig | `illpad_btype` / `config` | Nouveau `BankType` (ex: LOOP) → Tool 5 type cycle + ArpEngine assignment ([main.cpp:345-362](../../src/main.cpp:345)) + LED state machine + `validateBankTypeStore()` |
+| Global settings (profile, AT rate, BLE, clock, doubleTap, bargraph, panic, batCal) | `SettingsStore` | Tool 6 ToolSettings | `illpad_set` / `settings` | Nouveau field → Tool 6 case switch + validator + bump version + apply dans `main.cpp` setup() ([main.cpp:329-339](../../src/main.cpp:329)) |
+| Pot bindings (user-configurable pot → parameter) | `PotMappingStore` (normalMap + arpegMap) | Tool 7 ToolPotMapping | `illpad_pmap` / `mapping` | Nouveau `PotTarget` enum → pool line, label+color, `getDiscreteSteps()`, `isPerBankTarget()`, `applyBinding()` case |
+| Pot filter tuning (snap, deadband, sleep, wake) | `PotFilterStore` | **none** (descriptor in T7 "Monitor" range but no UI) | `illpad_pflt` / `config` | **Friction zone** : modifiable only via code + flash. Intent "Monitor in T7" unimplemented. |
+| LED intensities + timings + confirm blinks + gamma | `LedSettingsStore` | Tool 8 ToolLedSettings | `illpad_lset` / `settings` | Nouveau `ConfirmType` → struct field (durationMs + blinkCount) + Tool 8 CONFIRM page + `renderConfirmation()` dispatch |
+| Color slots (13 preset+hue) | `ColorSlotStore` | Tool 8 ToolLedSettings | `illpad_lset` / `colors` | Ajouter un slot → `COLOR_SLOT_COUNT` + Tool 8 color grid + `resolveColorSlot()` |
 
 ### Table 2 — Runtime-managed persisted state (no Setup Tool, written via pot/pad gestures)
 
@@ -512,6 +517,7 @@ the task spans multiple files.
 | **Note resolution** | `ScaleResolver::resolve` | 3-layer mapping, `_lastResolvedNote` invariant. |
 | **Bank switching** | `BankManager::switchToBank` [181-210] | All side effects of a bank change. See §2 Flow 3. |
 | **Scale/hold/octave** | `ScaleManager::processScalePads` [114-201] | Pad→change flag + group propagation. |
+| **Control pads** | `ControlPadManager::update` | Edge detection (LEFT press/release, bank switch) + per-mode CC emission (MOMENTARY / LATCH / CONTINUOUS) + gate-vs-setter handoff. Music block skips via `isControlPad(i)`. |
 | **Arpeggiator core** | `ArpEngine::tick` [536-566] → `executeStep` [572-654] | State dispatch + note scheduling. `rebuildSequence` is a callee. |
 | **Arp scheduling** | `ArpScheduler::tick` [98-131] + `processEvents` [140-146] | Per-engine tick accumulator + event dispatch. |
 | **Clock/PLL** | `ClockManager::update` [45-63] → `processIncomingTicks` [66-116], `generateTicks` [181-203] | Source cascade + PLL smoothing. |

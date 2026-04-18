@@ -32,7 +32,7 @@ Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous 
 
 ## Descriptor Table
 
-`NVS_DESCRIPTORS[11]` in `KeyboardData.h` — one entry per Store blob:
+`NVS_DESCRIPTORS[12]` in `KeyboardData.h` — one entry per Store blob:
 
 ```cpp
 struct NvsDescriptor {
@@ -44,17 +44,18 @@ struct NvsDescriptor {
 };
 ```
 
-`TOOL_NVS_FIRST[7]` / `TOOL_NVS_LAST[7]` map Tools 1-7 to descriptor index ranges:
+`TOOL_NVS_FIRST[8]` / `TOOL_NVS_LAST[8]` map Tools 1-8 to descriptor index ranges:
 
 | Tool | Descriptors | Stores |
 |------|-------------|--------|
 | T1 Calibration | [0] | CalDataStore |
 | T2 Pad Ordering | [1] | NoteMapStore |
 | T3 Pad Roles | [2..4] | BankPadStore + ScalePadStore + ArpPadStore |
-| T4 Bank Config | [5] | BankTypeStore |
-| T5 Settings | [6] | SettingsStore |
-| T6 Pot Mapping | [7..8] | PotMappingStore + PotFilterStore |
-| T7 LED Settings | [9..10] | LedSettingsStore + ColorSlotStore |
+| T4 Control Pads | [5] | ControlPadStore |
+| T5 Bank Config | [6] | BankTypeStore |
+| T6 Settings | [7] | SettingsStore |
+| T7 Pot Mapping | [8..9] | PotMappingStore + PotFilterStore |
+| T8 LED Settings | [10..11] | LedSettingsStore + ColorSlotStore |
 
 Menu (`SetupUI::printMainMenu`) loops over these to check all stores in one pass.
 
@@ -100,6 +101,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | Struct | Namespace | Key | Magic | Version | Size | Replaces |
 |--------|-----------|-----|-------|---------|------|----------|
 | `ScalePadStore` | `illpad_spad` | `pads` | 0xBEEF | 1 | 20B | 3 separate keys (root_pads, mode_pads, chrom_pad) |
+| `ControlPadStore` | `illpad_ctrl` | `pads` | 0xBEEF | 1 | 76B | 12 sparse entries for Tool 4 Control Pads. Each entry : padIndex, ccNumber, channel, mode, deadzone, releaseMode. Validator : `validateControlPadStore()` clamps + enforces LATCH-requires-fixed-channel invariant. |
 | `ArpPadStore` | `illpad_apad` | `pads` | 0xBEEF | 2 | 12B | 2 separate keys (hold_pad, oct_pads) — v2 drops legacy play/stop pad |
 | `BankTypeStore` | `illpad_btype` | `config` | 0xBEEF | 2 | 28B | raw types[8] + qmode[8] (2 blobs, desync risk). v2 adds `scaleGroup[8]` (0=none, 1..4=A..D) for inter-bank scale linking |
 | `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 8B | **PLANNED** — not yet in code |

@@ -282,10 +282,11 @@ VT100 terminal, serial keyboard input only (no physical button in setup mode).
 [1] Pressure Calibration  — unchanged from V1
 [2] Pad Ordering           — touch low→high, positions 1-48, no base note
 [3] Pad Roles              — bank(8) + scale(15) + arp(5: hold+4 octave), color grid, collision check
-[4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
-[5] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
-[6] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
-[7] LED Settings           — color presets + hue + intensity + timing + gamma, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink). COLOR page: STOPPED(5 rows)/PLAYING(2 rows)/EVENTS(10 rows)/TIMING(3 rows) = 20 visible params (3 legacy rows hidden). CONFIRM page: hold fade (Play/Stop), octave blinks+duration, scale blinks+duration.
+[4] Control Pads           — 12 sparse CC/latch/momentary pads, per-mode editor, gate-vs-setter handoff
+[5] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
+[6] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
+[7] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
+[8] LED Settings           — color presets + hue + intensity + timing + gamma, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink). COLOR page: STOPPED(5 rows)/PLAYING(2 rows)/EVENTS(10 rows)/TIMING(3 rows) = 20 visible params (3 legacy rows hidden). CONFIRM page: hold fade (Play/Stop), octave blinks+duration, scale blinks+duration.
 [0] Reboot
 ```
 
@@ -299,11 +300,11 @@ Two context pages (NORMAL / ARPEG), toggle with `t`. Physical pot detection: tur
 src/
 ├── main.cpp, HardwareConfig.h
 ├── core/       CapacitiveKeyboard†, MidiTransport, LedController, PotFilter, KeyboardData.h
-├── managers/   BankManager, ScaleManager, PotRouter, BatteryMonitor, NvsManager
+├── managers/   BankManager, ScaleManager, PotRouter, BatteryMonitor, NvsManager, ControlPadManager
 ├── midi/       MidiEngine, ScaleResolver, ClockManager, GrooveTemplates.h
 ├── arp/        ArpEngine, ArpScheduler
 └── setup/      SetupManager, ToolCalibration, ToolPadOrdering, ToolPadRoles,
-                ToolBankConfig, ToolSettings, ToolPotMapping, ToolLedSettings,
+                ToolControlPads, ToolBankConfig, ToolSettings, ToolPotMapping, ToolLedSettings,
                 SetupUI, SetupPotInput, InputParser, SetupCommon.h
 ```
 
@@ -323,7 +324,7 @@ Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous 
 
 ### Descriptor table + validation
 
-`NVS_DESCRIPTORS[11]` in `KeyboardData.h` — one entry per Store blob (ns, key, magic, version, size). `TOOL_NVS_FIRST[7]`/`TOOL_NVS_LAST[7]` map Tools 1-7 to descriptor ranges (T3 spans 3, T6 spans 2, T7 spans 2). Menu uses a loop over these to check all stores.
+`NVS_DESCRIPTORS[12]` in `KeyboardData.h` — one entry per Store blob (ns, key, magic, version, size). `TOOL_NVS_FIRST[8]`/`TOOL_NVS_LAST[8]` map Tools 1-8 to descriptor ranges (T3 spans 3, T4 spans 1, T7 spans 2, T8 spans 2). Menu uses a loop over these to check all stores.
 
 `NVS_BLOB_MAX_SIZE` (128) — all Store structs must fit. `static_assert` on every Store struct enforces this at compile time. `static_assert(offsetof(SettingsStore, baselineProfile) == 3)` guards the byte-3 layout.
 
@@ -351,6 +352,7 @@ Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous 
 | `illpad_btype` | BankTypeStore — types[8] + quantize[8] + scaleGroup[8] (key `"config"`) |
 | `illpad_scale` | ScaleConfig per bank (keys `"cfg_0"` through `"cfg_7"`) |
 | `illpad_spad` | ScalePadStore — 7 root + 7 mode + 1 chrom (key `"pads"`) |
+| `illpad_ctrl` | ControlPadStore — 12 sparse entries, cross-bank CC pads (Tool 4) |
 | `illpad_apad` | ArpPadStore — 1 hold + 4 octave (key `"pads"`) |
 | `illpad_apot` | ArpPotStore per bank (gate, shuffle depth, shuffle template, div, pattern, octave range) |
 | `illpad_bvel` | base velocity + velocity variation per bank (NORMAL + ARPEG) |

@@ -304,14 +304,22 @@ All 7 tools + main menu follow the same frame layout:
 - Edit mode: Enter on grid → pool navigation, assign role to pad
 - `[r]` clear all roles, `[d]` factory defaults
 
-### Tool 4 — Bank Config
+### Tool 4 — Control Pads
+
+- Grid mode: GRID_CONTROLPAD (colored labels NNm / NNl / NNc by mode, VT_ORANGE assigned, VT_DIM unassigned)
+- PROP_EDIT: 5-field editor (CC#, Channel, Mode, Deadzone, Release) with cyan cursor + Nixie vedette for numeric fields
+- Invariants: LATCH forbids channel=0 (follow), Tool refuses or auto-remaps
+- Hardware pad tap = jump cursor (pattern from Tool 3)
+- `[x]` remove, `[d]` reset all (y/n confirm). Auto-save per edit via flashSaved + badge
+
+### Tool 5 — Bank Config
 
 - List of 8 banks with type (NORMAL/ARPEG) and quantize mode
 - Arrow nav, Enter to edit, Left/Right to toggle type
 - Down arrow from type field → quantize sub-field (ARPEG only)
 - Max 4 ARPEG banks enforced
 
-### Tool 5 — Settings
+### Tool 6 — Settings
 
 - Named category sections: PERFORMANCE, CONNECTIVITY, TIMING, SAFETY
 - 8 parameters, arrow nav, Enter to edit, Left/Right to change value
@@ -319,7 +327,7 @@ All 7 tools + main menu follow the same frame layout:
 - When editing a numeric param (AT rate / double-tap / bargraph), a `drawSegmentedValue` readout is injected as a new section before INFO — the value is promoted as the "vedette" of the screen.
 - Reboot warning for BLE Interval and Clock Mode changes
 
-### Tool 6 — Pot Mapping
+### Tool 7 — Pot Mapping
 
 - Two-column layout: Alone | + Hold Left
 - Up/Down = R1-R4, Left/Right = switch column
@@ -327,12 +335,12 @@ All 7 tools + main menu follow the same frame layout:
 - Pool line shows available targets with color coding
 - CC sub-editor and steal confirmation sub-states
 
-### Tool 7 — LED Settings
+### Tool 8 — LED Settings
 
 - 2 pages toggled with `t`: DISPLAY (15 params) and CONFIRM (15 params)
 - DISPLAY page: Normal bank fg/bg intensity, Arpeg pulse min/max (fg/bg, stopped/playing), tick flash intensities, absolute max cap, pulse period, tick flash duration
 - CONFIRM page: per-event blink count (1-3) + duration (ms) for bank switch, scale root/mode/chrom, hold on/off, play beats, stop fade, octave
-- Same drawParam/adjustParam pattern as Tool 5
+- Same drawParam/adjustParam pattern as Tool 6
 - NVS namespace `illpad_lset`, struct `LedSettingsStore` with magic/version
 - Save applies immediately via `LedController::loadLedSettings()`
 - Sine LUT: 256 entries (upgraded from 64) for smooth breathing
@@ -366,6 +374,9 @@ Hold has its own line and color because it is a unique function — arp-only Pla
 | **GRID_MEASUREMENT** | Delta valid (>=50) | — | Active (measuring) | Active (already done) | Delta too low | Uncalibrated |
 | **GRID_ORDERING** | Assigned position | — | Active (touching) | Active (already assigned) | — | Unassigned |
 | **GRID_ROLES** | Root | — | Mode (selected=bold) | — | Collision | None/unassigned |
+| **GRID_CONTROLPAD** | — | — | — | — | — | Unassigned |
+
+GRID_CONTROLPAD : VT_DIM unassigned, VT_ORANGE assigned (all 3 modes share the color, label suffix m/l/c distinguishes), cursor VT_REVERSE overlay.
 
 ## 2.5 Files
 
