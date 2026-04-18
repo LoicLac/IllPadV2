@@ -383,8 +383,8 @@ void SetupUI::setProgress(int8_t percent) {
 
 void SetupUI::printMainMenu() {
   // Unified NVS status checks via descriptor table
-  char toolStatus[7];
-  for (uint8_t t = 0; t < 7; t++) {
+  char toolStatus[8];
+  for (uint8_t t = 0; t < 8; t++) {
     bool allOk = true;
     for (uint8_t d = TOOL_NVS_FIRST[t]; d <= TOOL_NVS_LAST[t]; d++) {
       if (!NvsManager::checkBlob(NVS_DESCRIPTORS[d].ns, NVS_DESCRIPTORS[d].key,
@@ -399,10 +399,11 @@ void SetupUI::printMainMenu() {
   char calStatus  = toolStatus[0];
   char ordStatus  = toolStatus[1];
   char roleStatus = toolStatus[2];
-  char bankStatus = toolStatus[3];
-  char setStatus  = toolStatus[4];
-  char potStatus  = toolStatus[5];
-  char ledStatus  = toolStatus[6];
+  char ctrlStatus = toolStatus[3];  // T4 Control Pads
+  char bankStatus = toolStatus[4];  // was T4, now T5
+  char setStatus  = toolStatus[5];  // was T5, now T6
+  char potStatus  = toolStatus[6];  // was T6, now T7
+  char ledStatus  = toolStatus[7];  // was T7, now T8
 
   auto statusStr = [](char s) -> const char* {
     if (s == 'v') return VT_REVERSE VT_GREEN " ok " VT_RESET;
@@ -423,10 +424,11 @@ void SetupUI::printMainMenu() {
   drawFrameLine("[1]  Pressure Calibration          " VT_DIM "sensitivity tuning" VT_RESET "                  %s", statusStr(calStatus));
   drawFrameLine("[2]  Pad Ordering                  " VT_DIM "pitch mapping, low to high" VT_RESET "          %s", statusStr(ordStatus));
   drawFrameLine("[3]  Pad Roles                     " VT_DIM "bank / scale / arp pads" VT_RESET "             %s", statusStr(roleStatus));
-  drawFrameLine("[4]  Bank Config                   " VT_DIM "NORMAL vs ARPEG, quantize" VT_RESET "           %s", statusStr(bankStatus));
-  drawFrameLine("[5]  Settings                      " VT_DIM "preferences & connectivity" VT_RESET "          %s", statusStr(setStatus));
-  drawFrameLine("[6]  Pot Mapping                   " VT_DIM "parameter assignments" VT_RESET "               %s", statusStr(potStatus));
-  drawFrameLine("[7]  LED Settings                  " VT_DIM "colors, intensity & timing" VT_RESET "          %s", statusStr(ledStatus));
+  drawFrameLine("[4]  Control Pads                  " VT_DIM "cross-bank CC pads" VT_RESET "                  %s", statusStr(ctrlStatus));
+  drawFrameLine("[5]  Bank Config                   " VT_DIM "NORMAL vs ARPEG, quantize" VT_RESET "           %s", statusStr(bankStatus));
+  drawFrameLine("[6]  Settings                      " VT_DIM "preferences & connectivity" VT_RESET "          %s", statusStr(setStatus));
+  drawFrameLine("[7]  Pot Mapping                   " VT_DIM "parameter assignments" VT_RESET "               %s", statusStr(potStatus));
+  drawFrameLine("[8]  LED Settings                  " VT_DIM "colors, intensity & timing" VT_RESET "          %s", statusStr(ledStatus));
   drawFrameEmpty();
 
   // System section
@@ -439,21 +441,22 @@ void SetupUI::printMainMenu() {
   drawSection("SYSTEM CHECK");
   drawFrameEmpty();
   {
-    StatusItem items[7] = {
+    StatusItem items[8] = {
       { "CAL",  calStatus  == 'v' },
       { "ORD",  ordStatus  == 'v' },
       { "ROL",  roleStatus == 'v' },
+      { "CTL",  ctrlStatus == 'v' },
       { "BNK",  bankStatus == 'v' },
       { "SET",  setStatus  == 'v' },
       { "POT",  potStatus  == 'v' },
       { "LED",  ledStatus  == 'v' },
     };
-    drawStatusCluster(items, 7);
+    drawStatusCluster(items, 8);
   }
   drawFrameEmpty();
 
   // Control bar
-  drawControlBar("Type 0-7");
+  drawControlBar("Type 0-8");
 
   vtFrameEnd();
 }

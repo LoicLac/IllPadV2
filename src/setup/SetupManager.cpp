@@ -31,6 +31,7 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
                    bankPads, rootPads, modePads,
                    chromaticPad, holdPad,
                    octavePads);
+  _toolControlPads.begin(keyboard, leds, &_ui, nvs);
   _toolBankConfig.begin(leds, nvs, &_ui, banks);
   _toolSettings.begin(keyboard, leds, &_ui);
   _toolPotMapping.begin(leds, &_ui, potRouter);
@@ -97,24 +98,30 @@ void SetupManager::run() {
         break;
 
       case '4':
-        _toolBankConfig.run();
+        _toolControlPads.run();
         _ui.vtClear();
         screenDirty = true;
         break;
 
       case '5':
-        _toolSettings.run();
+        _toolBankConfig.run();
         _ui.vtClear();
         screenDirty = true;
         break;
 
       case '6':
-        _toolPotMapping.run();
+        _toolSettings.run();
         _ui.vtClear();
         screenDirty = true;
         break;
 
       case '7':
+        _toolPotMapping.run();
+        _ui.vtClear();
+        screenDirty = true;
+        break;
+
+      case '8':
         _toolLedSettings.run();
         _leds->startSetupComet();  // Restart comet (stopped by previewBegin)
         _ui.vtClear();

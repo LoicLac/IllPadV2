@@ -7,6 +7,7 @@
 #include "ToolCalibration.h"
 #include "ToolPadOrdering.h"
 #include "ToolPadRoles.h"
+#include "ToolControlPads.h"
 #include "ToolBankConfig.h"
 #include "ToolSettings.h"
 #include "ToolPotMapping.h"
@@ -42,6 +43,7 @@ private:
   ToolCalibration     _toolCal;
   ToolPadOrdering     _toolOrdering;
   ToolPadRoles        _toolRoles;
+  ToolControlPads     _toolControlPads;
   ToolBankConfig      _toolBankConfig;
   ToolSettings        _toolSettings;
   ToolPotMapping      _toolPotMapping;
