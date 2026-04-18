@@ -74,6 +74,11 @@ NvsManager::NvsManager()
     _colorSlots.slots[i].hueOffset = 0;
   }
 
+  // Default control pads (empty)
+  memset(&_ctrlStore, 0, sizeof(_ctrlStore));
+  _ctrlStore.magic   = CONTROLPAD_MAGIC;
+  _ctrlStore.version = CONTROLPAD_VERSION;
+
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     _scaleDirty[i] = false;
     _velocityDirty[i] = false;
@@ -779,6 +784,24 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   Serial.println("[NVS] LED settings + color slots loaded.");
   #endif
 
+  // --- Control pads (Tool 4) — single blob in illpad_ctrl / pads ---
+  memset(&_ctrlStore, 0, sizeof(_ctrlStore));
+  _ctrlStore.magic   = CONTROLPAD_MAGIC;
+  _ctrlStore.version = CONTROLPAD_VERSION;
+  if (NvsManager::loadBlob(CONTROLPAD_NVS_NAMESPACE, CONTROLPAD_NVS_KEY,
+                           CONTROLPAD_MAGIC, CONTROLPAD_VERSION,
+                           &_ctrlStore, sizeof(_ctrlStore))) {
+    validateControlPadStore(_ctrlStore);
+#if DEBUG_SERIAL
+    Serial.printf("[NVS] loaded %u control pad(s)\n", (unsigned)_ctrlStore.count);
+#endif
+  } else {
+#if DEBUG_SERIAL
+    Serial.println("[NVS] control pads: defaults (empty)");
+#endif
+    _ctrlStore.count = 0;
+  }
+
   // --- Pot mapping (user-configurable pot assignments) ---
   {
     PotMappingStore pms;
@@ -860,6 +883,10 @@ const LedSettingsStore& NvsManager::getLoadedLedSettings() const {
 
 const ColorSlotStore& NvsManager::getLoadedColorSlots() const {
   return _colorSlots;
+}
+
+const ControlPadStore& NvsManager::getLoadedControlPadStore() const {
+  return _ctrlStore;
 }
 
 // =================================================================

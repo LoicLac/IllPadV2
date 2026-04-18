@@ -55,6 +55,9 @@ public:
   // Access loaded color slots (for LedController init at boot, after loadAll)
   const ColorSlotStore& getLoadedColorSlots() const;
 
+  // Access loaded control pads (for ControlPadManager init at boot, after loadAll)
+  const ControlPadStore& getLoadedControlPadStore() const;
+
   // --- Static NVS helpers (usable without instance, for setup Tools + menu) ---
   static bool loadBlob(const char* ns, const char* key,
                        uint16_t expectedMagic, uint8_t expectedVersion,
@@ -113,6 +116,9 @@ private:
   // LED settings (loaded at boot from NVS)
   LedSettingsStore _ledSettings;
   ColorSlotStore _colorSlots;
+
+  // Control pads (loaded at boot from NVS, consumed by ControlPadManager::applyStore)
+  ControlPadStore _ctrlStore;
 
   // Global pot params (shape, slew, deadzone) — stored as raw values
   float       _pendingResponseShape;
