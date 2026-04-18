@@ -143,7 +143,47 @@ void ToolControlPads::_handleGridNav(const NavEvent& ev) {
       break;
   }
 }
-void ToolControlPads::_handlePropEdit(const NavEvent&)        { }
+void ToolControlPads::_handlePropEdit(const NavEvent& ev) {
+  int8_t s = _findSlot(_cursorPad);
+  if (s < 0) {
+    // Slot vanished (defensive) — back to grid
+    _uiMode = UI_GRID_NAV;
+    _screenDirty = true;
+    return;
+  }
+
+  switch (ev.type) {
+    case NAV_UP:
+      do {
+        if (_fieldIdx == 0) _fieldIdx = 4; else _fieldIdx--;
+      } while (_isFieldGreyed(_fieldIdx));
+      _screenDirty = true;
+      break;
+
+    case NAV_DOWN:
+      do {
+        if (_fieldIdx == 4) _fieldIdx = 0; else _fieldIdx++;
+      } while (_isFieldGreyed(_fieldIdx));
+      _screenDirty = true;
+      break;
+
+    case NAV_LEFT:
+      _adjustField(ev.accelerated ? -10 : -1);
+      break;
+    case NAV_RIGHT:
+      _adjustField(ev.accelerated ? +10 : +1);
+      break;
+
+    case NAV_ENTER:
+    case NAV_QUIT:
+      _uiMode = UI_GRID_NAV;
+      _screenDirty = true;
+      break;
+
+    default:
+      break;
+  }
+}
 void ToolControlPads::_handleConfirmRemove(const NavEvent&)   { }
 void ToolControlPads::_handleConfirmDefaults(const NavEvent&) { }
 
@@ -189,8 +229,78 @@ void ToolControlPads::_resetAll() {
   _save();
 }
 
-void ToolControlPads::_adjustField(int8_t) { }
-bool ToolControlPads::_isFieldGreyed(uint8_t) const { return false; }
+void ToolControlPads::_adjustField(int8_t delta) {
+  int8_t sSigned = _findSlot(_cursorPad);
+  if (sSigned < 0) return;
+  uint8_t s = (uint8_t)sSigned;
+  ControlPadEntry& e = _wk.entries[s];
+
+  switch (_fieldIdx) {
+    case 0: {  // CC number 0-127
+      int16_t v = (int16_t)e.ccNumber + delta;
+      if (v < 0)   v = 0;
+      if (v > 127) v = 127;
+      e.ccNumber = (uint8_t)v;
+      break;
+    }
+    case 1: {  // Channel 0 (follow) .. 16
+      int16_t v = (int16_t)e.channel + delta;
+      if (v < 0)  v = 0;
+      if (v > 16) v = 16;
+      // Invariant: LATCH + follow (ch 0) forbidden — refuse
+      if (e.mode == CTRL_MODE_LATCH && v == 0) {
+        _setFlash("LATCH requires fixed channel - change mode first");
+        return;  // no save
+      }
+      e.channel = (uint8_t)v;
+      break;
+    }
+    case 2: {  // Mode cycle 0..2
+      int16_t v = (int16_t)e.mode + delta;
+      while (v < 0) v += 3;
+      while (v > 2) v -= 3;
+      uint8_t newMode = (uint8_t)v;
+      // Invariant: switching TO LATCH with channel=0 forces channel=1
+      if (newMode == CTRL_MODE_LATCH && e.channel == 0) {
+        e.channel = 1;
+        _setFlash("CHANNEL forced to 1 (LATCH requires fixed channel)");
+      }
+      e.mode = newMode;
+      break;
+    }
+    case 3: {  // Deadzone 0..126 (continuous only)
+      if (e.mode != CTRL_MODE_CONTINUOUS) return;
+      int16_t v = (int16_t)e.deadzone + delta;
+      if (v < 0)   v = 0;
+      if (v > 126) v = 126;
+      e.deadzone = (uint8_t)v;
+      break;
+    }
+    case 4: {  // Release cycle 0..1 (continuous only)
+      if (e.mode != CTRL_MODE_CONTINUOUS) return;
+      e.releaseMode = (e.releaseMode == CTRL_RELEASE_TO_ZERO)
+                    ? CTRL_RELEASE_HOLD
+                    : CTRL_RELEASE_TO_ZERO;
+      break;
+    }
+    default:
+      return;
+  }
+
+  _save();
+  _screenDirty = true;
+}
+
+bool ToolControlPads::_isFieldGreyed(uint8_t fieldIdx) const {
+  int8_t s = _findSlot(_cursorPad);
+  if (s < 0) return false;
+  const ControlPadEntry& e = _wk.entries[s];
+  // Deadzone (3) and Release (4) only for continuous
+  if ((fieldIdx == 3 || fieldIdx == 4) && e.mode != CTRL_MODE_CONTINUOUS) {
+    return true;
+  }
+  return false;
+}
 
 void ToolControlPads::_drawGrid() {
   char labels[NUM_KEYS][6];
@@ -220,9 +330,87 @@ void ToolControlPads::_drawGrid() {
                     nullptr, labels, map);
 }
 void ToolControlPads::_drawSelected() {
+  int8_t sSigned = _findSlot(_cursorPad);
+
+  // Unassigned pad : only show slot count
+  if (sSigned < 0) {
+    _ui->drawFrameLine(VT_DIM "Slots used   %u / %u" VT_RESET,
+                       (unsigned)_wk.count, (unsigned)MAX_CONTROL_PADS);
+    _ui->drawFrameEmpty();
+    return;
+  }
+
+  const ControlPadEntry& e = _wk.entries[sSigned];
+
+  // Build all 5 field rows
+  struct FieldRow {
+    const char* label;
+    char        valBuf[24];
+    const char* desc;
+    bool        greyed;
+  };
+  FieldRow rows[5];
+
+  rows[0].label = "CC number ";
+  snprintf(rows[0].valBuf, sizeof(rows[0].valBuf), "%03u", (unsigned)e.ccNumber);
+  rows[0].desc = "standard MIDI CC 0-127";
+  rows[0].greyed = false;
+
+  rows[1].label = "Channel   ";
+  if (e.channel == 0) snprintf(rows[1].valBuf, sizeof(rows[1].valBuf), "follow");
+  else                snprintf(rows[1].valBuf, sizeof(rows[1].valBuf), "%u", (unsigned)e.channel);
+  rows[1].desc = "0=follow bank, 1-16=fixed MIDI channel";
+  rows[1].greyed = false;
+
+  rows[2].label = "Mode      ";
+  snprintf(rows[2].valBuf, sizeof(rows[2].valBuf), "%s",
+           (e.mode == CTRL_MODE_MOMENTARY)  ? "momentary"
+           : (e.mode == CTRL_MODE_LATCH)     ? "latch"
+                                             : "continuous");
+  rows[2].desc = "momentary / latch / continuous";
+  rows[2].greyed = false;
+
+  rows[3].label = "Deadzone  ";
+  snprintf(rows[3].valBuf, sizeof(rows[3].valBuf), "%03u", (unsigned)e.deadzone);
+  rows[3].desc = "continuous only - pressure threshold 0-126";
+  rows[3].greyed = (e.mode != CTRL_MODE_CONTINUOUS);
+
+  rows[4].label = "Release   ";
+  snprintf(rows[4].valBuf, sizeof(rows[4].valBuf), "%s",
+           (e.releaseMode == CTRL_RELEASE_TO_ZERO) ? "return-0" : "hold-last");
+  rows[4].desc = "continuous only - return-to-zero / hold-last";
+  rows[4].greyed = (e.mode != CTRL_MODE_CONTINUOUS);
+
+  for (uint8_t i = 0; i < 5; i++) {
+    bool selected = (_uiMode == UI_PROP_EDIT) && (_fieldIdx == i);
+    const char* cursor = selected
+        ? "  " VT_CYAN VT_BOLD "\xe2\x96\xb8 "
+        : "    ";
+    const char* valCol = rows[i].greyed ? VT_DIM
+                       : selected        ? VT_CYAN
+                                         : VT_BRIGHT_WHITE;
+    const char* val = rows[i].greyed ? "---" : rows[i].valBuf;
+    _ui->drawFrameLine("%s%s[%s%-10s%s]   " VT_DIM "%s" VT_RESET,
+                       cursor, rows[i].label,
+                       valCol, val, VT_RESET,
+                       rows[i].desc);
+  }
+
+  _ui->drawFrameEmpty();
   _ui->drawFrameLine(VT_DIM "Slots used   %u / %u" VT_RESET,
                      (unsigned)_wk.count, (unsigned)MAX_CONTROL_PADS);
   _ui->drawFrameEmpty();
+
+  // Nixie vedette when editing a numeric field (pattern Tool 5)
+  if (_uiMode == UI_PROP_EDIT) {
+    if (_fieldIdx == 0) {
+      _ui->drawSection("CC NUMBER");
+      _ui->drawSegmentedValue("", (uint32_t)e.ccNumber, 3, "");
+    } else if (_fieldIdx == 3 && e.mode == CTRL_MODE_CONTINUOUS) {
+      _ui->drawSection("DEADZONE");
+      _ui->drawSegmentedValue("", (uint32_t)e.deadzone, 3, "");
+    }
+  }
 }
 void ToolControlPads::_drawInfo() {
   if (_flashActive()) {
