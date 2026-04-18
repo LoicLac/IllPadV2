@@ -89,12 +89,12 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `CalDataStore` | `illpad_cal` | `caldata` | 0xBEEF | 5 | 102B | CapacitiveKeyboard (DO NOT MODIFY) |
 | `NoteMapStore` | `illpad_nmap` | `map` | 0xBEEF | 1 | 52B | T2 PadOrdering |
 | `BankPadStore` | `illpad_bpad` | `map` | 0xBEEF | 1 | 12B | T3 PadRoles |
-| `SettingsStore` | `illpad_set` | `settings` | 0xBEEF | 10 | 14B | T5 Settings |
+| `SettingsStore` | `illpad_set` | `settings` | 0xBEEF | 10 | 14B | T6 Settings |
 | `PotParamsStore` | `illpad_pot` | `params` | 0xBEEF | 2 | 10B | NvsManager (runtime) |
-| `PotMappingStore` | `illpad_pmap` | `mapping` | 0xBEEF | 1 | 36B | T6 PotMapping |
-| `PotFilterStore` | `illpad_pflt` | `cfg` | 0xBEEF | 1 | 12B | PotFilter (runtime, tuned via T6 Monitor). Fields: snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
-| `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 3 | 38B | T7 LedSettings |
-| `ColorSlotStore` | `illpad_lset` | `ledcolors` | 0xC010 | 1 | 30B | T7 LedSettings |
+| `PotMappingStore` | `illpad_pmap` | `mapping` | 0xBEEF | 1 | 36B | T7 PotMapping |
+| `PotFilterStore` | `illpad_pflt` | `cfg` | 0xBEEF | 1 | 12B | PotFilter (runtime, tuned via T7 Monitor). Fields: snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
+| `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 3 | 38B | T8 LedSettings |
+| `ColorSlotStore` | `illpad_lset` | `ledcolors` | 0xC010 | 1 | 30B | T8 LedSettings |
 
 ### V2 Stores (replace raw formats)
 

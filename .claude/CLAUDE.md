@@ -180,7 +180,7 @@ New confirmation preempts active one. `LedController` no longer depends on `Cloc
 
 ### Pot Bargraph
 
-`showPotBargraph(realLevel, potLevel, caught)` — 3 params. Shows target level as solid bar + physical pot position indicator. Catch state visualized: uncaught pots show pot position dimly until caught. Configurable duration via Tool 5 Settings (parameter 6, 0-indexed as case 5). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
+`showPotBargraph(realLevel, potLevel, caught)` — 3 params. Shows target level as solid bar + physical pot position indicator. Catch state visualized: uncaught pots show pot position dimly until caught. Configurable duration via Tool 6 Settings (parameter 6, 0-indexed as case 5). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
 
 `showTempoBargraph(realLevel, potLevel, caught, bpm)` — 4 params. Same as pot bargraph but with **tempo pulse**: the tip LED (highest lit) blinks on/off at the displayed BPM rate (period = 60000/bpm, duty 50%). Only pulses when caught. Called from `handlePotPipeline()` when `PotRouter::getBargraphTarget() == TARGET_TEMPO_BPM`.
 
@@ -221,7 +221,7 @@ Bank switch does not affect any bank's Play/Stop state — background arps conti
 
 5 patterns (Up/Down/UpDown/Random/Order) via hold+pot right 2. 1-4 octaves via 4 pads in single-layer control (hold left + octave pad). Up to 48 positions (192 steps with 4 oct). Division via hold+pot right 1 (9 binary values: 4/1→1/64). Gate/shuffle/velocity per-bank via pots.
 
-**Quantized start** (per-bank, set in Tool 4): Immediate (fire on next division boundary), Beat (snap to next 1/4 note, 24 ticks), or Bar (snap to next bar, 96 ticks). Stop is always immediate. Stop-mode auto-play (pile 0→1 transition) also respects quantize.
+**Quantized start** (per-bank, set in Tool 5): Immediate (fire on next division boundary), Beat (snap to next 1/4 note, 24 ticks), or Bar (snap to next bar, 96 ticks). Stop is always immediate. Stop-mode auto-play (pile 0→1 transition) also respects quantize.
 
 **Shuffle**: 10 groove templates (16 steps each, 0-4 positive-only classic, 5-9 bipolar), depth 0.0–1.0 via pot (extreme: notes can overlap across steps). Template selected via hold+pot right 3 (10 discrete values). Depth controls intensity, template controls groove shape. Shuffle offset = template[step%16] × depth × stepDuration / 100. Gate and shuffle use a unified time-based event system with reference counting (up to 64 pending events per engine): ArpScheduler.tick() schedules noteOn (with shuffle delay) and noteOff (at noteOnTime + stepDuration × gateLength), ArpScheduler.processEvents() fires them in real time. Overlapping notes handled via per-note refcount (MIDI noteOn only on 0→1, noteOff only on 1→0). Shuffle step counter resets on: play/stop toggle, pile 0→1 note, pattern change.
 
@@ -248,7 +248,7 @@ PotFilter reads 5 ADCs via 16× oversampling + adaptive EMA + deadband gate + sl
 
 **Empty slot** (Right 1, NORMAL + hold left): reserved for future parameter.
 
-### User-Configurable Mapping (Tool 6)
+### User-Configurable Mapping (Tool 7)
 
 The 4 right pots × 2 layers = **8 slots per context** (NORMAL and ARPEG independently). Rear pot is fixed (not configurable). Each slot can be assigned any parameter from that context's pool, plus MIDI CC (with CC#) or MIDI Pitchbend.
 
@@ -290,7 +290,7 @@ VT100 terminal, serial keyboard input only (no physical button in setup mode).
 [0] Reboot
 ```
 
-### Tool 6 — Pot Mapping UX
+### Tool 7 — Pot Mapping UX
 
 Two context pages (NORMAL / ARPEG), toggle with `t`. Physical pot detection: turn a pot (or hold-left + turn) to select a slot. Pool line always visible showing all assignable parameters, color-coded: GREEN = available, DIM = already assigned. `< >` cycles through pool, Enter confirms assignment and auto-saves to NVS. Steal logic: picking an already-assigned param orphans the source slot to "empty". CC enters CC# sub-mode immediately (`< >` adjusts number, ENTER confirms, `q` cancels and restores previous assignment). PB: max one per context, auto-steals. `d` resets current context to defaults. `q` exits.
 
