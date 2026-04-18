@@ -25,6 +25,7 @@
 #include "managers/PotRouter.h"
 #include "managers/BatteryMonitor.h"
 #include "managers/NvsManager.h"
+#include "managers/ControlPadManager.h"
 
 // Setup
 #include "setup/SetupManager.h"
@@ -55,6 +56,7 @@ static ScaleManager       s_scaleManager;
 static PotRouter          s_potRouter;
 static BatteryMonitor     s_batteryMonitor;
 static NvsManager         s_nvsManager;
+static ControlPadManager  s_controlPadManager;
 static SetupManager       s_setupManager;
 static ClockManager       s_clockManager;
 static ArpScheduler       s_arpScheduler;
@@ -416,6 +418,13 @@ void setup() {
   Serial.println("[INIT] ScaleManager OK.");
   #endif
 
+  // Control Pad Manager (Tool 4)
+  s_controlPadManager.begin(&s_transport);
+  s_controlPadManager.applyStore(s_nvsManager.getLoadedControlPadStore());
+  #if DEBUG_SERIAL
+  Serial.println("[INIT] ControlPadManager OK.");
+  #endif
+
   // Battery Monitor
   s_batteryMonitor.begin(&s_leds);
 
@@ -466,6 +475,7 @@ void setup() {
 static void processNormalMode(const SharedKeyboardState& state, BankSlot& slot) {
   const ScaleConfig& scale = slot.scale;
   for (int i = 0; i < NUM_KEYS; i++) {
+    if (s_controlPadManager.isControlPad(i)) continue;
     bool pressed    = state.keyIsPressed[i];
     bool wasPressed = s_lastKeys[i];
 
@@ -501,6 +511,7 @@ static void processNormalMode(const SharedKeyboardState& state, BankSlot& slot) 
 static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uint32_t now) {
   for (int i = 0; i < NUM_KEYS; i++) {
     if (i == s_holdPad) continue;  // Hold pad is never a music pad
+    if (s_controlPadManager.isControlPad(i)) continue;
 
     bool pressed    = state.keyIsPressed[i];
     bool wasPressed = s_lastKeys[i];
@@ -542,6 +553,7 @@ static void handleLeftReleaseCleanup(const SharedKeyboardState& state) {
     BankSlot& relSlot = s_bankManager.getCurrentSlot();
     if (relSlot.type == BANK_NORMAL) {
       for (int i = 0; i < NUM_KEYS; i++) {
+        if (s_controlPadManager.isControlPad(i)) continue;
         if (!state.keyIsPressed[i]) {
           s_midiEngine.noteOff(i);
         }
@@ -550,6 +562,7 @@ static void handleLeftReleaseCleanup(const SharedKeyboardState& state) {
                && !relSlot.arpEngine->isCaptured()) {
       for (int i = 0; i < NUM_KEYS; i++) {
         if (i == s_holdPad) continue;
+        if (s_controlPadManager.isControlPad(i)) continue;
         if (!state.keyIsPressed[i]) {
           relSlot.arpEngine->removePadPosition(s_padOrder[i]);
         }
@@ -940,6 +953,11 @@ void loop() {
   handleManagerUpdates(state, leftHeld);
 
   handleHoldPad(state);
+
+  // --- Control pads (step 7b): after bank switch resolution + hold pad,
+  //     before music block. Emits CC and handles LEFT/bank edges.
+  s_controlPadManager.update(state, leftHeld,
+                             s_bankManager.getCurrentSlot().channel);
 
   handlePadInput(state, now);
 
