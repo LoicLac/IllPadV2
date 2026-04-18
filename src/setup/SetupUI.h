@@ -114,7 +114,8 @@ enum GridMode : uint8_t {
   GRID_BASELINE,      // Stabilization: colored baselines vs target
   GRID_MEASUREMENT,   // Calibration: measured deltas, active key highlight
   GRID_ORDERING,      // Pad ordering: position numbers 1-48
-  GRID_ROLES          // Pad roles: colored 5-char labels
+  GRID_ROLES,         // Pad roles: colored 5-char labels
+  GRID_CONTROLPAD     // Tool 4 — CC slot cells
 };
 
 // =================================================================

@@ -541,6 +541,19 @@ void SetupUI::drawCellGrid(
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
                           "%s%5s" VT_RESET, color, roleLabels[key]);
         }
+      } else if (mode == GRID_CONTROLPAD && roleLabels && roleMap) {
+        const char* label = roleLabels[key];
+        if (key == activeKey) {
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                          VT_REVERSE VT_ORANGE "%5s" VT_RESET, label);
+        } else if (roleMap[key] == 0) {
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                          VT_DIM "%5s" VT_RESET, label);
+        } else {
+          // roleMap[key] == 1/2/3 → momentary/latch/continuous (all assigned)
+          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
+                          VT_ORANGE "%5s" VT_RESET, label);
+        }
       } else if (mode == GRID_ORDERING) {
         if (key == activeKey && orderMap) {
           if (activeIsDone) {
