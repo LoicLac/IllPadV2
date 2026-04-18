@@ -372,7 +372,7 @@ void setup() {
 
       // Apply NVS-loaded arp params to each engine
       const ArpPotStore& arp = s_nvsManager.getLoadedArpParams(i);
-      s_banks[i].arpEngine->setGateLength(max(0.05f, (float)arp.gateRaw / 4095.0f));
+      s_banks[i].arpEngine->setGateLength(max(0.005f, (float)arp.gateRaw / 4095.0f));
       s_banks[i].arpEngine->setShuffleDepth((float)arp.shuffleDepthRaw / 4095.0f);
       s_banks[i].arpEngine->setDivision((ArpDivision)arp.division);
       s_banks[i].arpEngine->setPattern((ArpPattern)arp.pattern);
@@ -396,9 +396,11 @@ void setup() {
   s_holdPad = holdPad;
 
   // Bank Manager
-  s_bankManager.begin(&s_midiEngine, &s_leds, s_banks, s_lastKeys);
+  s_bankManager.begin(&s_midiEngine, &s_leds, s_banks, s_lastKeys, &s_transport);
   s_bankManager.setBankPads(bankPads);
   s_bankManager.setCurrentBank(currentBank);
+  s_bankManager.setDoubleTapMs(s_doubleTapMs);
+  s_bankManager.setHoldPad(holdPad);
   #if DEBUG_SERIAL
   Serial.println("[INIT] BankManager OK.");
   #endif
@@ -506,7 +508,7 @@ static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uin
 
     if (pressed && !wasPressed) {
       if (slot.arpEngine->isCaptured()) {
-        // ON mode: double-tap removes, single tap adds
+        // Play: double-tap removes, single tap adds to persistent pile
         if (s_lastPressTime[i] > 0 &&
             (now - s_lastPressTime[i]) < (uint32_t)s_doubleTapMs) {
           slot.arpEngine->removePadPosition(pos);
@@ -516,16 +518,19 @@ static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uin
           s_lastPressTime[i] = now;
         }
       } else {
-        // OFF mode: live add
+        // Stop: live mode. First press after Play→Stop wipes the paused pile.
+        if (slot.arpEngine->isPaused() && slot.arpEngine->hasNotes()) {
+          slot.arpEngine->clearAllNotes(s_transport);
+        }
         slot.arpEngine->addPadPosition(pos);
       }
 
     } else if (!pressed && wasPressed) {
       if (!slot.arpEngine->isCaptured()) {
-        // OFF mode: live remove
+        // Stop: live remove
         slot.arpEngine->removePadPosition(pos);
       }
-      // ON mode: release ignored (pile frozen)
+      // Play: release ignored (pile persistent)
     }
   }
 }
@@ -610,20 +615,39 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
   bool scaleChanged = (scaleChange != SCALE_CHANGE_NONE);
   bool octaveChanged = s_scaleManager.hasOctaveChanged();
 
-  // Queue NVS save on scale change + sync arp engine scale + LED confirmation
+  // Queue NVS save on scale change + sync arp engine scale + LED confirmation.
+  // Scale group propagation : si la banque courante appartient a un groupe,
+  // toutes les autres banques du groupe recoivent la meme ScaleConfig.
   if (scaleChanged) {
     uint8_t bank = s_bankManager.getCurrentBank();
     BankSlot& scSlot = s_bankManager.getCurrentSlot();
+
+    // Save + sync arp pour la banque courante
     s_nvsManager.queueScaleWrite(bank, scSlot.scale);
     if (scSlot.type == BANK_ARPEG && scSlot.arpEngine) {
       scSlot.arpEngine->setScaleConfig(scSlot.scale);
     }
-    switch (scaleChange) {
-      case SCALE_CHANGE_ROOT:      s_leds.triggerConfirm(CONFIRM_SCALE_ROOT); break;
-      case SCALE_CHANGE_MODE:      s_leds.triggerConfirm(CONFIRM_SCALE_MODE); break;
-      case SCALE_CHANGE_CHROMATIC: s_leds.triggerConfirm(CONFIRM_SCALE_CHROM); break;
-      default: break;
+
+    // Propagation aux membres du meme groupe + bitmask pour LED confirmation
+    uint8_t group = s_nvsManager.getLoadedScaleGroup(bank);
+    uint8_t ledMask = (uint8_t)(1 << bank);
+    if (group > 0) {
+      for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        if (i == bank) continue;
+        if (s_nvsManager.getLoadedScaleGroup(i) != group) continue;
+        s_banks[i].scale = scSlot.scale;
+        s_nvsManager.queueScaleWrite(i, scSlot.scale);
+        if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine) {
+          s_banks[i].arpEngine->setScaleConfig(scSlot.scale);
+        }
+        ledMask |= (uint8_t)(1 << i);
+      }
     }
+
+    ConfirmType ct = (scaleChange == SCALE_CHANGE_ROOT) ? CONFIRM_SCALE_ROOT
+                   : (scaleChange == SCALE_CHANGE_MODE) ? CONFIRM_SCALE_MODE
+                   : CONFIRM_SCALE_CHROM;
+    s_leds.triggerConfirm(ct, 0, ledMask);
   }
 
   // Queue NVS save on octave change + LED confirmation

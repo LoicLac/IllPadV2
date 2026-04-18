@@ -63,14 +63,16 @@ public:
   void setScaleConfig(const ScaleConfig& scale);
   void setPadOrder(const uint8_t* padOrder);
 
-  // --- Capture (OFF/ON switch) ---
-  // OFF→ON (capture): pile snapshot, arp continues. If paused pile exists, resume.
-  // ON→OFF (release): if fingers down (excl. holdPad) → pile cleared, live mode.
-  //                    if no fingers → pile kept, arp paused (resume on next ON).
+  // --- Play/Stop toggle (hold pad OR LEFT + double-tap bank pad) ---
+  // Stop → Play: if paused pile has notes, relaunch; clears paused flag.
+  // Play → Stop: fingers down (excl. holdPad) → pile cleared, live mode.
+  //              no fingers → pile kept, paused flag armed.
+  // keyIsPressed == nullptr → treated as "no fingers" (BG bank: pads feed FG).
   void setCaptured(bool captured, MidiTransport& transport,
                    const uint8_t* keyIsPressed, uint8_t holdPadIdx);
   bool isCaptured() const;
   bool isPlaying() const;
+  bool isPaused() const;
 
   // --- Core tick (called by ArpScheduler when a step fires) ---
   void tick(MidiTransport& transport, uint32_t stepDurationUs,

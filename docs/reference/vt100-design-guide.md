@@ -2,6 +2,8 @@
 
 This document defines the visual language, navigation patterns, and technical conventions for VT100 terminal-based setup interfaces. It serves as the spec for anyone touching the setup UI code.
 
+Aesthetic direction : **Apollo cockpit / amber phosphor CRT**. Every visible element must serve a function ("beauté fonctionnelle") — no decorative text. Structural accents (rivets, tape labels, voyants, segmented readouts) caricature that functional beauty.
+
 ---
 
 # Part 1 — General (reusable across instruments)
@@ -26,23 +28,38 @@ All visual structure uses Unicode box drawing characters (UTF-8 encoded, 3 bytes
 |---|---|---|
 | **Outer frame** | `╔ ═ ╗ ║ ╚ ╝ ╠ ╣` (double-line) | Page border, header, control bar |
 | **Section separator** | `╟ ─ ╢` (single-line, connects to outer) | Named sections within the page |
-| **Cell grid** | `┌ ─ ┬ ┐ │ ├ ─ ┼ ┤ │ └ ─ ┴ ┘` (single-line, standalone) | Data grids (pad matrices, tables) |
-| **Two-column divider** | `│` (single vertical) | Side-by-side layouts |
+| **Cell grid** | `┌ ─ ┬ ┐ │ ├ ─ ┼ ┤ │ └ ─ ┴ ┘` (single-line, standalone) | Data grids (pad matrices, tables, segmented readouts) |
+| **Two-column divider** | `│` (single vertical) | Side-by-side layouts, control-bar group separators |
+
+### Cockpit accents
+
+| Glyph | Name | Usage |
+|---|---|---|
+| `◉` | `UNI_RIVET` (fisheye) | Bolt head on every horizontal frame line |
+| `●` | `UNI_LED_ON` (BLACK CIRCLE) | Lit voyant (status OK) |
+| `○` | `UNI_LED_OFF` (WHITE CIRCLE) | Dim voyant (status --) |
+| `█` | `UNI_BAR_FULL` | Gauge filled cell |
+| `░` | `UNI_BAR_EMPTY` | Gauge empty cell |
+| `▸` | step arrow | Inline breadcrumb separator `─▸` |
 
 ### Frame anatomy
 
 ```
-╔══════════════════════════════════════════════════════╗   ← drawFrameTop()
-║  [TITLE REVERSE]     TOOL NAME           [NVS:OK]   ║   ← drawConsoleHeader()
-╠══════════════════════════════════════════════════════╣   ← separator (part of header)
-║                                                      ║   ← drawFrameEmpty()
-╟── SECTION LABEL ─────────────────────────────────────╢   ← drawSection()
-║  Content line with auto-padding                      ║   ← drawFrameLine()
-║                                                      ║   ← drawFrameEmpty()
-╠══════════════════════════════════════════════════════╣   ← drawControlBar() top
-║  [KEY] ACTION   [KEY] ACTION   [q] EXIT              ║   ← drawControlBar() content
-╚══════════════════════════════════════════════════════╝   ← drawControlBar() bottom
+╔══◉══════════════════════════════════════════════◉══╗   ← drawFrameTop()      rivets at corners
+║  [TITLE REVERSE]     TOOL NAME           [NVS:OK]  ║   ← drawConsoleHeader()
+╠══◉══════════════════════════════════════════════◉══╣   ← separator           rivets
+║                                                    ║   ← drawFrameEmpty()
+╟── [reverse]  SECTION LABEL  [reverse] ─────────────╢   ← drawSection()       tape label
+║  Content line with auto-padding                    ║   ← drawFrameLine()
+║                                                    ║   ← drawFrameEmpty()
+╠══◉══════════════════════════════════════════════◉══╣   ← drawControlBar()   rivets
+║  [KEY] ACTION  │  [KEY] ACTION  │  [q] EXIT        ║   ← grouped controls
+╚══◉══════════════════════════════════════════════◉══╝   ← drawControlBar() bottom rivets
 ```
+
+Every horizontal frame line carries **rivets (◉)** at the same two positions (3 chars in from each end). They look like panel bolts, reinforcing the cockpit metaphor without consuming space.
+
+Section labels are rendered as **tape labels** — the label text sits in a reverse-cyan-bold strip, flanked by single `─` dashes. Reads like an engraved Dymo strip on an amber Apollo console.
 
 ### Width math
 
@@ -144,7 +161,40 @@ Every tool header shows a badge:
 
 The main menu shows per-tool status (`ok` / `--`). Each check reads the NVS namespace and validates size + magic/version where applicable.
 
-## 1.7 Cell Grid (4xN pad matrix)
+## 1.7 Cockpit primitives
+
+Specialised building blocks that pair with the base frame. All live in `SetupUI` and take care of their own padding / colouring.
+
+### `drawStepIndicator(labels, count, current)`
+
+Renders a one-line breadcrumb for multi-phase tools. Each step appears as `(N) LABEL`, joined by dim `─▸` arrows. The **current** step is reverse-cyan-bold, past steps are dim green (completed), future steps dim white. Used by Tool 1 (`SENS → STAB → MEAS → RECAP`) and Tool 2 (`REVIEW → MEAS → RECAP`). Call once at the top of each phase, just after the header empty line.
+
+### `drawGaugeLine(label, percent, selected)`
+
+Labelled intensity bar : 40 cells of `█ / ░` followed by the numeric readout. Selected rows render in cyan/bold. Available but currently not applied (compact tables read better in Tool 7).
+
+### `drawSegmentedValue(label, value, digits, unit)`
+
+Three-line "Nixie" style readout for headline numeric values. Each digit lives in its own `┌─┬─┬─┐` cell. Digits are VT_BRIGHT_WHITE VT_BOLD. Used in Tool 5 when the cursor sits on a numeric parameter (`AFTERTOUCH RATE`, `DOUBLE-TAP WINDOW`, `BARGRAPH DURATION`). Gives the edited value undeniable hierarchy without stealing the description zone.
+
+### `drawStatusCluster(items, count)`
+
+One-line pre-flight check : `● CAL   ● ORD   ○ ROL   ● BNK   ...`. `●` (BLACK CIRCLE) lit in green = saved to NVS, `○` (WHITE CIRCLE) dim = factory defaults. Used in the main menu below the tool list.
+
+### `CBAR_SEP` and `CBAR_CONFIRM_*`
+
+String macros exposed in `SetupUI.h`:
+- `CBAR_SEP` = `"  │  "` — inserts a dim single vertical between control-bar groups.
+- `CBAR_CONFIRM_ANY` = `"[y] confirm  [any] cancel"` (dim).
+- `CBAR_CONFIRM_STRICT` = `"[y] YES  [n] NO"` (bold).
+
+Control bars with 4+ key hints should be split into 2-3 logical groups separated by `CBAR_SEP`. Typical pattern : `NAV  │  ACTIONS  │  EXIT`.
+
+### Parsing confirmations
+
+`SetupUI::parseConfirm(ev) -> ConfirmResult` factors the y/any-cancel handler. Returns `CONFIRM_PENDING`, `CONFIRM_YES`, or `CONFIRM_NO`. Strict y/n tools (ToolCalibration, SetupManager reboot) still own their handlers — different semantics.
+
+## 1.8 Cell Grid (4xN pad matrix)
 
 For instruments with pad matrices, `drawCellGrid()` renders a bordered grid:
 
@@ -161,7 +211,7 @@ For instruments with pad matrices, `drawCellGrid()` renders a bordered grid:
 - Grid indented 4 spaces from left content edge
 - Color per cell is mode-dependent (each tool defines its color rules)
 
-## 1.8 Python Terminal Script Conventions
+## 1.9 Python Terminal Script Conventions
 
 The Python serial terminal (`ItermCode/vt100_serial_terminal.py`) is the bridge between the instrument and the user's terminal emulator.
 
@@ -226,19 +276,22 @@ All 7 tools + main menu follow the same frame layout:
 
 ### Main Menu
 
-- Sections: CONFIGURATION TOOLS, SYSTEM, STATUS
-- Per-tool NVS status (`ok` green, `--` dim)
+- Sections: CONFIGURATION TOOLS, SYSTEM, SYSTEM CHECK
+- Per-tool NVS status (`ok` green, `--` dim) on the right of each tool line
+- SYSTEM CHECK = single `drawStatusCluster` row with the 7 tool voyants at a glance
 - iTerm2 init happens here (resize, palette sent by script)
 
 ### Tool 1 — Pressure Calibration
 
 - States: SENSITIVITY → STABILIZATION → MEASUREMENT → RECAP → SAVE
+- `drawStepIndicator(CAL_STEPS, 4, current)` rendered at every phase (SENS / STAB / MEAS / RECAP)
 - Grid mode: GRID_BASELINE (stabilization), GRID_MEASUREMENT (calibration)
 - No pool. Detail box shows sensor/channel/delta for active pad.
 
 ### Tool 2 — Pad Ordering
 
 - States: REVIEW → MEASUREMENT → RECAP → SAVE
+- `drawStepIndicator(ORD_STEPS, 3, current)` rendered at every phase (REVIEW / MEAS / RECAP)
 - Grid mode: GRID_ORDERING (position numbers 1-48)
 - Touch = auto-assign (no Enter needed)
 - REVIEW state shows current NVS ordering in green
@@ -263,6 +316,7 @@ All 7 tools + main menu follow the same frame layout:
 - Named category sections: PERFORMANCE, CONNECTIVITY, TIMING, SAFETY
 - 8 parameters, arrow nav, Enter to edit, Left/Right to change value
 - Parameter types: enum (wrap), numeric (clamp + accelerate), boolean (toggle), calibration (ADC sample)
+- When editing a numeric param (AT rate / double-tap / bargraph), a `drawSegmentedValue` readout is injected as a new section before INFO — the value is promoted as the "vedette" of the screen.
 - Reboot warning for BLE Interval and Clock Mode changes
 
 ### Tool 6 — Pot Mapping
@@ -286,7 +340,7 @@ All 7 tools + main menu follow the same frame layout:
 
 ## 2.3 Pad Role Categories and Colors
 
-Tool 3 uses 7 role categories, each with a distinct VT100 color:
+Tool 3 uses 6 role categories, each with a distinct VT100 color:
 
 | Category | Pool label | Items | Color | ANSI | RoleCode |
 |---|---|---|---|---|---|
@@ -295,7 +349,6 @@ Tool 3 uses 7 role categories, each with a distinct VT100 color:
 | **Mode** | `Mode:` | Ion Dor Phr Lyd Mix Aeo Loc Chr | Cyan | `\033[36m` | 3 |
 | **Octave** | `Octave:` | 1-4 | Yellow | `\033[33m` | 4 |
 | **Hold** | `Hold:` | Hld | Magenta | `\033[35m` | 5 |
-| **Play/Stop** | `Play/Stop:` | P/S | Bright Red | `\033[91m` | 6 |
 | **Clear** | `[---] clear role` | (action) | Dim | `\033[2m` | 0 |
 
 These colors are used in:
@@ -303,9 +356,7 @@ These colors are used in:
 - The 4x12 grid cells (via `roleMap[]` → `drawCellGrid()`)
 - The info panel title when showing a role description
 
-Hold and Play/Stop have their own lines and colors because they are unique functions:
-- Hold = arp-only toggle (hold on/off)
-- Play/Stop = the ONLY pad that works WITHOUT the left button held — it's a standalone transport control
+Hold has its own line and color because it is a unique function — arp-only Play/Stop toggle, works without the left button held (the only arp-only pad that does). The same Play/Stop toggle can also be triggered via LEFT + double-tap on a bank pad, which is a button-combo action rather than a dedicated pad role.
 
 ## 2.4 Grid Color Rules by Mode
 

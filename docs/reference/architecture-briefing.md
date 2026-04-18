@@ -38,10 +38,9 @@ ClockManager::update() → _currentTick++
       synthTick = currentTick - tickAccum
       ArpEngine::tick(synthTick, globalTick=currentTick)
         → switch (currentState()):             [state dispatch]
-            IDLE: flush + stop, return
-            HELD_STOPPED: return
+            IDLE: flush + stop, return              (pile empty)
             WAITING_QUANTIZE: check boundary, return or proceed
-            PLAYING: auto-play transition if HOLD OFF
+            PLAYING: Play-mode captured or Stop-mode auto-play
         → executeStep():                       [note scheduling]
             → resolve position → MIDI note via ScaleResolver
             → schedule noteOff FIRST (atomic pair)
@@ -74,6 +73,61 @@ Key files: `ClockManager.cpp:181-203` (generateTicks), `ArpScheduler.cpp:98-131`
 11. resetPerBankCatch() — uncatch per-bank only [reloadPerBankParams:605]
 ```
 
+#### LEFT + Bank Pad: deferral and double-tap Play/Stop toggle
+`BankManager::update()` uses rising-edge detection on bank pads while LEFT is held, plus
+a per-pad timestamp (`_lastBankPadPressTime[b]`) for double-tap tracking. Window =
+`_doubleTapMs` (100–250ms, settings default 150ms, same value as Play-mode note double-tap).
+
+```
+Rising edge on bank pad b (while LEFT held):
+  if 2nd tap within window AND _banks[b].type == BANK_ARPEG:
+    // Same event chain as Hold pad. Only difference: BG target → keys=nullptr.
+    ArpEngine::setCaptured(!wasCaptured, transport,
+                           keys = (b == _currentBank) ? keyIsPressed : nullptr,
+                           _holdPad):
+      Stop → Play (captured=true):
+        _pausedPile && pile>0 → relaunch from step 0, waitForQuantize if needed
+        else                  → just flip _captured, _pausedPile=false
+      Play → Stop (captured=false):
+        anyFingerDown (excl. holdPad) → clearAllNotes() (live mode takes over)
+        no fingers (or BG: keys==nullptr)
+                                       → flushPendingNoteOffs, _playing=false,
+                                         _waitingForQuantize=false, _pausedPile=true
+    Toggle always fires — LED always updates.
+    Always: consume press (timestamp=0), cancel pending switch, continue.
+    LED: triggerConfirm(HOLD_OFF|HOLD_ON, mask=1<<b) — fade overlay on target
+         pad LED (may be BG bank). Double-tap NEVER switches bank.
+
+  _pausedPile semantics (persistent):
+    _pausedPile=true means "Stop with pile kept — next Play relaunches from step 0".
+    In Stop mode, first pad press wipes the paused pile before entering live mode
+    (processArpMode in main.cpp).
+    clearAllNotes(), setCaptured(true), and addPadPosition() all reset _pausedPile=false.
+
+  Else (1st tap):
+    _lastBankPadPressTime[b] = now
+    if b == _currentBank: continue
+    if _banks[b].type == BANK_ARPEG:
+      arm pending switch: _pendingSwitchBank = b, _pendingSwitchTime = now
+                          (switch deferred ~doubleTapMs to allow 2nd tap detection)
+    else (NORMAL):
+      switchToBank(b) immediately, clear pending switch
+```
+
+Pending switch resolution:
+- **Natural timeout** (`now - _pendingSwitchTime >= _doubleTapMs`): commit `switchToBank(target)`.
+- **LEFT release while pending**: fast-forward — commit `switchToBank(target)` on release edge.
+  Avoids perceived latency if user drops LEFT before window elapses.
+
+`_switchedDuringHold` flag: set when a switch occurs while LEFT is held. On LEFT release,
+`s_lastKeys` is snapshotted from current `keyIsPressed` to prevent phantom noteOn/noteOff
+when resuming normal play on the new bank.
+
+Key files: `BankManager.cpp` (update, switchToBank, `_holdPad` set at boot via `setHoldPad()`),
+`ArpEngine.cpp:setCaptured()` (unified Play/Stop toggle, called by both Hold pad in
+`main.cpp:handleHoldPad()` and BankManager double-tap path), `LedController.cpp`
+CONFIRM_HOLD_ON/OFF (honors `_confirmLedMask` → fades the target bank's LED, not just foreground).
+
 ### Scale Change
 ```
 ScaleManager::processScalePads() detects root/mode/chromatic pad press
@@ -82,8 +136,14 @@ ScaleManager::processScalePads() detects root/mode/chromatic pad press
   → Set flag: _scaleChangeType = ROOT|MODE|CHROMATIC
 handleManagerUpdates() consumes flag:
   → NVS queue + ArpEngine::setScaleConfig() + LED confirm
+  → Group propagation: if currentBank.scaleGroup > 0, iterate all other banks
+    in the same group: copy scSlot.scale, queueScaleWrite(i, scale),
+    setScaleConfig() if ARPEG. No allNotesOff on propagated banks
+    (NORMAL bg = no active notes, ARPEG re-resolves on next tick).
+  → LED confirmation: triggerConfirm(SCALE_*, 0, ledMask) with bitmask of
+    all group members — all group LEDs blink together (not just foreground).
 ```
-Key files: `ScaleManager.cpp:123-227`, `main.cpp:handleManagerUpdates()` (line 609), `reloadPerBankParams()` (line 587)
+Key files: `ScaleManager.cpp:123-227`, `main.cpp:handleManagerUpdates()` (line 609), `reloadPerBankParams()` (line 587), scale groups stored in `BankTypeStore.scaleGroup[]` (0=none, 1..NUM_SCALE_GROUPS=A..D), accessed via `NvsManager::getLoadedScaleGroup()`. Leader-wins propagation at boot in `NvsManager::loadAll()` ensures consistency across NVS per-bank scale blobs.
 
 ### Pot → Parameter
 ```

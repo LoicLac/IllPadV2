@@ -67,9 +67,9 @@ Menu (`SetupUI::printMainMenu`) loops over these to check all stores in one pass
 | Function | Clamps |
 |----------|--------|
 | `validateSettingsStore` | profile, AT rate, BLE interval, clock mode, double-tap, bargraph, panic, batADC |
-| `validateBankTypeStore` | types (max BANK_ARPEG), arpCount (max 4), quantize modes |
+| `validateBankTypeStore` | types (max BANK_ARPEG), arpCount (max 4), quantize modes, scaleGroup (max NUM_SCALE_GROUPS) |
 | `validateScalePadStore` | rootPads, modePads, chromaticPad (all < NUM_KEYS) |
-| `validateArpPadStore` | holdPad, playStopPad, octavePads (all < NUM_KEYS) |
+| `validateArpPadStore` | holdPad, octavePads (all < NUM_KEYS) |
 | `validateBankPadStore` | bankPads (all < NUM_KEYS) |
 | `validateNoteMapStore` | noteMap entries (all < NUM_KEYS) |
 | `validateLedSettingsStore` | intensity cross-validation, timing ranges, confirmation blink counts/durations |
@@ -100,8 +100,8 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | Struct | Namespace | Key | Magic | Version | Size | Replaces |
 |--------|-----------|-----|-------|---------|------|----------|
 | `ScalePadStore` | `illpad_spad` | `pads` | 0xBEEF | 1 | 20B | 3 separate keys (root_pads, mode_pads, chrom_pad) |
-| `ArpPadStore` | `illpad_apad` | `pads` | 0xBEEF | 1 | 12B | 3 separate keys (hold_pad, ps_pad, oct_pads) |
-| `BankTypeStore` | `illpad_btype` | `config` | 0xBEEF | 1 | 20B | raw types[8] + qmode[8] (2 blobs, desync risk) |
+| `ArpPadStore` | `illpad_apad` | `pads` | 0xBEEF | 2 | 12B | 2 separate keys (hold_pad, oct_pads) — v2 drops legacy play/stop pad |
+| `BankTypeStore` | `illpad_btype` | `config` | 0xBEEF | 2 | 28B | raw types[8] + qmode[8] (2 blobs, desync risk). v2 adds `scaleGroup[8]` (0=none, 1..4=A..D) for inter-bank scale linking |
 | `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 8B | **PLANNED** — not yet in code |
 
 ### Non-Blob Namespaces (scalar values, not Store structs)

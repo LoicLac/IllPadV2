@@ -89,8 +89,8 @@ Critical path first, secondary after. MIDI latency depends on this order.
 5b. Consume scale/octave/hold flags + LED confirmations
     (ARPEG scale change: no flush needed — events store resolved MIDI notes)
 6. ClockManager.update()                      ← PLL + tick generation
-── handlePlayStopPad(state, holdBeforeUpdate, bankSwitched) ──
-7. Play/Stop pad (ARPEG + HOLD ON only)
+── handleHoldPad(state) ──
+7. Hold pad (ARPEG only) — toggles Play/Stop via ArpEngine::setCaptured()
 ── handlePadInput(state, now) ──
 8. processNormalMode() or processArpMode()
 8b. Stuck-note cleanup on left-release edge
@@ -150,7 +150,7 @@ LedController drives a SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel` (NEO_G
 
 ### Confirmation Blinks (ALL overlay — bar never blanks)
 
-All 10 `ConfirmType` values are **overlay-only**: `renderConfirmation()` tracks state/expiry, `renderNormalDisplay()` renders the overlay on top of the normal bank display. No confirmation ever calls `clearPixels()`. The normal display (including tick flashes) runs underneath at all times.
+All 7 `ConfirmType` values are **overlay-only**: `renderConfirmation()` tracks state/expiry, `renderNormalDisplay()` renders the overlay on top of the normal bank display. No confirmation ever calls `clearPixels()`. The normal display (including tick flashes) runs underneath at all times.
 
 | Event | ConfirmType | Color | Pattern | Duration |
 |---|---|---|---|---|
@@ -158,10 +158,8 @@ All 10 `ConfirmType` values are **overlay-only**: `renderConfirmation()` tracks 
 | Scale root | `CONFIRM_SCALE_ROOT` | Amber (preset 6) | Blink on/off current LED | scaleRootDurationMs (200ms) |
 | Scale mode | `CONFIRM_SCALE_MODE` | Gold (preset 7) | Blink on/off current LED | scaleModeDurationMs (200ms) |
 | Scale chromatic | `CONFIRM_SCALE_CHROM` | Gold (preset 7) | Blink on/off current LED | scaleChromDurationMs (200ms) |
-| Hold ON | `CONFIRM_HOLD_ON` | Deep blue | Fade IN 0%→100% (latch engage) | holdFadeMs (300ms) |
-| Hold OFF | `CONFIRM_HOLD_OFF` | Deep blue | Fade OUT 100%→0% (latch release) | holdFadeMs (300ms) |
-| Play | `CONFIRM_PLAY` | Green | Blink overlay on current LED | playDurationMs (200ms) |
-| Stop | `CONFIRM_STOP` | Cyan | Blink overlay on current LED | stopDurationMs (200ms) |
+| Play (Hold pad or LEFT+double-tap bank pad) | `CONFIRM_HOLD_ON` | Deep blue | Fade IN 0%→100% | holdFadeMs (300ms) |
+| Stop (Hold pad or LEFT+double-tap bank pad) | `CONFIRM_HOLD_OFF` | Deep blue | Fade OUT 100%→0% | holdFadeMs (300ms) |
 | Octave | `CONFIRM_OCTAVE` | Blue-violet | Blink overlay on current LED (1 LED, not 2) | octaveDurationMs (300ms) |
 
 New confirmation preempts active one. `LedController` no longer depends on `ClockManager` (beat-sync removed). All blink counts and durations configurable in Tool 7.
@@ -188,9 +186,9 @@ New confirmation preempts active one. `LedController` no longer depends on `Cloc
 
 ## Buttons
 
-- **Left (hold + pad)**: single-layer control. 8 bank pads + 15 scale pads (7 root + 7 mode + 1 chromatic) + 1 HOLD toggle (ARPEG only) + 4 octave pads (ARPEG only, 1-4 octaves). All visible in one hold. BankManager and ScaleManager share this button — no conflict (pad roles are distinct, checked by Tool 3). All notes off for NORMAL on bank switch. ARPEG: nothing (arp lives/dies by its own logic). Scale change on ARPEG: no allNotesOff — arp re-resolves at next tick.
+- **Left (hold + pad)**: single-layer control. 8 bank pads + 15 scale pads (7 root + 7 mode + 1 chromatic) + 1 Hold toggle (ARPEG only) + 4 octave pads (ARPEG only, 1-4 octaves). All visible in one hold. BankManager and ScaleManager share this button — no conflict (pad roles are distinct, checked by Tool 3). All notes off for NORMAL on bank switch. ARPEG: nothing (arp lives/dies by its own logic). Scale change on ARPEG: no allNotesOff — arp re-resolves at next tick.
 - **Left (hold + pot)**: modifier for 4 right pots (2nd slot: division, AT deadzone/pattern, pitch bend/shuffle template, velocity variation).
-- **Play/Stop pad**: ARPEG + HOLD ON only — toggles arp transport. In HOLD OFF mode, this pad is a regular music pad (enters the arp pile like any other pad). On NORMAL banks, always a regular music pad.
+- **Left + double-tap on bank pad (ARPEG target)**: toggles Play/Stop on that bank (FG or BG). Same event chain as the Hold pad. Never switches bank. BG target = keys=nullptr → always pauses (no fingers possible off-foreground).
 - **Rear (press)**: battery gauge (3s).
 - **Rear (boot, two-phase)**: press within 3s of boot, then hold 3s → setup mode (chase LED during hold).
 - **Rear (hold + pot rear)**: modifier for rear pot (pad sensitivity).
@@ -199,13 +197,31 @@ New confirmation preempts active one. `LedController` no longer depends on `Cloc
 
 **Pile stores padOrder positions, NOT MIDI notes.** Resolution happens at each tick via current ScaleConfig. Each arp engine keeps its own ScaleConfig copy (set via `setScaleConfig()` when foreground). Background arps retain their last-set ScaleConfig — scale changes only affect the foreground bank's engine.
 
-**HOLD OFF (live)**: press=add position, release=remove. All fingers up = arp stops naturally. BankManager has NO arp stop logic.
+### Play/Stop semantic (toggled via Hold pad OR LEFT+double-tap on bank pad)
 
-**HOLD ON (persistent)**: press=add, double-tap(configurable 100-250ms, default 150ms)=remove. Play/stop pad controls transport (restart from beginning). Bank switch = arp continues in background.
+Two triggers, one event chain (`ArpEngine::setCaptured()`). The only difference: LEFT+double-tap can target a BG bank (keys=nullptr, treated as "no fingers"). Double-tap on a bank pad NEVER switches bank.
+
+**Stop (live mode, `_captured=false`)**:
+- Press pad = add to pile; release = remove from pile. All fingers up → arp stops naturally.
+- If a paused pile exists (Play→Stop with no fingers), the first press wipes it before entering live mode.
+
+**Play (persistent, `_captured=true`)**:
+- Press pad = add to persistent pile. Double-tap (configurable 100-250ms, default 150ms) = remove. Pile is frozen on release.
+- Arp keeps playing as long as the pile has notes. Pile becomes empty → arp stops.
+
+**Play → Stop transition**:
+- Fingers down (excluding Hold pad): pile cleared, live mode takes over.
+- No fingers: pile kept, arp stops, `_pausedPile=true` armed. Next Play relaunches from step 0.
+
+**Stop → Play transition**:
+- Paused pile with notes: relaunch from step 0.
+- Empty pile: state flips, LED confirms, arp silent until notes added.
+
+Bank switch does not affect any bank's Play/Stop state — background arps continue running.
 
 5 patterns (Up/Down/UpDown/Random/Order) via hold+pot right 2. 1-4 octaves via 4 pads in single-layer control (hold left + octave pad). Up to 48 positions (192 steps with 4 oct). Division via hold+pot right 1 (9 binary values: 4/1→1/64). Gate/shuffle/velocity per-bank via pots.
 
-**Quantized start** (per-bank, set in Tool 4): Immediate (fire on next division boundary), Beat (snap to next 1/4 note, 24 ticks), or Bar (snap to next bar, 96 ticks). Stop is always immediate. HOLD OFF auto-play also respects quantize on 0→1 finger transition.
+**Quantized start** (per-bank, set in Tool 4): Immediate (fire on next division boundary), Beat (snap to next 1/4 note, 24 ticks), or Bar (snap to next bar, 96 ticks). Stop is always immediate. Stop-mode auto-play (pile 0→1 transition) also respects quantize.
 
 **Shuffle**: 10 groove templates (16 steps each, 0-4 positive-only classic, 5-9 bipolar), depth 0.0–1.0 via pot (extreme: notes can overlap across steps). Template selected via hold+pot right 3 (10 discrete values). Depth controls intensity, template controls groove shape. Shuffle offset = template[step%16] × depth × stepDuration / 100. Gate and shuffle use a unified time-based event system with reference counting (up to 64 pending events per engine): ArpScheduler.tick() schedules noteOn (with shuffle delay) and noteOff (at noteOnTime + stepDuration × gateLength), ArpScheduler.processEvents() fires them in real time. Overlapping notes handled via per-note refcount (MIDI noteOn only on 0→1, noteOff only on 1→0). Shuffle step counter resets on: play/stop toggle, pile 0→1 note, pattern change.
 
@@ -265,11 +281,11 @@ VT100 terminal, serial keyboard input only (no physical button in setup mode).
 ```
 [1] Pressure Calibration  — unchanged from V1
 [2] Pad Ordering           — touch low→high, positions 1-48, no base note
-[3] Pad Roles              — bank(8) + scale(15) + arp(6: hold+play/stop+4 octave), color grid, collision check
+[3] Pad Roles              — bank(8) + scale(15) + arp(5: hold+4 octave), color grid, collision check
 [4] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
 [5] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
 [6] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
-[7] LED Settings           — color presets + hue + intensity + timing + gamma, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink). COLOR page: STOPPED(5 rows)/PLAYING(2 rows)/EVENTS(10 rows)/TIMING(3 rows) = 20 visible params (3 legacy rows hidden). CONFIRM page: 15 params (hold fade, play/stop blinks+duration, octave blinks+duration).
+[7] LED Settings           — color presets + hue + intensity + timing + gamma, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink). COLOR page: STOPPED(5 rows)/PLAYING(2 rows)/EVENTS(10 rows)/TIMING(3 rows) = 20 visible params (3 legacy rows hidden). CONFIRM page: hold fade (Play/Stop), octave blinks+duration, scale blinks+duration.
 [0] Reboot
 ```
 
@@ -318,8 +334,8 @@ Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous 
 | Struct | Namespace | Key | Size | Replaces |
 |---|---|---|---|---|
 | `ScalePadStore` | `illpad_spad` | `"pads"` | 20B | 3 separate keys (root_pads, mode_pads, chrom_pad) |
-| `ArpPadStore` | `illpad_apad` | `"pads"` | 12B | 3 separate keys (hold_pad, ps_pad, oct_pads) |
-| `BankTypeStore` | `illpad_btype` | `"config"` | 20B | raw types[8] + qmode[8] (2 blobs, desync risk) |
+| `ArpPadStore` | `illpad_apad` | `"pads"` | 12B | 2 separate keys (hold_pad, oct_pads) |
+| `BankTypeStore` | `illpad_btype` | `"config"` | 28B | raw types[8] + qmode[8] (2 blobs, desync risk). v2 adds `scaleGroup[8]` (0=none, 1..4=A..D) for inter-bank scale linking |
 
 ### Namespace table
 
@@ -332,10 +348,10 @@ Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous 
 | `illpad_set` | SettingsStore (profile, AT rate, BLE interval, clock mode, double-tap, bargraph duration, panic-on-reconnect, battery ADC cal) |
 | `illpad_pot` | PotParamsStore (shape, slew, AT deadzone) |
 | `illpad_tempo` | tempo BPM (global) — scalar, not blob |
-| `illpad_btype` | BankTypeStore — types[8] + quantize[8] (key `"config"`) |
+| `illpad_btype` | BankTypeStore — types[8] + quantize[8] + scaleGroup[8] (key `"config"`) |
 | `illpad_scale` | ScaleConfig per bank (keys `"cfg_0"` through `"cfg_7"`) |
 | `illpad_spad` | ScalePadStore — 7 root + 7 mode + 1 chrom (key `"pads"`) |
-| `illpad_apad` | ArpPadStore — 1 hold + 1 play/stop + 4 octave (key `"pads"`) |
+| `illpad_apad` | ArpPadStore — 1 hold + 4 octave (key `"pads"`) |
 | `illpad_apot` | ArpPotStore per bank (gate, shuffle depth, shuffle template, div, pattern, octave range) |
 | `illpad_bvel` | base velocity + velocity variation per bank (NORMAL + ARPEG) |
 | `illpad_pbnd` | pitch bend offset per bank (NORMAL) |

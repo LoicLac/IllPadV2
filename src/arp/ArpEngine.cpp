@@ -108,11 +108,17 @@ void ArpEngine::addPadPosition(uint8_t padOrderPos) {
 
   _sequenceDirty = true;
 
-  // Reset shuffle groove when pile goes from empty to first note
-  if (wasEmpty) {
-    _shuffleStepCounter = 0;
-    // OFF mode auto-play: start playback on first note
-    if (!_captured) _playing = true;
+  // Start or resume playback.
+  //  - wasEmpty: fresh 0->1 transition (any mode)
+  //  - !_playing: resume from pause or post-panic
+  if (wasEmpty || !_playing) {
+    if (wasEmpty) _shuffleStepCounter = 0;
+    _playing = true;
+    _pausedPile = false;
+    if (_quantizeMode != ARP_START_IMMEDIATE) {
+      _waitingForQuantize = true;
+      _lastDispatchedGlobalTick = 0xFFFFFFFF;
+    }
   }
 
   #if DEBUG_SERIAL
@@ -160,6 +166,7 @@ void ArpEngine::clearAllNotes(MidiTransport& transport) {
   _sequenceDirty = false;
   _stepIndex = -1;
   _shuffleStepCounter = 0;
+  _playing = false;
   _waitingForQuantize = false;
   _pausedPile = false;
 }
@@ -186,53 +193,55 @@ void ArpEngine::setCaptured(bool captured, MidiTransport& transport,
   _captured = captured;
 
   if (captured) {
-    // OFF -> ON (capture)
+    // Stop → Play: if paused pile has notes, relaunch from step 0.
     if (_pausedPile && _positionCount > 0) {
-      // Resume after pause: restart the paused pile
       _playing = true;
       _stepIndex = -1;
       _shuffleStepCounter = 0;
       _waitingForQuantize = (_quantizeMode != ARP_START_IMMEDIATE);
       if (_waitingForQuantize) _lastDispatchedGlobalTick = 0xFFFFFFFF;
       #if DEBUG_SERIAL
-      Serial.printf("[ARP] Bank %d: Resume paused pile (%d notes)\n", _channel + 1, _positionCount);
+      Serial.printf("[ARP] Bank %d: Play — relaunch paused pile (%d notes)\n", _channel + 1, _positionCount);
+      #endif
+    } else {
+      #if DEBUG_SERIAL
+      Serial.printf("[ARP] Bank %d: Play (pile %d notes)\n", _channel + 1, _positionCount);
       #endif
     }
     _pausedPile = false;
-    #if DEBUG_SERIAL
-    if (_positionCount > 0) {
-      Serial.printf("[ARP] Bank %d: Captured (%d notes)\n", _channel + 1, _positionCount);
-    } else {
-      Serial.printf("[ARP] Bank %d: Captured (empty)\n", _channel + 1);
-    }
-    #endif
   } else {
-    // ON -> OFF (release)
+    // Play → Stop: check fingers down on FG bank only.
+    // keyIsPressed == nullptr → BG bank, no fingers possible.
     bool anyFingerDown = false;
-    for (uint8_t i = 0; i < NUM_KEYS; i++) {
-      if (i == holdPadIdx) continue;
-      if (keyIsPressed[i]) { anyFingerDown = true; break; }
+    if (keyIsPressed) {
+      for (uint8_t i = 0; i < NUM_KEYS; i++) {
+        if (i == holdPadIdx) continue;
+        if (keyIsPressed[i]) { anyFingerDown = true; break; }
+      }
     }
 
     if (anyFingerDown) {
-      // Fingers down: pile cleared, live mode resumes
+      // Fingers down: wipe pile, live mode takes over.
       clearAllNotes(transport);
       #if DEBUG_SERIAL
-      Serial.printf("[ARP] Bank %d: Released with fingers — pile cleared\n", _channel + 1);
+      Serial.printf("[ARP] Bank %d: Stop — fingers down, pile cleared\n", _channel + 1);
       #endif
     } else {
-      // No fingers: pile kept, arp paused
+      // No fingers: keep pile, arm pause for next Play.
       flushPendingNoteOffs(transport);
+      _playing = false;
+      _waitingForQuantize = false;
       _pausedPile = true;
       #if DEBUG_SERIAL
-      Serial.printf("[ARP] Bank %d: Released — paused (%d notes kept)\n", _channel + 1, _positionCount);
+      Serial.printf("[ARP] Bank %d: Stop — pile kept (%d notes)\n", _channel + 1, _positionCount);
       #endif
     }
   }
 }
 
 bool ArpEngine::isCaptured() const { return _captured; }
-bool ArpEngine::isPlaying() const { return _playing; }
+bool ArpEngine::isPlaying() const  { return _playing; }
+bool ArpEngine::isPaused() const   { return _pausedPile; }
 
 // =================================================================
 // Sequence building
@@ -513,8 +522,10 @@ void ArpEngine::rebuildSequence() {
 // =================================================================
 
 ArpState ArpEngine::currentState() const {
-  if (_positionCount == 0)     return ArpState::IDLE;
-  if (_waitingForQuantize)     return ArpState::WAITING_QUANTIZE;
+  // _playing is the authoritative engine-running flag.
+  // IDLE covers: empty pile, paused pile (ON->OFF no fingers), post-panic.
+  if (_positionCount == 0 || !_playing)  return ArpState::IDLE;
+  if (_waitingForQuantize)               return ArpState::WAITING_QUANTIZE;
   return ArpState::PLAYING;
 }
 
