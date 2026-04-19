@@ -517,7 +517,7 @@ the task spans multiple files.
 | **Note resolution** | `ScaleResolver::resolve` | 3-layer mapping, `_lastResolvedNote` invariant. |
 | **Bank switching** | `BankManager::switchToBank` [181-210] | All side effects of a bank change. See §2 Flow 3. |
 | **Scale/hold/octave** | `ScaleManager::processScalePads` [114-201] | Pad→change flag + group propagation. |
-| **Control pads** | `ControlPadManager::update` | Edge detection (LEFT press/release, bank switch) + per-mode CC emission (MOMENTARY / LATCH / CONTINUOUS) + gate-vs-setter handoff. Music block skips via `isControlPad(i)`. |
+| **Control pads** | `ControlPadManager::update` | Edge detection (LEFT press/release, bank switch) + per-mode CC emission (MOMENTARY / LATCH / CONTINUOUS) + gate-vs-setter handoff. CONTINUOUS has a 3-stage DSP pipeline (EMA smooth → ring-buffer sample-and-hold → linear release envelope) driven by global `smoothMs`/`sampleHoldMs`/`releaseMs`. Music block skips via `isControlPad(i)`. |
 | **Arpeggiator core** | `ArpEngine::tick` [536-566] → `executeStep` [572-654] | State dispatch + note scheduling. `rebuildSequence` is a callee. |
 | **Arp scheduling** | `ArpScheduler::tick` [98-131] + `processEvents` [140-146] | Per-engine tick accumulator + event dispatch. |
 | **Clock/PLL** | `ClockManager::update` [45-63] → `processIncomingTicks` [66-116], `generateTicks` [181-203] | Source cascade + PLL smoothing. |

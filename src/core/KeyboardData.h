@@ -305,7 +305,7 @@ struct BankSlot {
 // =================================================================
 
 const uint16_t CONTROLPAD_MAGIC   = 0xBEEF;
-const uint8_t  CONTROLPAD_VERSION = 1;
+const uint8_t  CONTROLPAD_VERSION = 2;  // v1 -> v2 : added smoothMs/sampleHoldMs/releaseMs globals
 const uint8_t  MAX_CONTROL_PADS   = 12;
 const uint8_t  CTRL_PAD_INVALID   = 0xFF;  // sentinel for corrupted/skipped entry
 
@@ -333,14 +333,24 @@ struct ControlPadStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  count;
+  uint16_t smoothMs;         // V2 : EMA tau for CONTINUOUS (0 = bypass, 1..200 typical)
+  uint16_t sampleHoldMs;     // V2 : ring-buffer look-back for HOLD_LAST capture (5..30 typical)
+  uint16_t releaseMs;        // V2 : linear fade-out duration for RETURN_TO_ZERO (10..500 typical)
   ControlPadEntry entries[MAX_CONTROL_PADS];
 };
+// sizeof = 4 + 6 + 12*6 = 82 bytes (still within NVS_BLOB_MAX_SIZE=128)
 
 #define CONTROLPAD_NVS_NAMESPACE "illpad_ctrl"
 #define CONTROLPAD_NVS_KEY       "pads"
 
 inline void validateControlPadStore(ControlPadStore& s) {
   if (s.count > MAX_CONTROL_PADS) s.count = MAX_CONTROL_PADS;
+
+  // V2 globals — clamp to sensible ranges
+  if (s.smoothMs      > 500)  s.smoothMs     = 500;
+  if (s.sampleHoldMs  > 100)  s.sampleHoldMs = 100;
+  if (s.releaseMs     > 2000) s.releaseMs    = 2000;
+
   for (uint8_t i = 0; i < s.count; i++) {
     auto& e = s.entries[i];
     if (e.padIndex >= NUM_KEYS)  e.padIndex = CTRL_PAD_INVALID;

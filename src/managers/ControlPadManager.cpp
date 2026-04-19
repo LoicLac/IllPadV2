@@ -5,7 +5,8 @@
 
 ControlPadManager::ControlPadManager()
   : _transport(nullptr), _count(0),
-    _lastLeftHeld(false), _lastChannel(0xFF) {
+    _lastLeftHeld(false), _lastChannel(0xFF),
+    _smoothMs(0), _sampleHoldMs(0), _releaseMs(0) {
   memset(_isControlPadLut, 0, sizeof(_isControlPadLut));
   memset(_slots, 0, sizeof(_slots));
 }
@@ -17,6 +18,11 @@ void ControlPadManager::begin(MidiTransport* transport) {
 void ControlPadManager::applyStore(const ControlPadStore& store) {
   _count = 0;
   memset(_isControlPadLut, 0, sizeof(_isControlPadLut));
+
+  // V2 : copy globals (clamped by validator already, defensive min)
+  _smoothMs     = store.smoothMs;
+  _sampleHoldMs = store.sampleHoldMs;
+  _releaseMs    = store.releaseMs;
 
   uint8_t n = store.count;
   if (n > MAX_CONTROL_PADS) n = MAX_CONTROL_PADS;
@@ -32,6 +38,13 @@ void ControlPadManager::applyStore(const ControlPadStore& store) {
     slot.lastChannel = 0;
     slot.latchState  = false;
     slot.wasPressed  = false;
+    // V2 DSP state reset
+    slot.emaAccum            = 0;
+    memset(slot.ring, 0, sizeof(slot.ring));
+    slot.ringWrIdx           = 0;
+    slot.envStartValue       = 0;
+    slot.envFramesRemaining  = 0;
+    slot.envFramesTotal      = 0;
 
     _isControlPadLut[e.padIndex] = true;
     _count++;
@@ -72,6 +85,11 @@ void ControlPadManager::update(const SharedKeyboardState& state,
   if (bankSwitchEdge && !leftHeld && !leftReleaseEdge) {
     _handleBankSwitch(_lastChannel, currentBankChannel, state);
   }
+
+  // V2 : tick any active release envelopes (regardless of leftHeld — envelope
+  // continues even if user presses LEFT mid-fade ; user can cancel by re-pressing
+  // the pad which resets envFramesRemaining in _processSlot).
+  _tickReleaseEnvelopes();
 
   if (!leftHeld) {
     for (uint8_t s = 0; s < _count; s++) {
@@ -117,16 +135,59 @@ void ControlPadManager::_processSlot(uint8_t s,
     }
     case CTRL_MODE_CONTINUOUS: {
       if (pressed) {
-        uint8_t ccVal = _scalePressure(state.pressure[pad], slot.cfg.deadzone);
-        if (ccVal != slot.lastCcValue) {
-          _emit(slot, targetCh, ccVal);
+        uint8_t rawCc = _scalePressure(state.pressure[pad], slot.cfg.deadzone);
+
+        // Stage 1 : EMA smooth
+        uint8_t smoothedCc;
+        if (_smoothMs == 0) {
+          smoothedCc = rawCc;
+          slot.emaAccum = (uint16_t)rawCc << 8;  // keep accumulator aligned
+        } else {
+          uint16_t alpha = _emaAlpha();  // Q16 factor in [1..65535]
+          // new = alpha*raw + (1-alpha)*prev,  everything Q16
+          uint32_t rawQ16    = (uint32_t)rawCc << 8;
+          uint32_t prevQ16   = (uint32_t)slot.emaAccum;
+          uint32_t mixedQ16  = ((uint64_t)alpha * rawQ16 + (uint64_t)(65535 - alpha) * prevQ16) >> 16;
+          slot.emaAccum = (uint16_t)mixedQ16;
+          smoothedCc = (uint8_t)(mixedQ16 >> 8);
         }
+
+        // Stage 2 : push into ring buffer (for HOLD_LAST look-back)
+        slot.ring[slot.ringWrIdx] = smoothedCc;
+        slot.ringWrIdx = (slot.ringWrIdx + 1) % CTRL_RING_SIZE;
+
+        // Emit if changed
+        if (smoothedCc != slot.lastCcValue) {
+          _emit(slot, targetCh, smoothedCc);
+        }
+        // Cancel any active release envelope (re-press)
+        slot.envFramesRemaining = 0;
       } else if (wasPressed) {
-        // release edge
-        if (slot.cfg.releaseMode == CTRL_RELEASE_TO_ZERO
-            && slot.lastCcValue > 0) {
-          _emit(slot, slot.lastChannel, 0);
+        // Falling edge
+        if (slot.cfg.releaseMode == CTRL_RELEASE_TO_ZERO) {
+          // Start linear release envelope from lastCcValue -> 0 over releaseMs frames
+          if (_releaseMs == 0) {
+            // Immediate zero (fallback to V1 behavior if release disabled)
+            if (slot.lastCcValue > 0) _emit(slot, slot.lastChannel, 0);
+          } else {
+            slot.envStartValue      = slot.lastCcValue;
+            slot.envFramesTotal     = _releaseMs;    // ~ 1 frame ~ 1ms
+            slot.envFramesRemaining = _releaseMs;
+          }
+        } else {
+          // CTRL_RELEASE_HOLD : sample-and-hold from ring buffer
+          uint8_t lookback = _sampleHoldLookback(slot);
+          // ringWrIdx points to next write position ; last written = wrIdx-1
+          uint8_t readIdx = (uint8_t)((slot.ringWrIdx + CTRL_RING_SIZE - 1 - lookback) % CTRL_RING_SIZE);
+          uint8_t heldValue = slot.ring[readIdx];
+          if (heldValue != slot.lastCcValue) {
+            _emit(slot, targetCh, heldValue);
+          }
+          // After capture, freeze — no further emission until re-press
         }
+      } else {
+        // Not pressed, not rising/falling : tick any active release envelope
+        // (handled globally in _tickReleaseEnvelopes, called from update())
       }
       break;
     }
@@ -230,4 +291,49 @@ bool ControlPadManager::_isGate(const ControlPadSlot& slot) const {
   if (slot.cfg.mode == CTRL_MODE_CONTINUOUS
       && slot.cfg.releaseMode == CTRL_RELEASE_TO_ZERO) return true;
   return false;
+}
+
+// -------------------------------------------------------------
+// V2 DSP helpers
+// -------------------------------------------------------------
+uint16_t ControlPadManager::_emaAlpha() const {
+  // Convert smoothMs (tau in ms) to alpha in Q16 such that per-frame filtering
+  // approximates a first-order low-pass with time constant ~smoothMs.
+  // alpha ~ 1 / smoothMs (per-ms step) expressed in Q16.
+  // alpha_Q16 = 65535 / smoothMs (clamp to valid range).
+  if (_smoothMs == 0) return 65535;  // alpha=1 -> pass-through
+  uint32_t a = 65535u / _smoothMs;
+  if (a > 65535) a = 65535;
+  if (a < 1)     a = 1;
+  return (uint16_t)a;
+}
+
+uint8_t ControlPadManager::_sampleHoldLookback(const ControlPadSlot& slot) const {
+  (void)slot;
+  // sampleHoldMs / frameMs (~1ms) = #frames. Clamp to RING_SIZE-1 max.
+  uint8_t lookback = (uint8_t)_sampleHoldMs;
+  if (lookback >= CTRL_RING_SIZE) lookback = CTRL_RING_SIZE - 1;
+  return lookback;
+}
+
+void ControlPadManager::_tickReleaseEnvelopes() {
+  // For each slot with active envelope, emit next intermediate value.
+  for (uint8_t s = 0; s < _count; s++) {
+    ControlPadSlot& slot = _slots[s];
+    if (slot.envFramesRemaining == 0) continue;
+    slot.envFramesRemaining--;
+    uint16_t remaining = slot.envFramesRemaining;
+    uint16_t total     = slot.envFramesTotal;
+    // Linear interpolation : ccVal = envStartValue * remaining / total
+    uint8_t newCc;
+    if (total == 0 || remaining == 0) {
+      newCc = 0;
+    } else {
+      newCc = (uint8_t)(((uint32_t)slot.envStartValue * remaining) / total);
+    }
+    if (newCc != slot.lastCcValue) {
+      _emit(slot, slot.lastChannel, newCc);
+    }
+    // When envelope finishes (remaining hits 0), lastCcValue == 0. Freeze.
+  }
 }

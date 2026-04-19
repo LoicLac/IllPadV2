@@ -5,6 +5,12 @@
 #include "../core/KeyboardData.h"
 #include "../core/HardwareConfig.h"
 
+// Per-slot DSP state buffer size. Covers ~32 frames = ~32ms of look-back
+// at a 1ms frame interval. sampleHoldMs settings > 32 clamp to max look-back.
+#ifndef CTRL_RING_SIZE
+#define CTRL_RING_SIZE 32
+#endif
+
 class MidiTransport;
 struct SharedKeyboardState;
 
@@ -15,6 +21,14 @@ struct ControlPadSlot {
   uint8_t lastChannel;   // channel of last emission (for follow-bank handoff)
   bool    latchState;    // LATCH: current toggle state (boot = false)
   bool    wasPressed;    // per-slot edge tracking (independent of s_lastKeys)
+
+  // V2 DSP state (CONTINUOUS only) :
+  uint16_t emaAccum;              // fixed-point 8.8 accumulator for smooth EMA
+  uint8_t  ring[CTRL_RING_SIZE];  // ring buffer of smoothed ccVal over last N frames
+  uint8_t  ringWrIdx;             // write position modulo CTRL_RING_SIZE
+  uint8_t  envStartValue;         // RETURN_TO_ZERO envelope start (0 = inactive)
+  uint16_t envFramesRemaining;    // frames left in envelope
+  uint16_t envFramesTotal;        // initial total (for linear interpolation)
 };
 
 class ControlPadManager {
@@ -53,6 +67,11 @@ private:
   bool    _lastLeftHeld;
   uint8_t _lastChannel;  // 0-7, or 0xFF at boot (skip first-frame bank edge)
 
+  // V2 : global DSP params (copied from store at applyStore)
+  uint16_t _smoothMs;
+  uint16_t _sampleHoldMs;
+  uint16_t _releaseMs;
+
   // --- In-frame per-slot processing ---
   void _processSlot(uint8_t s, const SharedKeyboardState& state,
                     uint8_t currentBankChannel);
@@ -72,6 +91,11 @@ private:
 
   // --- Gate family predicate (MOMENTARY OR CONTINUOUS+RETURN_TO_ZERO) ---
   bool _isGate(const ControlPadSlot& slot) const;
+
+  // --- V2 DSP helpers ---
+  void     _tickReleaseEnvelopes();
+  uint16_t _emaAlpha() const;                              // derive alpha (Q16) from _smoothMs
+  uint8_t  _sampleHoldLookback(const ControlPadSlot& slot) const;
 };
 
 #endif // CONTROL_PAD_MANAGER_H
