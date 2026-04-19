@@ -42,6 +42,7 @@ private:
   uint8_t _globalFieldIdx;  // 0=smoothMs, 1=sampleHoldMs, 2=releaseMs
   bool    _screenDirty;
   bool    _nvsSaved;
+  bool    _wkDirty;      // working-copy modified since last _save() ?
 
   // Working copy (committed via saveBlob on every edit)
   ControlPadStore _wk;

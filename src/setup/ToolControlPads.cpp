@@ -12,7 +12,7 @@ ToolControlPads::ToolControlPads()
     _banks(nullptr),
     _uiMode(UI_GRID_NAV), _cursorPad(0), _fieldIdx(0),
     _globalFieldIdx(0),
-    _screenDirty(true), _nvsSaved(false), _flashExpireMs(0) {
+    _screenDirty(true), _nvsSaved(false), _wkDirty(false), _flashExpireMs(0) {
   memset(&_wk, 0, sizeof(_wk));
   _wk.magic   = CONTROLPAD_MAGIC;
   _wk.version = CONTROLPAD_VERSION;
@@ -41,8 +41,7 @@ void ToolControlPads::run() {
   _screenDirty    = true;
   _flashMsg[0]    = '\0';
   _flashExpireMs  = 0;
-
-  _leds->startSetupComet();
+  _wkDirty        = false;
 
   // Capture baselines for pad-tap-select (pattern from ToolPadRoles)
   captureBaselines(*_keyboard, _refBaselines);
@@ -83,8 +82,6 @@ void ToolControlPads::run() {
 
     delay(5);
   }
-
-  _leds->stopSetupComet();
 }
 
 // ------------------------------------------------------------
@@ -186,6 +183,10 @@ void ToolControlPads::_handlePropEdit(const NavEvent& ev) {
 
     case NAV_ENTER:
     case NAV_QUIT:
+      if (_wkDirty) {
+        _save();
+        _wkDirty = false;
+      }
       _uiMode = UI_GRID_NAV;
       _screenDirty = true;
       break;
@@ -238,6 +239,10 @@ void ToolControlPads::_handleGlobalEdit(const NavEvent& ev) {
       break;
     case NAV_ENTER:
     case NAV_QUIT:
+      if (_wkDirty) {
+        _save();
+        _wkDirty = false;
+      }
       _uiMode = UI_GRID_NAV;
       _screenDirty = true;
       break;
@@ -272,7 +277,7 @@ void ToolControlPads::_adjustGlobalField(int8_t delta) {
     default:
       return;
   }
-  _save();
+  _wkDirty = true;
   _screenDirty = true;
 }
 
@@ -384,7 +389,7 @@ void ToolControlPads::_adjustField(int8_t delta) {
       return;
   }
 
-  _save();
+  _wkDirty = true;
   _screenDirty = true;
 }
 
@@ -529,17 +534,6 @@ void ToolControlPads::_drawSelected() {
   _ui->drawFrameLine(VT_DIM "Slots used   %u / %u" VT_RESET,
                      (unsigned)_wk.count, (unsigned)MAX_CONTROL_PADS);
   _ui->drawFrameEmpty();
-
-  // Nixie vedette when editing a numeric field (pattern Tool 5)
-  if (_uiMode == UI_PROP_EDIT) {
-    if (_fieldIdx == 0) {
-      _ui->drawSection("CC NUMBER");
-      _ui->drawSegmentedValue("", (uint32_t)e.ccNumber, 3, "");
-    } else if (_fieldIdx == 3 && e.mode == CTRL_MODE_CONTINUOUS) {
-      _ui->drawSection("DEADZONE");
-      _ui->drawSegmentedValue("", (uint32_t)e.deadzone, 3, "");
-    }
-  }
 }
 
 void ToolControlPads::_drawGlobals() {
