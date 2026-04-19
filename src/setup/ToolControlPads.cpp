@@ -338,12 +338,32 @@ void ToolControlPads::_drawGrid() {
       map[i] = 0;
     } else {
       const ControlPadEntry& e = _wk.entries[s];
-      char suffix = (e.mode == CTRL_MODE_MOMENTARY)  ? 'm'
-                   : (e.mode == CTRL_MODE_LATCH)      ? 'l'
-                                                      : 'c';
+      char suffix;
+      uint8_t mapVal;
+      switch (e.mode) {
+        case CTRL_MODE_MOMENTARY:
+          suffix = 'm';
+          mapVal = 1;
+          break;
+        case CTRL_MODE_LATCH:
+          suffix = 'l';
+          mapVal = 2;
+          break;
+        case CTRL_MODE_CONTINUOUS:
+        default:
+          if (e.releaseMode == CTRL_RELEASE_HOLD) {
+            suffix = 'h';
+            mapVal = 4;
+          } else {
+            // CTRL_RELEASE_TO_ZERO (default)
+            suffix = 'z';
+            mapVal = 3;
+          }
+          break;
+      }
       snprintf(labels[i], sizeof(labels[i]), "%02u%c",
                (unsigned)(e.ccNumber % 100), suffix);
-      map[i] = e.mode + 1;  // 1/2/3
+      map[i] = mapVal;
     }
   }
 

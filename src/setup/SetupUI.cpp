@@ -546,16 +546,20 @@ void SetupUI::drawCellGrid(
         }
       } else if (mode == GRID_CONTROLPAD && roleLabels && roleMap) {
         const char* label = roleLabels[key];
+        const char* modeColor;
+        switch (roleMap[key]) {
+          case 1:  modeColor = VT_BRIGHT_YELLOW; break;  // MOMENTARY   → "m"
+          case 2:  modeColor = VT_MAGENTA;       break;  // LATCH       → "l"
+          case 3:  modeColor = VT_ORANGE;        break;  // CONT + RET0 → "z"
+          case 4:  modeColor = VT_BRIGHT_WHITE;  break;  // CONT + HOLD → "h"
+          default: modeColor = VT_DIM;           break;  // unassigned  → "---"
+        }
         if (key == activeKey) {
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
-                          VT_REVERSE VT_ORANGE "%5s" VT_RESET, label);
-        } else if (roleMap[key] == 0) {
-          pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
-                          VT_DIM "%5s" VT_RESET, label);
+                          VT_REVERSE "%s%5s" VT_RESET, modeColor, label);
         } else {
-          // roleMap[key] == 1/2/3 → momentary/latch/continuous (all assigned)
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
-                          VT_ORANGE "%5s" VT_RESET, label);
+                          "%s%5s" VT_RESET, modeColor, label);
         }
       } else if (mode == GRID_ORDERING) {
         if (key == activeKey && orderMap) {
