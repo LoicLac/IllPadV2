@@ -30,7 +30,8 @@ private:
   // UI state
   enum UIMode : uint8_t {
     UI_GRID_NAV,
-    UI_PROP_EDIT,
+    UI_MODE_PICK,         // V3.B : pool line, commit via ENTER (Tool 3 style)
+    UI_VALUE_EDIT,        // V3.B : renamed from UI_PROP_EDIT (CC/Channel/Deadzone only)
     UI_CONFIRM_REMOVE,
     UI_CONFIRM_DEFAULTS,
     UI_GLOBAL_EDIT,   // V2 : editing smoothMs / sampleHoldMs / releaseMs
@@ -38,11 +39,17 @@ private:
 
   UIMode _uiMode;
   uint8_t _cursorPad;       // 0-47, selected cell in grid
-  uint8_t _fieldIdx;        // 0-4 in PROP_EDIT (CC/Channel/Mode/Deadzone/Release)
+  uint8_t _fieldIdx;        // 0-2 in VALUE_EDIT (CC/Channel/Deadzone)
+  uint8_t _poolIdx;         // 0..4 in UI_MODE_PICK
   uint8_t _globalFieldIdx;  // 0=smoothMs, 1=sampleHoldMs, 2=releaseMs
   bool    _screenDirty;
   bool    _nvsSaved;
   bool    _wkDirty;      // working-copy modified since last _save() ?
+
+  // V3.A : dirty tracking for save-on-exit from VALUE_EDIT / GLOBAL_EDIT.
+  // Arrow presses mutate _wk freely; save only fires on state exit.
+  bool    _propEditDirty;
+  bool    _globalEditDirty;
 
   // Working copy (committed via saveBlob on every edit)
   ControlPadStore _wk;
@@ -59,10 +66,15 @@ private:
 
   // --- Navigation (filled by Tasks 6-8) ---
   void _handleGridNav(const NavEvent& ev);
-  void _handlePropEdit(const NavEvent& ev);
+  void _handleModePick(const NavEvent& ev);        // V3.B : pool selector
+  void _handleValueEdit(const NavEvent& ev);       // V3.B : renamed from _handlePropEdit
   void _handleConfirmRemove(const NavEvent& ev);
   void _handleConfirmDefaults(const NavEvent& ev);
   void _handleGlobalEdit(const NavEvent& ev);
+
+  // --- Pool helpers (V3.B) ---
+  uint8_t _poolIdxFromEntry(const ControlPadEntry& e) const;
+  void    _applyPoolIdxToEntry(uint8_t idx, ControlPadEntry& e) const;
 
   // --- Global DSP field edit helpers ---
   void    _adjustGlobalField(int8_t delta);
@@ -81,6 +93,7 @@ private:
   // --- Render ---
   void _draw();
   void _drawGrid();
+  void _drawPool();        // V3.B : permanent pool legend
   void _drawSelected();
   void _drawGlobals();
   void _drawInfo();

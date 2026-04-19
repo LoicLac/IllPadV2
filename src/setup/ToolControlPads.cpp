@@ -11,7 +11,8 @@ ToolControlPads::ToolControlPads()
   : _keyboard(nullptr), _leds(nullptr), _ui(nullptr), _nvs(nullptr),
     _banks(nullptr),
     _uiMode(UI_GRID_NAV), _cursorPad(0), _fieldIdx(0),
-    _globalFieldIdx(0),
+    _poolIdx(0), _globalFieldIdx(0),
+    _propEditDirty(false), _globalEditDirty(false),
     _screenDirty(true), _nvsSaved(false), _wkDirty(false), _flashExpireMs(0) {
   memset(&_wk, 0, sizeof(_wk));
   _wk.magic   = CONTROLPAD_MAGIC;
@@ -37,7 +38,10 @@ void ToolControlPads::run() {
   _uiMode         = UI_GRID_NAV;
   _cursorPad      = 0;
   _fieldIdx       = 0;
+  _poolIdx        = 0;
   _globalFieldIdx = 0;
+  _propEditDirty  = false;   // V3.A
+  _globalEditDirty = false;  // V3.A
   _screenDirty    = true;
   _flashMsg[0]    = '\0';
   _flashExpireMs  = 0;
@@ -65,7 +69,8 @@ void ToolControlPads::run() {
     // Dispatch input
     switch (_uiMode) {
       case UI_GRID_NAV:         _handleGridNav(ev);         break;
-      case UI_PROP_EDIT:        _handlePropEdit(ev);        break;
+      case UI_MODE_PICK:        _handleModePick(ev);        break;
+      case UI_VALUE_EDIT:       _handleValueEdit(ev);       break;
       case UI_CONFIRM_REMOVE:   _handleConfirmRemove(ev);   break;
       case UI_CONFIRM_DEFAULTS: _handleConfirmDefaults(ev); break;
       case UI_GLOBAL_EDIT:      _handleGlobalEdit(ev);      break;
@@ -87,6 +92,24 @@ void ToolControlPads::run() {
 // ------------------------------------------------------------
 // Stubs for Task 5 — filled in Tasks 6-8
 // ------------------------------------------------------------
+// --- Pool helpers (V3.B stubs) ---
+uint8_t ToolControlPads::_poolIdxFromEntry(const ControlPadEntry& e) const {
+  // TODO: implement pool index lookup from entry
+  return 1;  // Default to MOMENTARY
+}
+
+void ToolControlPads::_applyPoolIdxToEntry(uint8_t idx, ControlPadEntry& e) const {
+  // TODO: implement pool index to entry application
+}
+
+void ToolControlPads::_handleModePick(const NavEvent& ev) {
+  // TODO: V3.B pool picker implementation
+}
+
+void ToolControlPads::_drawPool() {
+  // TODO: V3.B pool render implementation
+}
+
 void ToolControlPads::_handleGridNav(const NavEvent& ev) {
   // Hardware pad touch → jump cursor (pattern from ToolPadRoles.cpp)
   int detected = detectActiveKey(*_keyboard, _refBaselines);
@@ -111,15 +134,12 @@ void ToolControlPads::_handleGridNav(const NavEvent& ev) {
       break;
 
     case NAV_ENTER: {
+      // V3.B : ENTER opens the mode pool selector (does NOT create slot yet).
+      // Pool cursor starts on the pad's current mode if assigned, else MOM (idx 1).
       int8_t s = _findSlot(_cursorPad);
-      if (s < 0) {
-        if (!_addSlot(_cursorPad)) {
-          _setFlash("Cap reached (12/12). Remove a pad first.");
-          break;
-        }
-      }
-      _uiMode = UI_PROP_EDIT;
-      _fieldIdx = 0;
+      _poolIdx = (s >= 0) ? _poolIdxFromEntry(_wk.entries[s]) : 1;
+      _propEditDirty = false;   // V3.A : fresh edit session
+      _uiMode = UI_MODE_PICK;
       _screenDirty = true;
       break;
     }
@@ -134,9 +154,20 @@ void ToolControlPads::_handleGridNav(const NavEvent& ev) {
       } else if (ev.ch == 'd') {
         _uiMode = UI_CONFIRM_DEFAULTS;
         _screenDirty = true;
+      } else if (ev.ch == 'e') {
+        // V3.B : enter numeric value edit (only if pad is assigned)
+        int8_t s = _findSlot(_cursorPad);
+        if (s >= 0) {
+          _uiMode = UI_VALUE_EDIT;
+          _fieldIdx = 0;
+          _screenDirty = true;
+        } else {
+          _setFlash("No slot. Press [RET] to create first.");
+        }
       } else if (ev.ch == 'g') {
         _uiMode = UI_GLOBAL_EDIT;
         _globalFieldIdx = 0;
+        _globalEditDirty = false;   // V3.A : fresh edit session
         _screenDirty = true;
       }
       break;
@@ -150,7 +181,7 @@ void ToolControlPads::_handleGridNav(const NavEvent& ev) {
       break;
   }
 }
-void ToolControlPads::_handlePropEdit(const NavEvent& ev) {
+void ToolControlPads::_handleValueEdit(const NavEvent& ev) {
   int8_t s = _findSlot(_cursorPad);
   if (s < 0) {
     // Slot vanished (defensive) — back to grid
@@ -183,9 +214,9 @@ void ToolControlPads::_handlePropEdit(const NavEvent& ev) {
 
     case NAV_ENTER:
     case NAV_QUIT:
-      if (_wkDirty) {
+      if (_propEditDirty) {
         _save();
-        _wkDirty = false;
+        _propEditDirty = false;
       }
       _uiMode = UI_GRID_NAV;
       _screenDirty = true;
@@ -239,9 +270,9 @@ void ToolControlPads::_handleGlobalEdit(const NavEvent& ev) {
       break;
     case NAV_ENTER:
     case NAV_QUIT:
-      if (_wkDirty) {
+      if (_globalEditDirty) {
         _save();
-        _wkDirty = false;
+        _globalEditDirty = false;
       }
       _uiMode = UI_GRID_NAV;
       _screenDirty = true;
@@ -277,7 +308,7 @@ void ToolControlPads::_adjustGlobalField(int8_t delta) {
     default:
       return;
   }
-  _wkDirty = true;
+  _globalEditDirty = true;
   _screenDirty = true;
 }
 
@@ -389,7 +420,7 @@ void ToolControlPads::_adjustField(int8_t delta) {
       return;
   }
 
-  _wkDirty = true;
+  _propEditDirty = true;
   _screenDirty = true;
 }
 
@@ -516,7 +547,7 @@ void ToolControlPads::_drawSelected() {
   rows[4].greyed = (e.mode != CTRL_MODE_CONTINUOUS);
 
   for (uint8_t i = 0; i < 5; i++) {
-    bool selected = (_uiMode == UI_PROP_EDIT) && (_fieldIdx == i);
+    bool selected = (_uiMode == UI_VALUE_EDIT) && (_fieldIdx == i);
     const char* cursor = selected
         ? "  " VT_CYAN VT_BOLD "\xe2\x96\xb8 "
         : "    ";
@@ -637,7 +668,7 @@ void ToolControlPads::_drawControlBar() {
                "[x] REMOVE  [d] DFLT  [g] GLOBALS" CBAR_SEP
                "[q] EXIT" VT_RESET);
       break;
-    case UI_PROP_EDIT:
+    case UI_VALUE_EDIT:
       _ui->drawControlBar(
         VT_DIM "[^v] FIELD  [</>] VALUE" CBAR_SEP
                "[RET] BACK  [q] CANCEL" VT_RESET);
