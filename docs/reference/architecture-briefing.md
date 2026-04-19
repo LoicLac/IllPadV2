@@ -86,11 +86,15 @@ catch. **Decide on new target**: global or per-bank? Flag via
 
 ### MM7 — LED priority + overlays
 9-level priority: Boot > Setup > Chase > Error > Battery > Bargraph >
-[Confirmation tracking] > Calibration > Normal display + overlays.
-Confirmations are *overlays* (blit on top, never clear). Normal display
-encodes multi-bank state (FG solid / BG dim / tick flashes / sine pulse for
-stopped-loaded). **Don't**: design a new visual by writing pixels — declare
-a priority level + overlay semantics first.
+[Event overlay tracking] > Calibration > Normal display + event overlay.
+Event overlays are *overlays* (blit on top via `renderPattern()`, never
+clear). Normal display encodes multi-bank state (FG solid / BG dim via
+`_bgFactor` / tick flashes via `renderFlashOverlay()` / sine pulse for
+stopped-loaded ARPEG). The 3-layer LED grammar (patterns × color slots
+× event mapping, see P5) is the single source of truth for all visual
+events since Phase 0 refactor 2026-04-19. **Don't**: design a new visual
+by writing pixels — declare a pattern + color slot + event entry first
+(or add a new PatternId to the palette if truly novel).
 
 ### MM8 — Setup is a config mirror
 Setup Tools are the UI surface of runtime config. Every persisted user-param
@@ -165,7 +169,7 @@ switchToBank() calls [BankManager.cpp:181-210]:
 4. setChannel(newBank)                        [BankManager.cpp:195]
 5. sendPitchBend(newBank.pitchBendOffset)     [BankManager.cpp:196-197]
    — NORMAL banks only. ARPEG banks: no pitch bend sent (no aftertouch, spec)
-6. LED: setCurrentBank + triggerConfirm       [BankManager.cpp:200-203]
+6. LED: setCurrentBank + triggerEvent(EVT_BANK_SWITCH)  [BankManager.cpp:200-203]
 — back in handleManagerUpdates() [main.cpp:602] —
 7. queueBankWrite() to NVS                    [main.cpp:609]
 8. reloadPerBankParams(newSlot)               [main.cpp:610]
@@ -202,7 +206,7 @@ Rising edge on bank pad b (while LEFT held):
                                          _waitingForQuantize=false, _pausedPile=true
     Toggle always fires — LED always updates.
     Always: consume press (timestamp=0), cancel pending switch, continue.
-    LED: triggerConfirm(HOLD_OFF|HOLD_ON, mask=1<<b) — fade overlay on target
+    LED: triggerEvent(EVT_STOP|EVT_PLAY, mask=1<<b) — FADE overlay on target
          pad LED (may be BG bank). Double-tap NEVER switches bank.
 
   _pausedPile semantics (persistent):
@@ -247,7 +251,7 @@ handleManagerUpdates() consumes flag:
     in the same group: copy scSlot.scale, queueScaleWrite(i, scale),
     setScaleConfig() if ARPEG. No allNotesOff on propagated banks
     (NORMAL bg = no active notes, ARPEG re-resolves on next tick).
-  → LED confirmation: triggerConfirm(SCALE_*, 0, ledMask) with bitmask of
+  → LED confirmation: triggerEvent(EVT_SCALE_*, ledMask) with bitmask of
     all group members — all group LEDs blink together (not just foreground).
 ```
 Entry points: `ScaleManager::processScalePads` [114-201],
@@ -292,7 +296,7 @@ it is probably **broad** — go back to §0 Q2 and treat as exploration.
 | Add a new scale mode | `ScaleResolver.cpp` (`scaleIntervals[][7]`) | `ScaleResolver::resolve()` table | MidiEngine, ArpEngine (re-résolvent auto) |
 | Add a new ARP pattern | `ArpEngine.h` (enum `ArpPattern`, array sizes), `ArpEngine.cpp` (`rebuildSequence()`), `main.cpp` (`s_patNames[]`) | `ArpEngine::rebuildSequence()` switch case | ScaleResolver, ArpScheduler, NVS, LED |
 | Add a new pot target (pure param, no new UX) | `PotRouter.h` (enum `PotTarget`), `PotRouter.cpp` (`applyBinding()`, `isPerBankTarget()`, `getDiscreteSteps()`), `ToolPotMapping.cpp` (pool + label + color) | `PotRouter::applyBinding()` switch + getter | MidiEngine, ArpEngine (sauf si cible les alimente) |
-| Add a new LED confirmation (single new event type) | `LedController.h` (enum `ConfirmType`), `LedController.cpp` (`renderConfirmation`, `triggerConfirm`), `LedSettingsStore` (new duration+blinkCount field), `ToolLedSettings.cpp` CONFIRM page | `LedController::renderConfirmation` + `triggerConfirm` callsite | Flow métier (bank/scale/arp) sauf pour déclencher |
+| Add a new LED event (unified grammar) | `LedGrammar.h` (enum `EventId` entry), `LedGrammar.cpp` (`EVENT_RENDER_DEFAULT[]` row pointing to a pattern + color slot), `LedSettingsStore` field if the pattern needs a new global, `ToolLedSettings` if the event should appear in EVENTS page (add to `PHASE0_EVENT_IDS[]`) | `LedController::triggerEvent` callsite in metier flow | Flow métier (bank/scale/arp) sauf pour déclencher |
 
 ---
 
@@ -315,7 +319,7 @@ setup Tools. Walk through these tables before ANY user-configurable change.
 | Global settings (profile, AT rate, BLE, clock, doubleTap, bargraph, panic, batCal) | `SettingsStore` | Tool 6 ToolSettings | `illpad_set` / `settings` | Nouveau field → Tool 6 case switch + validator + bump version + apply dans `main.cpp` setup() ([main.cpp:329-339](../../src/main.cpp:329)) |
 | Pot bindings (user-configurable pot → parameter) | `PotMappingStore` (normalMap + arpegMap) | Tool 7 ToolPotMapping | `illpad_pmap` / `mapping` | Nouveau `PotTarget` enum → pool line, label+color, `getDiscreteSteps()`, `isPerBankTarget()`, `applyBinding()` case |
 | Pot filter tuning (snap, deadband, sleep, wake) | `PotFilterStore` | **none** (descriptor in T7 "Monitor" range but no UI) | `illpad_pflt` / `config` | **Friction zone** : modifiable only via code + flash. Intent "Monitor in T7" unimplemented. |
-| LED intensities + timings + confirm blinks + gamma | `LedSettingsStore` | Tool 8 ToolLedSettings | `illpad_lset` / `settings` | Nouveau `ConfirmType` → struct field (durationMs + blinkCount) + Tool 8 CONFIRM page + `renderConfirmation()` dispatch |
+| LED pattern globals + event overrides + intensities + gamma | `LedSettingsStore` v6 | Tool 8 ToolLedSettings (3 pages : PATTERNS / COLORS / EVENTS) | `illpad_lset` / `settings` | Nouveau event → `EventId` + `EVENT_RENDER_DEFAULT[]` + optional entry in Tool 8 PHASE0_EVENT_IDS ; nouveau global pattern param → field in v6 Store + edit case in PATTERNS page + apply in `renderPattern()` |
 | Color slots (13 preset+hue) | `ColorSlotStore` | Tool 8 ToolLedSettings | `illpad_lset` / `colors` | Ajouter un slot → `COLOR_SLOT_COUNT` + Tool 8 color grid + `resolveColorSlot()` |
 
 ### Table 2 — Runtime-managed persisted state (no Setup Tool, written via pot/pad gestures)
@@ -373,12 +377,30 @@ storedValue}` + catch window check before writing. Used:
 `PotRouter::applyBinding`. **Reuse** for every new user-facing continuous
 param shared across contexts. Define per-bank vs global policy.
 
-#### P5 — Confirmation overlay (LED)
-Temporary event visualization on top of normal display. `triggerConfirm(type,
-data, ledMask)`. Auto-expires. Used: all bank/scale/octave/hold feedbacks.
-**Reuse** for new visual events: add `ConfirmType` enum entry +
-`LedSettingsStore` field (duration + blinkCount) + Tool 7 CONFIRM page +
-`renderConfirmation()` dispatch.
+#### P5 — Event overlay (LED grammar, Phase 0 refactor 2026-04-19)
+Temporary event visualization on top of normal display via a unified
+3-layer pattern grammar (LED spec `2026-04-19-led-feedback-unified-design.md`) :
+  1. **Patterns** — palette of 9 fixed behaviors (SOLID, PULSE_SLOW,
+     CROSSFADE_COLOR, BLINK_SLOW, BLINK_FAST, FADE, FLASH, RAMP_HOLD,
+     SPARK) declared in `src/core/LedGrammar.h`.
+  2. **Color slots** — 15 `ColorSlotId` entries (MODE_*, VERB_*,
+     SETUP/NAV, CONFIRM_OK) in `ColorSlotStore` v4.
+  3. **Events** — each `EventId` maps to `{patternId, colorSlot, fgPct}`.
+     Per-event NVS override in `LedSettingsStore.eventOverrides[]` ;
+     compile-time fallback in `EVENT_RENDER_DEFAULT[]`.
+
+API : `triggerEvent(EventId, ledMask)` preempts the single-slot
+`_eventOverlay` PatternInstance. Auto-expires per pattern math.
+`renderPattern(inst, now)` dispatches on `patternId`. Tick ARPEG rendering
+shares `renderFlashOverlay()` with the pattern engine (FLASH visual logic
+in one place).
+
+**Reuse** for new visual events : add `EventId` entry + row in
+`EVENT_RENDER_DEFAULT` (LedGrammar.cpp). Tunable params — per-event
+override via Tool 8 EVENTS page ; global pattern params (SPARK,
+PULSE_SLOW period, FLASH intensities) via Tool 8 PATTERNS page ;
+color via Tool 8 COLORS page. Legacy `ConfirmType` / `triggerConfirm`
+removed in step 0.9.
 
 #### P6 — Store + validate + version (NVS)
 Zero-migration-policy persistence: struct `{magic, version, fields}` +
@@ -486,7 +508,7 @@ skip, what existing system to read as reference.
 |---|---|---|---|
 | **New mode of play** (loop, beat, sequencer, drum pad) | Clock, BankType, State machine, Scheduling, Pile, LED, PotMapping, Setup Tool 4, NVS | Pressure pipeline, ScaleResolver (sauf si notes), Battery, BLE transport detail | ArpEngine + ArpScheduler (pattern complet) + BankManager |
 | **New pad role category** (loop controls, macro pads, etc.) | Tool 3 collision check, nouveau manager runtime, LED state, NVS nouveau Store, main.cpp dispatch | ArpEngine internals, MIDI transport, Clock | ScaleManager (template role-based) + BankManager (template pad-detection) + Tool 3 |
-| **Rethink visual feedback** (nouveau type de confirmation, animation, priorité) | LedController complet, ConfirmType enum, Tool 7 (2 pages), ColorSlotStore, tous les callsites de `triggerConfirm()` | Runtime métier (consomment l'API mais pas l'animation) | LedController::update() + renderConfirmation + Tool 7 CONFIRM page |
+| **Rethink visual feedback** (nouveau pattern, animation, priorité) | LedController (pattern engine + renderFlashOverlay), LedGrammar (PatternId/EventId/defaults), LedSettingsStore v6 (globals + eventOverrides[]), ColorSlotStore v4 (15 slots), Tool 8 (3 pages), tous les callsites de `triggerEvent()` | Runtime métier (consomment l'API mais pas l'animation) | LedController::update() + renderPattern + Tool 8 PATTERNS/EVENTS/COLORS pages |
 | **New MIDI output class** (MPE, MCU, program change, etc.) | MidiTransport, MidiEngine, PotRouter (si déclencheur), setup Tool 5 (si user-config) | Arp internals, LED, Battery | MidiTransport::sendCC / sendPitchBend / sendPolyAftertouch |
 | **Redesign clock/tempo** (tap tempo, tempo per bank, swing global) | ClockManager complet, ArpScheduler tick loop, PotRouter tempo target, setup Tool 5 | Pressure, Battery, LED (sauf pulse) | ClockManager + tout consommateur de `getCurrentTick()` / `getSmoothedBPM()` |
 | **Refactor pot/catch system** | PotFilter, PotRouter (rebuild + catch + bargraph), main.cpp handlePotPipeline, Tool 6 | Tout sauf ça | PotRouter::applyBinding full |
@@ -523,7 +545,7 @@ the task spans multiple files.
 | **Arp scheduling** | `ArpScheduler::tick` [98-131] + `processEvents` [140-146] | Per-engine tick accumulator + event dispatch. |
 | **Clock/PLL** | `ClockManager::update` [45-63] → `processIncomingTicks` [66-116], `generateTicks` [181-203] | Source cascade + PLL smoothing. |
 | **Pot → parameter** | `PotRouter::applyBinding` [386-546] | Catch system + value conversion + dirty flags. |
-| **LEDs** | `LedController::update` | 9-level priority ladder + overlays. |
+| **LEDs** | `LedController::update` | 9-level priority ladder + event overlay. Event grammar : `triggerEvent(EventId, ledMask)` -> `renderPattern(_eventOverlay, now)`. Tick ARPEG uses shared `renderFlashOverlay()`. See `LedGrammar.h` for palette. |
 | **NVS** | `NvsManager::loadBlob/saveBlob/checkBlob` | Persistence API + descriptor table. |
 | **Battery** | `BatteryMonitor::update` | Voltage divider + thresholds + low flag. |
 | **Setup mode** | `SetupManager::run` + individual `ToolX::run` | VT100 menu + Tool dispatch. |

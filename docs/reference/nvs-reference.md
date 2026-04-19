@@ -67,13 +67,13 @@ Menu (`SetupUI::printMainMenu`) loops over these to check all stores in one pass
 
 | Function | Clamps |
 |----------|--------|
-| `validateSettingsStore` | profile, AT rate, BLE interval, clock mode, double-tap, bargraph, panic, batADC |
+| `validateSettingsStore` | profile, AT rate, BLE interval, clock mode, double-tap, bargraph, panic, batADC, LOOP timers (clearLoop, slotSave, slotClear) |
 | `validateBankTypeStore` | types (max BANK_ARPEG), arpCount (max 4), quantize modes, scaleGroup (max NUM_SCALE_GROUPS) |
 | `validateScalePadStore` | rootPads, modePads, chromaticPad (all < NUM_KEYS) |
 | `validateArpPadStore` | holdPad, octavePads (all < NUM_KEYS) |
 | `validateBankPadStore` | bankPads (all < NUM_KEYS) |
 | `validateNoteMapStore` | noteMap entries (all < NUM_KEYS) |
-| `validateLedSettingsStore` | intensity cross-validation, timing ranges, confirmation blink counts/durations |
+| `validateLedSettingsStore` | intensity cross-validation (min<=max), timing ranges, gamma, bgFactor [10,50], SPARK params (onMs/gapMs/cycles), legacy confirmation blink counts/durations, eventOverrides[] clamp (PTN_NONE or valid PatternId, colorSlot < COLOR_SLOT_COUNT, fgPct <= 100) |
 | `validatePotFilterStore` | snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
 
 ---
@@ -89,12 +89,12 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `CalDataStore` | `illpad_cal` | `caldata` | 0xBEEF | 5 | 102B | CapacitiveKeyboard (DO NOT MODIFY) |
 | `NoteMapStore` | `illpad_nmap` | `map` | 0xBEEF | 1 | 52B | T2 PadOrdering |
 | `BankPadStore` | `illpad_bpad` | `map` | 0xBEEF | 1 | 12B | T3 PadRoles |
-| `SettingsStore` | `illpad_set` | `settings` | 0xBEEF | 10 | 14B | T6 Settings |
+| `SettingsStore` | `illpad_set` | `settings` | 0xBEEF | 11 | 20B | T6 Settings (v11 adds 3 LOOP RAMP_HOLD timers : clearLoopTimerMs / slotSaveTimerMs / slotClearTimerMs) |
 | `PotParamsStore` | `illpad_pot` | `params` | 0xBEEF | 2 | 10B | NvsManager (runtime) |
 | `PotMappingStore` | `illpad_pmap` | `mapping` | 0xBEEF | 1 | 36B | T7 PotMapping |
 | `PotFilterStore` | `illpad_pflt` | `cfg` | 0xBEEF | 1 | 12B | PotFilter (runtime, tuned via T7 Monitor). Fields: snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
-| `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 3 | 38B | T8 LedSettings |
-| `ColorSlotStore` | `illpad_lset` | `ledcolors` | 0xC010 | 1 | 30B | T8 LedSettings |
+| `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 6 | ~90B | T8 LedSettings (v6 unified grammar : 3 legacy unused fields retired ; new : bgFactor, sparkOnMs/GapMs/Cycles, eventOverrides[EVT_COUNT] array) |
+| `ColorSlotStore` | `illpad_lset` | `ledcolors` | 0xC010 | 4 | 34B | T8 LedSettings (v4 : 12->15 slots, MODE_*/VERB_*/setup/CONFIRM_OK families ; NORMAL_BG/ARPEG_BG/HOLD_OFF retired — BG derives from FG via bgFactor) |
 
 ### V2 Stores (replace raw formats)
 

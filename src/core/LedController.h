@@ -11,20 +11,6 @@
 struct BankSlot;
 class ArpEngine;
 
-// =================================================================
-// Confirmation blink types
-// =================================================================
-enum ConfirmType : uint8_t {
-  CONFIRM_NONE         = 0,
-  CONFIRM_BANK_SWITCH  = 1,
-  CONFIRM_SCALE_ROOT   = 2,
-  CONFIRM_SCALE_MODE   = 3,
-  CONFIRM_SCALE_CHROM  = 4,
-  CONFIRM_HOLD_ON      = 5,
-  CONFIRM_HOLD_OFF     = 6,
-  CONFIRM_OCTAVE       = 7,
-};
-
 class LedController {
 public:
   LedController();
@@ -43,21 +29,15 @@ public:
 
   // Event trigger (unified grammar — Phase 0 step 0.4).
   // Preempts any active event overlay. Resolves pattern + color + fgPct from
-  // LedSettingsStore.eventOverrides[evt] (NVS override) or EVENT_RENDER_DEFAULT
-  // (compile-time fallback). Durations for BLINK/FADE are resolved from the
-  // legacy per-event settings fields (bankDurationMs, holdOnFadeMs, etc.) so
-  // existing NVS values continue to drive timing.
+  // LedSettingsStore.eventOverrides[evt] (NVS override via Tool 8 Page EVENTS)
+  // or EVENT_RENDER_DEFAULT (compile-time fallback). Durations for BLINK/FADE
+  // come from the legacy per-event settings fields (bankDurationMs, holdOnFadeMs,
+  // etc.) — editable via Tool 8 PATTERNS for globals.
   //
   // ledMask : 0 = target _currentBank only. Non-zero = bitmask of LEDs to
   //           animate simultaneously (used by SCALE_* scale-group propagation
   //           and PLAY/STOP via LEFT+double-tap on BG bank pad).
   void triggerEvent(EventId evt, uint8_t ledMask = 0);
-
-  // Legacy API wrapper. Routes to triggerEvent() via confirmTypeToEventId().
-  // Kept for backward compat during Phase 0 ; callsites migrate to
-  // triggerEvent() in step 0.5. param is currently ignored (was only used
-  // internally for OCTAVE direction which was never rendered).
-  void triggerConfirm(ConfirmType type, uint8_t param = 0, uint8_t ledMask = 0);
 
   // Bargraph persistence
   void setPotBarDuration(uint16_t ms);
@@ -149,7 +129,6 @@ private:
   // Engine methods (step 0.4).
   void renderPattern(const PatternInstance& inst, unsigned long now);
   bool isPatternExpired(const PatternInstance& inst, unsigned long now) const;
-  EventId confirmTypeToEventId(ConfirmType type) const;
   RGBW colorForSlot(uint8_t slotId) const;
   // Shared FLASH rendering logic (used inline by tick ARPEG in step 0.5, and
   // by the pattern engine for FLASH events).
@@ -211,7 +190,7 @@ private:
 
   // _eventOverlay replaces the legacy _confirmType/_confirmStart/... fields
   // as of step 0.4 (pattern engine). Single-slot overlay, preempted on
-  // each triggerEvent/triggerConfirm call.
+  // each triggerEvent call.
 
   // Bargraph
   uint16_t _potBarDurationMs;

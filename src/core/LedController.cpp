@@ -504,7 +504,7 @@ void LedController::renderNormalDisplay(unsigned long now) {
   // --- Event overlay (unified pattern engine — step 0.4) ---
   // All events (bank switch, scale, octave, hold capture, etc.) flow through
   // renderPattern() which picks up _eventOverlay populated by triggerEvent()
-  // (or triggerConfirm() legacy wrapper). renderConfirmation() has already
+  // by triggerEvent(). renderConfirmation() has already
   // cleared expired overlays before we get here.
   if (_eventOverlay.active) {
     renderPattern(_eventOverlay, now);
@@ -537,13 +537,6 @@ void LedController::setBankSlots(const BankSlot* slots) {
 // =================================================================
 // Confirmation Blinks
 // =================================================================
-
-void LedController::triggerConfirm(ConfirmType type, uint8_t param, uint8_t ledMask) {
-  (void)param;  // unused in new engine (was only used for OCTAVE direction internally, never rendered)
-  EventId evt = confirmTypeToEventId(type);
-  if (evt >= EVT_COUNT) return;
-  triggerEvent(evt, ledMask);
-}
 
 void LedController::triggerEvent(EventId evt, uint8_t ledMask) {
   if (evt >= EVT_COUNT) return;
@@ -665,19 +658,6 @@ void LedController::triggerEvent(EventId evt, uint8_t ledMask) {
   }
 
   _eventOverlay.active = true;
-}
-
-EventId LedController::confirmTypeToEventId(ConfirmType type) const {
-  switch (type) {
-    case CONFIRM_BANK_SWITCH: return EVT_BANK_SWITCH;
-    case CONFIRM_SCALE_ROOT:  return EVT_SCALE_ROOT;
-    case CONFIRM_SCALE_MODE:  return EVT_SCALE_MODE;
-    case CONFIRM_SCALE_CHROM: return EVT_SCALE_CHROM;
-    case CONFIRM_HOLD_ON:     return EVT_PLAY;
-    case CONFIRM_HOLD_OFF:    return EVT_STOP;
-    case CONFIRM_OCTAVE:      return EVT_OCTAVE;
-    default:                  return (EventId)EVT_COUNT;  // sentinel (out of range)
-  }
 }
 
 RGBW LedController::colorForSlot(uint8_t slotId) const {
