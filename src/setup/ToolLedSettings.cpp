@@ -44,6 +44,36 @@ static const int8_t DEFAULT_SLOT_HUES[COLOR_SLOT_COUNT] = {
   0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0
 };
 
+// Phase 0 events (Tool 8 PAGE_EVENTS shows these, hides LOOP reserved).
+// Index is the EventId ; the EVENTS page cursor traverses this array in
+// order.
+static const uint8_t PHASE0_EVENT_IDS[] = {
+  EVT_BANK_SWITCH,
+  EVT_SCALE_ROOT,
+  EVT_SCALE_MODE,
+  EVT_SCALE_CHROM,
+  EVT_OCTAVE,
+  EVT_PLAY,
+  EVT_STOP,
+  EVT_WAITING,
+  EVT_REFUSE,
+  EVT_CONFIRM_OK,
+};
+static const uint8_t NUM_PHASE0_EVENTS = sizeof(PHASE0_EVENT_IDS);
+
+static const char* const PHASE0_EVENT_LABELS[NUM_PHASE0_EVENTS] = {
+  "BANK_SWITCH",
+  "SCALE_ROOT",
+  "SCALE_MODE",
+  "SCALE_CHROM",
+  "OCTAVE",
+  "PLAY",
+  "STOP",
+  "WAITING",
+  "REFUSE",
+  "CONFIRM_OK",
+};
+
 // Pattern pool labels (short, aligned with LED spec §10 palette).
 static const char* const PATTERN_POOL_LABELS[PTN_COUNT] = {
   "SOLID",            // 0
@@ -69,7 +99,11 @@ ToolLedSettings::ToolLedSettings()
     _patternsCursor(0),
     _patternsSub(PATTERNS_NAV),
     _patternsEditField(0),
-    _patternsEditBackup{} {}
+    _patternsEditBackup{},
+    _eventsCursor(0),
+    _eventsSub(EVENTS_NAV),
+    _eventsEditField(EVT_FIELD_PATTERN),
+    _eventsEditBackup{} {}
 
 void ToolLedSettings::begin(LedController* leds, SetupUI* ui) {
   _leds = leds;
@@ -441,14 +475,181 @@ void ToolLedSettings::renderPagePatterns() {
   renderPatternParamsPanel(_patternsCursor, _patternsSub == PATTERNS_EDIT);
 }
 
-// --- EVENTS : stub for 0.8d ---
+// --- EVENTS page ---
+//
+// Vertical field list of Phase 0 events (LOOP reserved events hidden
+// until Phase 1+). Each row shows the event name + 3 fields :
+//   - pattern   (pool : 9 patterns + PTN_NONE "default")
+//   - color     (pool : 15 color slots)
+//   - fgPct     (numeric, 0-100)
+//
+// Sentinel PTN_NONE means "use EVENT_RENDER_DEFAULT[evt]" — the
+// compile-time fallback takes over. Any other PatternId value is a
+// user override stored in LedSettingsStore.eventOverrides[].
+
+void ToolLedSettings::adjustEventField(uint8_t eventIdx, uint8_t field, int dir, bool accel) {
+  if (eventIdx >= NUM_PHASE0_EVENTS) return;
+  uint8_t evt = PHASE0_EVENT_IDS[eventIdx];
+  EventRenderEntry& entry = _lwk.eventOverrides[evt];
+
+  if (field == EVT_FIELD_PATTERN) {
+    // Cycle through 9 patterns + PTN_NONE (default) = 10 options.
+    // Storage : 0..8 are PatternId, 0xFF is PTN_NONE.
+    // We map them to a linear cursor : 0..8 = patterns, 9 = default.
+    uint8_t cur = (entry.patternId == PTN_NONE) ? 9 : entry.patternId;
+    int n = (int)cur + dir;
+    if (n < 0)  n = 9;
+    if (n > 9)  n = 0;
+    entry.patternId = (n == 9) ? PTN_NONE : (uint8_t)n;
+  } else if (field == EVT_FIELD_COLOR) {
+    int c = (int)entry.colorSlot + dir;
+    if (c < 0) c = COLOR_SLOT_COUNT - 1;
+    if (c >= (int)COLOR_SLOT_COUNT) c = 0;
+    entry.colorSlot = (uint8_t)c;
+  } else if (field == EVT_FIELD_FG_PCT) {
+    int step = accel ? 10 : 1;
+    int v = (int)entry.fgPct + dir * step;
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    entry.fgPct = (uint8_t)v;
+  }
+}
+
+void ToolLedSettings::resetCurrentEventToDefault() {
+  if (_eventsCursor >= NUM_PHASE0_EVENTS) return;
+  uint8_t evt = PHASE0_EVENT_IDS[_eventsCursor];
+  _lwk.eventOverrides[evt].patternId = PTN_NONE;  // fallback active
+  _lwk.eventOverrides[evt].colorSlot = 0;
+  _lwk.eventOverrides[evt].fgPct     = 0;
+}
+
+void ToolLedSettings::handlePageEvents(const NavEvent& ev, bool& screenDirty) {
+  if (_eventsSub == EVENTS_NAV) {
+    if (ev.type == NAV_UP) {
+      _eventsCursor = (_eventsCursor == 0) ? (NUM_PHASE0_EVENTS - 1) : (_eventsCursor - 1);
+      screenDirty = true;
+    } else if (ev.type == NAV_DOWN) {
+      _eventsCursor = (_eventsCursor + 1) % NUM_PHASE0_EVENTS;
+      screenDirty = true;
+    } else if (ev.type == NAV_ENTER) {
+      _eventsSub        = EVENTS_EDIT;
+      _eventsEditField  = EVT_FIELD_PATTERN;
+      uint8_t evt       = PHASE0_EVENT_IDS[_eventsCursor];
+      _eventsEditBackup = _lwk.eventOverrides[evt];
+      screenDirty       = true;
+    } else if (ev.type == NAV_DEFAULTS) {
+      resetCurrentEventToDefault();
+      if (saveLedSettings()) {
+        _nvsSaved = true;
+        _ui->flashSaved();
+      }
+      screenDirty = true;
+    }
+  } else {
+    // EVENTS_EDIT
+    if (ev.type == NAV_UP || ev.type == NAV_DOWN) {
+      // Cycle focused field among 3
+      int n = (int)_eventsEditField + (ev.type == NAV_DOWN ? 1 : -1);
+      if (n < 0) n = 2;
+      if (n > 2) n = 0;
+      _eventsEditField = (EventsEditField)n;
+      screenDirty = true;
+    } else if (ev.type == NAV_LEFT) {
+      adjustEventField(_eventsCursor, _eventsEditField, -1, ev.accelerated);
+      screenDirty = true;
+    } else if (ev.type == NAV_RIGHT) {
+      adjustEventField(_eventsCursor, _eventsEditField, +1, ev.accelerated);
+      screenDirty = true;
+    } else if (ev.type == NAV_ENTER) {
+      if (saveLedSettings()) {
+        _nvsSaved = true;
+        _ui->flashSaved();
+      }
+      _eventsSub = EVENTS_NAV;
+      screenDirty = true;
+    } else if (ev.type == NAV_QUIT) {
+      // Cancel : restore backup for this event only
+      uint8_t evt = PHASE0_EVENT_IDS[_eventsCursor];
+      _lwk.eventOverrides[evt] = _eventsEditBackup;
+      _eventsSub = EVENTS_NAV;
+      screenDirty = true;
+    }
+  }
+}
 
 void ToolLedSettings::renderPageEvents() {
-  _ui->drawSection("EVENTS — step 0.8d");
-  _ui->drawFrameLine(VT_DIM "  Vertical field list per event." VT_RESET);
-  _ui->drawFrameLine(VT_DIM "  Row edits : pattern (pool) + color slot (pool) + fgPct (field)." VT_RESET);
-  _ui->drawFrameLine(VT_DIM "  RAMP_HOLD events : rampMs shown as derived (Tool 6)." VT_RESET);
-  _ui->drawFrameLine(VT_DIM "  Preview via 'b' triggers the event on LED 3-4." VT_RESET);
+  _ui->drawSection("EVENTS");
+  for (uint8_t i = 0; i < NUM_PHASE0_EVENTS; i++) {
+    bool selected = (i == _eventsCursor);
+    bool editing  = selected && (_eventsSub == EVENTS_EDIT);
+
+    uint8_t evt = PHASE0_EVENT_IDS[i];
+    const EventRenderEntry& entry = _lwk.eventOverrides[evt];
+
+    // Derive visible pattern/color/fgPct : if override is PTN_NONE,
+    // show the default values (informational) but tag as "(default)".
+    bool isOverride = (entry.patternId != PTN_NONE);
+    const EventRenderEntry& effective = isOverride ? entry : EVENT_RENDER_DEFAULT[evt];
+
+    const char* patLabel = (entry.patternId == PTN_NONE)
+                             ? "default"
+                             : (effective.patternId < PTN_COUNT
+                                ? PATTERN_POOL_LABELS[effective.patternId]
+                                : "?");
+    const char* colLabel = (effective.colorSlot < COLOR_SLOT_COUNT)
+                             ? COLOR_SLOT_LABELS[effective.colorSlot]
+                             : "?";
+
+    auto fieldTag = [&](EventsEditField f, const char* text) -> const char* {
+      static char buf[48];
+      bool focus = editing && (_eventsEditField == f);
+      if (focus) snprintf(buf, sizeof(buf), VT_CYAN VT_BOLD "[%s]" VT_RESET, text);
+      else if (selected) snprintf(buf, sizeof(buf), VT_BRIGHT_WHITE "[%s]" VT_RESET, text);
+      else snprintf(buf, sizeof(buf), "[%s]", text);
+      return buf;
+    };
+
+    char fgBuf[8];
+    snprintf(fgBuf, sizeof(fgBuf), "%d%%", effective.fgPct);
+
+    // Render each row using 3 separate snprintf-buffered tags. Due to the
+    // static-buffer aliasing in fieldTag(), we concatenate into one string.
+    char rowBuf[160];
+    char patBuf[48], colBuf[48], fgOutBuf[48];
+    bool focusPat = editing && _eventsEditField == EVT_FIELD_PATTERN;
+    bool focusCol = editing && _eventsEditField == EVT_FIELD_COLOR;
+    bool focusFg  = editing && _eventsEditField == EVT_FIELD_FG_PCT;
+    snprintf(patBuf, sizeof(patBuf), "%s[%s]%s",
+             focusPat ? VT_CYAN VT_BOLD : (selected ? VT_BRIGHT_WHITE : ""), patLabel, VT_RESET);
+    snprintf(colBuf, sizeof(colBuf), "%s[%-16s]%s",
+             focusCol ? VT_CYAN VT_BOLD : (selected ? VT_BRIGHT_WHITE : ""), colLabel, VT_RESET);
+    snprintf(fgOutBuf, sizeof(fgOutBuf), "%s[%s]%s",
+             focusFg ? VT_CYAN VT_BOLD : (selected ? VT_BRIGHT_WHITE : ""), fgBuf, VT_RESET);
+
+    const char* leader = selected ? (VT_CYAN VT_BOLD "> " VT_RESET) : "  ";
+    snprintf(rowBuf, sizeof(rowBuf), "%s%-12s %-28s %-28s %-12s",
+             leader, PHASE0_EVENT_LABELS[i], patBuf, colBuf, fgOutBuf);
+    _ui->drawFrameLine("%s", rowBuf);
+    (void)fieldTag;  // silence unused-lambda warning if the compiler is strict
+  }
+
+  _ui->drawFrameEmpty();
+  _ui->drawSection("INFO");
+  if (_eventsSub == EVENTS_EDIT) {
+    const char* fieldName = (_eventsEditField == EVT_FIELD_PATTERN) ? "PATTERN"
+                          : (_eventsEditField == EVT_FIELD_COLOR)   ? "COLOR" : "FG%";
+    _ui->drawFrameLine(VT_DIM "Editing %s — %s focused." VT_RESET,
+                       PHASE0_EVENT_LABELS[_eventsCursor], fieldName);
+    _ui->drawFrameLine(VT_DIM "UP/DOWN : switch field. LEFT/RIGHT : adjust." VT_RESET);
+    _ui->drawFrameLine(VT_DIM "ENTER : save & exit edit. 'q' : cancel." VT_RESET);
+  } else {
+    uint8_t evt = PHASE0_EVENT_IDS[_eventsCursor];
+    bool isDefault = (_lwk.eventOverrides[evt].patternId == PTN_NONE);
+    _ui->drawFrameLine(VT_DIM "%s %s" VT_RESET,
+                       PHASE0_EVENT_LABELS[_eventsCursor],
+                       isDefault ? "(using compile-time default)" : "(overridden)");
+    _ui->drawFrameLine(VT_DIM "ENTER edits pattern / color / fgPct. 'd' resets to default." VT_RESET);
+  }
 }
 
 // --- run() ---
@@ -464,6 +665,9 @@ void ToolLedSettings::run() {
   _patternsCursor  = 0;
   _patternsSub     = PATTERNS_NAV;
   _patternsEditField = 0;
+  _eventsCursor    = 0;
+  _eventsSub       = EVENTS_NAV;
+  _eventsEditField = EVT_FIELD_PATTERN;
 
   // Load ColorSlotStore from NVS
   bool colorLoaded = NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
@@ -544,12 +748,14 @@ void ToolLedSettings::run() {
     // Determine if we're in a page sub-state (sub-state consumes 'q' and 't'
     // for cancel / field switch rather than top-level exit / page toggle).
     bool inSubState = (_page == PAGE_COLORS   && _colorsSub   != COLORS_NAV)
-                   || (_page == PAGE_PATTERNS && _patternsSub != PATTERNS_NAV);
+                   || (_page == PAGE_PATTERNS && _patternsSub != PATTERNS_NAV)
+                   || (_page == PAGE_EVENTS   && _eventsSub   != EVENTS_NAV);
 
     if (inSubState) {
       switch (_page) {
         case PAGE_COLORS:   handlePageColors(ev, screenDirty);   break;
         case PAGE_PATTERNS: handlePagePatterns(ev, screenDirty); break;
+        case PAGE_EVENTS:   handlePageEvents(ev, screenDirty);   break;
         default: break;
       }
     } else {
@@ -563,7 +769,7 @@ void ToolLedSettings::run() {
         switch (_page) {
           case PAGE_COLORS:   handlePageColors(ev, screenDirty);   break;
           case PAGE_PATTERNS: handlePagePatterns(ev, screenDirty); break;
-          case PAGE_EVENTS:   /* step 0.8d */ break;
+          case PAGE_EVENTS:   handlePageEvents(ev, screenDirty);   break;
           default: break;
         }
       }
@@ -607,6 +813,10 @@ void ToolLedSettings::run() {
         _ui->drawControlBar(VT_DIM "[^v] FIELD" CBAR_SEP "[</>] ADJUST" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
       } else if (_page == PAGE_PATTERNS) {
         _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT" CBAR_SEP "[t] PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
+      } else if (_page == PAGE_EVENTS && _eventsSub == EVENTS_EDIT) {
+        _ui->drawControlBar(VT_DIM "[^v] FIELD" CBAR_SEP "[</>] ADJUST" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
+      } else if (_page == PAGE_EVENTS) {
+        _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT" CBAR_SEP "[d] DFLT" CBAR_SEP "[t] PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
       } else {
         _ui->drawControlBar(VT_DIM "[t] NEXT PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
       }

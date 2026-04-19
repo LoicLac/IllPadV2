@@ -28,6 +28,8 @@ LedController::LedController()
     _scaleChromBlinks(2), _scaleChromDurationMs(200),
     _holdOnFadeMs(500), _holdOffFadeMs(500),
     _octaveBlinks(3), _octaveDurationMs(300),
+    _sparkOnMs(50), _sparkGapMs(70), _sparkCycles(2),
+    _bgFactor(25),
     _potBarDurationMs(LED_BARGRAPH_DURATION_DEFAULT),
     _showingPotBar(false),
     _potBarRealLevel(0),
@@ -65,6 +67,13 @@ LedController::LedController()
   _eventOverlay = {};
   _eventOverlay.active = false;
   _eventOverlay.patternId = PTN_NONE;
+  // Init per-event override array : all PTN_NONE -> fallback on
+  // EVENT_RENDER_DEFAULT until loadLedSettings() populates from NVS.
+  for (uint8_t i = 0; i < EVT_COUNT; i++) {
+    _eventOverrides[i].patternId = PTN_NONE;
+    _eventOverrides[i].colorSlot = 0;
+    _eventOverrides[i].fgPct     = 0;
+  }
   // Init color slot cache with v4 compile-time defaults matching
   // NvsManager::_colorSlots. loadColorSlots() overwrites when NVS loads.
   _colors[CSLOT_MODE_NORMAL]      = COLOR_PRESETS[1];   // Warm White
@@ -540,14 +549,14 @@ void LedController::triggerEvent(EventId evt, uint8_t ledMask) {
   if (evt >= EVT_COUNT) return;
 
   // --- Resolve render entry : NVS override > compile-time default ---
-  // Phase 0 : NVS override array exists in LedSettingsStore v6 but is not
-  // yet wired here (step 0.8d will bring the Tool 8 UI). For now we always
-  // use EVENT_RENDER_DEFAULT. When the override path lands, replace this
-  // with : use _ledSettings.eventOverrides[evt] if patternId != PTN_NONE.
-  EventRenderEntry entry = EVENT_RENDER_DEFAULT[evt];
+  // Phase 0 step 0.8d : _eventOverrides[] is populated from LedSettingsStore
+  // v6 eventOverrides[EVT_COUNT] at loadLedSettings(). PTN_NONE sentinel
+  // falls back to EVENT_RENDER_DEFAULT. If the default is also PTN_NONE
+  // (LOOP reserved events in Phase 0), no render.
+  EventRenderEntry entry = _eventOverrides[evt];
   if (entry.patternId == PTN_NONE) {
-    // No render for this event (LOOP reserved slots in Phase 0).
-    return;
+    entry = EVENT_RENDER_DEFAULT[evt];
+    if (entry.patternId == PTN_NONE) return;
   }
 
   // --- Populate the PatternInstance ---
@@ -888,6 +897,15 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
   _holdOffFadeMs = s.holdOffFadeMs;
   _octaveBlinks = s.octaveBlinks;
   _octaveDurationMs = s.octaveDurationMs;
+  _sparkOnMs   = s.sparkOnMs;
+  _sparkGapMs  = s.sparkGapMs;
+  _sparkCycles = s.sparkCycles;
+  _bgFactor    = s.bgFactor;
+  // Copy per-event overrides array — consumed by triggerEvent() for NVS-driven
+  // per-event customization (Tool 8 EVENTS page, step 0.8d).
+  for (uint8_t i = 0; i < EVT_COUNT; i++) {
+    _eventOverrides[i] = s.eventOverrides[i];
+  }
   rebuildGammaLut(s.gammaTenths > 0 ? s.gammaTenths : 20);
 }
 

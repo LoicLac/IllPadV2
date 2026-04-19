@@ -195,6 +195,16 @@ private:
   uint16_t _holdOffFadeMs;
   uint8_t  _octaveBlinks;
   uint16_t _octaveDurationMs;
+  // SPARK params (LedSettingsStore v6).
+  uint16_t _sparkOnMs;
+  uint16_t _sparkGapMs;
+  uint8_t  _sparkCycles;
+  // Global bg factor (v6).
+  uint8_t  _bgFactor;
+  // Per-event overrides (LedSettingsStore v6 eventOverrides[EVT_COUNT]).
+  // Copied at loadLedSettings() ; consulted by triggerEvent() — NVS override
+  // takes precedence over EVENT_RENDER_DEFAULT when patternId != PTN_NONE.
+  EventRenderEntry _eventOverrides[EVT_COUNT];
 
   uint8_t _gammaLut[256];
   unsigned long _flashStartTime[NUM_LEDS];

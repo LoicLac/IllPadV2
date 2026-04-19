@@ -67,6 +67,19 @@ private:
     PATTERNS_EDIT = 1,  // field editor for selected pattern's globals
   };
 
+  // EVENTS page sub-states
+  enum EventsSubState : uint8_t {
+    EVENTS_NAV  = 0,  // cursor over event rows
+    EVENTS_EDIT = 1,  // editing an event : focus cycles pattern/color/fgPct
+  };
+
+  // EVENTS edit focus : which of the 3 fields is active
+  enum EventsEditField : uint8_t {
+    EVT_FIELD_PATTERN = 0,
+    EVT_FIELD_COLOR   = 1,
+    EVT_FIELD_FG_PCT  = 2,
+  };
+
   LedController* _leds;
   SetupUI*       _ui;
   Page           _page;
@@ -80,11 +93,17 @@ private:
   ColorSlot        _colorsEditBackup;     // for cancel (q) during edit
 
   // PATTERNS page state
-  LedSettingsStore _lwk;                  // working copy for pattern globals
+  LedSettingsStore _lwk;                  // working copy for pattern globals + event overrides
   uint8_t          _patternsCursor;       // 0..8 (PatternId pool index)
   PatternsSubState _patternsSub;
   uint8_t          _patternsEditField;    // 0..N-1 per selected pattern
   LedSettingsStore _patternsEditBackup;   // for cancel (q)
+
+  // EVENTS page state
+  uint8_t          _eventsCursor;         // 0..NUM_PHASE0_EVENTS-1 (visible events)
+  EventsSubState   _eventsSub;
+  EventsEditField  _eventsEditField;
+  EventRenderEntry _eventsEditBackup;     // for cancel (q) during edit
 
   // Page renderers
   void renderPagePatterns();
@@ -103,6 +122,11 @@ private:
   void adjustPatternField(uint8_t patternId, uint8_t field, int dir, bool accel);
   bool saveLedSettings();
   void renderPatternParamsPanel(uint8_t patternId, bool editing) const;
+
+  // EVENTS page helpers
+  void handlePageEvents(const struct NavEvent& ev, bool& screenDirty);
+  void adjustEventField(uint8_t eventIdx, uint8_t field, int dir, bool accel);
+  void resetCurrentEventToDefault();
 };
 
 #endif // TOOL_LED_SETTINGS_H
