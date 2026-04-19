@@ -8,12 +8,25 @@
 #include <Arduino.h>
 
 // =================================================================
-// Tool 8 — LED Settings (Phase 0 step 0.8b — COLORS page)
+// Tool 8 — LED Settings (Phase 0 step 0.8e — polish complete)
 // =================================================================
-// PATTERNS and EVENTS pages still stubbed (steps 0.8c / 0.8d).
-// COLORS page fully functional : vertical list of 15 slots, ENTER opens
-// an edit sub-state with preset pool + hue offset field. Save on ENTER
-// commit (conventions §1). Live preview on LED 3-4.
+// Three-page editor for the unified LED grammar :
+//   COLORS   : 15 color slots (preset + hue offset)   [§0.8b]
+//   PATTERNS : 9 palette patterns, 4 with editable globals  [§0.8c]
+//   EVENTS   : 10 Phase 0 events, per-event {pattern, color, fgPct}
+//              override ; PTN_NONE sentinel = fallback on
+//              EVENT_RENDER_DEFAULT                      [§0.8d]
+//
+// Conventions respected :
+//   §1 Save on commit only. ENTER commits, 'q' cancels (no save).
+//      'd' on an item resets it to default, which IS a commit (saves).
+//   §2 One flashSaved() per commit — audited via grep.
+//   §3 LED 3-4 driven by the tool in preview mode (COLORS page).
+//   §4 3 canonical paradigms : grid-like cursor list (NAV), pool
+//      (pattern / color / preset cycling via LEFT/RIGHT), field editor
+//      (numeric adjustments with accel).
+//   §6 't' toggles pages ; arrows strictly intra-page.
+//      Two-step exit : 'q' in sub-state cancels edit, 'q' in NAV exits tool.
 // =================================================================
 
 // Short labels (max 16 chars) for each color slot — indexed by ColorSlotId.
@@ -600,22 +613,13 @@ void ToolLedSettings::renderPageEvents() {
                              ? COLOR_SLOT_LABELS[effective.colorSlot]
                              : "?";
 
-    auto fieldTag = [&](EventsEditField f, const char* text) -> const char* {
-      static char buf[48];
-      bool focus = editing && (_eventsEditField == f);
-      if (focus) snprintf(buf, sizeof(buf), VT_CYAN VT_BOLD "[%s]" VT_RESET, text);
-      else if (selected) snprintf(buf, sizeof(buf), VT_BRIGHT_WHITE "[%s]" VT_RESET, text);
-      else snprintf(buf, sizeof(buf), "[%s]", text);
-      return buf;
-    };
-
+    // Build each of the 3 fields with its focus tag (cyan bold when edited,
+    // bright white when just selected, plain otherwise). snprintf to a
+    // per-field buffer to avoid a single-static-buffer aliasing issue.
     char fgBuf[8];
     snprintf(fgBuf, sizeof(fgBuf), "%d%%", effective.fgPct);
 
-    // Render each row using 3 separate snprintf-buffered tags. Due to the
-    // static-buffer aliasing in fieldTag(), we concatenate into one string.
-    char rowBuf[160];
-    char patBuf[48], colBuf[48], fgOutBuf[48];
+    char patBuf[48], colBuf[48], fgOutBuf[48], rowBuf[192];
     bool focusPat = editing && _eventsEditField == EVT_FIELD_PATTERN;
     bool focusCol = editing && _eventsEditField == EVT_FIELD_COLOR;
     bool focusFg  = editing && _eventsEditField == EVT_FIELD_FG_PCT;
@@ -630,7 +634,6 @@ void ToolLedSettings::renderPageEvents() {
     snprintf(rowBuf, sizeof(rowBuf), "%s%-12s %-28s %-28s %-12s",
              leader, PHASE0_EVENT_LABELS[i], patBuf, colBuf, fgOutBuf);
     _ui->drawFrameLine("%s", rowBuf);
-    (void)fieldTag;  // silence unused-lambda warning if the compiler is strict
   }
 
   _ui->drawFrameEmpty();
