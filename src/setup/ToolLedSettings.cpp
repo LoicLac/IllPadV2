@@ -2,6 +2,7 @@
 #include "SetupUI.h"
 #include "InputParser.h"
 #include "../core/LedController.h"
+#include "../core/LedGrammar.h"
 #include "../core/HardwareConfig.h"
 #include "../managers/NvsManager.h"
 #include <Arduino.h>
@@ -43,6 +44,19 @@ static const int8_t DEFAULT_SLOT_HUES[COLOR_SLOT_COUNT] = {
   0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0
 };
 
+// Pattern pool labels (short, aligned with LED spec §10 palette).
+static const char* const PATTERN_POOL_LABELS[PTN_COUNT] = {
+  "SOLID",            // 0
+  "PULSE_SLOW",       // 1
+  "CROSSFADE_COLOR",  // 2
+  "BLINK_SLOW",       // 3
+  "BLINK_FAST",       // 4
+  "FADE",             // 5
+  "FLASH",            // 6
+  "RAMP_HOLD",        // 7
+  "SPARK",            // 8
+};
+
 ToolLedSettings::ToolLedSettings()
   : _leds(nullptr), _ui(nullptr), _page(PAGE_COLORS),
     _nvsSaved(false),
@@ -50,7 +64,12 @@ ToolLedSettings::ToolLedSettings()
     _colorsCursor(0),
     _colorsSub(COLORS_NAV),
     _colorsEditField(EDIT_FIELD_PRESET),
-    _colorsEditBackup{} {}
+    _colorsEditBackup{},
+    _lwk{},
+    _patternsCursor(0),
+    _patternsSub(PATTERNS_NAV),
+    _patternsEditField(0),
+    _patternsEditBackup{} {}
 
 void ToolLedSettings::begin(LedController* leds, SetupUI* ui) {
   _leds = leds;
@@ -194,14 +213,235 @@ void ToolLedSettings::renderPageColors() {
   }
 }
 
-// --- PATTERNS / EVENTS : stubs for 0.8c / 0.8d ---
+// --- PATTERNS page ---
+//
+// Pool of 9 patterns (selected via UP/DOWN). Some patterns have editable
+// global params stored in LedSettingsStore ; others are entirely
+// event-specific (edit via EVENTS page in 0.8d) or not-yet-configurable.
+//
+// Global params map :
+//   PTN_SOLID            : none (per-event)
+//   PTN_PULSE_SLOW       : 1 field  (pulsePeriodMs)
+//   PTN_CROSSFADE_COLOR  : none (not yet a store field)
+//   PTN_BLINK_SLOW       : none (per-event)
+//   PTN_BLINK_FAST       : none (per-event)
+//   PTN_FADE             : none (per-event)
+//   PTN_FLASH            : 3 fields (tickFlashDurationMs, tickFlashFg, tickFlashBg)
+//   PTN_RAMP_HOLD        : 3 fields (sparkOnMs, sparkGapMs, sparkCycles — shared with SPARK)
+//   PTN_SPARK            : 3 fields (sparkOnMs, sparkGapMs, sparkCycles — shared with RAMP_HOLD)
+
+bool ToolLedSettings::saveLedSettings() {
+  _lwk.magic    = EEPROM_MAGIC;
+  _lwk.version  = LED_SETTINGS_VERSION;
+  _lwk.reserved = 0;
+  validateLedSettingsStore(_lwk);
+  if (!NvsManager::saveBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
+                             &_lwk, sizeof(_lwk))) {
+    return false;
+  }
+  if (_leds) _leds->loadLedSettings(_lwk);  // push to runtime cache
+  return true;
+}
+
+uint8_t ToolLedSettings::patternEditFieldCount(uint8_t patternId) const {
+  switch (patternId) {
+    case PTN_PULSE_SLOW:  return 1;
+    case PTN_FLASH:       return 3;
+    case PTN_RAMP_HOLD:   return 3;  // suffix = spark
+    case PTN_SPARK:       return 3;
+    default:              return 0;
+  }
+}
+
+void ToolLedSettings::adjustPatternField(uint8_t patternId, uint8_t field, int dir, bool accel) {
+  switch (patternId) {
+    case PTN_PULSE_SLOW: {
+      // field 0 : pulsePeriodMs (500-4000 ms, step 100 / accel 500)
+      int step = accel ? 500 : 100;
+      int v = (int)_lwk.pulsePeriodMs + dir * step;
+      if (v < 500) v = 500;
+      if (v > 4000) v = 4000;
+      _lwk.pulsePeriodMs = (uint16_t)v;
+      break;
+    }
+    case PTN_FLASH: {
+      if (field == 0) {
+        int step = accel ? 10 : 5;
+        int v = (int)_lwk.tickFlashDurationMs + dir * step;
+        if (v < 10) v = 10;
+        if (v > 100) v = 100;
+        _lwk.tickFlashDurationMs = (uint8_t)v;
+      } else if (field == 1) {
+        int v = (int)_lwk.tickFlashFg + dir * (accel ? 10 : 1);
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        _lwk.tickFlashFg = (uint8_t)v;
+      } else if (field == 2) {
+        int v = (int)_lwk.tickFlashBg + dir * (accel ? 10 : 1);
+        if (v < 0) v = 0;
+        if (v > 100) v = 100;
+        _lwk.tickFlashBg = (uint8_t)v;
+      }
+      break;
+    }
+    case PTN_RAMP_HOLD:
+    case PTN_SPARK: {
+      // Both edit the same sparkOnMs / sparkGapMs / sparkCycles fields
+      // (RAMP_HOLD uses them for its suffix).
+      if (field == 0) {
+        int step = accel ? 10 : 5;
+        int v = (int)_lwk.sparkOnMs + dir * step;
+        if (v < 20) v = 20;
+        if (v > 200) v = 200;
+        _lwk.sparkOnMs = (uint16_t)v;
+      } else if (field == 1) {
+        int step = accel ? 10 : 5;
+        int v = (int)_lwk.sparkGapMs + dir * step;
+        if (v < 20) v = 20;
+        if (v > 300) v = 300;
+        _lwk.sparkGapMs = (uint16_t)v;
+      } else if (field == 2) {
+        int v = (int)_lwk.sparkCycles + dir;
+        if (v < 1) v = 1;
+        if (v > 4) v = 4;
+        _lwk.sparkCycles = (uint8_t)v;
+      }
+      break;
+    }
+    default: break;
+  }
+}
+
+void ToolLedSettings::renderPatternParamsPanel(uint8_t patternId, bool editing) const {
+  auto fieldLine = [&](uint8_t fieldIdx, const char* label, const char* value) {
+    bool focus = editing && (_patternsEditField == fieldIdx);
+    if (focus) {
+      _ui->drawFrameLine(VT_CYAN VT_BOLD "  > %-20s" VT_RESET VT_CYAN "[%s]" VT_RESET, label, value);
+    } else {
+      _ui->drawFrameLine("    %-20s%s", label, value);
+    }
+  };
+  char buf[24];
+
+  switch (patternId) {
+    case PTN_PULSE_SLOW:
+      snprintf(buf, sizeof(buf), "%d ms  (500-4000)", _lwk.pulsePeriodMs);
+      fieldLine(0, "periodMs:", buf);
+      break;
+    case PTN_FLASH:
+      snprintf(buf, sizeof(buf), "%d ms  (10-100)", _lwk.tickFlashDurationMs);
+      fieldLine(0, "durationMs:", buf);
+      snprintf(buf, sizeof(buf), "%d %%  (0-100)", _lwk.tickFlashFg);
+      fieldLine(1, "fgPct:", buf);
+      snprintf(buf, sizeof(buf), "%d %%  (0-100)", _lwk.tickFlashBg);
+      fieldLine(2, "bgPct:", buf);
+      break;
+    case PTN_RAMP_HOLD:
+      _ui->drawFrameLine(VT_DIM "    rampMs:             derived from Tool 6 timers" VT_RESET);
+      // Fallthrough to SPARK : suffix params
+      snprintf(buf, sizeof(buf), "%d ms  (20-200)", _lwk.sparkOnMs);
+      fieldLine(0, "suffix onMs:", buf);
+      snprintf(buf, sizeof(buf), "%d ms  (20-300)", _lwk.sparkGapMs);
+      fieldLine(1, "suffix gapMs:", buf);
+      snprintf(buf, sizeof(buf), "%d  (1-4)", _lwk.sparkCycles);
+      fieldLine(2, "suffix cycles:", buf);
+      break;
+    case PTN_SPARK:
+      snprintf(buf, sizeof(buf), "%d ms  (20-200)", _lwk.sparkOnMs);
+      fieldLine(0, "onMs:", buf);
+      snprintf(buf, sizeof(buf), "%d ms  (20-300)", _lwk.sparkGapMs);
+      fieldLine(1, "gapMs:", buf);
+      snprintf(buf, sizeof(buf), "%d  (1-4)", _lwk.sparkCycles);
+      fieldLine(2, "cycles:", buf);
+      break;
+    default:
+      _ui->drawFrameLine(VT_DIM "    No global params. Edit via EVENTS page (0.8d)." VT_RESET);
+      break;
+  }
+}
+
+void ToolLedSettings::handlePagePatterns(const NavEvent& ev, bool& screenDirty) {
+  if (_patternsSub == PATTERNS_NAV) {
+    // Pool navigation over 9 patterns
+    if (ev.type == NAV_UP) {
+      _patternsCursor = (_patternsCursor == 0) ? (PTN_COUNT - 1) : (_patternsCursor - 1);
+      screenDirty = true;
+    } else if (ev.type == NAV_DOWN) {
+      _patternsCursor = (_patternsCursor + 1) % PTN_COUNT;
+      screenDirty = true;
+    } else if (ev.type == NAV_ENTER) {
+      if (patternEditFieldCount(_patternsCursor) > 0) {
+        _patternsSub         = PATTERNS_EDIT;
+        _patternsEditField   = 0;
+        _patternsEditBackup  = _lwk;  // backup full store for cancel
+        screenDirty          = true;
+      }
+      // else : pattern has no editable globals, ENTER is a no-op (user sees
+      // the "No global params" message in the panel).
+    }
+  } else {
+    // PATTERNS_EDIT : field editor over N params of selected pattern
+    uint8_t count = patternEditFieldCount(_patternsCursor);
+    if (count == 0) {
+      // Should not happen (we only enter EDIT if count > 0) but handle safely
+      _patternsSub = PATTERNS_NAV;
+      screenDirty = true;
+      return;
+    }
+    if (ev.type == NAV_UP) {
+      _patternsEditField = (_patternsEditField == 0) ? (count - 1) : (_patternsEditField - 1);
+      screenDirty = true;
+    } else if (ev.type == NAV_DOWN) {
+      _patternsEditField = (_patternsEditField + 1) % count;
+      screenDirty = true;
+    } else if (ev.type == NAV_LEFT) {
+      adjustPatternField(_patternsCursor, _patternsEditField, -1, ev.accelerated);
+      screenDirty = true;
+    } else if (ev.type == NAV_RIGHT) {
+      adjustPatternField(_patternsCursor, _patternsEditField, +1, ev.accelerated);
+      screenDirty = true;
+    } else if (ev.type == NAV_ENTER) {
+      if (saveLedSettings()) {
+        _nvsSaved = true;
+        _ui->flashSaved();
+      }
+      _patternsSub = PATTERNS_NAV;
+      screenDirty = true;
+    } else if (ev.type == NAV_QUIT) {
+      // Cancel : restore backup, back to NAV
+      _lwk = _patternsEditBackup;
+      _patternsSub = PATTERNS_NAV;
+      screenDirty = true;
+    }
+  }
+}
 
 void ToolLedSettings::renderPagePatterns() {
-  _ui->drawSection("PATTERNS — step 0.8c");
-  _ui->drawFrameLine(VT_DIM "  Pool nav (UP/DOWN) over 9 patterns," VT_RESET);
-  _ui->drawFrameLine(VT_DIM "  ENTER opens field editor for selected pattern params." VT_RESET);
-  _ui->drawFrameLine(VT_DIM "  Live preview on LED 3-4." VT_RESET);
+  _ui->drawSection("PATTERNS");
+  for (uint8_t i = 0; i < PTN_COUNT; i++) {
+    bool selected = (i == _patternsCursor);
+    bool editing  = selected && (_patternsSub == PATTERNS_EDIT);
+    uint8_t fieldCount = patternEditFieldCount(i);
+
+    char hint[32];
+    if (fieldCount > 0) snprintf(hint, sizeof(hint), "%d global", fieldCount);
+    else                snprintf(hint, sizeof(hint), "per-event (see EVENTS)");
+
+    if (editing) {
+      _ui->drawFrameLine(VT_CYAN VT_BOLD "> %-18s" VT_RESET VT_DIM " [editing]" VT_RESET, PATTERN_POOL_LABELS[i]);
+    } else if (selected) {
+      _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET "%-18s" VT_DIM " %s" VT_RESET, PATTERN_POOL_LABELS[i], hint);
+    } else {
+      _ui->drawFrameLine("  %-18s" VT_DIM " %s" VT_RESET, PATTERN_POOL_LABELS[i], hint);
+    }
+  }
+  _ui->drawFrameEmpty();
+
+  _ui->drawSection(_patternsSub == PATTERNS_EDIT ? "EDITING" : "PARAMS");
+  renderPatternParamsPanel(_patternsCursor, _patternsSub == PATTERNS_EDIT);
 }
+
+// --- EVENTS : stub for 0.8d ---
 
 void ToolLedSettings::renderPageEvents() {
   _ui->drawSection("EVENTS — step 0.8d");
@@ -221,14 +461,15 @@ void ToolLedSettings::run() {
   _colorsCursor    = 0;
   _colorsSub       = COLORS_NAV;
   _colorsEditField = EDIT_FIELD_PRESET;
+  _patternsCursor  = 0;
+  _patternsSub     = PATTERNS_NAV;
+  _patternsEditField = 0;
 
-  // Load ColorSlotStore from NVS (fallback : validator-safe defaults already
-  // set by NvsManager at boot ; here we just re-load the latest persisted copy).
-  _nvsSaved = NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
-                                    COLOR_SLOT_MAGIC, COLOR_SLOT_VERSION,
-                                    &_cwk, sizeof(_cwk));
-  if (!_nvsSaved) {
-    // Seed with defaults (same as NvsManager init body).
+  // Load ColorSlotStore from NVS
+  bool colorLoaded = NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
+                                           COLOR_SLOT_MAGIC, COLOR_SLOT_VERSION,
+                                           &_cwk, sizeof(_cwk));
+  if (!colorLoaded) {
     _cwk.magic    = COLOR_SLOT_MAGIC;
     _cwk.version  = COLOR_SLOT_VERSION;
     _cwk.reserved = 0;
@@ -237,6 +478,58 @@ void ToolLedSettings::run() {
       _cwk.slots[i].hueOffset = DEFAULT_SLOT_HUES[i];
     }
   }
+
+  // Load LedSettingsStore from NVS — needed for PATTERNS page.
+  bool ledLoaded = NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
+                                         EEPROM_MAGIC, LED_SETTINGS_VERSION,
+                                         &_lwk, sizeof(_lwk));
+  if (ledLoaded) {
+    validateLedSettingsStore(_lwk);
+  } else {
+    // Not saved yet : NvsManager has compile-time defaults loaded in its
+    // internal cache, but we need our own working copy. Seed minimal
+    // defaults matching NvsManager init body for the fields we edit here.
+    _lwk.magic                = EEPROM_MAGIC;
+    _lwk.version              = LED_SETTINGS_VERSION;
+    _lwk.reserved             = 0;
+    _lwk.normalFgIntensity    = 85;
+    _lwk.normalBgIntensity    = 10;
+    _lwk.fgArpStopMin         = 30;
+    _lwk.fgArpStopMax         = 100;
+    _lwk.fgArpPlayMax         = 80;
+    _lwk.bgArpStopMin         = 8;
+    _lwk.bgArpPlayMin         = 8;
+    _lwk.tickFlashFg          = 100;
+    _lwk.tickFlashBg          = 25;
+    _lwk.bgFactor             = 25;
+    _lwk.pulsePeriodMs        = 1472;
+    _lwk.tickFlashDurationMs  = 30;
+    _lwk.gammaTenths          = 20;
+    _lwk.sparkOnMs            = 50;
+    _lwk.sparkGapMs           = 70;
+    _lwk.sparkCycles          = 2;
+    _lwk.bankBlinks           = 3;
+    _lwk.bankDurationMs       = 300;
+    _lwk.bankBrightnessPct    = 80;
+    _lwk.scaleRootBlinks      = 2;
+    _lwk.scaleRootDurationMs  = 200;
+    _lwk.scaleModeBlinks      = 2;
+    _lwk.scaleModeDurationMs  = 200;
+    _lwk.scaleChromBlinks     = 2;
+    _lwk.scaleChromDurationMs = 200;
+    _lwk.holdOnFadeMs         = 500;
+    _lwk.holdOffFadeMs        = 500;
+    _lwk.octaveBlinks         = 3;
+    _lwk.octaveDurationMs     = 300;
+    for (uint8_t i = 0; i < EVT_COUNT; i++) {
+      _lwk.eventOverrides[i].patternId = PTN_NONE;
+      _lwk.eventOverrides[i].colorSlot = 0;
+      _lwk.eventOverrides[i].fgPct     = 0;
+    }
+  }
+
+  // NVS badge : "saved" if both blobs loaded cleanly.
+  _nvsSaved = colorLoaded && ledLoaded;
 
   if (_leds) _leds->previewBegin();
 
@@ -248,11 +541,17 @@ void ToolLedSettings::run() {
   while (true) {
     NavEvent ev = input.update();
 
-    // Inter-page nav via 't' — top level only (edit sub-states consume 't' themselves)
-    if (_page == PAGE_COLORS && _colorsSub != COLORS_NAV) {
-      // In a sub-state : route all events to the page handler (it handles 'q'
-      // as cancel, ENTER as commit, etc.)
-      handlePageColors(ev, screenDirty);
+    // Determine if we're in a page sub-state (sub-state consumes 'q' and 't'
+    // for cancel / field switch rather than top-level exit / page toggle).
+    bool inSubState = (_page == PAGE_COLORS   && _colorsSub   != COLORS_NAV)
+                   || (_page == PAGE_PATTERNS && _patternsSub != PATTERNS_NAV);
+
+    if (inSubState) {
+      switch (_page) {
+        case PAGE_COLORS:   handlePageColors(ev, screenDirty);   break;
+        case PAGE_PATTERNS: handlePagePatterns(ev, screenDirty); break;
+        default: break;
+      }
     } else {
       // Top-level page nav
       if (ev.type == NAV_QUIT) break;
@@ -262,8 +561,8 @@ void ToolLedSettings::run() {
       } else {
         // Route to active page
         switch (_page) {
-          case PAGE_COLORS:   handlePageColors(ev, screenDirty); break;
-          case PAGE_PATTERNS: /* step 0.8c */ break;
+          case PAGE_COLORS:   handlePageColors(ev, screenDirty);   break;
+          case PAGE_PATTERNS: handlePagePatterns(ev, screenDirty); break;
           case PAGE_EVENTS:   /* step 0.8d */ break;
           default: break;
         }
@@ -304,6 +603,10 @@ void ToolLedSettings::run() {
         _ui->drawControlBar(VT_DIM "[^v] FIELD" CBAR_SEP "[</>] ADJUST" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
       } else if (_page == PAGE_COLORS) {
         _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT" CBAR_SEP "[d] DFLT" CBAR_SEP "[t] PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
+      } else if (_page == PAGE_PATTERNS && _patternsSub == PATTERNS_EDIT) {
+        _ui->drawControlBar(VT_DIM "[^v] FIELD" CBAR_SEP "[</>] ADJUST" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
+      } else if (_page == PAGE_PATTERNS) {
+        _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT" CBAR_SEP "[t] PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
       } else {
         _ui->drawControlBar(VT_DIM "[t] NEXT PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
       }

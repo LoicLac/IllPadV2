@@ -61,6 +61,12 @@ private:
     EDIT_FIELD_HUE    = 1,
   };
 
+  // PATTERNS page sub-states
+  enum PatternsSubState : uint8_t {
+    PATTERNS_NAV  = 0,  // pool cursor over 9 patterns
+    PATTERNS_EDIT = 1,  // field editor for selected pattern's globals
+  };
+
   LedController* _leds;
   SetupUI*       _ui;
   Page           _page;
@@ -73,6 +79,13 @@ private:
   ColorsEditField  _colorsEditField;
   ColorSlot        _colorsEditBackup;     // for cancel (q) during edit
 
+  // PATTERNS page state
+  LedSettingsStore _lwk;                  // working copy for pattern globals
+  uint8_t          _patternsCursor;       // 0..8 (PatternId pool index)
+  PatternsSubState _patternsSub;
+  uint8_t          _patternsEditField;    // 0..N-1 per selected pattern
+  LedSettingsStore _patternsEditBackup;   // for cancel (q)
+
   // Page renderers
   void renderPagePatterns();
   void renderPageColors();
@@ -83,6 +96,13 @@ private:
   void previewCurrentColor();
   bool saveColorSlots();
   void resetCurrentColorToDefault();
+
+  // PATTERNS page helpers
+  void handlePagePatterns(const struct NavEvent& ev, bool& screenDirty);
+  uint8_t patternEditFieldCount(uint8_t patternId) const;
+  void adjustPatternField(uint8_t patternId, uint8_t field, int dir, bool accel);
+  bool saveLedSettings();
+  void renderPatternParamsPanel(uint8_t patternId, bool editing) const;
 };
 
 #endif // TOOL_LED_SETTINGS_H
