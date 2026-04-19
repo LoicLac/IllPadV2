@@ -65,7 +65,7 @@ struct BankPadStore {
 // Settings Data — runtime-tunable parameters, stored in NVS
 // =================================================================
 
-const uint8_t SETTINGS_VERSION = 10;  // Bumped: 9→10 (added batAdcAtFull)
+const uint8_t SETTINGS_VERSION = 11;  // Bumped: 10→11 (added LOOP RAMP_HOLD timers)
 
 struct SettingsStore {
   uint16_t magic;               // EEPROM_MAGIC (0xBEEF)
@@ -79,6 +79,13 @@ struct SettingsStore {
   uint8_t  panicOnReconnect;    // 0=No, 1=Yes — send CC123 on BLE reconnect
   uint8_t  reserved2;           // explicit padding (alignment for batAdcAtFull)
   uint16_t batAdcAtFull;        // Raw ADC reading at full charge (0 = uncalibrated, use default)
+  // --- LOOP timers (v11) — coupled to RAMP_HOLD LED pattern (see LED spec §13, LOOP spec §20) ---
+  // These timers drive both the user gesture hold duration AND the visual ramp duration.
+  // Single source of truth : changes here reflect live in the LED ramp animation.
+  // Tool 6 exposes these for editing (step 0.7).
+  uint16_t clearLoopTimerMs;    // 200-1500 (ms), default 500 — CLEAR long-press to empty a LOOP bank
+  uint16_t slotSaveTimerMs;     // 500-2000 (ms), default 1000 — slot pad long-press to save a loop
+  uint16_t slotClearTimerMs;    // 400-1500 (ms), default 800  — visual animation for slot delete combo (not a user hold)
 };
 
 #define SETTINGS_NVS_NAMESPACE "illpad_set"
@@ -576,6 +583,10 @@ inline void validateSettingsStore(SettingsStore& s) {
     s.potBarDurationMs = LED_BARGRAPH_DURATION_DEFAULT;
   if (s.panicOnReconnect > 1) s.panicOnReconnect = DEFAULT_PANIC_ON_RECONNECT;
   if (s.batAdcAtFull > 4095) s.batAdcAtFull = 4095;  // ADC 12-bit max
+  // LOOP timers (v11) : clamp to documented ranges
+  if (s.clearLoopTimerMs < 200  || s.clearLoopTimerMs > 1500) s.clearLoopTimerMs = 500;
+  if (s.slotSaveTimerMs  < 500  || s.slotSaveTimerMs  > 2000) s.slotSaveTimerMs  = 1000;
+  if (s.slotClearTimerMs < 400  || s.slotClearTimerMs > 1500) s.slotClearTimerMs = 800;
 }
 
 inline void validateBankTypeStore(BankTypeStore& s) {

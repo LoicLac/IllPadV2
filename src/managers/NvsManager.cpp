@@ -770,11 +770,12 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     }
   }
 
-  // --- Settings (profile, AT rate, BLE interval, clock, double-tap, bargraph, panic, bat cal) ---
+  // --- Settings (profile, AT rate, BLE interval, clock, double-tap, bargraph, panic, bat cal, LOOP timers) ---
   settings = {EEPROM_MAGIC, SETTINGS_VERSION, DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT,
               DEFAULT_BLE_INTERVAL, DEFAULT_CLOCK_MODE,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT, DEFAULT_PANIC_ON_RECONNECT,
-              0, DEFAULT_BAT_ADC_AT_FULL};
+              0, DEFAULT_BAT_ADC_AT_FULL,
+              500, 1000, 800};  // clearLoopTimerMs, slotSaveTimerMs, slotClearTimerMs
   if (loadBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY,
                      EEPROM_MAGIC, SETTINGS_VERSION, &settings, sizeof(settings))) {
     validateSettingsStore(settings);
