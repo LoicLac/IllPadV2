@@ -79,8 +79,8 @@ struct PatternParams {
     struct { uint8_t  pct; }                                                  solid;
     struct { uint8_t  minPct; uint8_t maxPct; uint16_t periodMs; }            pulseSlow;
     struct { uint16_t periodMs; }                                             crossfadeColor;
-    struct { uint16_t onMs; uint16_t offMs; uint8_t cycles; }                 blinkSlow;
-    struct { uint16_t onMs; uint16_t offMs; uint8_t cycles; }                 blinkFast;
+    struct { uint16_t onMs; uint16_t offMs; uint8_t cycles; uint8_t blackoutOff; } blinkSlow;
+    struct { uint16_t onMs; uint16_t offMs; uint8_t cycles; uint8_t blackoutOff; } blinkFast;
     struct { uint16_t durationMs; uint8_t startPct; uint8_t endPct; }         fade;
     struct { uint16_t durationMs; uint8_t fgPct; uint8_t bgPct; }             flash;
     struct { uint16_t rampMs; uint16_t suffixOnMs; uint16_t suffixGapMs;

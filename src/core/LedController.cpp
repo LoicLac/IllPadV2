@@ -34,10 +34,6 @@ LedController::LedController()
     _scaleChromBlinks(2), _scaleChromDurationMs(200),
     _holdOnFadeMs(500), _holdOffFadeMs(500),
     _octaveBlinks(3), _octaveDurationMs(300),
-    _confirmType(CONFIRM_NONE),
-    _confirmStart(0),
-    _confirmParam(0),
-    _confirmLedMask(0),
     _potBarDurationMs(LED_BARGRAPH_DURATION_DEFAULT),
     _showingPotBar(false),
     _potBarRealLevel(0),
@@ -71,6 +67,10 @@ LedController::LedController()
   for (uint8_t i = 0; i < NUM_LEDS; i++) {
     _flashStartTime[i] = 0;
   }
+  // Init event overlay to inactive
+  _eventOverlay = {};
+  _eventOverlay.active = false;
+  _eventOverlay.patternId = PTN_NONE;
 }
 
 // =================================================================
@@ -353,38 +353,17 @@ bool LedController::renderBargraph(unsigned long now) {
 }
 
 bool LedController::renderConfirmation(unsigned long now) {
-  if (_confirmType == CONFIRM_NONE) return false;
-  unsigned long elapsed = now - _confirmStart;
-
-  // All confirmations are overlays — state tracking only, no rendering here.
-  // Rendering happens in renderNormalDisplay() overlay section.
-  switch (_confirmType) {
-    case CONFIRM_BANK_SWITCH:
-      if (elapsed >= _bankDurationMs) { _confirmType = CONFIRM_NONE; return false; }
-      return true;
-    case CONFIRM_SCALE_ROOT:
-      if (elapsed >= _scaleRootDurationMs) { _confirmType = CONFIRM_NONE; return false; }
-      return true;
-    case CONFIRM_SCALE_MODE:
-      if (elapsed >= _scaleModeDurationMs) { _confirmType = CONFIRM_NONE; return false; }
-      return true;
-    case CONFIRM_SCALE_CHROM:
-      if (elapsed >= _scaleChromDurationMs) { _confirmType = CONFIRM_NONE; return false; }
-      return true;
-    case CONFIRM_HOLD_ON:
-      if (elapsed >= _holdOnFadeMs) { _confirmType = CONFIRM_NONE; return false; }
-      return true;
-    case CONFIRM_HOLD_OFF:
-      if (elapsed >= _holdOffFadeMs) { _confirmType = CONFIRM_NONE; return false; }
-      return true;
-    case CONFIRM_OCTAVE:
-      if (elapsed >= _octaveDurationMs) { _confirmType = CONFIRM_NONE; return false; }
-      return true;
-
-    default:
-      _confirmType = CONFIRM_NONE;
-      return false;
+  // All event overlays are rendered in renderNormalDisplay() overlay section
+  // via renderPattern(_eventOverlay, now). This method only tracks expiry :
+  // it returns false when there is no active overlay (so renderNormalDisplay
+  // can skip the overlay step).
+  if (!_eventOverlay.active) return false;
+  if (isPatternExpired(_eventOverlay, now)) {
+    _eventOverlay.active = false;
+    _eventOverlay.patternId = PTN_NONE;
+    return false;
   }
+  return true;
 }
 
 void LedController::renderCalibration(unsigned long now) {
@@ -491,91 +470,13 @@ void LedController::renderNormalDisplay(unsigned long now) {
     setPixel(_currentBank, _colNormalFg, _normalFgIntensity);
   }
 
-  // --- Confirmation overlays (all types, applied on current bank LED) ---
-  if (_confirmType != CONFIRM_NONE) {
-    unsigned long elapsed = now - _confirmStart;
-
-    switch (_confirmType) {
-      case CONFIRM_BANK_SWITCH: {
-        uint16_t unitMs = _bankDurationMs / (_bankBlinks * 2);
-        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-        if (on) {
-          setPixel(_currentBank, _colBankSwitch, _bankBrightnessPct);
-        } else {
-          _strip.setPixelColor(_currentBank, 0);
-        }
-        break;
-      }
-      case CONFIRM_SCALE_ROOT: {
-        uint16_t unitMs = _scaleRootDurationMs / (_scaleRootBlinks * 2);
-        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
-        for (uint8_t led = 0; led < NUM_LEDS; led++) {
-          if (!(mask & (1 << led))) continue;
-          if (on) setPixel(led, _colScaleRoot, 100);
-          else    _strip.setPixelColor(led, 0);
-        }
-        break;
-      }
-      case CONFIRM_SCALE_MODE: {
-        uint16_t unitMs = _scaleModeDurationMs / (_scaleModeBlinks * 2);
-        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
-        for (uint8_t led = 0; led < NUM_LEDS; led++) {
-          if (!(mask & (1 << led))) continue;
-          if (on) setPixel(led, _colScaleMode, 100);
-          else    _strip.setPixelColor(led, 0);
-        }
-        break;
-      }
-      case CONFIRM_SCALE_CHROM: {
-        uint16_t unitMs = _scaleChromDurationMs / (_scaleChromBlinks * 2);
-        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
-        for (uint8_t led = 0; led < NUM_LEDS; led++) {
-          if (!(mask & (1 << led))) continue;
-          if (on) setPixel(led, _colScaleChrom, 100);
-          else    _strip.setPixelColor(led, 0);
-        }
-        break;
-      }
-      case CONFIRM_HOLD_ON: {
-        // Fade IN: 0% -> 100% over _holdOnFadeMs.
-        // LED target: ledMask if non-zero (used by LEFT+double-tap bank pad
-        // pause/resume, can target any bank FG/BG), else current bank (hold pad).
-        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
-        uint8_t fadePct;
-        if (_holdOnFadeMs == 0) {
-          fadePct = 100;
-        } else {
-          uint32_t tmp = (uint32_t)elapsed * 100 / _holdOnFadeMs;
-          fadePct = (tmp > 100) ? 100 : (uint8_t)tmp;
-        }
-        for (uint8_t led = 0; led < NUM_LEDS; led++) {
-          if (mask & (1 << led)) setPixel(led, _colHoldOn, fadePct);
-        }
-        break;
-      }
-      case CONFIRM_HOLD_OFF: {
-        // Fade OUT: 100% -> 0% over _holdOffFadeMs.
-        // LED target: ledMask if non-zero, else current bank.
-        if (_holdOffFadeMs == 0) break;  // instant: no overlay
-        uint8_t mask = (_confirmLedMask != 0) ? _confirmLedMask : (1 << _currentBank);
-        unsigned long e = (elapsed > _holdOffFadeMs) ? _holdOffFadeMs : elapsed;
-        uint8_t fadePct = (uint8_t)((uint32_t)(_holdOffFadeMs - e) * 100 / _holdOffFadeMs);
-        for (uint8_t led = 0; led < NUM_LEDS; led++) {
-          if (mask & (1 << led)) setPixel(led, _colHoldOff, fadePct);
-        }
-        break;
-      }
-      case CONFIRM_OCTAVE: {
-        uint16_t unitMs = _octaveDurationMs / (_octaveBlinks * 2);
-        bool on = ((elapsed / (unitMs > 0 ? unitMs : 1)) % 2 == 0);
-        if (on) setPixel(_currentBank, _colOctave, 100);
-        break;
-      }
-      default: break;
-    }
+  // --- Event overlay (unified pattern engine — step 0.4) ---
+  // All events (bank switch, scale, octave, hold capture, etc.) flow through
+  // renderPattern() which picks up _eventOverlay populated by triggerEvent()
+  // (or triggerConfirm() legacy wrapper). renderConfirmation() has already
+  // cleared expired overlays before we get here.
+  if (_eventOverlay.active) {
+    renderPattern(_eventOverlay, now);
   }
 
   _strip.show();
@@ -607,10 +508,346 @@ void LedController::setBankSlots(const BankSlot* slots) {
 // =================================================================
 
 void LedController::triggerConfirm(ConfirmType type, uint8_t param, uint8_t ledMask) {
-  _confirmType    = type;
-  _confirmStart   = millis();
-  _confirmParam   = param;
-  _confirmLedMask = ledMask;
+  (void)param;  // unused in new engine (was only used for OCTAVE direction internally, never rendered)
+  EventId evt = confirmTypeToEventId(type);
+  if (evt >= EVT_COUNT) return;
+  triggerEvent(evt, ledMask);
+}
+
+void LedController::triggerEvent(EventId evt, uint8_t ledMask) {
+  if (evt >= EVT_COUNT) return;
+
+  // --- Resolve render entry : NVS override > compile-time default ---
+  // Phase 0 : NVS override array exists in LedSettingsStore v6 but is not
+  // yet wired here (step 0.8d will bring the Tool 8 UI). For now we always
+  // use EVENT_RENDER_DEFAULT. When the override path lands, replace this
+  // with : use _ledSettings.eventOverrides[evt] if patternId != PTN_NONE.
+  EventRenderEntry entry = EVENT_RENDER_DEFAULT[evt];
+  if (entry.patternId == PTN_NONE) {
+    // No render for this event (LOOP reserved slots in Phase 0).
+    return;
+  }
+
+  // --- Populate the PatternInstance ---
+  _eventOverlay.patternId = entry.patternId;
+  _eventOverlay.fgPct     = entry.fgPct;
+  _eventOverlay.ledMask   = ledMask;
+  _eventOverlay.startTime = millis();
+  _eventOverlay.colorA    = colorForSlot(entry.colorSlot);
+  _eventOverlay.colorB    = _eventOverlay.colorA;  // used only by CROSSFADE_COLOR
+
+  // --- Resolve pattern-specific params from the legacy v5 settings fields ---
+  // (step 0.8d will let the user override these via Tool 8, but for Phase 0
+  // they are driven by bankDurationMs / holdOnFadeMs / etc. as before.)
+  switch (entry.patternId) {
+    case PTN_BLINK_SLOW: {
+      uint16_t durationMs = _bankDurationMs;
+      uint8_t  cycles     = _bankBlinks > 0 ? _bankBlinks : 1;
+      if (evt == EVT_BANK_SWITCH) {
+        // BANK_SWITCH uses bankBrightnessPct, not the default 100 fgPct,
+        // to preserve v5 visual behavior. Override.
+        _eventOverlay.fgPct = _bankBrightnessPct;
+      }
+      uint16_t cycleMs = durationMs / cycles;
+      uint16_t halfMs  = cycleMs / 2;
+      _eventOverlay.params.blinkSlow.onMs        = halfMs;
+      _eventOverlay.params.blinkSlow.offMs       = cycleMs - halfMs;
+      _eventOverlay.params.blinkSlow.cycles      = cycles;
+      _eventOverlay.params.blinkSlow.blackoutOff = 1;  // BANK_SWITCH blackouts during off (v5 behavior)
+      break;
+    }
+    case PTN_BLINK_FAST: {
+      uint16_t durationMs = 300;
+      uint8_t  cycles     = 2;
+      uint8_t  blackout   = 1;
+      switch (evt) {
+        case EVT_SCALE_ROOT:
+          durationMs = _scaleRootDurationMs;  cycles = _scaleRootBlinks;  break;
+        case EVT_SCALE_MODE:
+          durationMs = _scaleModeDurationMs;  cycles = _scaleModeBlinks;  break;
+        case EVT_SCALE_CHROM:
+          durationMs = _scaleChromDurationMs; cycles = _scaleChromBlinks; break;
+        case EVT_OCTAVE:
+          durationMs = _octaveDurationMs;     cycles = _octaveBlinks;
+          blackout = 0;  // OCTAVE preserves bank base during off (v5 behavior)
+          break;
+        default: break;
+      }
+      if (cycles == 0) cycles = 1;
+      uint16_t cycleMs = durationMs / cycles;
+      uint16_t halfMs  = cycleMs / 2;
+      _eventOverlay.params.blinkFast.onMs        = halfMs;
+      _eventOverlay.params.blinkFast.offMs       = cycleMs - halfMs;
+      _eventOverlay.params.blinkFast.cycles      = cycles;
+      _eventOverlay.params.blinkFast.blackoutOff = blackout;
+      break;
+    }
+    case PTN_FADE: {
+      uint16_t durationMs = 500;
+      uint8_t  startPct = 0, endPct = 100;
+      if (evt == EVT_PLAY)       { durationMs = _holdOnFadeMs;  startPct = 0;   endPct = 100; }
+      else if (evt == EVT_STOP)  { durationMs = _holdOffFadeMs; startPct = 100; endPct = 0;   }
+      _eventOverlay.params.fade.durationMs = durationMs;
+      _eventOverlay.params.fade.startPct   = startPct;
+      _eventOverlay.params.fade.endPct     = endPct;
+      break;
+    }
+    case PTN_FLASH: {
+      _eventOverlay.params.flash.durationMs = _tickFlashDurationMs;
+      _eventOverlay.params.flash.fgPct      = _tickFlashFg;
+      _eventOverlay.params.flash.bgPct      = _tickFlashBg;
+      break;
+    }
+    case PTN_SPARK: {
+      // SPARK params come from LedSettingsStore directly (v6 new fields).
+      // Phase 0 : not yet wired (step 0.5+). Use reasonable defaults.
+      _eventOverlay.params.spark.onMs   = 50;
+      _eventOverlay.params.spark.gapMs  = 70;
+      _eventOverlay.params.spark.cycles = 2;
+      break;
+    }
+    case PTN_CROSSFADE_COLOR: {
+      // Used by WAITING_* events (LOOP phase). Period default 800 ms.
+      _eventOverlay.params.crossfadeColor.periodMs = 800;
+      // colorB = VERB_PLAY — not yet a dedicated slot in Phase 0, fallback to colorA
+      _eventOverlay.colorB = _eventOverlay.colorA;
+      break;
+    }
+    case PTN_RAMP_HOLD:
+      // RAMP_HOLD is driven by LOOP timers (clearLoopTimerMs, slotSaveTimerMs,
+      // slotClearTimerMs) — wired in Phase 1+ when LOOP callsites land.
+      // Phase 0 : reserved pattern, no consumer yet.
+      _eventOverlay.params.rampHold.rampMs       = 500;
+      _eventOverlay.params.rampHold.suffixOnMs   = 50;
+      _eventOverlay.params.rampHold.suffixGapMs  = 70;
+      _eventOverlay.params.rampHold.suffixCycles = 2;
+      break;
+    case PTN_PULSE_SLOW:
+    case PTN_SOLID:
+      // Not typically used as event overlays (they belong to bank backgrounds).
+      // Populate anyway for robustness.
+      _eventOverlay.params.pulseSlow.minPct    = 30;
+      _eventOverlay.params.pulseSlow.maxPct    = 100;
+      _eventOverlay.params.pulseSlow.periodMs  = _pulsePeriodMs;
+      break;
+    default: break;
+  }
+
+  _eventOverlay.active = true;
+}
+
+EventId LedController::confirmTypeToEventId(ConfirmType type) const {
+  switch (type) {
+    case CONFIRM_BANK_SWITCH: return EVT_BANK_SWITCH;
+    case CONFIRM_SCALE_ROOT:  return EVT_SCALE_ROOT;
+    case CONFIRM_SCALE_MODE:  return EVT_SCALE_MODE;
+    case CONFIRM_SCALE_CHROM: return EVT_SCALE_CHROM;
+    case CONFIRM_HOLD_ON:     return EVT_PLAY;
+    case CONFIRM_HOLD_OFF:    return EVT_STOP;
+    case CONFIRM_OCTAVE:      return EVT_OCTAVE;
+    default:                  return (EventId)EVT_COUNT;  // sentinel (out of range)
+  }
+}
+
+RGBW LedController::colorForSlot(uint8_t slotId) const {
+  // Phase 0 (v3 ColorSlotStore, 12 slots). Step 0.6 will refactor into an
+  // array when ColorSlotStore grows to 16 slots.
+  switch (slotId) {
+    case CSLOT_NORMAL_FG:   return _colNormalFg;
+    case CSLOT_NORMAL_BG:   return _colNormalBg;
+    case CSLOT_ARPEG_FG:    return _colArpFg;
+    case CSLOT_ARPEG_BG:    return _colArpBg;
+    case CSLOT_TICK_FLASH:  return _colTickFlash;
+    case CSLOT_BANK_SWITCH: return _colBankSwitch;
+    case CSLOT_SCALE_ROOT:  return _colScaleRoot;
+    case CSLOT_SCALE_MODE:  return _colScaleMode;
+    case CSLOT_SCALE_CHROM: return _colScaleChrom;
+    case CSLOT_HOLD_ON:     return _colHoldOn;
+    case CSLOT_HOLD_OFF:    return _colHoldOff;
+    case CSLOT_OCTAVE:      return _colOctave;
+    default:                return _colNormalFg;
+  }
+}
+
+bool LedController::isPatternExpired(const PatternInstance& inst, unsigned long now) const {
+  if (!inst.active) return true;
+  unsigned long elapsed = now - inst.startTime;
+
+  switch (inst.patternId) {
+    case PTN_BLINK_SLOW:
+    case PTN_BLINK_FAST: {
+      const auto& p = inst.params.blinkFast;  // same layout as blinkSlow
+      unsigned long totalMs = (unsigned long)(p.onMs + p.offMs) * p.cycles;
+      return elapsed >= totalMs;
+    }
+    case PTN_FADE:
+      return elapsed >= inst.params.fade.durationMs;
+    case PTN_FLASH:
+      return elapsed >= inst.params.flash.durationMs;
+    case PTN_SPARK: {
+      const auto& p = inst.params.spark;
+      unsigned long totalMs = (unsigned long)(p.onMs + p.gapMs) * p.cycles;
+      return elapsed >= totalMs;
+    }
+    case PTN_RAMP_HOLD: {
+      // RAMP_HOLD only expires after the SPARK suffix completes.
+      const auto& p = inst.params.rampHold;
+      unsigned long suffixMs = (unsigned long)(p.suffixOnMs + p.suffixGapMs) * p.suffixCycles;
+      return elapsed >= ((unsigned long)p.rampMs + suffixMs);
+    }
+    case PTN_CROSSFADE_COLOR:
+    case PTN_PULSE_SLOW:
+    case PTN_SOLID:
+      // Continuous patterns : never expire autonomously. Caller must clear
+      // _eventOverlay.active manually (e.g., when WAITING_* state exits).
+      return false;
+    default:
+      return true;  // unknown pattern : treat as expired
+  }
+}
+
+void LedController::renderPattern(const PatternInstance& inst, unsigned long now) {
+  if (!inst.active || inst.patternId == PTN_NONE) return;
+  unsigned long elapsed = now - inst.startTime;
+  uint8_t mask = (inst.ledMask != 0) ? inst.ledMask : (uint8_t)(1 << _currentBank);
+
+  switch (inst.patternId) {
+    case PTN_BLINK_SLOW:
+    case PTN_BLINK_FAST: {
+      const auto& p = inst.params.blinkFast;  // same layout
+      uint16_t cycleMs = p.onMs + p.offMs;
+      if (cycleMs == 0) return;
+      unsigned long posInCycle = elapsed % cycleMs;
+      bool on = (posInCycle < p.onMs);
+      for (uint8_t led = 0; led < NUM_LEDS; led++) {
+        if (!(mask & (1 << led))) continue;
+        if (on) {
+          setPixel(led, inst.colorA, inst.fgPct);
+        } else if (p.blackoutOff) {
+          _strip.setPixelColor(led, 0);
+        }
+        // else : transparent off (OCTAVE semantic) — bank base shows through
+      }
+      break;
+    }
+    case PTN_FADE: {
+      const auto& p = inst.params.fade;
+      if (p.durationMs == 0) {
+        // Instant : paint endPct and stop (renderConfirmation will expire next frame)
+        for (uint8_t led = 0; led < NUM_LEDS; led++) {
+          if (mask & (1 << led)) setPixel(led, inst.colorA, p.endPct);
+        }
+        return;
+      }
+      unsigned long e = (elapsed > p.durationMs) ? p.durationMs : elapsed;
+      int16_t delta = (int16_t)p.endPct - (int16_t)p.startPct;
+      int32_t val   = (int32_t)p.startPct + ((int32_t)delta * (int32_t)e) / (int32_t)p.durationMs;
+      if (val < 0) val = 0;
+      if (val > 100) val = 100;
+      for (uint8_t led = 0; led < NUM_LEDS; led++) {
+        if (mask & (1 << led)) setPixel(led, inst.colorA, (uint8_t)val);
+      }
+      break;
+    }
+    case PTN_FLASH: {
+      const auto& p = inst.params.flash;
+      if (elapsed >= p.durationMs) return;
+      // Event-level FLASH : paint fgPct over masked LEDs.
+      for (uint8_t led = 0; led < NUM_LEDS; led++) {
+        if (mask & (1 << led)) setPixel(led, inst.colorA, p.fgPct);
+      }
+      break;
+    }
+    case PTN_SPARK: {
+      const auto& p = inst.params.spark;
+      uint16_t cycleMs = p.onMs + p.gapMs;
+      if (cycleMs == 0) return;
+      unsigned long posInCycle = elapsed % cycleMs;
+      bool on = (posInCycle < p.onMs);
+      for (uint8_t led = 0; led < NUM_LEDS; led++) {
+        if (!(mask & (1 << led))) continue;
+        if (on) setPixel(led, inst.colorA, inst.fgPct);
+        // else : transparent gap between flashes (bank base shows through)
+      }
+      break;
+    }
+    case PTN_CROSSFADE_COLOR: {
+      const auto& p = inst.params.crossfadeColor;
+      if (p.periodMs == 0) return;
+      // Sine interp between colorA and colorB over periodMs (ease-in-out)
+      uint32_t phase = elapsed % p.periodMs;
+      float t = (float)phase / (float)p.periodMs;  // 0..1
+      float s = 0.5f - 0.5f * cosf(t * 2.0f * 3.14159265f);  // 0..1..0 ease
+      auto lerpChan = [&](uint8_t a, uint8_t b) -> uint8_t {
+        return (uint8_t)((1.0f - s) * a + s * b);
+      };
+      RGBW mixed;
+      mixed.r = lerpChan(inst.colorA.r, inst.colorB.r);
+      mixed.g = lerpChan(inst.colorA.g, inst.colorB.g);
+      mixed.b = lerpChan(inst.colorA.b, inst.colorB.b);
+      mixed.w = lerpChan(inst.colorA.w, inst.colorB.w);
+      for (uint8_t led = 0; led < NUM_LEDS; led++) {
+        if (mask & (1 << led)) setPixel(led, mixed, inst.fgPct);
+      }
+      break;
+    }
+    case PTN_RAMP_HOLD: {
+      const auto& p = inst.params.rampHold;
+      if (elapsed < p.rampMs) {
+        // Ramp phase : linear 0 -> fgPct
+        uint32_t val = (uint32_t)inst.fgPct * elapsed / p.rampMs;
+        for (uint8_t led = 0; led < NUM_LEDS; led++) {
+          if (mask & (1 << led)) setPixel(led, inst.colorA, (uint8_t)val);
+        }
+      } else {
+        // Suffix SPARK phase
+        unsigned long suffixElapsed = elapsed - p.rampMs;
+        uint16_t cycleMs = p.suffixOnMs + p.suffixGapMs;
+        if (cycleMs == 0) return;
+        unsigned long posInCycle = suffixElapsed % cycleMs;
+        bool on = (posInCycle < p.suffixOnMs);
+        for (uint8_t led = 0; led < NUM_LEDS; led++) {
+          if (!(mask & (1 << led))) continue;
+          if (on) setPixel(led, inst.colorA, 100);
+          // else transparent gap
+        }
+      }
+      break;
+    }
+    case PTN_SOLID: {
+      const auto& p = inst.params.solid;
+      for (uint8_t led = 0; led < NUM_LEDS; led++) {
+        if (mask & (1 << led)) setPixel(led, inst.colorA, p.pct);
+      }
+      break;
+    }
+    case PTN_PULSE_SLOW: {
+      const auto& p = inst.params.pulseSlow;
+      if (p.periodMs == 0) return;
+      uint32_t phase = elapsed % p.periodMs;
+      float t = (float)phase / (float)p.periodMs;
+      float s = 0.5f - 0.5f * cosf(t * 2.0f * 3.14159265f);
+      uint8_t val = (uint8_t)((1.0f - s) * p.minPct + s * p.maxPct);
+      for (uint8_t led = 0; led < NUM_LEDS; led++) {
+        if (mask & (1 << led)) setPixel(led, inst.colorA, val);
+      }
+      break;
+    }
+    default: break;
+  }
+}
+
+void LedController::renderFlashOverlay(uint8_t led, const RGBW& color, uint8_t fgPct,
+                                        uint8_t bgPct, unsigned long startTime,
+                                        uint16_t durationMs, bool isFg, unsigned long now) {
+  // Shared FLASH rendering logic, used inline by tick ARPEG (step 0.5) AND
+  // by the pattern engine's PTN_FLASH case. Keeps the visual semantics of
+  // FLASH in one place : during the duration, pixel is replaced by color
+  // at fgPct (if isFg) or bgPct (if BG). Caller controls the timing.
+  unsigned long elapsed = now - startTime;
+  if (elapsed >= durationMs) return;
+  uint8_t pct = isFg ? fgPct : bgPct;
+  setPixel(led, color, pct);
 }
 
 void LedController::setPotBarDuration(uint16_t ms) {
@@ -757,7 +994,8 @@ void LedController::allOff() {
   _showingPotBar = false;
   _potBarIsTempo = false;
   _showingBattery = false;
-  _confirmType = CONFIRM_NONE;
+  _eventOverlay.active = false;
+  _eventOverlay.patternId = PTN_NONE;
   for (uint8_t i = 0; i < NUM_LEDS; i++) _flashStartTime[i] = 0;
 }
 

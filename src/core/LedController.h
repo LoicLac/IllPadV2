@@ -3,6 +3,7 @@
 
 #include "HardwareConfig.h"
 #include "KeyboardData.h"
+#include "LedGrammar.h"
 #include <Adafruit_NeoPixel.h>
 #include <stdint.h>
 
@@ -40,12 +41,22 @@ public:
   // Multi-bank state
   void setBankSlots(const BankSlot* slots);
 
-  // Confirmations
-  // ledMask: 0 = target _currentBank only (default / legacy behavior).
-  // Non-zero = bitmask of LEDs to blink simultaneously. Honored by:
-  //   - SCALE_ROOT/MODE/CHROM (scale group propagation)
-  //   - HOLD_ON/HOLD_OFF     (LEFT + double-tap bank pad pause/resume, can target BG bank)
-  // Other confirmation types ignore the mask.
+  // Event trigger (unified grammar — Phase 0 step 0.4).
+  // Preempts any active event overlay. Resolves pattern + color + fgPct from
+  // LedSettingsStore.eventOverrides[evt] (NVS override) or EVENT_RENDER_DEFAULT
+  // (compile-time fallback). Durations for BLINK/FADE are resolved from the
+  // legacy per-event settings fields (bankDurationMs, holdOnFadeMs, etc.) so
+  // existing NVS values continue to drive timing.
+  //
+  // ledMask : 0 = target _currentBank only. Non-zero = bitmask of LEDs to
+  //           animate simultaneously (used by SCALE_* scale-group propagation
+  //           and PLAY/STOP via LEFT+double-tap on BG bank pad).
+  void triggerEvent(EventId evt, uint8_t ledMask = 0);
+
+  // Legacy API wrapper. Routes to triggerEvent() via confirmTypeToEventId().
+  // Kept for backward compat during Phase 0 ; callsites migrate to
+  // triggerEvent() in step 0.5. param is currently ignored (was only used
+  // internally for OCTAVE direction which was never rendered).
   void triggerConfirm(ConfirmType type, uint8_t param = 0, uint8_t ledMask = 0);
 
   // Bargraph persistence
@@ -119,6 +130,33 @@ private:
   void renderBankNormal(uint8_t led, bool isFg);
   void renderBankArpeg(uint8_t led, bool isFg, unsigned long now);
 
+  // Pattern engine (Phase 0 step 0.4).
+  // Active event overlay is a single PatternInstance : new triggerEvent()
+  // preempts any active one (same semantics as the legacy single-slot confirm).
+  struct PatternInstance {
+    uint8_t       patternId;  // PTN_* enum (0..8) or PTN_NONE when inactive
+    uint8_t       fgPct;      // foreground intensity 0-100 (scaled by pattern math)
+    uint8_t       ledMask;    // 0 = current bank ; non-zero = bitmask of LEDs
+    uint8_t       reserved;
+    unsigned long startTime;  // millis() at trigger
+    PatternParams params;     // pattern-specific params (from LedGrammar.h)
+    RGBW          colorA;     // primary color (resolved from ColorSlotId at trigger)
+    RGBW          colorB;     // secondary color (used by CROSSFADE_COLOR only)
+    bool          active;
+  };
+  PatternInstance _eventOverlay;
+
+  // Engine methods (step 0.4).
+  void renderPattern(const PatternInstance& inst, unsigned long now);
+  bool isPatternExpired(const PatternInstance& inst, unsigned long now) const;
+  EventId confirmTypeToEventId(ConfirmType type) const;
+  RGBW colorForSlot(uint8_t slotId) const;
+  // Shared FLASH rendering logic (used inline by tick ARPEG in step 0.5, and
+  // by the pattern engine for FLASH events).
+  void renderFlashOverlay(uint8_t led, const RGBW& color, uint8_t fgPct,
+                          uint8_t bgPct, unsigned long startTime,
+                          uint16_t durationMs, bool isFg, unsigned long now);
+
   // Master brightness (0-100 perceptual, from pot via POT_BRIGHTNESS_CURVE)
   uint8_t _brightnessPct;
 
@@ -163,11 +201,9 @@ private:
   uint8_t _gammaLut[256];
   unsigned long _flashStartTime[NUM_LEDS];
 
-  // Confirmation state
-  ConfirmType   _confirmType;
-  unsigned long _confirmStart;
-  uint8_t       _confirmParam;
-  uint8_t       _confirmLedMask;  // 0 = use _currentBank; non-zero = bitmask (SCALE_*, HOLD_ON/OFF)
+  // _eventOverlay replaces the legacy _confirmType/_confirmStart/... fields
+  // as of step 0.4 (pattern engine). Single-slot overlay, preempted on
+  // each triggerEvent/triggerConfirm call.
 
   // Bargraph
   uint16_t _potBarDurationMs;
