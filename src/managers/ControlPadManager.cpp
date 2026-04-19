@@ -42,6 +42,7 @@ void ControlPadManager::applyStore(const ControlPadStore& store) {
     slot.emaAccum            = 0;
     memset(slot.ring, 0, sizeof(slot.ring));
     slot.ringWrIdx           = 0;
+    slot.pressedFrames       = 0;
     slot.envStartValue       = 0;
     slot.envFramesRemaining  = 0;
     slot.envFramesTotal      = 0;
@@ -135,6 +136,16 @@ void ControlPadManager::_processSlot(uint8_t s,
     }
     case CTRL_MODE_CONTINUOUS: {
       if (pressed) {
+        // C3/C4 : on rising edge, reset DSP state so every fresh press starts
+        // with a clean attack. Avoids false-high initial CC (previous plateau
+        // bleeding down through EMA) and stale/zero HOLD_LAST reads.
+        if (!wasPressed) {
+          slot.emaAccum = 0;
+          memset(slot.ring, 0, sizeof(slot.ring));
+          slot.ringWrIdx     = 0;
+          slot.pressedFrames = 0;
+        }
+
         uint8_t rawCc = _scalePressure(state.pressure[pad], slot.cfg.deadzone);
 
         // Stage 1 : EMA smooth
@@ -145,9 +156,11 @@ void ControlPadManager::_processSlot(uint8_t s,
         } else {
           uint16_t alpha = _emaAlpha();  // Q16 factor in [1..65535]
           // new = alpha*raw + (1-alpha)*prev,  everything Q16
+          // I4 : + 32768 = rounding instead of truncation (prevents 1-3 unit
+          // steady-state undershoot at full pressure).
           uint32_t rawQ16    = (uint32_t)rawCc << 8;
           uint32_t prevQ16   = (uint32_t)slot.emaAccum;
-          uint32_t mixedQ16  = ((uint64_t)alpha * rawQ16 + (uint64_t)(65535 - alpha) * prevQ16) >> 16;
+          uint32_t mixedQ16  = ((uint64_t)alpha * rawQ16 + (uint64_t)(65535 - alpha) * prevQ16 + 32768ULL) >> 16;
           slot.emaAccum = (uint16_t)mixedQ16;
           smoothedCc = (uint8_t)(mixedQ16 >> 8);
         }
@@ -155,6 +168,10 @@ void ControlPadManager::_processSlot(uint8_t s,
         // Stage 2 : push into ring buffer (for HOLD_LAST look-back)
         slot.ring[slot.ringWrIdx] = smoothedCc;
         slot.ringWrIdx = (slot.ringWrIdx + 1) % CTRL_RING_SIZE;
+
+        // C4 : track frames since rising edge so HOLD_LAST lookback clamps
+        // to valid (actually-written) ring cells on short presses.
+        if (slot.pressedFrames < 0xFFFF) slot.pressedFrames++;
 
         // Emit if changed
         if (smoothedCc != slot.lastCcValue) {
@@ -206,6 +223,10 @@ void ControlPadManager::_handleLeftPress(const SharedKeyboardState& state) {
     if (slot.lastCcValue > 0) {
       _emit(slot, slot.lastChannel, 0);
     }
+    // C1 : cancel any in-flight release envelope. Otherwise the next
+    // _tickReleaseEnvelopes() would emit the next envelope value and
+    // overwrite the CC=0 we just sent (staircase 127, 0, 126, 125, ...).
+    slot.envFramesRemaining = 0;
   }
 }
 
@@ -246,9 +267,15 @@ void ControlPadManager::_handleBankSwitch(uint8_t oldCh, uint8_t newCh,
     if (slot.lastCcValue > 0) {
       _emit(slot, oldCh, 0);
     }
-    // Re-sync on NEW channel if pad still pressed
     uint8_t pad     = slot.cfg.padIndex;
     bool    pressed = state.keyIsPressed[pad];
+
+    // C2 : cancel in-flight release envelope. It would otherwise keep
+    // ticking on slot.lastChannel (= OLD ch) and overwrite the CC=0
+    // cleanup with a descending fade, confusing DAWs.
+    slot.envFramesRemaining = 0;
+
+    // Re-sync on NEW channel if pad still pressed
     if (!pressed) continue;
 
     if (slot.cfg.mode == CTRL_MODE_MOMENTARY) {
@@ -309,11 +336,14 @@ uint16_t ControlPadManager::_emaAlpha() const {
 }
 
 uint8_t ControlPadManager::_sampleHoldLookback(const ControlPadSlot& slot) const {
-  (void)slot;
   // sampleHoldMs / frameMs (~1ms) = #frames. Clamp to RING_SIZE-1 max.
-  uint8_t lookback = (uint8_t)_sampleHoldMs;
+  uint16_t lookback = _sampleHoldMs;
   if (lookback >= CTRL_RING_SIZE) lookback = CTRL_RING_SIZE - 1;
-  return lookback;
+  // C4 : also bound by frames actually pressed. Short presses (fewer frames
+  // than sampleHoldMs) would otherwise read unwritten/stale ring cells.
+  if (slot.pressedFrames == 0) return 0;
+  if (lookback >= slot.pressedFrames) lookback = slot.pressedFrames - 1;
+  return (uint8_t)lookback;
 }
 
 void ControlPadManager::_tickReleaseEnvelopes() {

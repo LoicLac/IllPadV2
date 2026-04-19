@@ -74,10 +74,16 @@ NvsManager::NvsManager()
     _colorSlots.slots[i].hueOffset = 0;
   }
 
-  // Default control pads (empty)
+  // Default control pads (empty) + V2 DSP defaults.
+  // I1 : with all DSP params at 0, V2 degenerates to V1 behavior until the
+  // user saves a blob. Seed meaningful defaults so fresh NVS already gets
+  // the pipeline (mild low-pass, short S&H window, ~50ms fade-out).
   memset(&_ctrlStore, 0, sizeof(_ctrlStore));
-  _ctrlStore.magic   = CONTROLPAD_MAGIC;
-  _ctrlStore.version = CONTROLPAD_VERSION;
+  _ctrlStore.magic        = CONTROLPAD_MAGIC;
+  _ctrlStore.version      = CONTROLPAD_VERSION;
+  _ctrlStore.smoothMs     = 10;
+  _ctrlStore.sampleHoldMs = 15;
+  _ctrlStore.releaseMs    = 50;
 
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     _scaleDirty[i] = false;
@@ -785,9 +791,15 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   #endif
 
   // --- Control pads (Tool 4) — single blob in illpad_ctrl / pads ---
+  // I1 : seed sensible V2 DSP defaults pre-load. If loadBlob succeeds, it
+  // overwrites them with persisted values ; if it fails (fresh NVS / wrong
+  // version), these survive and V2 behaves as intended instead of V1.
   memset(&_ctrlStore, 0, sizeof(_ctrlStore));
-  _ctrlStore.magic   = CONTROLPAD_MAGIC;
-  _ctrlStore.version = CONTROLPAD_VERSION;
+  _ctrlStore.magic        = CONTROLPAD_MAGIC;
+  _ctrlStore.version      = CONTROLPAD_VERSION;
+  _ctrlStore.smoothMs     = 10;
+  _ctrlStore.sampleHoldMs = 15;
+  _ctrlStore.releaseMs    = 50;
   if (NvsManager::loadBlob(CONTROLPAD_NVS_NAMESPACE, CONTROLPAD_NVS_KEY,
                            CONTROLPAD_MAGIC, CONTROLPAD_VERSION,
                            &_ctrlStore, sizeof(_ctrlStore))) {

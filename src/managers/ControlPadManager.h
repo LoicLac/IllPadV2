@@ -26,6 +26,7 @@ struct ControlPadSlot {
   uint16_t emaAccum;              // fixed-point 8.8 accumulator for smooth EMA
   uint8_t  ring[CTRL_RING_SIZE];  // ring buffer of smoothed ccVal over last N frames
   uint8_t  ringWrIdx;             // write position modulo CTRL_RING_SIZE
+  uint16_t pressedFrames;         // frames elapsed since rising edge (HOLD_LAST lookback bound)
   uint8_t  envStartValue;         // RETURN_TO_ZERO envelope start (0 = inactive)
   uint16_t envFramesRemaining;    // frames left in envelope
   uint16_t envFramesTotal;        // initial total (for linear interpolation)

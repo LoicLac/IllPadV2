@@ -348,7 +348,7 @@ inline void validateControlPadStore(ControlPadStore& s) {
 
   // V2 globals — clamp to sensible ranges
   if (s.smoothMs      > 500)  s.smoothMs     = 500;
-  if (s.sampleHoldMs  > 100)  s.sampleHoldMs = 100;
+  if (s.sampleHoldMs  > 31)   s.sampleHoldMs = 31;   // bounded by ring buffer size (CTRL_RING_SIZE-1)
   if (s.releaseMs     > 2000) s.releaseMs    = 2000;
 
   for (uint8_t i = 0; i < s.count; i++) {
