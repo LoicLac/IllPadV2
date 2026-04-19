@@ -282,7 +282,7 @@ VT100 terminal, serial keyboard input only (no physical button in setup mode).
 [1] Pressure Calibration  — unchanged from V1
 [2] Pad Ordering           — touch low→high, positions 1-48, no base note
 [3] Pad Roles              — bank(8) + scale(15) + arp(5: hold+4 octave), color grid, collision check
-[4] Control Pads           — 12 sparse CC pads (momentary/latch/continuous). 4-color grid, per-mode editor, gate-vs-setter handoff. V2 DSP : smooth + sample-and-hold (HOLD_LAST) + release envelope (RETURN_TO_ZERO). Edit globals via 'g'.
+[4] Control Pads           — 12 sparse CC pads (momentary/latch/continuous). 4-color grid + POOL legend. [RET] picks mode via pool, [e] edits numeric values (CC/channel/deadzone), [g] edits global DSP params (smooth / S&H / release). Save-on-exit, no NVS spam. V2 DSP fix for HOLD_LAST plateau capture.
 [5] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
 [6] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
 [7] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)

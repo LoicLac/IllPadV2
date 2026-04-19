@@ -402,6 +402,10 @@ dispatch shifted.
 ║    │ --- │ --- │ --- │ --- │ --- │ --- │ --- │ --- │ --- │ --- │ --- │ --- │                    ║
 ║    └─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┴─────┘                    ║
 ║                                                                                                  ║
+╟── POOL ───────────────────────────────────────────────────────────────────────────────────────╢
+║ Mode :   [MOM ]  [LATCH]  [RET0 ]  [HOLD ]  [--- ]                                              ║
+║          yellow  magenta  orange   white    dim                                                 ║
+║                                                                                                  ║
 ╟── GLOBALS ────────────────────────────────────────────────────────────────────────────────────╢
 ║    Smooth          [010] ms   EMA filter time constant (attack smoothing)                       ║
 ║    Sample & hold   [015] ms   look-back for HOLD_LAST plateau capture                          ║
@@ -410,9 +414,7 @@ dispatch shifted.
 ╟── SELECTED : PAD #04 ──────────────────────────────────────────────────────────────────────────╢
 ║    CC number    [074]       standard MIDI CC 0-127                                               ║
 ║  ▸ Channel      [follow]    0=follow bank, 1-16=fixed MIDI channel                               ║
-║    Mode         [continuous]  momentary / latch / continuous                                     ║
 ║    Deadzone     [016]       continuous only — pressure threshold 0-126                           ║
-║    Release      [return-0]  continuous only — return-to-zero / hold-last                         ║
 ║    Slots used   2 / 12                                                                           ║
 ║                                                                                                  ║
 ╟── INFO ────────────────────────────────────────────────────────────────────────────────────────╢
@@ -420,7 +422,7 @@ dispatch shifted.
 ║  Overlap: Pad #04 also BANK 1 in Tool 3 — informational, layers disjoint by LEFT.                ║
 ║                                                                                                  ║
 ╠══◉═══════════════════════════════════════════════════════════════════════════════════════════◉══╣
-║  [^v<>] GRID  [RET] EDIT  [g] GLOBALS  [TAP] SELECT  │  [x] REMOVE  [d] DFLT  │  [q] EXIT       ║
+║  [^v<>] GRID  [RET] MODE  [e] EDIT  [g] GLOBALS  [TAP] SELECT  │  [x] REMOVE  [d] DFLT  │  [q] EXIT ║
 ╚══◉═══════════════════════════════════════════════════════════════════════════════════════════◉══╝
 ```
 
@@ -434,7 +436,6 @@ dispatch shifted.
 | `drawSection("PAD GRID" / "SELECTED : PAD #NN" / "INFO")` | Tape labels cyan |
 | `drawCellGrid(GRID_CONTROLPAD, …, roleLabels, roleMap)` | **New** GridMode value ; the two trailing optional params already declared for `GRID_ROLES` are reused as-is — no signature change. |
 | `drawFrameLine(fmt, …)` | Property rows, info text |
-| `drawSegmentedValue(label, val, digits, unit)` | Nixie vedette when editing CC# (digits=3) or Deadzone (digits=3) — injected between SELECTED and INFO |
 | `drawControlBar(ctrlBuf)` | Bottom bar with `CBAR_SEP` between nav / action / exit groups |
 | `flashSaved()` | 120ms header pulse on every NVS save |
 | `parseConfirm(ev)` | y/any-cancel for `[x] remove` and `[d] reset all` |
@@ -466,58 +467,40 @@ enum GridMode : uint8_t {
   - 4 → CONTINUOUS + HOLD_LAST (VT_BRIGHT_WHITE, label suffix "h")
 - Cursor overlay : `VT_REVERSE` on top of the mode color
 
-### 6.5 Navigation states
+### 6.5 Navigation states (V3)
 
-**GRID_NAV** (default on entry) :
-- `← → ↑ ↓` → move cursor on grid
-- `ENTER` → enter `PROP_EDIT` on selected pad :
-  - If pad already assigned → PROP_EDIT on its existing slot.
-  - If pad unassigned AND `count < MAX_CONTROL_PADS` → create a slot
-    with defaults (CC=0, channel=follow, mode=momentary, deadzone=0,
-    release=return-0), then enter PROP_EDIT.
-  - If pad unassigned AND `count == MAX_CONTROL_PADS` → refuse.
-    INFO shows `VT_YELLOW "Cap reached (12/12). Remove a pad first." VT_RESET`,
-    control bar unchanged, no slot created, no PROP_EDIT. Cleared on
-    next cursor move.
-- **Hardware pad touch** → cursor jumps to that pad (uses
-  `CapacitiveKeyboard` in setup mode, like Tool 2 / Tool 3).
-- `x` → remove the slot for the current pad (with y/n confirm).
-  Removal is a **sparse compaction** — `_slots[s..count-1]` shifts down
-  by one, `_count--`. No tombstone, no gap. Runtime `lastCcValue` etc.
-  of shifted slots is preserved (same logical slots, just reindexed).
-- `g` → enter `UI_GLOBAL_EDIT` (V2 DSP params)
-- `d` → reset all (clear every slot, with y/n confirm)
-- `q` → exit tool
-- Control bar : `[^v<>] GRID  [RET] EDIT  [g] GLOBALS  [TAP] SELECT │ [x] REMOVE  [d] DFLT │ [q] EXIT`
+**UI_GRID_NAV** (default) :
+- Arrow keys + TAP hardware = move cursor on 4×12 grid
+- `[RET]` → UI_MODE_PICK (pool-driven mode selection)
+- `[e]` → UI_VALUE_EDIT (numeric fields only, assigned pad)
+- `[g]` → UI_GLOBAL_EDIT (DSP params)
+- `[x]` → UI_CONFIRM_REMOVE (remove current pad, with confirm)
+- `[d]` → UI_CONFIRM_DEFAULTS (reset all, with confirm)
+- `[q]` → exit tool
 
-**UI_GLOBAL_EDIT** (V2 — activated by `'g'` from GRID_NAV) :
-- `↑ ↓` navigate between the 3 DSP params (smoothMs / sampleHoldMs / releaseMs)
-- `< >` adjust value (accelerate ×10 on repeat)
-- `ENTER` or `q` → back to GRID_NAV
-- Auto-save per edit via `NvsManager::saveBlob`
-- INFO shows per-param help text
+**UI_MODE_PICK** (activated by `[RET]` on grid) :
+- Pool cursor on current pad's mode (defaults to MOM if unassigned)
+- `[<>]` cycle the 5 pool options (MOM / LATCH / RET0 / HOLD / clear)
+- `[RET]` commit : create slot if needed, apply mode (LATCH auto-promotes
+  channel to 1 if was follow), single NVS save, return to GRID_NAV
+- `[q]` cancel, return to GRID_NAV without modifying the slot
+- Selecting `[---]` (idx=4) then `[RET]` removes the slot (no confirm,
+  matches Tool 3 "[---] clear role" convention)
 
-**PROP_EDIT** :
-- `↑ ↓` → move between the 5 fields (CC / Channel / Mode / Deadzone / Release)
-- `< >` → adjust value for current field (acceleration flag → ×10 step
-  on fast repeat, already handled by `InputParser`)
-- `ENTER` → back to `GRID_NAV` on same pad
-- `q` → back to `GRID_NAV` without rollback (edits are already
-  auto-saved, see 6.7)
-- Greyed fields (Deadzone / Release when `mode != CONTINUOUS`) render in
-  `VT_DIM "[---]"` and `↑ ↓` skip them.
-- Cursor marker : `▸` + `VT_CYAN VT_BOLD` on the selected field label
-  (pattern from ToolPotMapping).
-- Editing a numeric field (CC#, Deadzone) → inject
-  `drawSegmentedValue("CC NUMBER", val, 3, "")` as a new section
-  between SELECTED and INFO (pattern Tool 5).
-- Control bar : `[^v] FIELD  [</>] VALUE │ [RET] BACK  [q] CANCEL`
+**UI_VALUE_EDIT** (activated by `[e]` on grid, only if pad assigned) :
+- Numeric field editor : CC number (0-127), Channel (0=follow / 1-16),
+  Deadzone (0-126, CONTINUOUS only)
+- Mode and Release rows are read-only greyed — pool-driven
+- `[^v]` navigate fields, skipping greyed ones
+- `[<>]` adjust value (accelerate ×10 on repeat)
+- Save-on-exit via `[RET]` or `[q]` — dirty flag tracked, single save if
+  changed, no NVS write per arrow press
 
-**CONFIRM** (remove, defaults) :
-- INFO shows `VT_YELLOW "Remove control pad #4? (y/n)" VT_RESET` (or
-  equivalent).
-- Control bar : `CBAR_CONFIRM_ANY` template.
-- Input handled via `SetupUI::parseConfirm(ev) → ConfirmResult`.
+**UI_GLOBAL_EDIT** (activated by `[g]` on grid) :
+- Field editor for smoothMs / sampleHoldMs / releaseMs
+- Same save-on-exit policy as VALUE_EDIT
+
+**UI_CONFIRM_REMOVE / UI_CONFIRM_DEFAULTS** : unchanged (y/n prompt)
 
 ### 6.6 Mode / channel invariant enforcement
 
@@ -531,15 +514,12 @@ When user changes **Channel** in PROP_EDIT :
 - `→ 0 (follow)` and current `mode == LATCH` → refuse change, flash
   `LATCH requires fixed channel — change mode first`. Channel stays.
 
-### 6.7 Save behavior
+### 6.7 Save policy
 
-Pattern Tool 3 (auto-save on every edit) :
-- Every modification (assign new pad, edit a field, remove a slot,
-  reset all) → `saveWorkingCopy()` → `NvsManager::saveBlob(…)` with
-  debounced background task.
-- `flashSaved()` on save success (120ms header pulse + LED flash).
-- Header badge `[NVS:OK]` / `[NVS:--]` evaluated via
-  `NvsManager::checkBlob()` on tool entry and after every save.
+- Discrete actions (mode commit via pool, remove, reset-all, create-on-ENTER, global commit) : save fires once, flashSaved pulses
+- Numeric edits (UI_VALUE_EDIT, UI_GLOBAL_EDIT) : dirty flag set on each
+  arrow press, single save + flashSaved on state exit
+- Tool 3 convention : save-on-commit, not save-on-change
 
 ### 6.8 `screenDirty` flag
 
