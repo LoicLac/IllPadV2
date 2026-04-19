@@ -10,13 +10,14 @@ class CapacitiveKeyboard;
 class LedController;
 class SetupUI;
 class NvsManager;
+struct BankSlot;
 
 class ToolControlPads {
 public:
   ToolControlPads();
 
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
-             SetupUI* ui, NvsManager* nvs);
+             SetupUI* ui, NvsManager* nvs, BankSlot* banks);
   void run();  // Blocking main loop
 
 private:
@@ -24,6 +25,7 @@ private:
   LedController*      _leds;
   SetupUI*            _ui;
   NvsManager*         _nvs;
+  BankSlot*           _banks;   // for follow-bank channel resolution in SELECTED panel
 
   // UI state
   enum UIMode : uint8_t {
@@ -31,11 +33,13 @@ private:
     UI_PROP_EDIT,
     UI_CONFIRM_REMOVE,
     UI_CONFIRM_DEFAULTS,
+    UI_GLOBAL_EDIT,   // V2 : editing smoothMs / sampleHoldMs / releaseMs
   };
 
   UIMode _uiMode;
-  uint8_t _cursorPad;     // 0-47, selected cell in grid
-  uint8_t _fieldIdx;      // 0-4 in PROP_EDIT (CC/Channel/Mode/Deadzone/Release)
+  uint8_t _cursorPad;       // 0-47, selected cell in grid
+  uint8_t _fieldIdx;        // 0-4 in PROP_EDIT (CC/Channel/Mode/Deadzone/Release)
+  uint8_t _globalFieldIdx;  // 0=smoothMs, 1=sampleHoldMs, 2=releaseMs
   bool    _screenDirty;
   bool    _nvsSaved;
 
@@ -57,6 +61,11 @@ private:
   void _handlePropEdit(const NavEvent& ev);
   void _handleConfirmRemove(const NavEvent& ev);
   void _handleConfirmDefaults(const NavEvent& ev);
+  void _handleGlobalEdit(const NavEvent& ev);
+
+  // --- Global DSP field edit helpers ---
+  void    _adjustGlobalField(int8_t delta);
+  uint8_t _currentBankFromBanks() const;
 
   // --- Slot ops ---
   int8_t _findSlot(uint8_t padIdx) const;
@@ -72,6 +81,7 @@ private:
   void _draw();
   void _drawGrid();
   void _drawSelected();
+  void _drawGlobals();
   void _drawInfo();
   void _drawControlBar();
 

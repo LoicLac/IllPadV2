@@ -9,7 +9,9 @@
 
 ToolControlPads::ToolControlPads()
   : _keyboard(nullptr), _leds(nullptr), _ui(nullptr), _nvs(nullptr),
+    _banks(nullptr),
     _uiMode(UI_GRID_NAV), _cursorPad(0), _fieldIdx(0),
+    _globalFieldIdx(0),
     _screenDirty(true), _nvsSaved(false), _flashExpireMs(0) {
   memset(&_wk, 0, sizeof(_wk));
   _wk.magic   = CONTROLPAD_MAGIC;
@@ -19,11 +21,12 @@ ToolControlPads::ToolControlPads()
 }
 
 void ToolControlPads::begin(CapacitiveKeyboard* keyboard, LedController* leds,
-                            SetupUI* ui, NvsManager* nvs) {
+                            SetupUI* ui, NvsManager* nvs, BankSlot* banks) {
   _keyboard = keyboard;
   _leds     = leds;
   _ui       = ui;
   _nvs      = nvs;
+  _banks    = banks;
 }
 
 void ToolControlPads::run() {
@@ -31,12 +34,13 @@ void ToolControlPads::run() {
 
   _load();
   _refreshBadge();
-  _uiMode        = UI_GRID_NAV;
-  _cursorPad     = 0;
-  _fieldIdx      = 0;
-  _screenDirty   = true;
-  _flashMsg[0]   = '\0';
-  _flashExpireMs = 0;
+  _uiMode         = UI_GRID_NAV;
+  _cursorPad      = 0;
+  _fieldIdx       = 0;
+  _globalFieldIdx = 0;
+  _screenDirty    = true;
+  _flashMsg[0]    = '\0';
+  _flashExpireMs  = 0;
 
   _leds->startSetupComet();
 
@@ -64,6 +68,7 @@ void ToolControlPads::run() {
       case UI_PROP_EDIT:        _handlePropEdit(ev);        break;
       case UI_CONFIRM_REMOVE:   _handleConfirmRemove(ev);   break;
       case UI_CONFIRM_DEFAULTS: _handleConfirmDefaults(ev); break;
+      case UI_GLOBAL_EDIT:      _handleGlobalEdit(ev);      break;
     }
 
     if (ev.type == NAV_QUIT && _uiMode == UI_GRID_NAV) {
@@ -130,6 +135,10 @@ void ToolControlPads::_handleGridNav(const NavEvent& ev) {
         }
       } else if (ev.ch == 'd') {
         _uiMode = UI_CONFIRM_DEFAULTS;
+        _screenDirty = true;
+      } else if (ev.ch == 'g') {
+        _uiMode = UI_GLOBAL_EDIT;
+        _globalFieldIdx = 0;
         _screenDirty = true;
       }
       break;
@@ -208,6 +217,70 @@ void ToolControlPads::_handleConfirmDefaults(const NavEvent& ev) {
     _uiMode = UI_GRID_NAV;
     _screenDirty = true;
   }
+}
+
+void ToolControlPads::_handleGlobalEdit(const NavEvent& ev) {
+  switch (ev.type) {
+    case NAV_UP:
+      if (_globalFieldIdx == 0) _globalFieldIdx = 2; else _globalFieldIdx--;
+      _screenDirty = true;
+      break;
+    case NAV_DOWN:
+      if (_globalFieldIdx == 2) _globalFieldIdx = 0; else _globalFieldIdx++;
+      _screenDirty = true;
+      break;
+    case NAV_LEFT:
+      _adjustGlobalField(ev.accelerated ? -10 : -1);
+      break;
+    case NAV_RIGHT:
+      _adjustGlobalField(ev.accelerated ? +10 : +1);
+      break;
+    case NAV_ENTER:
+    case NAV_QUIT:
+      _uiMode = UI_GRID_NAV;
+      _screenDirty = true;
+      break;
+    default:
+      break;
+  }
+}
+
+void ToolControlPads::_adjustGlobalField(int8_t delta) {
+  switch (_globalFieldIdx) {
+    case 0: {  // smoothMs 0..500
+      int32_t v = (int32_t)_wk.smoothMs + delta;
+      if (v < 0)   v = 0;
+      if (v > 500) v = 500;
+      _wk.smoothMs = (uint16_t)v;
+      break;
+    }
+    case 1: {  // sampleHoldMs 0..31 (bounded by CTRL_RING_SIZE - 1)
+      int32_t v = (int32_t)_wk.sampleHoldMs + delta;
+      if (v < 0)  v = 0;
+      if (v > 31) v = 31;
+      _wk.sampleHoldMs = (uint16_t)v;
+      break;
+    }
+    case 2: {  // releaseMs 0..2000
+      int32_t v = (int32_t)_wk.releaseMs + delta;
+      if (v < 0)    v = 0;
+      if (v > 2000) v = 2000;
+      _wk.releaseMs = (uint16_t)v;
+      break;
+    }
+    default:
+      return;
+  }
+  _save();
+  _screenDirty = true;
+}
+
+uint8_t ToolControlPads::_currentBankFromBanks() const {
+  if (!_banks) return 0;
+  for (uint8_t b = 0; b < NUM_BANKS; b++) {
+    if (_banks[b].isForeground) return b;
+  }
+  return 0;
 }
 
 int8_t ToolControlPads::_findSlot(uint8_t padIdx) const {
@@ -400,9 +473,21 @@ void ToolControlPads::_drawSelected() {
   rows[0].greyed = false;
 
   rows[1].label = "Channel   ";
-  if (e.channel == 0) snprintf(rows[1].valBuf, sizeof(rows[1].valBuf), "follow");
-  else                snprintf(rows[1].valBuf, sizeof(rows[1].valBuf), "%u", (unsigned)e.channel);
-  rows[1].desc = "0=follow bank, 1-16=fixed MIDI channel";
+  char chDescBuf[64];
+  if (e.channel == 0) {
+    snprintf(rows[1].valBuf, sizeof(rows[1].valBuf), "follow");
+    uint8_t curBank = _currentBankFromBanks();
+    uint8_t curCh   = _banks ? (uint8_t)(_banks[curBank].channel + 1)
+                             : (uint8_t)(curBank + 1);  // 1-indexed for user
+    snprintf(chDescBuf, sizeof(chDescBuf),
+             "0=follow bank (now: ch %u, bank %c)",
+             (unsigned)curCh, (char)('A' + curBank));
+    rows[1].desc = chDescBuf;
+  } else {
+    snprintf(rows[1].valBuf, sizeof(rows[1].valBuf), "%u", (unsigned)e.channel);
+    snprintf(chDescBuf, sizeof(chDescBuf), "1-16=fixed MIDI channel");
+    rows[1].desc = chDescBuf;
+  }
   rows[1].greyed = false;
 
   rows[2].label = "Mode      ";
@@ -455,6 +540,36 @@ void ToolControlPads::_drawSelected() {
     }
   }
 }
+
+void ToolControlPads::_drawGlobals() {
+  struct GRow {
+    const char* label;
+    uint16_t    value;
+    const char* unit;
+    const char* desc;
+  };
+  GRow rows[3] = {
+    { "Smooth        ", _wk.smoothMs,     "ms", "EMA filter time constant (attack smoothing)" },
+    { "Sample & hold ", _wk.sampleHoldMs, "ms", "look-back for HOLD_LAST plateau capture" },
+    { "Release fade  ", _wk.releaseMs,    "ms", "RETURN_TO_ZERO linear fade-out duration" },
+  };
+
+  for (uint8_t i = 0; i < 3; i++) {
+    bool selected = (_uiMode == UI_GLOBAL_EDIT) && (_globalFieldIdx == i);
+    const char* cursor = selected
+        ? "  " VT_CYAN VT_BOLD "\xe2\x96\xb8 "
+        : "    ";
+    const char* valCol = selected ? VT_CYAN : VT_BRIGHT_WHITE;
+    char valBuf[12];
+    snprintf(valBuf, sizeof(valBuf), "%03u", (unsigned)rows[i].value);
+    _ui->drawFrameLine("%s%s[%s%s%s] %s   " VT_DIM "%s" VT_RESET,
+                       cursor, rows[i].label,
+                       valCol, valBuf, VT_RESET,
+                       rows[i].unit,
+                       rows[i].desc);
+  }
+}
+
 void ToolControlPads::_drawInfo() {
   if (_uiMode == UI_CONFIRM_REMOVE) {
     _ui->drawFrameLine(VT_YELLOW "Remove control pad #%d? (y/n)" VT_RESET,
@@ -474,35 +589,67 @@ void ToolControlPads::_drawInfo() {
     return;
   }
 
+  if (_uiMode == UI_GLOBAL_EDIT) {
+    const char* desc;
+    switch (_globalFieldIdx) {
+      case 0: desc = "Smooth : longer = more filtering on CC output. 0 = bypass. Affects attack."; break;
+      case 1: desc = "Sample & hold : at HOLD_LAST release, capture CC value from N ms ago."; break;
+      case 2: desc = "Release fade : at RETURN_TO_ZERO release, linear fade to 0 over N ms."; break;
+      default: desc = ""; break;
+    }
+    _ui->drawFrameLine(VT_DIM "%s" VT_RESET, desc);
+    _ui->drawFrameEmpty();
+    return;
+  }
+
   int8_t s = _findSlot(_cursorPad);
   if (s < 0) {
-    _ui->drawFrameLine(VT_DIM "Pad #%d : unassigned. [RET] to create." VT_RESET,
+    _ui->drawFrameLine(VT_DIM "Pad #%d : unassigned. [RET] to create. [g] edit globals." VT_RESET,
                        (int)_cursorPad + 1);
-  } else {
-    const ControlPadEntry& e = _wk.entries[s];
-    const char* modeName = (e.mode == CTRL_MODE_MOMENTARY)  ? "momentary"
-                          : (e.mode == CTRL_MODE_LATCH)      ? "latch"
-                                                             : "continuous";
-    char chBuf[12];
-    if (e.channel == 0) snprintf(chBuf, sizeof(chBuf), "follow");
-    else                snprintf(chBuf, sizeof(chBuf), "ch %u", (unsigned)e.channel);
-    _ui->drawFrameLine(VT_BRIGHT_WHITE "Pad #%d" VT_RESET
-                       " : CC %u, %s, %s",
-                       (int)_cursorPad + 1, (unsigned)e.ccNumber, chBuf, modeName);
+    _ui->drawFrameEmpty();
+    return;
   }
-  _ui->drawFrameEmpty();
+
+  const ControlPadEntry& e = _wk.entries[s];
+  const char* modeName = (e.mode == CTRL_MODE_MOMENTARY)  ? "momentary"
+                        : (e.mode == CTRL_MODE_LATCH)     ? "latch"
+                                                          : "continuous";
+  char chBuf[12];
+  if (e.channel == 0) snprintf(chBuf, sizeof(chBuf), "follow");
+  else                snprintf(chBuf, sizeof(chBuf), "ch %u", (unsigned)e.channel);
+
+  _ui->drawFrameLine(VT_BRIGHT_WHITE "Pad #%d" VT_RESET " : CC %u, %s, %s",
+                     (int)_cursorPad + 1, (unsigned)e.ccNumber, chBuf, modeName);
+
+  // Line 2 : mode semantic
+  const char* modeSem;
+  if (e.mode == CTRL_MODE_MOMENTARY) {
+    modeSem = "MOMENTARY : press=127, release=0 (binary gate)";
+  } else if (e.mode == CTRL_MODE_LATCH) {
+    modeSem = "LATCH : each press toggles CC 0 <-> 127 (needs fixed channel)";
+  } else if (e.releaseMode == CTRL_RELEASE_TO_ZERO) {
+    modeSem = "CONT+RET0 : pressure-driven, release fades to 0 (gate expression)";
+  } else {
+    modeSem = "CONT+HOLD : pressure-driven, release freezes last value (setter)";
+  }
+  _ui->drawFrameLine(VT_DIM "%s" VT_RESET, modeSem);
 }
 void ToolControlPads::_drawControlBar() {
   switch (_uiMode) {
     case UI_GRID_NAV:
       _ui->drawControlBar(
         VT_DIM "[^v<>] GRID  [RET] EDIT  [TAP] SELECT" CBAR_SEP
-               "[x] REMOVE  [d] DFLT" CBAR_SEP
+               "[x] REMOVE  [d] DFLT  [g] GLOBALS" CBAR_SEP
                "[q] EXIT" VT_RESET);
       break;
     case UI_PROP_EDIT:
       _ui->drawControlBar(
         VT_DIM "[^v] FIELD  [</>] VALUE" CBAR_SEP
+               "[RET] BACK  [q] CANCEL" VT_RESET);
+      break;
+    case UI_GLOBAL_EDIT:
+      _ui->drawControlBar(
+        VT_DIM "[^v] PARAM  [</>] VALUE" CBAR_SEP
                "[RET] BACK  [q] CANCEL" VT_RESET);
       break;
     case UI_CONFIRM_REMOVE:
@@ -519,9 +666,14 @@ void ToolControlPads::_draw() {
 
   _ui->drawSection("PAD GRID");
   _drawGrid();
+  _ui->drawFrameEmpty();
 
   _ui->drawSection("SELECTED");
   _drawSelected();
+
+  _ui->drawSection("GLOBALS");
+  _drawGlobals();
+  _ui->drawFrameEmpty();
 
   _ui->drawSection("INFO");
   _drawInfo();
@@ -537,9 +689,12 @@ void ToolControlPads::_load() {
     validateControlPadStore(_wk);
   } else {
     memset(&_wk, 0, sizeof(_wk));
-    _wk.magic   = CONTROLPAD_MAGIC;
-    _wk.version = CONTROLPAD_VERSION;
-    _wk.count   = 0;
+    _wk.magic        = CONTROLPAD_MAGIC;
+    _wk.version      = CONTROLPAD_VERSION;
+    _wk.count        = 0;
+    _wk.smoothMs     = 10;
+    _wk.sampleHoldMs = 15;
+    _wk.releaseMs    = 50;
   }
 }
 
