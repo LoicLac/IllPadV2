@@ -152,25 +152,42 @@ static const char* const COLOR_PRESET_NAMES[COLOR_PRESET_COUNT] = {
 };
 
 // =================================================================
-// Color Slots (Tool 7 COLOR page)
+// Color Slots (Tool 8 COLORS page) — v4 unified grammar
 // =================================================================
-#define COLOR_SLOT_COUNT       12
+// v4 grammar (LED spec §11) : "nom au fond, verbe en surface".
+//   MODE_* : bank identity colors (the "nouns")
+//   VERB_* : transport action colors (the "verbs")
+//   SETUP/NAV : bank switch, scale family, octave
+//   CONFIRM_OK : universal white suffix (SPARK)
+//
+// BG colors retired : BG rendering derives from the FG color applied
+// to bgFactor% intensity (step 0.6). HOLD_OFF slot retired : STOP uses
+// VERB_PLAY color with inverted FADE direction (LED spec option γ).
+// =================================================================
+#define COLOR_SLOT_COUNT       15
 #define COLOR_SLOT_NVS_KEY     "ledcolors"
 #define COLOR_SLOT_MAGIC       0xC010
 
 enum ColorSlotId : uint8_t {
-  CSLOT_NORMAL_FG = 0,
-  CSLOT_NORMAL_BG,
-  CSLOT_ARPEG_FG,
-  CSLOT_ARPEG_BG,
-  CSLOT_TICK_FLASH,
-  CSLOT_BANK_SWITCH,
-  CSLOT_SCALE_ROOT,
-  CSLOT_SCALE_MODE,
-  CSLOT_SCALE_CHROM,
-  CSLOT_HOLD_ON,
-  CSLOT_HOLD_OFF,
-  CSLOT_OCTAVE
+  // Mode identity colors (the "nouns")
+  CSLOT_MODE_NORMAL      = 0,   // Warm White  — NORMAL bank base color
+  CSLOT_MODE_ARPEG       = 1,   // Ice Blue    — ARPEG bank base color
+  CSLOT_MODE_LOOP        = 2,   // Gold        — LOOP bank base color (Phase 1+)
+  // Verb / action colors (the "verbs")
+  CSLOT_VERB_PLAY        = 3,   // Green       — PLAY, tick ARPEG step, HOLD on (merged)
+  CSLOT_VERB_REC         = 4,   // Coral       — RECORDING tick (LOOP Phase 1+), REFUSE blink
+  CSLOT_VERB_OVERDUB     = 5,   // Amber       — OVERDUBBING tick (LOOP Phase 1+)
+  CSLOT_VERB_CLEAR_LOOP  = 6,   // Cyan        — CLEAR long-press ramp (LOOP Phase 1+)
+  CSLOT_VERB_SLOT_CLEAR  = 7,   // Amber+hue   — slot delete ramp (LOOP Phase 1+)
+  CSLOT_VERB_SAVE        = 8,   // Magenta     — slot save ramp (LOOP Phase 1+)
+  // Setup / navigation
+  CSLOT_BANK_SWITCH      = 9,   // Pure White  — bank switch blink
+  CSLOT_SCALE_ROOT       = 10,  // Amber       — scale root change
+  CSLOT_SCALE_MODE       = 11,  // Gold        — scale mode change
+  CSLOT_SCALE_CHROM      = 12,  // Coral       — scale chromatic toggle
+  CSLOT_OCTAVE           = 13,  // Violet      — octave change
+  // Confirmation
+  CSLOT_CONFIRM_OK       = 14,  // Pure White  — SPARK suffix universal (LOOP Phase 1+)
 };
 
 struct ColorSlot {
@@ -480,7 +497,7 @@ struct BankTypeStore {
 };
 static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds NVS blob max");
 
-#define COLOR_SLOT_VERSION  3
+#define COLOR_SLOT_VERSION  4
 
 // =================================================================
 // PotTarget — all possible pot-controlled parameters

@@ -79,12 +79,48 @@ NvsManager::NvsManager()
   _colorSlots.magic = COLOR_SLOT_MAGIC;
   _colorSlots.version = COLOR_SLOT_VERSION;
   _colorSlots.reserved = 0;
+  // v4 defaults — 15 slots, aligned with LedController init body and LED spec §11.
+  // Preset indices refer to COLOR_PRESET_NAMES[] :
+  //   0 Pure White, 1 Warm White, 2 Cool White, 3 Ice Blue, 4 Deep Blue,
+  //   5 Cyan, 6 Amber, 7 Gold, 8 Coral, 9 Violet, 10 Magenta, 11 Green,
+  //   12 Soft Peach, 13 Mint.
   static const uint8_t defaultPresets[COLOR_SLOT_COUNT] = {
-    0, 1, 3, 4, 0, 0, 6, 7, 7, 4, 4, 9
+    /* CSLOT_MODE_NORMAL      */ 1,   // Warm White
+    /* CSLOT_MODE_ARPEG       */ 3,   // Ice Blue
+    /* CSLOT_MODE_LOOP        */ 7,   // Gold
+    /* CSLOT_VERB_PLAY        */ 11,  // Green
+    /* CSLOT_VERB_REC         */ 8,   // Coral
+    /* CSLOT_VERB_OVERDUB     */ 6,   // Amber
+    /* CSLOT_VERB_CLEAR_LOOP  */ 5,   // Cyan
+    /* CSLOT_VERB_SLOT_CLEAR  */ 6,   // Amber (with hue offset, see below)
+    /* CSLOT_VERB_SAVE        */ 10,  // Magenta
+    /* CSLOT_BANK_SWITCH      */ 0,   // Pure White
+    /* CSLOT_SCALE_ROOT       */ 6,   // Amber
+    /* CSLOT_SCALE_MODE       */ 7,   // Gold
+    /* CSLOT_SCALE_CHROM      */ 8,   // Coral
+    /* CSLOT_OCTAVE           */ 9,   // Violet
+    /* CSLOT_CONFIRM_OK       */ 0,   // Pure White (SPARK universal)
+  };
+  static const int8_t defaultHueOffsets[COLOR_SLOT_COUNT] = {
+    /* MODE_NORMAL      */ 0,
+    /* MODE_ARPEG       */ 0,
+    /* MODE_LOOP        */ 0,
+    /* VERB_PLAY        */ 0,
+    /* VERB_REC         */ 0,
+    /* VERB_OVERDUB     */ 0,
+    /* VERB_CLEAR_LOOP  */ 0,
+    /* VERB_SLOT_CLEAR  */ 20,  // hue-shifted orange, distinct from VERB_OVERDUB (LED spec §11)
+    /* VERB_SAVE        */ 0,
+    /* BANK_SWITCH      */ 0,
+    /* SCALE_ROOT       */ 0,
+    /* SCALE_MODE       */ 0,
+    /* SCALE_CHROM      */ 0,
+    /* OCTAVE           */ 0,
+    /* CONFIRM_OK       */ 0,
   };
   for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
-    _colorSlots.slots[i].presetId = defaultPresets[i];
-    _colorSlots.slots[i].hueOffset = 0;
+    _colorSlots.slots[i].presetId  = defaultPresets[i];
+    _colorSlots.slots[i].hueOffset = defaultHueOffsets[i];
   }
 
   // Default control pads (empty) + V2 DSP defaults.

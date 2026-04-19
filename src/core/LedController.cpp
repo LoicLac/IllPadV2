@@ -15,12 +15,6 @@ LedController::LedController()
     _currentBank(0),
     _batteryLow(false),
     _slots(nullptr),
-    _colNormalFg(COLOR_PRESETS[0]), _colNormalBg(COLOR_PRESETS[1]),
-    _colArpFg(COLOR_PRESETS[3]), _colArpBg(COLOR_PRESETS[4]),
-    _colTickFlash(COLOR_PRESETS[0]),
-    _colBankSwitch(COLOR_PRESETS[0]), _colScaleRoot(COLOR_PRESETS[6]),
-    _colScaleMode(COLOR_PRESETS[7]), _colScaleChrom(COLOR_PRESETS[7]),
-    _colHoldOn(COLOR_PRESETS[4]), _colHoldOff(COLOR_PRESETS[4]), _colOctave(COLOR_PRESETS[9]),
     _normalFgIntensity(85), _normalBgIntensity(10),
     _fgArpStopMin(30), _fgArpStopMax(100),
     _fgArpPlayMax(80),
@@ -71,6 +65,23 @@ LedController::LedController()
   _eventOverlay = {};
   _eventOverlay.active = false;
   _eventOverlay.patternId = PTN_NONE;
+  // Init color slot cache with v4 compile-time defaults matching
+  // NvsManager::_colorSlots. loadColorSlots() overwrites when NVS loads.
+  _colors[CSLOT_MODE_NORMAL]      = COLOR_PRESETS[1];   // Warm White
+  _colors[CSLOT_MODE_ARPEG]       = COLOR_PRESETS[3];   // Ice Blue
+  _colors[CSLOT_MODE_LOOP]        = COLOR_PRESETS[7];   // Gold
+  _colors[CSLOT_VERB_PLAY]        = COLOR_PRESETS[11];  // Green
+  _colors[CSLOT_VERB_REC]         = COLOR_PRESETS[8];   // Coral
+  _colors[CSLOT_VERB_OVERDUB]     = COLOR_PRESETS[6];   // Amber
+  _colors[CSLOT_VERB_CLEAR_LOOP]  = COLOR_PRESETS[5];   // Cyan
+  _colors[CSLOT_VERB_SLOT_CLEAR]  = COLOR_PRESETS[6];   // Amber (hue-shift at store load)
+  _colors[CSLOT_VERB_SAVE]        = COLOR_PRESETS[10];  // Magenta
+  _colors[CSLOT_BANK_SWITCH]      = COLOR_PRESETS[0];   // Pure White
+  _colors[CSLOT_SCALE_ROOT]       = COLOR_PRESETS[6];   // Amber
+  _colors[CSLOT_SCALE_MODE]       = COLOR_PRESETS[7];   // Gold
+  _colors[CSLOT_SCALE_CHROM]      = COLOR_PRESETS[8];   // Coral
+  _colors[CSLOT_OCTAVE]           = COLOR_PRESETS[9];   // Violet
+  _colors[CSLOT_CONFIRM_OK]       = COLOR_PRESETS[0];   // Pure White (SPARK)
 }
 
 // =================================================================
@@ -308,8 +319,12 @@ bool LedController::renderBargraph(unsigned long now) {
     return false;
   }
   // Determine bar color based on foreground bank type
-  const RGBW& barColor = (_slots && _slots[_currentBank].type == BANK_ARPEG) ? _colArpFg : _colNormalFg;
-  const RGBW& barDim   = (_slots && _slots[_currentBank].type == BANK_ARPEG) ? _colArpBg : _colNormalBg;
+  // Bar color : mode base. Dim : same hue at bgFactor%. v4 derives BG from FG
+  // via bgFactor (bgArp no longer a distinct slot).
+  const RGBW& barColor = (_slots && _slots[_currentBank].type == BANK_ARPEG)
+                         ? _colors[CSLOT_MODE_ARPEG]
+                         : _colors[CSLOT_MODE_NORMAL];
+  const RGBW& barDim   = barColor;  // same hue ; bgFactor is applied at setPixel intensity
 
   clearPixels();
 
@@ -391,7 +406,10 @@ void LedController::renderCalibration(unsigned long now) {
 // --- Per-type bank render (extracted for LOOP extensibility) ---
 
 void LedController::renderBankNormal(uint8_t led, bool isFg) {
-  setPixel(led, isFg ? _colNormalFg : _colNormalBg,
+  // v4 : FG uses MODE_NORMAL. BG uses same color at reduced intensity
+  // (normalBgIntensity, which in step 0.6 acts as the effective bgFactor
+  // for NORMAL banks — tuned independently of the global bgFactor).
+  setPixel(led, _colors[CSLOT_MODE_NORMAL],
            isFg ? _normalFgIntensity : _normalBgIntensity);
 }
 
@@ -408,17 +426,17 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
     _flashStartTime[led] = now;
   }
 
-  const RGBW& col = isFg ? _colArpFg : _colArpBg;
+  // v4 : same color for FG and BG, differentiated by intensity.
+  const RGBW& col = _colors[CSLOT_MODE_ARPEG];
 
   if (playing) {
     // Base state : solid bright (FG) or solid dim (BG) — no pulse.
     setPixel(led, col, isFg ? _fgArpPlayMax : _bgArpPlayMin);
-    // Tick flash overlay : replaces the base during the tickFlashDurationMs
-    // window. renderFlashOverlay is a no-op once elapsed >= durationMs ; the
-    // explicit reset below keeps the flash timer from growing unbounded.
+    // Tick flash overlay : uses VERB_PLAY color (green, v4 grammar).
+    // Replaces the base during the tickFlashDurationMs window.
     if (_flashStartTime[led] != 0) {
       if ((now - _flashStartTime[led]) < _tickFlashDurationMs) {
-        renderFlashOverlay(led, _colTickFlash, _tickFlashFg, _tickFlashBg,
+        renderFlashOverlay(led, _colors[CSLOT_VERB_PLAY], _tickFlashFg, _tickFlashBg,
                            _flashStartTime[led], _tickFlashDurationMs, isFg, now);
       } else {
         _flashStartTime[led] = 0;
@@ -471,7 +489,7 @@ void LedController::renderNormalDisplay(unsigned long now) {
     }
   } else {
     // Fallback: no slots pointer (pre-init)
-    setPixel(_currentBank, _colNormalFg, _normalFgIntensity);
+    setPixel(_currentBank, _colors[CSLOT_MODE_NORMAL], _normalFgIntensity);
   }
 
   // --- Event overlay (unified pattern engine — step 0.4) ---
@@ -654,23 +672,9 @@ EventId LedController::confirmTypeToEventId(ConfirmType type) const {
 }
 
 RGBW LedController::colorForSlot(uint8_t slotId) const {
-  // Phase 0 (v3 ColorSlotStore, 12 slots). Step 0.6 will refactor into an
-  // array when ColorSlotStore grows to 16 slots.
-  switch (slotId) {
-    case CSLOT_NORMAL_FG:   return _colNormalFg;
-    case CSLOT_NORMAL_BG:   return _colNormalBg;
-    case CSLOT_ARPEG_FG:    return _colArpFg;
-    case CSLOT_ARPEG_BG:    return _colArpBg;
-    case CSLOT_TICK_FLASH:  return _colTickFlash;
-    case CSLOT_BANK_SWITCH: return _colBankSwitch;
-    case CSLOT_SCALE_ROOT:  return _colScaleRoot;
-    case CSLOT_SCALE_MODE:  return _colScaleMode;
-    case CSLOT_SCALE_CHROM: return _colScaleChrom;
-    case CSLOT_HOLD_ON:     return _colHoldOn;
-    case CSLOT_HOLD_OFF:    return _colHoldOff;
-    case CSLOT_OCTAVE:      return _colOctave;
-    default:                return _colNormalFg;
-  }
+  // v4 : trivial array access. 15 slots defined by the ColorSlotId enum.
+  if (slotId >= COLOR_SLOT_COUNT) return _colors[CSLOT_MODE_NORMAL];
+  return _colors[slotId];
 }
 
 bool LedController::isPatternExpired(const PatternInstance& inst, unsigned long now) const {
@@ -888,18 +892,11 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
 }
 
 void LedController::loadColorSlots(const ColorSlotStore& store) {
-  _colNormalFg   = resolveColorSlot(store.slots[CSLOT_NORMAL_FG]);
-  _colNormalBg   = resolveColorSlot(store.slots[CSLOT_NORMAL_BG]);
-  _colArpFg      = resolveColorSlot(store.slots[CSLOT_ARPEG_FG]);
-  _colArpBg      = resolveColorSlot(store.slots[CSLOT_ARPEG_BG]);
-  _colTickFlash  = resolveColorSlot(store.slots[CSLOT_TICK_FLASH]);
-  _colBankSwitch = resolveColorSlot(store.slots[CSLOT_BANK_SWITCH]);
-  _colScaleRoot  = resolveColorSlot(store.slots[CSLOT_SCALE_ROOT]);
-  _colScaleMode  = resolveColorSlot(store.slots[CSLOT_SCALE_MODE]);
-  _colScaleChrom = resolveColorSlot(store.slots[CSLOT_SCALE_CHROM]);
-  _colHoldOn     = resolveColorSlot(store.slots[CSLOT_HOLD_ON]);
-  _colHoldOff    = resolveColorSlot(store.slots[CSLOT_HOLD_OFF]);
-  _colOctave     = resolveColorSlot(store.slots[CSLOT_OCTAVE]);
+  // v4 : iterate over all 15 slots. Skips any out-of-range preset (validator
+  // in ColorSlotStore clamps to valid range, this is defence-in-depth).
+  for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
+    _colors[i] = resolveColorSlot(store.slots[i]);
+  }
 }
 
 // =================================================================

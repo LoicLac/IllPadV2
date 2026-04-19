@@ -167,12 +167,10 @@ private:
   // Multi-bank state
   const BankSlot* _slots;
 
-  // Resolved colors (from ColorSlotStore, resolved at load time)
-  RGBW _colNormalFg, _colNormalBg;
-  RGBW _colArpFg, _colArpBg;
-  RGBW _colTickFlash;
-  RGBW _colBankSwitch, _colScaleRoot, _colScaleMode, _colScaleChrom;
-  RGBW _colHoldOn, _colHoldOff, _colOctave;
+  // Resolved colors (from ColorSlotStore v4, 15 slots).
+  // Populated at boot by loadColorSlots() ; accessed via colorForSlot(id)
+  // or direct indexing _colors[CSLOT_*].
+  RGBW _colors[COLOR_SLOT_COUNT];
 
   // LED settings (0-100 perceptual %)
   uint8_t  _normalFgIntensity;
