@@ -70,7 +70,7 @@ private:
   bool _switchedDuringHold;
 
   // Commit a bank switch: PB reset, allNotesOff on old channel, channel swap,
-  // PB restore on new bank, LED update, CONFIRM_BANK_SWITCH.
+  // PB restore on new bank, LED update, triggerEvent(EVT_BANK_SWITCH).
   void switchToBank(uint8_t newBank);
 };
 

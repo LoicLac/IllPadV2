@@ -88,9 +88,8 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
           const uint8_t* keys = (b == _currentBank) ? keyIsPressed : nullptr;
           _banks[b].arpEngine->setCaptured(!wasCaptured, *_transport, keys, _holdPad);
           if (_leds) {
-            ConfirmType ct = _banks[b].arpEngine->isCaptured()
-                             ? CONFIRM_HOLD_ON : CONFIRM_HOLD_OFF;
-            _leds->triggerConfirm(ct, 0, (uint8_t)(1 << b));
+            EventId evt = _banks[b].arpEngine->isCaptured() ? EVT_PLAY : EVT_STOP;
+            _leds->triggerEvent(evt, (uint8_t)(1 << b));
           }
         }
         _lastBankPadPressTime[b] = 0;
@@ -199,7 +198,7 @@ void BankManager::switchToBank(uint8_t newBank) {
 
   if (_leds) {
     _leds->setCurrentBank(_currentBank);
-    _leds->triggerConfirm(CONFIRM_BANK_SWITCH);
+    _leds->triggerEvent(EVT_BANK_SWITCH);
   }
 
   #if DEBUG_SERIAL

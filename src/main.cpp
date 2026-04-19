@@ -657,10 +657,10 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
       }
     }
 
-    ConfirmType ct = (scaleChange == SCALE_CHANGE_ROOT) ? CONFIRM_SCALE_ROOT
-                   : (scaleChange == SCALE_CHANGE_MODE) ? CONFIRM_SCALE_MODE
-                   : CONFIRM_SCALE_CHROM;
-    s_leds.triggerConfirm(ct, 0, ledMask);
+    EventId evt = (scaleChange == SCALE_CHANGE_ROOT) ? EVT_SCALE_ROOT
+                : (scaleChange == SCALE_CHANGE_MODE) ? EVT_SCALE_MODE
+                : EVT_SCALE_CHROM;
+    s_leds.triggerEvent(evt, ledMask);
   }
 
   // Queue NVS save on octave change + LED confirmation
@@ -668,7 +668,7 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
     uint8_t bank = s_bankManager.getCurrentBank();
     uint8_t newOct = s_scaleManager.getNewOctaveRange();
     s_nvsManager.queueArpOctaveWrite(bank, newOct);
-    s_leds.triggerConfirm(CONFIRM_OCTAVE, newOct);
+    s_leds.triggerEvent(EVT_OCTAVE);
   }
 
   // Clock: process ticks (PLL + tick generation)
@@ -689,7 +689,7 @@ static void handleHoldPad(const SharedKeyboardState& state) {
   if (pressed && !s_lastHoldPadState) {
     bool wasCaptured = slot.arpEngine->isCaptured();
     slot.arpEngine->setCaptured(!wasCaptured, s_transport, state.keyIsPressed, s_holdPad);
-    s_leds.triggerConfirm(slot.arpEngine->isCaptured() ? CONFIRM_HOLD_ON : CONFIRM_HOLD_OFF);
+    s_leds.triggerEvent(slot.arpEngine->isCaptured() ? EVT_PLAY : EVT_STOP);
     if (slot.arpEngine->isCaptured()) {
       memset(s_lastPressTime, 0, sizeof(s_lastPressTime));
     }

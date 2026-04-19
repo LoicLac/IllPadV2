@@ -400,29 +400,33 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
   bool playing = slot.arpEngine && slot.arpEngine->isPlaying() && slot.arpEngine->hasNotes();
   bool hasNotes = slot.arpEngine && slot.arpEngine->hasNotes();
 
-  // Tick flash: consume flag, track flash timer
+  // Consume tick flag -> stash flash start time for this LED.
+  // The tick "triggering" stays inline (negligible cost, no event pollution,
+  // belongs to fond semantics). The tick "rendering" is delegated to
+  // renderFlashOverlay() below — single source of truth for FLASH visual.
   if (slot.arpEngine && slot.arpEngine->consumeTickFlash()) {
     _flashStartTime[led] = now;
-  }
-  bool flashing = false;
-  if (_flashStartTime[led] != 0) {
-    if ((now - _flashStartTime[led]) < _tickFlashDurationMs) {
-      flashing = true;
-    } else {
-      _flashStartTime[led] = 0;
-    }
   }
 
   const RGBW& col = isFg ? _colArpFg : _colArpBg;
 
-  if (flashing && playing) {
-    // Tick flash overrides during playback
-    setPixel(led, _colTickFlash, isFg ? _tickFlashFg : _tickFlashBg);
-  } else if (playing) {
-    // Playing: solid bright (FG) or solid dim (BG) — no pulse
+  if (playing) {
+    // Base state : solid bright (FG) or solid dim (BG) — no pulse.
     setPixel(led, col, isFg ? _fgArpPlayMax : _bgArpPlayMin);
+    // Tick flash overlay : replaces the base during the tickFlashDurationMs
+    // window. renderFlashOverlay is a no-op once elapsed >= durationMs ; the
+    // explicit reset below keeps the flash timer from growing unbounded.
+    if (_flashStartTime[led] != 0) {
+      if ((now - _flashStartTime[led]) < _tickFlashDurationMs) {
+        renderFlashOverlay(led, _colTickFlash, _tickFlashFg, _tickFlashBg,
+                           _flashStartTime[led], _tickFlashDurationMs, isFg, now);
+      } else {
+        _flashStartTime[led] = 0;
+      }
+    }
   } else if (isFg && hasNotes) {
-    // FG stopped with notes loaded: slow pulse (the ONLY remaining pulse)
+    // FG stopped with notes loaded : slow sine pulse (PULSE_SLOW semantic,
+    // not yet driven by the pattern engine — step 0.6/0.8 will wire).
     uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
     uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
     uint8_t  idx   = phase >> 8;
@@ -433,7 +437,7 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
                       + (uint8_t)((uint32_t)sine16 * (_fgArpStopMax - _fgArpStopMin) / 65280);
     setPixel(led, col, intensity);
   } else {
-    // BG (all states) or FG idle (no notes): solid dim
+    // BG (all states) or FG idle (no notes) : solid dim
     setPixel(led, col, isFg ? _fgArpStopMin : _bgArpStopMin);
   }
 }
