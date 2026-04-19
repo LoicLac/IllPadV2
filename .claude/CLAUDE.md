@@ -282,7 +282,7 @@ VT100 terminal, serial keyboard input only (no physical button in setup mode).
 [1] Pressure Calibration  — unchanged from V1
 [2] Pad Ordering           — touch low→high, positions 1-48, no base note
 [3] Pad Roles              — bank(8) + scale(15) + arp(5: hold+4 octave), color grid, collision check
-[4] Control Pads           — 12 sparse CC/latch/momentary pads, per-mode editor, gate-vs-setter handoff
+[4] Control Pads           — 12 sparse CC pads (momentary/latch/continuous). 4-color grid, per-mode editor, gate-vs-setter handoff. V2 DSP : smooth + sample-and-hold (HOLD_LAST) + release envelope (RETURN_TO_ZERO). Edit globals via 'g'.
 [5] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
 [6] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
 [7] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
@@ -352,7 +352,7 @@ Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous 
 | `illpad_btype` | BankTypeStore — types[8] + quantize[8] + scaleGroup[8] (key `"config"`) |
 | `illpad_scale` | ScaleConfig per bank (keys `"cfg_0"` through `"cfg_7"`) |
 | `illpad_spad` | ScalePadStore — 7 root + 7 mode + 1 chrom (key `"pads"`) |
-| `illpad_ctrl` | ControlPadStore — 12 sparse entries, cross-bank CC pads (Tool 4) |
+| `illpad_ctrl` | ControlPadStore v2 — 12 sparse entries + 3 global DSP params (smoothMs, sampleHoldMs, releaseMs) for Tool 4 Control Pads |
 | `illpad_apad` | ArpPadStore — 1 hold + 4 octave (key `"pads"`) |
 | `illpad_apot` | ArpPotStore per bank (gate, shuffle depth, shuffle template, div, pattern, octave range) |
 | `illpad_bvel` | base velocity + velocity variation per bank (NORMAL + ARPEG) |

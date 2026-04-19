@@ -110,6 +110,7 @@ Core 1: state = s_buffers[s_active.load(acquire)]
         → MIDI block runs ONLY if !bankManager.isHolding() && !scaleManager.isHolding()
         → edge detect (pressed && !wasPressed)
         → skip if s_controlPadManager.isControlPad(i) (control pads emit CC, not notes)
+          (skip also in pile rebuild for ARPEG)
         → velocity = baseVelocity ± random(variation)
         → MidiEngine::noteOn(padIndex, vel, padOrder, scale)
           → ScaleResolver::resolve() → MIDI note
@@ -308,7 +309,7 @@ setup Tools. Walk through these tables before ANY user-configurable change.
 | Pad ordering (physique → rank 0-47) | `NoteMapStore` | Tool 2 ToolPadOrdering | `illpad_nmap` / `pads` | `padOrder[48]` consommé partout — statique après setup. |
 | Bank pads (8 control pads) | `BankPadStore` | Tool 3 ToolPadRoles | `illpad_bpad` / `pads` | Nouveau rôle → Tool 3 collision check + category color ; consommateur runtime (BankManager) |
 | Scale pads (7 root + 7 mode + 1 chrom) | `ScalePadStore` | Tool 3 ToolPadRoles | `illpad_spad` / `pads` | Étendre catégorie → Tool 3 grid + ScaleManager |
-| Control pad assignments (12 sparse entries) | `ControlPadStore` | Tool 4 ToolControlPads | `illpad_ctrl` / `pads` | Nouveau PotTarget équivalent : add entry + Tool 4 edit ; consumed at boot via ControlPadManager::applyStore |
+| Control pad assignments (12 sparse entries + 3 global DSP params) | `ControlPadStore` v2 | Tool 4 ToolControlPads | `illpad_ctrl` / `pads` | Add entry : new slot + Tool 4 edit ; edit globals via 'g' key → UI_GLOBAL_EDIT. Consumed at boot via ControlPadManager::applyStore. |
 | Arp pads (1 hold + 4 octave) | `ArpPadStore` | Tool 3 ToolPadRoles | `illpad_apad` / `pads` | Ajouter un pad de contrôle ARPEG → Tool 3 + main.cpp handleHoldPad + ScaleManager |
 | Bank types + quantize mode + scaleGroup | `BankTypeStore` | Tool 5 ToolBankConfig | `illpad_btype` / `config` | Nouveau `BankType` (ex: LOOP) → Tool 5 type cycle + ArpEngine assignment ([main.cpp:345-362](../../src/main.cpp:345)) + LED state machine + `validateBankTypeStore()` |
 | Global settings (profile, AT rate, BLE, clock, doubleTap, bargraph, panic, batCal) | `SettingsStore` | Tool 6 ToolSettings | `illpad_set` / `settings` | Nouveau field → Tool 6 case switch + validator + bump version + apply dans `main.cpp` setup() ([main.cpp:329-339](../../src/main.cpp:329)) |
