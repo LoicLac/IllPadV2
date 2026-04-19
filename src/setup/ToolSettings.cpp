@@ -7,7 +7,7 @@
 #include <Arduino.h>
 #include <Preferences.h>
 
-static const uint8_t NUM_PARAMS = 8;
+static const uint8_t NUM_PARAMS = 11;  // 8 legacy + 3 LOOP timers (v11)
 
 static const char* s_profileNames[]   = {"Adaptive", "Expressive", "Percussive"};
 static const char* s_bleNames[]       = {"ON " "\xe2\x94\x80" " Low Latency (7.5ms)", "ON " "\xe2\x94\x80" " Normal (15ms)", "ON " "\xe2\x94\x80" " Battery Saver (30ms)", "OFF (USB only)"};
@@ -76,6 +76,30 @@ void ToolSettings::adjustParam(SettingsStore& wk, uint8_t param, int dir, bool a
       break;
     case 7:
       break;
+    case 8: {  // clearLoopTimerMs — CLEAR long-press duration (LOOP Phase 1+)
+      int step = accelerated ? 100 : 50;
+      int val = (int)wk.clearLoopTimerMs + dir * step;
+      if (val < 200) val = 200;
+      if (val > 1500) val = 1500;
+      wk.clearLoopTimerMs = (uint16_t)val;
+      break;
+    }
+    case 9: {  // slotSaveTimerMs — slot save long-press duration (LOOP Phase 1+)
+      int step = accelerated ? 100 : 50;
+      int val = (int)wk.slotSaveTimerMs + dir * step;
+      if (val < 500) val = 500;
+      if (val > 2000) val = 2000;
+      wk.slotSaveTimerMs = (uint16_t)val;
+      break;
+    }
+    case 10: {  // slotClearTimerMs — slot delete visual animation (LOOP Phase 1+)
+      int step = accelerated ? 100 : 50;
+      int val = (int)wk.slotClearTimerMs + dir * step;
+      if (val < 400) val = 400;
+      if (val > 1500) val = 1500;
+      wk.slotClearTimerMs = (uint16_t)val;
+      break;
+    }
   }
 }
 
@@ -154,6 +178,27 @@ void ToolSettings::drawDescription(uint8_t param) {
       _ui->drawFrameLine(VT_DIM "Calibrate once after hardware assembly. Plug charger, wait for" VT_RESET);
       _ui->drawFrameLine(VT_DIM "full charge LED, then press [RET] to sample current ADC value." VT_RESET);
       break;
+    case 8:
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "CLEAR Loop Timer" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Long-press duration on the LOOP CLEAR pad to empty a loop bank." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "The LED ramp (RAMP_HOLD cyan) matches this duration exactly —" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "single source of truth (LED spec §13). Release before expiry cancels." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Range: 200-1500 ms. Default: 500 ms. (Wired in LOOP Phase 1+.)" VT_RESET);
+      break;
+    case 9:
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Slot Save Timer" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Long-press duration on a LOOP slot pad to save the current loop." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Matches the RAMP_HOLD magenta animation duration (LED spec §13)." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Release before expiry cancels the save. Range: 500-2000 ms." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Default: 1000 ms. (Wired in LOOP Phase 1+.)" VT_RESET);
+      break;
+    case 10:
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Slot Clear Timer" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Visual animation duration for slot delete combo (CLEAR + slot pad)." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Unlike the other two timers, this is NOT a user hold — the delete" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "fires on rising edge. This timer purely sizes the RAMP_HOLD orange" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "confirmation animation. Range: 400-1500 ms. Default: 800 ms." VT_RESET);
+      break;
   }
 }
 
@@ -168,7 +213,8 @@ void ToolSettings::run() {
                       DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
                       DEFAULT_CLOCK_MODE,
                       DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
-                      DEFAULT_PANIC_ON_RECONNECT, 0, DEFAULT_BAT_ADC_AT_FULL};
+                      DEFAULT_PANIC_ON_RECONNECT, 0, DEFAULT_BAT_ADC_AT_FULL,
+                      500, 1000, 800};  // clearLoopTimerMs, slotSaveTimerMs, slotClearTimerMs
   bool loadedFromNvs = NvsManager::loadBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY,
                                              EEPROM_MAGIC, SETTINGS_VERSION, &wk, sizeof(wk));
   if (loadedFromNvs) {
@@ -201,7 +247,8 @@ void ToolSettings::run() {
               DEFAULT_BASELINE_PROFILE, AT_RATE_DEFAULT, DEFAULT_BLE_INTERVAL,
               DEFAULT_CLOCK_MODE,
               DOUBLE_TAP_MS_DEFAULT, LED_BARGRAPH_DURATION_DEFAULT,
-              DEFAULT_PANIC_ON_RECONNECT, 0, DEFAULT_BAT_ADC_AT_FULL};
+              DEFAULT_PANIC_ON_RECONNECT, 0, DEFAULT_BAT_ADC_AT_FULL,
+              500, 1000, 800};  // LOOP timers defaults (v11)
         if (saveSettings(wk)) {
           original = wk;
           nvsSaved = true;
@@ -336,6 +383,28 @@ void ToolSettings::run() {
       }
       _ui->drawFrameEmpty();
 
+      // --- LOOP TIMERS (v11) ---
+      // These drive the RAMP_HOLD LED animation AND the user hold expectation
+      // for LOOP CLEAR / slot save / slot delete confirmations. Single source
+      // of truth per event (LED spec §13). Consumed by LOOP Phase 1+.
+      _ui->drawSection("LOOP TIMERS");
+      {
+        char clrBuf[24];
+        snprintf(clrBuf, sizeof(clrBuf), "%d ms  (200-1500)", wk.clearLoopTimerMs);
+        drawParam(8, "CLEAR long-press:", clrBuf);
+      }
+      {
+        char svBuf[24];
+        snprintf(svBuf, sizeof(svBuf), "%d ms  (500-2000)", wk.slotSaveTimerMs);
+        drawParam(9, "Slot save press:", svBuf);
+      }
+      {
+        char scBuf[24];
+        snprintf(scBuf, sizeof(scBuf), "%d ms  (400-1500)", wk.slotClearTimerMs);
+        drawParam(10, "Slot clear anim:", scBuf);
+      }
+      _ui->drawFrameEmpty();
+
       // --- VEDETTE readout : segmented display when editing a numeric ---
       if (editing) {
         switch (cursor) {
@@ -355,6 +424,24 @@ void ToolSettings::run() {
             _ui->drawSection("BARGRAPH DURATION");
             _ui->drawFrameEmpty();
             _ui->drawSegmentedValue("", wk.potBarDurationMs, 5, "ms");
+            _ui->drawFrameEmpty();
+            break;
+          case 8:
+            _ui->drawSection("CLEAR LOOP TIMER");
+            _ui->drawFrameEmpty();
+            _ui->drawSegmentedValue("", wk.clearLoopTimerMs, 4, "ms");
+            _ui->drawFrameEmpty();
+            break;
+          case 9:
+            _ui->drawSection("SLOT SAVE TIMER");
+            _ui->drawFrameEmpty();
+            _ui->drawSegmentedValue("", wk.slotSaveTimerMs, 4, "ms");
+            _ui->drawFrameEmpty();
+            break;
+          case 10:
+            _ui->drawSection("SLOT CLEAR TIMER");
+            _ui->drawFrameEmpty();
+            _ui->drawSegmentedValue("", wk.slotClearTimerMs, 4, "ms");
             _ui->drawFrameEmpty();
             break;
           default: break;
