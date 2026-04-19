@@ -23,9 +23,9 @@ LedController::LedController()
     _colHoldOn(COLOR_PRESETS[4]), _colHoldOff(COLOR_PRESETS[4]), _colOctave(COLOR_PRESETS[9]),
     _normalFgIntensity(85), _normalBgIntensity(10),
     _fgArpStopMin(30), _fgArpStopMax(100),
-    _fgArpPlayMin(30), _fgArpPlayMax(80),
-    _bgArpStopMin(8), _bgArpStopMax(25),
-    _bgArpPlayMin(8), _bgArpPlayMax(20),
+    _fgArpPlayMax(80),
+    _bgArpStopMin(8),
+    _bgArpPlayMin(8),
     _tickFlashFg(100), _tickFlashBg(25),
     _pulsePeriodMs(1472), _tickFlashDurationMs(30),
     _bankBlinks(3), _bankDurationMs(300), _bankBrightnessPct(80),
@@ -623,12 +623,9 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
   // Guard against inverted min/max from corrupted NVS
   _fgArpStopMin = s.fgArpStopMin;
   _fgArpStopMax = (s.fgArpStopMax >= s.fgArpStopMin) ? s.fgArpStopMax : s.fgArpStopMin;
-  _fgArpPlayMin = s.fgArpPlayMin;
-  _fgArpPlayMax = (s.fgArpPlayMax >= s.fgArpPlayMin) ? s.fgArpPlayMax : s.fgArpPlayMin;
+  _fgArpPlayMax = s.fgArpPlayMax;
   _bgArpStopMin = s.bgArpStopMin;
-  _bgArpStopMax = (s.bgArpStopMax >= s.bgArpStopMin) ? s.bgArpStopMax : s.bgArpStopMin;
   _bgArpPlayMin = s.bgArpPlayMin;
-  _bgArpPlayMax = (s.bgArpPlayMax >= s.bgArpPlayMin) ? s.bgArpPlayMax : s.bgArpPlayMin;
   _tickFlashFg = s.tickFlashFg;
   _tickFlashBg = s.tickFlashBg;
   _pulsePeriodMs = s.pulsePeriodMs;

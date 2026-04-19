@@ -29,25 +29,32 @@ NvsManager::NvsManager()
   , _potPendingSave(false)
   , _anyPadPressed(false)
 {
-  // Default LED settings (0-100 perceptual %)
+  // Default LED settings v6 (0-100 perceptual %)
+  // See docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md
   _ledSettings.magic = EEPROM_MAGIC;
   _ledSettings.version = LED_SETTINGS_VERSION;
   _ledSettings.reserved = 0;
+  // Intensities
   _ledSettings.normalFgIntensity = 85;
   _ledSettings.normalBgIntensity = 10;
   _ledSettings.fgArpStopMin = 30;
   _ledSettings.fgArpStopMax = 100;
-  _ledSettings.fgArpPlayMin = 30;
   _ledSettings.fgArpPlayMax = 80;
   _ledSettings.bgArpStopMin = 8;
-  _ledSettings.bgArpStopMax = 25;
   _ledSettings.bgArpPlayMin = 8;
-  _ledSettings.bgArpPlayMax = 20;
   _ledSettings.tickFlashFg = 100;
   _ledSettings.tickFlashBg = 25;
+  // Global background factor (v6 new — step 0.6 activates in BG rendering)
+  _ledSettings.bgFactor = 25;  // provisional, tune on hardware in 0.9
+  // Timing
   _ledSettings.pulsePeriodMs = 1472;
   _ledSettings.tickFlashDurationMs = 30;
   _ledSettings.gammaTenths = 20;  // gamma 2.0 default
+  // SPARK params (v6 new)
+  _ledSettings.sparkOnMs = 50;
+  _ledSettings.sparkGapMs = 70;
+  _ledSettings.sparkCycles = 2;
+  // Confirmations (legacy v5, still used until event engine takes over)
   _ledSettings.bankBlinks = 3;
   _ledSettings.bankDurationMs = 300;
   _ledSettings.bankBrightnessPct = 80;
@@ -61,6 +68,12 @@ NvsManager::NvsManager()
   _ledSettings.holdOffFadeMs = 500;
   _ledSettings.octaveBlinks = 3;
   _ledSettings.octaveDurationMs = 300;
+  // Event overrides : all PTN_NONE by default -> fallback on EVENT_RENDER_DEFAULT
+  for (uint8_t i = 0; i < EVT_COUNT; i++) {
+    _ledSettings.eventOverrides[i].patternId = PTN_NONE;
+    _ledSettings.eventOverrides[i].colorSlot = 0;
+    _ledSettings.eventOverrides[i].fgPct    = 0;
+  }
 
   // Default color slots
   _colorSlots.magic = COLOR_SLOT_MAGIC;

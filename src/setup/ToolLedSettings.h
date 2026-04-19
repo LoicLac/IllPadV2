@@ -1,10 +1,20 @@
 #ifndef TOOL_LED_SETTINGS_H
 #define TOOL_LED_SETTINGS_H
 
-#include <stdint.h>
-#include "../core/KeyboardData.h"
-#include "InputParser.h"
-#include "SetupPotInput.h"
+// =================================================================
+// Tool 8 — LED Settings
+// =================================================================
+// Phase 0 step 0.2 : placeholder implementation. The previous v5 editor
+// referenced fields removed from LedSettingsStore v6 (fgArpPlayMin,
+// bgArpStopMax, bgArpPlayMax). The full 3-page refactor (PATTERNS /
+// COLORS / EVENTS) is scheduled in step 0.8 (see plan §0.8a-e).
+//
+// Until step 0.8 lands, this tool only displays a static "refactor in
+// progress" screen. User can 'q' back to the menu. All LED settings
+// continue to work at runtime via compile-time defaults (post-flash)
+// or whatever NVS v5 data survives the v6 bump — nothing is lost, just
+// not user-editable.
+// =================================================================
 
 class LedController;
 class SetupUI;
@@ -18,59 +28,6 @@ public:
 private:
   LedController* _leds;
   SetupUI*       _ui;
-
-  // Working copies
-  LedSettingsStore _wk;
-  ColorSlotStore   _cwk;
-
-  // Navigation
-  uint8_t _page;          // 0=COLOR+TIMING, 1=CONFIRM
-  uint8_t _cursor;        // row index within current page
-  uint8_t _colorField;    // COLOR rows: 0=Preset, 1=Hue, 2=Intensity
-  bool    _editing;
-  bool    _nvsSaved;
-  bool    _confirmDefaults;
-
-  // Preview state
-  enum PreviewState : uint8_t { PREV_IDLE, PREV_CONTINUOUS, PREV_EVENT };
-  PreviewState  _prevState;
-  unsigned long _prevStart;
-  uint8_t       _prevEventRow;
-
-  // Page counts
-  uint8_t pageParamCount() const;
-
-  // COLOR row helpers
-  void adjustColorField(int8_t dir, bool accel);
-  void adjustTimingParam(int8_t dir, bool accel);
-  uint8_t getRowIntensity(uint8_t row) const;
-  void setRowIntensity(uint8_t row, uint8_t val);
-  bool rowHasEditableIntensity(uint8_t row) const;
-
-  // CONFIRM page
-  void adjustConfirmParam(int8_t dir, bool accel);
-
-  // Save
-  bool saveLedSettings();
-  bool saveColorSlots();
-
-  // Drawing
-  void drawDescription();
-  void drawColorRow(uint8_t row, bool selected, bool editing);
-
-  // Preview
-  void updatePreview(unsigned long now);
-  void startEventPreview(uint8_t row);
-  void renderContinuousPreview(unsigned long now);
-  void renderEventPreview(unsigned long now);
-  uint8_t mapCursorToPreviewRow() const;
-
-  // Pot input — generic: _potVal[] is the intermediary the pot modifies,
-  // seedPotsForCursor loads from field, applyPotValues copies back.
-  SetupPotInput _pots;
-  int32_t _potVal[2];
-  void seedPotsForCursor();
-  bool applyPotValues();
 };
 
 #endif // TOOL_LED_SETTINGS_H

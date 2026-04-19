@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "HardwareConfig.h"
+#include "LedGrammar.h"   // EventRenderEntry, EVT_COUNT (consumed by LedSettingsStore v6)
 
 // =================================================================
 // Calibration Data — stored in ESP32 NVS via Preferences
@@ -226,35 +227,40 @@ inline RGBW resolveColorSlot(const ColorSlot& slot) {
 }
 
 // =================================================================
-// LED Settings (Tool 7 DISPLAY + CONFIRM pages)
-// All intensities are 0-100 (perceptual %). Fresh v1 — no migration.
+// LED Settings (Tool 8 PATTERNS + COLORS + EVENTS pages)
+// All intensities are 0-100 (perceptual %). v6 : unified LED grammar.
+// See docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md
+// and docs/superpowers/plans/2026-04-19-phase0-led-refactor-plan.md §0.2.
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       5
+#define LED_SETTINGS_VERSION       6   // v5 -> v6 : remove 3 legacy unused fields, add bgFactor + spark params + eventOverrides[EVT_COUNT]
 
 struct LedSettingsStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  reserved;
   // --- Intensities (0-100, perceptual %) ---
-  uint8_t  normalFgIntensity;     // default 85
-  uint8_t  normalBgIntensity;     // default 10
-  uint8_t  fgArpStopMin;          // default 30
-  uint8_t  fgArpStopMax;          // default 100
-  uint8_t  fgArpPlayMin;          // default 30  — LEGACY v2: unused (no pulse on playing), kept for NVS compat
-  uint8_t  fgArpPlayMax;          // default 80  — solid intensity FG arpeg playing (between tick flashes)
-  uint8_t  bgArpStopMin;          // default 8   — solid dim intensity BG arpeg stopped/idle
-  uint8_t  bgArpStopMax;          // default 25  — LEGACY v2: unused (no pulse on BG), kept for NVS compat
-  uint8_t  bgArpPlayMin;          // default 8   — solid dim intensity BG arpeg playing (between tick flashes)
-  uint8_t  bgArpPlayMax;          // default 20  — LEGACY v2: unused (no pulse on BG playing), kept for NVS compat
-  uint8_t  tickFlashFg;           // default 100
-  uint8_t  tickFlashBg;           // default 25
+  uint8_t  normalFgIntensity;     // default 85  — SOLID intensity FG NORMAL
+  uint8_t  normalBgIntensity;     // default 10  — SOLID intensity BG NORMAL (will be replaced by bgFactor in step 0.6)
+  uint8_t  fgArpStopMin;          // default 30  — PULSE_SLOW min intensity FG ARPEG stopped-loaded
+  uint8_t  fgArpStopMax;          // default 100 — PULSE_SLOW max intensity idem
+  uint8_t  fgArpPlayMax;          // default 80  — SOLID intensity FG ARPEG playing (between FLASH ticks)
+  uint8_t  bgArpStopMin;          // default 8   — SOLID intensity BG ARPEG stopped/idle
+  uint8_t  bgArpPlayMin;          // default 8   — SOLID intensity BG ARPEG playing (between FLASH ticks)
+  uint8_t  tickFlashFg;           // default 100 — FLASH pattern fgPct
+  uint8_t  tickFlashBg;           // default 25  — FLASH pattern bgPct
+  // --- Global background factor (v6 new — applied in step 0.6 when BG slots retire) ---
+  uint8_t  bgFactor;              // default 25  — BG = FG color x bgFactor%. Range [10, 50]. Provisional, tune on hardware in 0.9.
   // --- Timing ---
-  uint16_t pulsePeriodMs;         // default 1472 — FG arpeg stopped-loaded breathing only
-  uint8_t  tickFlashDurationMs;   // default 30
-  uint8_t  gammaTenths;           // 10-30 → gamma 1.0-3.0, default 20 (2.0). Reboot-only.
-  // --- Confirmations ---
+  uint16_t pulsePeriodMs;         // default 1472 — PULSE_SLOW period FG ARPEG stopped-loaded
+  uint8_t  tickFlashDurationMs;   // default 30  — FLASH pattern durationMs (ARPEG tick)
+  uint8_t  gammaTenths;           // 10-30 -> gamma 1.0-3.0, default 20 (2.0). Reboot-only.
+  // --- SPARK params (v6 new — used by RAMP_HOLD suffix and CONFIRM_OK) ---
+  uint16_t sparkOnMs;             // default 50  — SPARK pattern on duration per flash
+  uint16_t sparkGapMs;            // default 70  — SPARK pattern gap between flashes
+  uint8_t  sparkCycles;           // default 2   — SPARK pattern flash count
+  // --- Confirmations (legacy v5, still used in Phase 0 steps 0.3-0.5 until event engine takes over in 0.4-0.5) ---
   uint8_t  bankBlinks;            // 1-3, default 3
   uint16_t bankDurationMs;        // default 300
   uint8_t  bankBrightnessPct;     // default 80
@@ -268,7 +274,11 @@ struct LedSettingsStore {
   uint16_t holdOffFadeMs;         // default 500, 0-1000 (fade OUT on release ON->OFF)
   uint8_t  octaveBlinks;          // default 3
   uint16_t octaveDurationMs;      // default 300
+  // --- Event overrides (v6 new — per-event {pattern, color, fgPct} override) ---
+  // patternId == PTN_NONE (0xFF) -> fallback on EVENT_RENDER_DEFAULT[i].
+  EventRenderEntry eventOverrides[EVT_COUNT];
 };
+static_assert(sizeof(LedSettingsStore) <= 128, "LedSettingsStore exceeds NVS blob max (128)");
 
 // =================================================================
 // V2 — Bank Types & Scale Config
@@ -607,11 +617,11 @@ inline void validateNoteMapStore(NoteMapStore& s) {
 }
 
 inline void validateLedSettingsStore(LedSettingsStore& s) {
-  // Intensity cross-validation (min <= max for all pulse ranges)
+  // Intensity cross-validation (min <= max for pulse ranges)
   if (s.fgArpStopMin > s.fgArpStopMax) s.fgArpStopMax = s.fgArpStopMin;
-  if (s.fgArpPlayMin > s.fgArpPlayMax) s.fgArpPlayMax = s.fgArpPlayMin;
-  if (s.bgArpStopMin > s.bgArpStopMax) s.bgArpStopMax = s.bgArpStopMin;
-  if (s.bgArpPlayMin > s.bgArpPlayMax) s.bgArpPlayMax = s.bgArpPlayMin;
+  // bgFactor range [10, 50]
+  if (s.bgFactor < 10) s.bgFactor = 10;
+  if (s.bgFactor > 50) s.bgFactor = 50;
   // Timing ranges
   if (s.pulsePeriodMs < 500)  s.pulsePeriodMs = 500;
   if (s.pulsePeriodMs > 4000) s.pulsePeriodMs = 4000;
@@ -619,7 +629,13 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
   if (s.tickFlashDurationMs > 100) s.tickFlashDurationMs = 100;
   if (s.gammaTenths < 10) s.gammaTenths = 10;
   if (s.gammaTenths > 30) s.gammaTenths = 30;
-  // Confirmation blink counts and durations (from ToolLedSettings adjustConfirmParam)
+  // SPARK timing (range loose enough to support experimentation)
+  if (s.sparkOnMs < 20)   s.sparkOnMs = 20;
+  if (s.sparkOnMs > 200)  s.sparkOnMs = 200;
+  if (s.sparkGapMs < 20)  s.sparkGapMs = 20;
+  if (s.sparkGapMs > 300) s.sparkGapMs = 300;
+  if (s.sparkCycles < 1 || s.sparkCycles > 4) s.sparkCycles = 2;
+  // Confirmation blink counts and durations
   if (s.bankBlinks < 1 || s.bankBlinks > 3) s.bankBlinks = 3;
   if (s.bankDurationMs < 100 || s.bankDurationMs > 500) s.bankDurationMs = 300;
   if (s.bankBrightnessPct > 100) s.bankBrightnessPct = 80;
@@ -633,6 +649,14 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
   if (s.holdOffFadeMs > 1000) s.holdOffFadeMs = 500;
   if (s.octaveBlinks < 1 || s.octaveBlinks > 3) s.octaveBlinks = 3;
   if (s.octaveDurationMs < 100 || s.octaveDurationMs > 500) s.octaveDurationMs = 300;
+  // Event overrides : clamp patternId to valid range or PTN_NONE, clamp fgPct to 0-100.
+  // colorSlot clamped against COLOR_SLOT_COUNT (Phase 0 = 12 v3, step 0.6 = 16 v4).
+  for (uint8_t i = 0; i < EVT_COUNT; i++) {
+    EventRenderEntry& e = s.eventOverrides[i];
+    if (e.patternId != PTN_NONE && e.patternId >= PTN_COUNT) e.patternId = PTN_NONE;
+    if (e.fgPct > 100) e.fgPct = 100;
+    if (e.colorSlot >= COLOR_SLOT_COUNT) e.colorSlot = 0;
+  }
 }
 
 // --- V2 New NVS Namespaces ---

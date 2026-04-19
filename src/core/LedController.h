@@ -140,9 +140,9 @@ private:
   uint8_t  _normalFgIntensity;
   uint8_t  _normalBgIntensity;
   uint8_t  _fgArpStopMin, _fgArpStopMax;
-  uint8_t  _fgArpPlayMin, _fgArpPlayMax;
-  uint8_t  _bgArpStopMin, _bgArpStopMax;
-  uint8_t  _bgArpPlayMin, _bgArpPlayMax;
+  uint8_t  _fgArpPlayMax;         // FG ARPEG playing solid (v6: fgArpPlayMin removed — was LEGACY unused)
+  uint8_t  _bgArpStopMin;         // BG ARPEG stopped/idle solid (v6: bgArpStopMax removed — was LEGACY unused)
+  uint8_t  _bgArpPlayMin;         // BG ARPEG playing solid (v6: bgArpPlayMax removed — was LEGACY unused)
   uint8_t  _tickFlashFg, _tickFlashBg;
   uint16_t _pulsePeriodMs;
   uint8_t  _tickFlashDurationMs;
