@@ -54,6 +54,7 @@ void ToolControlPads::run() {
     _keyboard->pollAllSensorData();
 
     NavEvent ev = _input.update();
+    UIMode modeAtStart = _uiMode;
 
     // Handle flash expiry
     if (_flashActive() && millis() > _flashExpireMs) {
@@ -71,7 +72,7 @@ void ToolControlPads::run() {
       case UI_GLOBAL_EDIT:      _handleGlobalEdit(ev);      break;
     }
 
-    if (ev.type == NAV_QUIT && _uiMode == UI_GRID_NAV) {
+    if (ev.type == NAV_QUIT && modeAtStart == UI_GRID_NAV) {
       break;
     }
 
