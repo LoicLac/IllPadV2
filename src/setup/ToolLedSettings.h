@@ -2,6 +2,7 @@
 #define TOOL_LED_SETTINGS_H
 
 #include <stdint.h>
+#include "../core/KeyboardData.h"  // ColorSlotStore, COLOR_SLOT_COUNT
 
 // =================================================================
 // Tool 8 — LED Settings (Phase 0 step 0.8 refactor)
@@ -11,11 +12,12 @@
 //
 //   PAGE_PATTERNS : pool of 9 palette patterns + field editor for the
 //                   selected pattern's params. Live preview on LED 3-4.
-//   PAGE_COLORS   : grid 4x4 of 15 color slots + pool (14 presets) +
-//                   field editor (hueOffset). Preview = SOLID on LED 3-4.
+//   PAGE_COLORS   : vertical list of 15 color slots (rows). ENTER opens
+//                   an edit sub-state with 2 focusable fields :
+//                   preset (pool of 14) + hue offset (field editor).
+//                   Preview = SOLID on LED 3-4 with current slot color.
 //   PAGE_EVENTS   : vertical field list. Each event row edits
 //                   pattern (pool) + color slot (pool) + fgPct (field).
-//                   Preview = trigger the event on LED 3-4 via 'b'.
 //
 // Inter-page nav : 't' cycles PATTERNS -> COLORS -> EVENTS -> PATTERNS
 //                  (not arrows — arrows stay for cursor nav per §6).
@@ -24,7 +26,7 @@
 //                   flashSaved() per commit (conventions §2).
 //
 // Step 0.8a : skeleton with page navigation and stub content per page.
-// Step 0.8b : COLORS page implementation.
+// Step 0.8b : COLORS page implementation (this commit).
 // Step 0.8c : PATTERNS page implementation.
 // Step 0.8d : EVENTS page implementation (wires NVS eventOverrides[]).
 // Step 0.8e : polish, preview integration, flashSaved audit.
@@ -47,14 +49,40 @@ private:
     PAGE_COUNT    = 3,
   };
 
+  // COLORS page sub-states
+  enum ColorsSubState : uint8_t {
+    COLORS_NAV   = 0,  // cursor selecting a slot row
+    COLORS_EDIT  = 1,  // editing the selected slot (preset + hue)
+  };
+
+  // COLORS edit focus : which of the 2 fields is active
+  enum ColorsEditField : uint8_t {
+    EDIT_FIELD_PRESET = 0,
+    EDIT_FIELD_HUE    = 1,
+  };
+
   LedController* _leds;
   SetupUI*       _ui;
   Page           _page;
+  bool           _nvsSaved;  // NVS badge state in header
 
-  // Page renderers (stubs in 0.8a ; implementations land in 0.8b..0.8d).
+  // COLORS page state
+  ColorSlotStore   _cwk;                  // working copy loaded from NVS
+  uint8_t          _colorsCursor;         // 0..COLOR_SLOT_COUNT-1
+  ColorsSubState   _colorsSub;
+  ColorsEditField  _colorsEditField;
+  ColorSlot        _colorsEditBackup;     // for cancel (q) during edit
+
+  // Page renderers
   void renderPagePatterns();
   void renderPageColors();
   void renderPageEvents();
+
+  // COLORS page helpers
+  void handlePageColors(const struct NavEvent& ev, bool& screenDirty);
+  void previewCurrentColor();
+  bool saveColorSlots();
+  void resetCurrentColorToDefault();
 };
 
 #endif // TOOL_LED_SETTINGS_H
