@@ -92,22 +92,127 @@ void ToolControlPads::run() {
 // ------------------------------------------------------------
 // Stubs for Task 5 — filled in Tasks 6-8
 // ------------------------------------------------------------
-// --- Pool helpers (V3.B stubs) ---
+// --- Pool helpers (V3.B) ---
 uint8_t ToolControlPads::_poolIdxFromEntry(const ControlPadEntry& e) const {
-  // TODO: implement pool index lookup from entry
-  return 1;  // Default to MOMENTARY
+  switch (e.mode) {
+    case CTRL_MODE_MOMENTARY: return 0;
+    case CTRL_MODE_LATCH:     return 1;
+    case CTRL_MODE_CONTINUOUS:
+    default:
+      return (e.releaseMode == CTRL_RELEASE_HOLD) ? 3 : 2;
+  }
 }
 
 void ToolControlPads::_applyPoolIdxToEntry(uint8_t idx, ControlPadEntry& e) const {
-  // TODO: implement pool index to entry application
+  switch (idx) {
+    case 0:
+      e.mode = CTRL_MODE_MOMENTARY;
+      break;
+    case 1:
+      // LATCH requires fixed channel — auto-promote follow-bank to ch 1.
+      if (e.channel == 0) e.channel = 1;
+      e.mode = CTRL_MODE_LATCH;
+      break;
+    case 2:
+      e.mode        = CTRL_MODE_CONTINUOUS;
+      e.releaseMode = CTRL_RELEASE_TO_ZERO;
+      break;
+    case 3:
+      e.mode        = CTRL_MODE_CONTINUOUS;
+      e.releaseMode = CTRL_RELEASE_HOLD;
+      break;
+    default:
+      break;  // idx=4 (clear) handled by caller via slot removal
+  }
 }
 
 void ToolControlPads::_handleModePick(const NavEvent& ev) {
-  // TODO: V3.B pool picker implementation
+  switch (ev.type) {
+    case NAV_LEFT:
+      if (_poolIdx == 0) _poolIdx = 4; else _poolIdx--;
+      _screenDirty = true;
+      break;
+    case NAV_RIGHT:
+      if (_poolIdx == 4) _poolIdx = 0; else _poolIdx++;
+      _screenDirty = true;
+      break;
+
+    case NAV_ENTER: {
+      int8_t s = _findSlot(_cursorPad);
+      if (_poolIdx == 4) {
+        // Clear : remove slot if it exists. No confirmation — matches Tool 3.
+        if (s >= 0) _removeSlotForPad(_cursorPad);
+        _uiMode = UI_GRID_NAV;
+        _screenDirty = true;
+        break;
+      }
+
+      // Create slot if needed
+      if (s < 0) {
+        if (!_addSlot(_cursorPad)) {
+          _setFlash("Cap reached (12/12). Remove a pad first.");
+          _uiMode = UI_GRID_NAV;
+          _screenDirty = true;
+          break;
+        }
+        // _addSlot already called _save() with defaults. We'll overwrite + save again.
+        s = _findSlot(_cursorPad);
+      }
+
+      if (s >= 0) {
+        ControlPadEntry& e = _wk.entries[s];
+        _applyPoolIdxToEntry(_poolIdx, e);
+        _save();
+      }
+      _uiMode = UI_GRID_NAV;
+      _screenDirty = true;
+      break;
+    }
+
+    case NAV_QUIT:
+      _uiMode = UI_GRID_NAV;
+      _screenDirty = true;
+      break;
+
+    default:
+      break;
+  }
 }
 
 void ToolControlPads::_drawPool() {
-  // TODO: V3.B pool render implementation
+  bool inPick = (_uiMode == UI_MODE_PICK);
+  uint8_t cursor = _poolIdx;
+
+  struct PoolItem {
+    const char* label;
+    const char* color;
+  };
+  const PoolItem items[5] = {
+    { "MOM ",  VT_BRIGHT_YELLOW },
+    { "LATCH", VT_MAGENTA },
+    { "RET0 ", VT_ORANGE },
+    { "HOLD ", VT_BRIGHT_WHITE },
+    { "--- ",  VT_DIM },
+  };
+
+  char buf[256];
+  int pos = 0;
+  pos += snprintf(buf + pos, sizeof(buf) - pos, VT_DIM "Mode :  " VT_RESET);
+
+  for (uint8_t i = 0; i < 5; i++) {
+    const bool isCursor = inPick && (i == cursor);
+    if (isCursor) {
+      pos += snprintf(buf + pos, sizeof(buf) - pos,
+                      VT_REVERSE " %s[%s]" VT_RESET "  ",
+                      items[i].color, items[i].label);
+    } else {
+      pos += snprintf(buf + pos, sizeof(buf) - pos,
+                      " %s[%s]" VT_RESET "  ",
+                      items[i].color, items[i].label);
+    }
+  }
+
+  _ui->drawFrameLine("%s", buf);
 }
 
 void ToolControlPads::_handleGridNav(const NavEvent& ev) {
@@ -135,9 +240,9 @@ void ToolControlPads::_handleGridNav(const NavEvent& ev) {
 
     case NAV_ENTER: {
       // V3.B : ENTER opens the mode pool selector (does NOT create slot yet).
-      // Pool cursor starts on the pad's current mode if assigned, else MOM (idx 1).
+      // Pool cursor starts on the pad's current mode if assigned, else MOM (idx 0).
       int8_t s = _findSlot(_cursorPad);
-      _poolIdx = (s >= 0) ? _poolIdxFromEntry(_wk.entries[s]) : 1;
+      _poolIdx = (s >= 0) ? _poolIdxFromEntry(_wk.entries[s]) : 0;
       _propEditDirty = false;   // V3.A : fresh edit session
       _uiMode = UI_MODE_PICK;
       _screenDirty = true;
@@ -388,32 +493,15 @@ void ToolControlPads::_adjustField(int8_t delta) {
       e.channel = (uint8_t)v;
       break;
     }
-    case 2: {  // Mode cycle 0..2
-      int16_t v = (int16_t)e.mode + delta;
-      while (v < 0) v += 3;
-      while (v > 2) v -= 3;
-      uint8_t newMode = (uint8_t)v;
-      // Invariant: switching TO LATCH with channel=0 forces channel=1
-      if (newMode == CTRL_MODE_LATCH && e.channel == 0) {
-        e.channel = 1;
-        _setFlash("CHANNEL forced to 1 (LATCH requires fixed channel)");
-      }
-      e.mode = newMode;
-      break;
-    }
+    case 2:   // Mode — pool-driven in V3.B, ignored here
+    case 4:   // Release — pool-driven in V3.B, ignored here
+      return;
     case 3: {  // Deadzone 0..126 (continuous only)
       if (e.mode != CTRL_MODE_CONTINUOUS) return;
       int16_t v = (int16_t)e.deadzone + delta;
       if (v < 0)   v = 0;
       if (v > 126) v = 126;
       e.deadzone = (uint8_t)v;
-      break;
-    }
-    case 4: {  // Release cycle 0..1 (continuous only)
-      if (e.mode != CTRL_MODE_CONTINUOUS) return;
-      e.releaseMode = (e.releaseMode == CTRL_RELEASE_TO_ZERO)
-                    ? CTRL_RELEASE_HOLD
-                    : CTRL_RELEASE_TO_ZERO;
       break;
     }
     default:
@@ -428,10 +516,10 @@ bool ToolControlPads::_isFieldGreyed(uint8_t fieldIdx) const {
   int8_t s = _findSlot(_cursorPad);
   if (s < 0) return false;
   const ControlPadEntry& e = _wk.entries[s];
-  // Deadzone (3) and Release (4) only for continuous
-  if ((fieldIdx == 3 || fieldIdx == 4) && e.mode != CTRL_MODE_CONTINUOUS) {
-    return true;
-  }
+  // V3.B : Mode (2) and Release (4) are pool-driven — always greyed in VALUE_EDIT
+  if (fieldIdx == 2 || fieldIdx == 4) return true;
+  // Deadzone (3) is continuous-only
+  if (fieldIdx == 3 && e.mode != CTRL_MODE_CONTINUOUS) return true;
   return false;
 }
 
@@ -615,6 +703,21 @@ void ToolControlPads::_drawInfo() {
     return;
   }
 
+  if (_uiMode == UI_MODE_PICK) {
+    const char* desc;
+    switch (_poolIdx) {
+      case 0: desc = "MOMENTARY : press=127, release=0 (binary gate)"; break;
+      case 1: desc = "LATCH : each press toggles 0 <-> 127 (needs fixed channel)"; break;
+      case 2: desc = "CONT+RET0 : pressure-driven, release fades to 0 (gate expression)"; break;
+      case 3: desc = "CONT+HOLD : pressure-driven, release freezes last value (setter)"; break;
+      case 4: desc = "clear : remove this pad's CC assignment"; break;
+      default: desc = ""; break;
+    }
+    _ui->drawFrameLine(VT_DIM "%s" VT_RESET, desc);
+    _ui->drawFrameEmpty();
+    return;
+  }
+
   if (_uiMode == UI_GLOBAL_EDIT) {
     const char* desc;
     switch (_globalFieldIdx) {
@@ -664,9 +767,14 @@ void ToolControlPads::_drawControlBar() {
   switch (_uiMode) {
     case UI_GRID_NAV:
       _ui->drawControlBar(
-        VT_DIM "[^v<>] GRID  [RET] EDIT  [TAP] SELECT" CBAR_SEP
-               "[x] REMOVE  [d] DFLT  [g] GLOBALS" CBAR_SEP
+        VT_DIM "[^v<>] GRID  [RET] MODE  [e] VALUES  [TAP] SELECT" CBAR_SEP
+               "[x] RM  [d] DFLT  [g] GLOBS" CBAR_SEP
                "[q] EXIT" VT_RESET);
+      break;
+    case UI_MODE_PICK:
+      _ui->drawControlBar(
+        VT_DIM "[<>] CYCLE MODE" CBAR_SEP
+               "[RET] APPLY  [q] CANCEL" VT_RESET);
       break;
     case UI_VALUE_EDIT:
       _ui->drawControlBar(
@@ -692,6 +800,10 @@ void ToolControlPads::_draw() {
 
   _ui->drawSection("PAD GRID");
   _drawGrid();
+  _ui->drawFrameEmpty();
+
+  _ui->drawSection("POOL");
+  _drawPool();
   _ui->drawFrameEmpty();
 
   _ui->drawSection("SELECTED");
