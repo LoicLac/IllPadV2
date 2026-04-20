@@ -1,10 +1,11 @@
 # ILLPAD48 V2 — Mode LOOP : design haut niveau
 
-**Date** : 2026-04-19
-**Statut** : brouillon, à corriger
-**Scope** : LOOP core + Slot Drive + refactor Tool 3 b1. Haut niveau, sans code. Les plans d'implémentation par phase viendront dans des documents séparés.
-**Sources** : `docs/superpowers/specs/2026-04-02-loop-mode-design.md` (extrait de la branche `loop` au commit `39ef3cc^`), `docs/superpowers/specs/2026-04-06-loop-slot-drive-design.md`, `docs/reference/architecture-briefing.md`, état du code `main` au 2026-04-19.
-**Spec compagnon** : `docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md` (grammaire LED unifiée, source de vérité pour §21).
+**Date** : 2026-04-19 (créé) — **révisé 2026-04-20** post Phase 0.1
+**Statut** : **VALIDÉ** pour plan d'implémentation LOOP Phase 1→6. Pré-requis Phase 0 LED + Phase 0.1 Tool 8 respec **DONE** (commits `cad7530`, `39d2deb`, `290839d`, `cc379f5`, `6ac9ff3` sur `main`).
+**Scope** : LOOP core + Slot Drive + refactor Tool 3 b1. Haut niveau, sans code. Les plans d'implémentation par phase viennent dans des documents séparés.
+**Sources** : consolidation de `docs/archive/2026-04-02-loop-mode-design.md` + `docs/archive/2026-04-06-loop-slot-drive-design.md` (**tous deux marqués obsolètes** — ne pas lire, superseded par ce document), `docs/reference/architecture-briefing.md`, état du code `main` au 2026-04-20.
+**Spec compagnon** : `docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md` (grammaire LED unifiée, **implémentée** Phase 0 + respec Tool 8 Phase 0.1 — source de vérité pour §21).
+**Tool 8 respec compagnon** : `docs/superpowers/specs/2026-04-20-tool8-ux-respec-design.md` (single-view 6 sections, implémenté commit `cc379f5`).
 
 ---
 
@@ -395,44 +396,49 @@ Le geste ne change jamais la bank courante (comportement identique à ARPEG). Le
 
 ### §20 — NVS et persistence
 
-Trois nouveaux Store sont nécessaires (les détails field-par-field viendront dans les plans d'implémentation) :
+**État post Phase 0 + Phase 0.1** : les extensions NVS requises pour LOOP sont **partiellement faites**. Checklist mise à jour :
 
-| Store | Rôle | Persisté |
-|---|---|---|
-| **LoopPadStore** | 3 control pads (REC, PLAY/STOP, CLEAR) + 16 slot pads | Namespace unique via `illpad_lpad` / `pads` |
-| **LoopPotStore** | 5 effets per-bank (shuffle depth/template, chaos, vel pattern/depth) | Per-bank dans `illpad_lpot` / `loop_0..7` |
-| **Slot files** | 1 fichier LittleFS par slot occupé | `/loops/slotNN.lpb`, partition LittleFS dédiée |
+| Store | Rôle | Statut | Persisté |
+|---|---|---|---|
+| **LoopPadStore** | 3 control pads (REC, PLAY/STOP, CLEAR) + 16 slot pads | ❌ TODO Phase 1-3 | Namespace prévu : `illpad_lpad` / `pads` |
+| **LoopPotStore** | 5 effets per-bank (shuffle depth/template, chaos, vel pattern/depth) | ❌ TODO Phase 1-5 | Per-bank dans `illpad_lpot` / `loop_0..7` |
+| **Slot files** | 1 fichier LittleFS par slot occupé | ❌ TODO Phase 6 | `/loops/slotNN.lpb`, partition LittleFS dédiée |
 
 Extensions des Store existants :
-- **BankTypeStore v2+** : le champ `scaleGroup[8]` existe déjà. Pour les banks LOOP, il est **ignoré** — les loops n'ont pas de gamme. Le Tool 5 ne doit pas exposer le scaleGroup pour les banks LOOP. Le NvsManager ne propage pas de scale change vers une bank LOOP, même si le scaleGroup est accidentellement non-zéro.
-- **PotMappingStore** : passe de 2 contextes (NORMAL / ARPEG) à 3 contextes (+ LOOP). 8 slots de mapping supplémentaires, total 24. Rewrite complet vu la Zero Migration Policy — les anciennes données NVS sont rejetées au boot, defaults appliqués.
-- **SettingsStore** : ajout de **3 timers LOOP globaux** éditables en Tool 6, requis par la grammaire LED (pattern `RAMP_HOLD` couplé à un timer métier, voir LED spec §13) :
-  - `clearLoopTimerMs` — default 500 ms, range [200, 1500]. Durée du long press CLEAR pour vider une boucle (§9).
-  - `slotSaveTimerMs` — default 1000 ms, range [500, 2000]. Durée du long press slot pour sauvegarder (§11).
-  - `slotClearTimerMs` — default 800 ms (proposé, à valider), range [400, 1500]. Durée de l'**animation visuelle** confirmant la suppression d'un slot via combo delete (§13). Pas un hold user.
-  Ces 3 valeurs sont **globales** (pas per-bank). `SettingsStore` contient déjà des timings globaux analogues (bargraph duration, doubleTap window, aftertouch rate). Version bump de `SettingsStore` requis (Zero Migration Policy : reset aux defaults au premier boot post-flash). Le 4-link chain s'applique : champ dans Store + validator + case switch Tool 6 + apply dans `setup()`.
+- **BankTypeStore v2** (déjà en place) : le champ `scaleGroup[8]` existe. Pour les banks LOOP, il est **ignoré** — les loops n'ont pas de gamme. Le Tool 5 ne doit pas exposer le scaleGroup pour les banks LOOP. Le NvsManager ne propage pas de scale change vers une bank LOOP, même si le scaleGroup est accidentellement non-zéro. `BankType` enum actuel = `{BANK_NORMAL, BANK_ARPEG}` — **ajouter `BANK_LOOP`** Phase 1 (cascade : validator, Tool 5, LedController dispatch, main.cpp process switch, reloadPerBankParams).
+- **PotMappingStore** : passe de 2 contextes (NORMAL / ARPEG) à 3 contextes (+ LOOP). 8 slots de mapping supplémentaires, total 24. ❌ TODO Phase 3 (Tool 7 + PotRouter 3 contexts). Rewrite complet vu la Zero Migration Policy — les anciennes données NVS rejetées au boot, defaults appliqués.
+- **SettingsStore v11** ✅ **DONE** (commit `dec9391` Phase 0 step 0.3 + `cad7530` Phase 0.1) : les **3 timers LOOP globaux** sont déjà persistés et éditables en Tool 6 + Tool 8 (shared-field) :
+  - `clearLoopTimerMs` — default 500 ms, range [200, 1500] ✅
+  - `slotSaveTimerMs` — default 1000 ms, range [500, 2000] ✅
+  - `slotClearTimerMs` — default 800 ms, range [400, 1500] ✅
+- **LedSettingsStore v7** ✅ **DONE** (commit `cad7530`) : `tickBarDurationMs` + `tickWrapDurationMs` persistés et chargés dans `LedController` caches, non consommés runtime (attendent `consumeBarFlash` / `consumeWrapFlash` du LoopEngine Phase 1+).
+- **ColorSlotStore v5** ✅ **DONE** (commit `cad7530`) : 16 slots, incluant `CSLOT_MODE_LOOP` (Gold preset), `CSLOT_VERB_PLAY/REC/OVERDUB/CLEAR_LOOP/SLOT_CLEAR/SAVE` (tous verbs transport LOOP), `CSLOT_VERB_STOP`, `CSLOT_CONFIRM_OK`. Tous éditables via Tool 8 Phase 0.1.
 
-**Partition flash** : l'ajout de LittleFS implique un repartitionnement du flash (512 KB dédiés à LittleFS). Au premier boot après flash de ce firmware, **tous les paramètres utilisateurs seront reset aux defaults** (calibration, pad order, pad roles, etc.). Comportement assumé par la Zero Migration Policy du projet — un Serial.printf au boot signale chaque reset, le musicien reconfigure via setup mode.
+**Partition flash** : ❌ TODO Phase 6. L'ajout de LittleFS implique un repartitionnement du flash (512 KB dédiés à LittleFS). Au premier boot après flash de ce firmware, **tous les paramètres utilisateurs seront reset aux defaults** (calibration, pad order, pad roles, etc.). Comportement assumé par la Zero Migration Policy du projet — un Serial.printf au boot signale chaque reset, le musicien reconfigure via setup mode.
 
 **Zero Migration Policy** : comme ailleurs dans le projet, les changements de struct se font en bumpant la version ou en changeant le size. Les anciennes données NVS sont rejetées silencieusement, les defaults compile-time s'appliquent. Aucune migration à écrire.
 
 ### §21 — LED system (renvoi)
 
-Le feedback LED du mode LOOP est défini par la **LED feedback unified design** : [`docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md`](2026-04-19-led-feedback-unified-design.md). Ce document est la source de vérité pour tout ce qui concerne le rendu visuel — grammaire, palette de 9 patterns, 16 color slots, table de mapping events.
+Le feedback LED du mode LOOP est défini par la **LED feedback unified design** : [`docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md`](2026-04-19-led-feedback-unified-design.md) — **implémentée Phase 0** (commits `5c3e57c` → `8511b0d`). Ce document est la source de vérité pour tout ce qui concerne le rendu visuel — grammaire, palette de 9 patterns, 16 color slots, table de mapping events.
+
+**État post Phase 0.1** : la grammaire LED 3 couches est en place sur `main`. Le Tool 8 UX a été **refondu en single-view 6 sections** (respec `docs/superpowers/specs/2026-04-20-tool8-ux-respec-design.md`, commit `cc379f5`) — remplace la mention "Tool 8 refondu en 3 pages" de la LED spec historique.
 
 Éléments structurants à connaître pour comprendre la spec LOOP sans relire toute la LED spec :
 
-- **Slogan directeur** : "le nom au fond, le verbe en surface". La couleur du mode (`CSLOT_MODE_LOOP`, **jaune**) est le fond persistant ; les actions transport (REC, OVERDUB, PLAY, STOP, CLEAR, SAVE, LOAD, DELETE, REFUSE) sont des overlays colorés transitoires.
-- **Palette de patterns** (LED spec §10) : `SOLID`, `PULSE_SLOW`, `CROSSFADE_COLOR`, `BLINK_SLOW`, `BLINK_FAST`, `FADE`, `FLASH`, `RAMP_HOLD`, `SPARK`. Chaque rendu LOOP pointe vers un de ces 9 patterns.
-- **Couplage timer métier** (LED spec §13) : le pattern `RAMP_HOLD` consomme sa durée depuis un timer stocké en `SettingsStore` (§20), jamais un literal. CLEAR long-press = `clearLoopTimerMs`, slot save = `slotSaveTimerMs`, slot delete animation = `slotClearTimerMs`.
-- **Phase 0 LED** (LED spec §23) : le refactor LED est à faire **avant** le LOOP core, pour que les events LOOP arrivent dans un système unifié. Les Phases 1-6 LOOP arrivent après.
-- **Couleurs principales LOOP** : `CSLOT_MODE_LOOP` (jaune, Gold preset), `CSLOT_VERB_PLAY` (vert), `CSLOT_VERB_REC` (rouge), `CSLOT_VERB_OVERDUB` (orange), `CSLOT_VERB_CLEAR_LOOP` (cyan), `CSLOT_VERB_SLOT_CLEAR` (orange distinct), `CSLOT_VERB_SAVE` (magenta), `CSLOT_CONFIRM_OK` (blanc, universel pour SPARK).
-- **Refus** : réutilise `CSLOT_VERB_REC` (rouge) via pattern `BLINK_FAST` cycles=3. Pas de color slot dédié.
-- **WAITING_*** : pattern `CROSSFADE_COLOR` entre `CSLOT_MODE_LOOP` (jaune) et `CSLOT_VERB_PLAY` (vert), period ~800 ms.
+- **Slogan directeur** : "le nom au fond, le verbe en surface". La couleur du mode (`CSLOT_MODE_LOOP`, **jaune Gold**) est le fond persistant ; les actions transport (REC, OVERDUB, PLAY, STOP, CLEAR, SAVE, LOAD, DELETE, REFUSE) sont des overlays colorés transitoires.
+- **Palette de patterns** (LED spec §10) : `SOLID`, `PULSE_SLOW`, `CROSSFADE_COLOR`, `BLINK_SLOW`, `BLINK_FAST`, `FADE`, `FLASH`, `RAMP_HOLD`, `SPARK`. Chaque rendu LOOP pointe vers un de ces 9 patterns. ✅ Implémentés Phase 0.
+- **Couplage timer métier** (LED spec §13) : le pattern `RAMP_HOLD` consomme sa durée depuis un timer stocké en `SettingsStore` v11 (§20) ✅, jamais un literal. CLEAR long-press = `clearLoopTimerMs`, slot save = `slotSaveTimerMs`, slot delete animation = `slotClearTimerMs`.
+- **Phase 0 LED** ✅ **DONE** (commits Phase 0 + Phase 0.1). Les Phases 1-6 LOOP peuvent démarrer — les events LOOP arriveront dans un système unifié prêt.
+- **Couleurs principales LOOP** — toutes **présentes dans ColorSlotStore v5** (commit `cad7530`) : `CSLOT_MODE_LOOP` (jaune Gold preset 7), `CSLOT_VERB_PLAY` (Green preset 11), `CSLOT_VERB_REC` (Coral preset 8), `CSLOT_VERB_OVERDUB` (Amber preset 6), `CSLOT_VERB_CLEAR_LOOP` (Cyan preset 5), `CSLOT_VERB_SLOT_CLEAR` (Amber preset 6 + hue+20), `CSLOT_VERB_SAVE` (Magenta preset 10), `CSLOT_CONFIRM_OK` (Pure White preset 0, universel SPARK).
+- **Refus** : réutilise `CSLOT_VERB_REC` (Coral) via pattern `BLINK_FAST` cycles=3. Pas de color slot dédié. ✅ Pattern implémenté, callsites LOOP à câbler Phase 2+.
+- **WAITING_*** : pattern `CROSSFADE_COLOR` entre `CSLOT_MODE_LOOP` (jaune) et `CSLOT_VERB_PLAY` (vert), period hardcoded 800 ms (LED spec §4.3). ✅ Pattern implémenté.
+- **EVT_LOOP_* enum** ✅ **réservés** dans `LedGrammar.h` (EVT_LOOP_REC, OVERDUB, SLOT_LOADED, SLOT_WRITTEN, SLOT_CLEARED, SLOT_REFUSED, CLEAR) — mapping par défaut `PTN_NONE` actuellement. À wirer Phase 4 (PotRouter + LED wiring) avec le bon `{patternId, colorSlot, fgPct}` selon LED spec §12.
+- **Tick durations BAR/WRAP** ✅ **persistées** dans LedSettingsStore v7 + **cachées** dans LedController (`_tickBarDurationMs`, `_tickWrapDurationMs`). Non consommées runtime — attendent `consumeBarFlash()` / `consumeWrapFlash()` flags dans LoopEngine Phase 2+.
 
-Tous les tunings (intensités, durées, couleurs) sont configurables en Tool 8 LED Settings (pas de hardcode).
+Tous les tunings (intensités, durées, couleurs) sont configurables en **Tool 8 LED Settings single-view** (sections NORMAL / ARPEG / LOOP / TRANSPORT / CONFIRMATIONS / GLOBAL). La section LOOP + les lignes TRANSPORT tick (BEAT/BAR/WRAP durations + verb colors PLAY/REC/OVERDUB) sont déjà exposées musicien-facing. Pas de hardcode.
 
-Le reste des détails (intensités exactes, tables de rendu par mode×state×FG/BG, refactor Tool 8 en 3 pages, machine d'état `LedController` refactorée, Zero Migration NVS) est dans la LED spec.
+Le reste des détails (intensités exactes, tables de rendu par mode×state×FG/BG, refactor Tool 8 respec, machine d'état `LedController`, Zero Migration NVS) est dans la LED spec + la Tool 8 respec.
 
 ### §22 — Pot routing et catch
 
@@ -540,7 +546,17 @@ Structure en trois groupes : **questions tranchées** (pour traçabilité), **qu
 
 #### Questions encore ouvertes
 
-Aucune à ce stade pour le périmètre LOOP. La LED spec ([`2026-04-19-led-feedback-unified-design.md`](2026-04-19-led-feedback-unified-design.md)) porte quelques Qs résiduelles (bgFactor, valeur exacte `slotClearTimerMs`, color slot bank switch, nav keys Tool 8) — mais aucune ne bloque le design LOOP.
+**État post Phase 0.1** : aucune question bloquante restante. Les Qs résiduelles LED mentionnées historiquement ont été closes :
+- `bgFactor` → défaut acté 25 %, range [10, 50], éditable en Tool 8 section GLOBAL.
+- `slotClearTimerMs` → défaut acté 800 ms, range [400, 1500], persisté SettingsStore v11 ✅.
+- Color slot bank switch → `CSLOT_BANK_SWITCH` = Pure White preset 0, implémenté v4.
+- Nav keys Tool 8 → redéfinies Phase 0.1 respec (single-view, paradigme géométrique §4.4 conventions, `d` sans confirm).
+
+**Items encore à trancher spécifiquement pour la rédaction du plan d'implémentation LOOP** :
+- Max banks LOOP : 2 (archive) confirmé ici §14 + §25. À figer dans le plan.
+- Storage timestamps : µs (spec §16) confirmé — pas de PPQN. OK pour le plan.
+- Shared `PendingEvent` struct entre ArpEngine et LoopEngine (mentionné comme "Nice refactor" archive §Pre-Implementation) — décision à prendre au plan d'implémentation Phase 1 : factoriser ou dupliquer ?
+- SRAM pour 2 banks : 18.8 KB budget (§25) — à vérifier par mesure lors de Phase 2 (LoopEngine core).
 
 #### Items LED déférés — **résolus par la LED spec 2026-04-19**
 
@@ -558,20 +574,25 @@ Les 5 items qui étaient déférés au brainstorm LED sont adressés par [`2026-
 
 ## Partie 7 — Suite
 
-Ce document, une fois corrigé et validé, sert de **référence de haut niveau** pour les plans d'implémentation par phase. L'ordre d'implémentation est désormais préfixé par une **Phase 0 LED** (voir [LED spec §23](2026-04-19-led-feedback-unified-design.md)) qui refactorise le système LED dans sa cible finale **avant** l'arrivée du mode LOOP. Les events LOOP arrivent ainsi dans un système unifié, zéro dette visuelle.
+Ce document sert de **référence de haut niveau** pour les plans d'implémentation LOOP Phase 1→6.
 
-1. **Phase 0** (LED spec §23) — Refactor LED isolé : grammaire unifiée, palette 9 patterns, 16 color slots, Tool 8 refondu en 3 pages. Aucun changement moteur. Prérequis de toutes les phases LOOP qui consomment la grammaire LED. Inclut aussi l'extension `SettingsStore` pour les 3 timers LOOP (`clearLoopTimerMs`, `slotSaveTimerMs`, `slotClearTimerMs`) — voir §20 — avec leur édition en Tool 6.
-2. **Phase 1** — Skeleton + guards : structs, enums, validate fonctions, NVS descriptors, guards dans BankManager / ScaleManager / MidiTransport. Aucune nouvelle feature visible.
-3. **Phase 2** — LoopEngine core + main wiring : state machine, recording, playback, refcount, processLoopMode. Test mode activable via `ENABLE_LOOP_MODE`.
-4. **Phase 3** — Setup tools : refactor Tool 3 vers b1 contextuel, extension Tool 5 (3-way type cycle + quantize), extension Tool 7 (3e contexte).
-5. **Phase 4** — PotRouter + LED wiring : 3e contexte PotMappingStore, rendu LED LOOP complet (table `event_rendering` étendue), confirms via grammaire existante.
-6. **Phase 5** — Effets : shuffle, chaos, velocity patterns, tout le bloc pots LOOP.
-7. **Phase 6** — Slot Drive : LittleFS mount, LoopSlotStore, serialize/deserialize, handleLoopSlots, Tool 3 slot role section.
+**État Phase 0 + Phase 0.1** ✅ **DONE** (prérequis LED) :
+- **Phase 0 LED** (LED spec §23) — Refactor LED isolé : grammaire unifiée, palette 9 patterns, 15 color slots (v4). Tool 8 en 3 pages PATTERNS/COLORS/EVENTS. `SettingsStore` v11 avec 3 timers LOOP. Tool 6 expose les 3 timers. Commits : `5c3e57c` → `8511b0d`. Audit post `docs/superpowers/reports/rapport_phase_0_led.md`.
+- **Phase 0.1 Tool 8 respec** — Tool 8 refondu en single-view 6 sections (NORMAL/ARPEG/LOOP/TRANSPORT/CONFIRMATIONS/GLOBAL). `ColorSlotStore` v5 (16 slots, +`CSLOT_VERB_STOP`). `LedSettingsStore` v7 (+`tickBeatDurationMs`/`tickBarDurationMs`/`tickWrapDurationMs`). `LedController::renderPreviewPattern` public wrapper + helper `ToolLedPreview`. Gamma hot-reload. Commits : `cad7530` → `6ac9ff3`. Plan : `docs/superpowers/plans/2026-04-20-tool8-ux-respec-plan.md`. Spec : `docs/superpowers/specs/2026-04-20-tool8-ux-respec-design.md`.
 
-Chaque phase aura son **plan détaillé** séparé, listant les fichiers touchés, les signatures de fonction, les tests manuels, et les cross-references vers les invariants de ce document et de la LED spec.
+**Phases LOOP à venir** :
 
-**Option de repli** : si Phase 0 s'avère trop coûteuse à implémenter avant LOOP (machine d'état LED difficile à refactorer proprement), on bascule sur l'option (c) de la LED spec §25 — implémenter LOOP avec patterns ad-hoc puis grand refactor LED après stabilisation. Dette temporaire acceptée comme chemin de repli, pas comme plan nominal.
+1. **Phase 1** — Skeleton + guards : extension `BankType` enum (+`BANK_LOOP`), structs `LoopPadStore` / `LoopPotStore` + validators + NVS descriptors, guards dans BankManager / ScaleManager / MidiTransport pour ignorer scale sur bank LOOP. Aucune nouvelle feature visible.
+2. **Phase 2** — LoopEngine core + main wiring : classe `LoopEngine` (state machine EMPTY / RECORDING / PLAYING / OVERDUBBING / STOPPED + WAITING_* transitoires), recording avec timestamps µs, playback scalé proportionnellement, refcount noteOn/noteOff, `processLoopMode` dans main.cpp, `renderBankLoop` dans LedController (câble `EVT_LOOP_*` overrides dans `EVENT_RENDER_DEFAULT`, consomme `tickBeat/Bar/WrapDurationMs` via flags à définir). Test mode activable via `ENABLE_LOOP_MODE`.
+3. **Phase 3** — Setup tools : refactor **Tool 3 vers b1 contextuel** (3 sous-pages Banks / ARPEG / LOOP), extension **Tool 5** (3-way type cycle NORMAL/ARPEG/LOOP + `loopQuantize` per-bank), refactor **Tool 7** en 3 pages (NORMAL / ARPEG / LOOP, sans touche `t` — spec §22), extension **Tool 4** pour refuser ControlPad sur pad LOOP control (règle collision §5).
+4. **Phase 4** — PotRouter + LED wiring : `PotMappingStore` passe à 3 contextes (+8 slots LOOP), rendu `renderBankLoop` complet, mapping `EVT_LOOP_*` → patterns concrets dans `EVENT_RENDER_DEFAULT` (LED spec §12), câblage `consumeBarFlash`/`consumeWrapFlash` flags depuis LoopEngine vers LedController.
+5. **Phase 5** — Effets : shuffle (shared templates avec ARPEG), chaos avec re-seed sur retour à zéro, velocity patterns (4 LUTs), bloc pots LOOP complet.
+6. **Phase 6** — Slot Drive : partition LittleFS 512 KB, `LoopSlotStore` (format fichier binaire), serialize/deserialize, `handleLoopSlots` (load/save/delete gestes), Tool 3 slot role section (16 slot pads hold-left context LOOP).
+
+Chaque phase aura son **plan détaillé** séparé (via skill `superpowers:writing-plans`), listant les fichiers touchés, les signatures de fonction, les tests manuels HW, et les cross-references vers les invariants de ce document et de la LED spec.
+
+**Note Phase 0 fallback obsolète** : l'option de repli "implémenter LOOP avec patterns ad-hoc puis grand refactor LED après" (LED spec §25 option c) **n'est plus pertinente** — Phase 0 + 0.1 sont exécutées, la grammaire LED est en place. Le plan nominal (Phase 1-6 sur base LED unifiée) est le seul chemin prévu.
 
 ---
 
-**Fin du brouillon.** Relecture et corrections attendues.
+**Spec VALIDÉE post Phase 0.1** (2026-04-20). Prête à servir d'entrée pour la rédaction du plan d'implémentation Phase 1.

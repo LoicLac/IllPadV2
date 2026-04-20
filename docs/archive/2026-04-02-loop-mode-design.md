@@ -1,3 +1,13 @@
+> ⚠️ **OBSOLETE — NE PAS LIRE COMME CONTEXTE**
+>
+> Document **obsolète** (pré-refactor Phase 0 / 0.1). Ne doit pas être consommé par un agent ou LLM pour planning, implementation, ou audit.
+>
+> **Source de vérité LOOP actuelle** : [`docs/superpowers/specs/2026-04-19-loop-mode-design.md`](../superpowers/specs/2026-04-19-loop-mode-design.md) (qui consolide ce document + [`2026-04-06-loop-slot-drive-design.md`](2026-04-06-loop-slot-drive-design.md)).
+>
+> Conservé pour archive historique uniquement.
+
+---
+
 # LOOP Mode — Design Document
 
 **Status**: VALIDATED DRAFT — audited against codebase 2026-03-25, updated 2026-04-02

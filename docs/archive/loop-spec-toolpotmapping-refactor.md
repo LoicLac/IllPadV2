@@ -1,3 +1,13 @@
+> ⚠️ **OBSOLETE — NE PAS LIRE COMME CONTEXTE**
+>
+> Micro-spec **obsolète** (pré-refactor Phase 0 / 0.1). Le refactor PotMapping proposé ici a été intégré dans le runtime actuel (`PotRouter` + `PotMappingStore`) au cours des phases antérieures.
+>
+> **Source de vérité spec LOOP actuelle** : [`docs/superpowers/specs/2026-04-19-loop-mode-design.md`](../superpowers/specs/2026-04-19-loop-mode-design.md).
+>
+> Conservé pour archive historique uniquement.
+
+---
+
 # ToolPotMapping Refactor — Spec (future work)
 
 **Status**: Spec only — not part of LOOP mode implementation phases.

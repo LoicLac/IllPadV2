@@ -1,3 +1,13 @@
+> ⚠️ **OBSOLETE — NE PAS LIRE COMME CONTEXTE**
+>
+> Plan d'implémentation **obsolète** (pré-refactor Phase 0 / 0.1). Ne doit pas être consommé par un agent ou LLM pour planning, implementation, ou audit. Références codebase pré-Phase-0 (Tool 8 3-pages, ColorSlotStore v3, etc.).
+>
+> **Source de vérité spec LOOP actuelle** : [`docs/superpowers/specs/2026-04-19-loop-mode-design.md`](../superpowers/specs/2026-04-19-loop-mode-design.md). Le plan d'implémentation v2 sera rédigé à partir de la spec révisée Phase 0.1.
+>
+> Conservé pour archive historique uniquement.
+
+---
+
 # LOOP Mode — Phase 1: Skeleton + Guards
 
 **Goal**: Prepare the codebase for LOOP mode. After this phase, the build compiles and behavior is **identical to before** — no LOOP bank exists at runtime. All guards are traversed without effect.

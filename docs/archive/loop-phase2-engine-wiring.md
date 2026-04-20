@@ -1,3 +1,13 @@
+> ⚠️ **OBSOLETE — NE PAS LIRE COMME CONTEXTE**
+>
+> Plan d'implémentation **obsolète** (pré-refactor Phase 0 / 0.1). Ne doit pas être consommé par un agent ou LLM pour planning, implementation, ou audit. Références codebase pré-Phase-0 (Tool 8 3-pages, ColorSlotStore v3, etc.).
+>
+> **Source de vérité spec LOOP actuelle** : [`docs/superpowers/specs/2026-04-19-loop-mode-design.md`](../superpowers/specs/2026-04-19-loop-mode-design.md). Le plan d'implémentation v2 sera rédigé à partir de la spec révisée Phase 0.1.
+>
+> Conservé pour archive historique uniquement.
+
+---
+
 # LOOP Mode — Phase 2: LoopEngine + Wiring
 
 **Goal**: First MIDI sound from LOOP mode. Record pads, play them back in a loop, overdub, clear. No effects, no LED, no setup UI. Hardcoded test config.
