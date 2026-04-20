@@ -46,15 +46,16 @@ static const char* const COLOR_SLOT_LABELS[COLOR_SLOT_COUNT] = {
   "SCALE_CHROM",      // 12
   "OCTAVE",           // 13
   "CONFIRM_OK",       // 14
+  "VERB_STOP",        // 15 (Phase 0.1)
 };
 
 // Default preset per slot (mirrors NvsManager::_colorSlots init).
 static const uint8_t DEFAULT_SLOT_PRESETS[COLOR_SLOT_COUNT] = {
-  1, 3, 7, 11, 8, 6, 5, 6, 10, 0, 6, 7, 8, 9, 0
+  1, 3, 7, 11, 8, 6, 5, 6, 10, 0, 6, 7, 8, 9, 0, 8  // last: CSLOT_VERB_STOP = Coral (Phase 0.1)
 };
 // Default hue offset per slot (VERB_SLOT_CLEAR = +20 to distinguish from VERB_OVERDUB).
 static const int8_t DEFAULT_SLOT_HUES[COLOR_SLOT_COUNT] = {
-  0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0
+  0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0
 };
 
 // Phase 0 events (Tool 8 PAGE_EVENTS shows these, hides LOOP reserved).

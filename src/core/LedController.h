@@ -110,9 +110,14 @@ private:
   void renderBankNormal(uint8_t led, bool isFg);
   void renderBankArpeg(uint8_t led, bool isFg, unsigned long now);
 
+public:
   // Pattern engine (Phase 0 step 0.4).
   // Active event overlay is a single PatternInstance : new triggerEvent()
   // preempts any active one (same semantics as the legacy single-slot confirm).
+  //
+  // Phase 0.1 : struct declaration promoted to public: so ToolLedPreview can
+  // construct arbitrary PatternInstance values and pass them to
+  // renderPreviewPattern() below. The _eventOverlay member stays private.
   struct PatternInstance {
     uint8_t       patternId;  // PTN_* enum (0..8) or PTN_NONE when inactive
     uint8_t       fgPct;      // foreground intensity 0-100 (scaled by pattern math)
@@ -124,6 +129,14 @@ private:
     RGBW          colorB;     // secondary color (used by CROSSFADE_COLOR only)
     bool          active;
   };
+
+  // Phase 0.1 — Public wrapper for Tool 8 live preview (ToolLedPreview helper).
+  // Thin pass-through to the private renderPattern() so the preview runs through
+  // the same engine as runtime events (zero duplication). Does NOT touch
+  // _eventOverlay. Caller owns inst.startTime and inst.ledMask.
+  void renderPreviewPattern(const PatternInstance& inst, unsigned long now);
+
+private:
   PatternInstance _eventOverlay;
 
   // Engine methods (step 0.4).
@@ -160,7 +173,9 @@ private:
   uint8_t  _bgArpPlayMin;         // BG ARPEG playing solid (v6: bgArpPlayMax removed — was LEGACY unused)
   uint8_t  _tickFlashFg, _tickFlashBg;
   uint16_t _pulsePeriodMs;
-  uint16_t _tickBeatDurationMs;   // Phase 0.1 : renamed + widened from _tickFlashDurationMs (uint8). ARPEG step uses this now. BAR/WRAP caches land in Task 2.
+  uint16_t _tickBeatDurationMs;   // Phase 0.1 : ARPEG step FLASH duration (renamed + widened from uint8 _tickFlashDurationMs).
+  uint16_t _tickBarDurationMs;    // Phase 0.1 : LOOP bar FLASH duration. Cached now, consumed by LoopEngine in Phase 1+.
+  uint16_t _tickWrapDurationMs;   // Phase 0.1 : LOOP wrap FLASH duration. Cached now, consumed by LoopEngine in Phase 1+.
   uint8_t  _bankBlinks;
   uint16_t _bankDurationMs;
   uint8_t  _bankBrightnessPct;

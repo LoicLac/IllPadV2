@@ -12,9 +12,11 @@
 // LOOP entries are PTN_NONE : the renderer treats them as "no render"
 // until Phase 1+ wires them.
 //
-// LED spec option γ : EVT_STOP reuses CSLOT_VERB_PLAY — the FADE
-// direction (100 -> 0) inverts PLAY's (0 -> 100), giving the visual
-// "what was on is fading out" without a dedicated STOP color slot.
+// Phase 0.1 respec : option γ abandoned. EVT_STOP now points to the new
+// CSLOT_VERB_STOP slot (Coral default), decoupling STOP color from PLAY.
+// The FADE direction (100 -> 0) still inverts PLAY's (0 -> 100) ; only the
+// color differs. See docs/superpowers/specs/2026-04-20-tool8-ux-respec-design.md
+// §4.4 label mapping and §7.2 runtime changes.
 // =================================================================
 
 const EventRenderEntry EVENT_RENDER_DEFAULT[EVT_COUNT] = {
@@ -24,7 +26,7 @@ const EventRenderEntry EVENT_RENDER_DEFAULT[EVT_COUNT] = {
   /* EVT_SCALE_CHROM       */ { PTN_BLINK_FAST,      CSLOT_SCALE_CHROM,       100 },
   /* EVT_OCTAVE            */ { PTN_BLINK_FAST,      CSLOT_OCTAVE,            100 },
   /* EVT_PLAY              */ { PTN_FADE,            CSLOT_VERB_PLAY,         100 },
-  /* EVT_STOP              */ { PTN_FADE,            CSLOT_VERB_PLAY,         100 }, // option γ : same color as PLAY, FADE direction inverted
+  /* EVT_STOP              */ { PTN_FADE,            CSLOT_VERB_STOP,         100 }, // Phase 0.1 : dedicated STOP slot (Coral), FADE 100 -> 0 (direction inverts PLAY 0 -> 100)
   /* EVT_WAITING           */ { PTN_CROSSFADE_COLOR, CSLOT_MODE_ARPEG,        100 }, // placeholder colorA ; colorB supplied by LOOP callsite
   /* EVT_REFUSE            */ { PTN_BLINK_FAST,      CSLOT_VERB_REC,          100 },
   /* EVT_CONFIRM_OK        */ { PTN_SPARK,           CSLOT_CONFIRM_OK,        100 },

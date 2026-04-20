@@ -22,6 +22,7 @@ LedController::LedController()
     _bgArpPlayMin(8),
     _tickFlashFg(100), _tickFlashBg(25),
     _pulsePeriodMs(1472), _tickBeatDurationMs(30),
+    _tickBarDurationMs(60), _tickWrapDurationMs(100),
     _bankBlinks(3), _bankDurationMs(300), _bankBrightnessPct(80),
     _scaleRootBlinks(2), _scaleRootDurationMs(200),
     _scaleModeBlinks(2), _scaleModeDurationMs(200),
@@ -91,6 +92,7 @@ LedController::LedController()
   _colors[CSLOT_SCALE_CHROM]      = COLOR_PRESETS[8];   // Coral
   _colors[CSLOT_OCTAVE]           = COLOR_PRESETS[9];   // Violet
   _colors[CSLOT_CONFIRM_OK]       = COLOR_PRESETS[0];   // Pure White (SPARK)
+  _colors[CSLOT_VERB_STOP]        = COLOR_PRESETS[8];   // Coral (Phase 0.1 — Stop fade-out)
 }
 
 // =================================================================
@@ -879,6 +881,8 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
   _tickFlashBg = s.tickFlashBg;
   _pulsePeriodMs = s.pulsePeriodMs;
   _tickBeatDurationMs = s.tickBeatDurationMs;
+  _tickBarDurationMs  = s.tickBarDurationMs;   // Phase 0.1 : cached, consumed Phase 1+ (LoopEngine bar flash).
+  _tickWrapDurationMs = s.tickWrapDurationMs;  // Phase 0.1 : cached, consumed Phase 1+ (LoopEngine wrap flash).
   _bankBlinks = (s.bankBlinks > 0) ? s.bankBlinks : 3;
   _bankDurationMs = s.bankDurationMs;
   _bankBrightnessPct = s.bankBrightnessPct;
@@ -905,8 +909,9 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
 }
 
 void LedController::loadColorSlots(const ColorSlotStore& store) {
-  // v4 : iterate over all 15 slots. Skips any out-of-range preset (validator
-  // in ColorSlotStore clamps to valid range, this is defence-in-depth).
+  // v5 (Phase 0.1) : iterate over all 16 slots (was 15 in v4). Loop driven by
+  // COLOR_SLOT_COUNT so future bumps pick up automatically. Validator in
+  // ColorSlotStore already clamped preset IDs ; resolveColorSlot is defensive.
   for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
     _colors[i] = resolveColorSlot(store.slots[i]);
   }
@@ -1041,4 +1046,14 @@ void LedController::previewClear() {
 
 void LedController::previewShow() {
   _strip.show();
+}
+
+// ---------------------------------------------------------------------------
+// Phase 0.1 — Tool 8 preview wrapper.
+// Thin pass-through to renderPattern() so ToolLedPreview can inject arbitrary
+// PatternInstance values without duplicating runtime code. Does NOT consult or
+// mutate _eventOverlay. Caller owns inst.startTime and inst.ledMask.
+// ---------------------------------------------------------------------------
+void LedController::renderPreviewPattern(const PatternInstance& inst, unsigned long now) {
+  renderPattern(inst, now);
 }
