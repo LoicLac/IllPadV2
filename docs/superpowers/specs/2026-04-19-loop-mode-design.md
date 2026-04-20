@@ -157,7 +157,7 @@ Le loop tourne. Le musicien peut maintenant soit le laisser tourner, soit jouer 
 
 ### §8 — Overdub
 
-Pendant qu'un loop joue, taper **REC** une seconde fois fait entrer l'engine en **OVERDUBBING**. Le LED garde le fond jaune solide et passe du flash vert (PLAYING) au flash orange (OVERDUBBING) à chaque wrap (voir LED spec §17). Le loop continue de jouer. Tout ce que le musicien frappe est capturé dans un buffer temporaire d'overdub, avec la même résolution microseconde.
+Pendant qu'un loop joue, taper **REC** une seconde fois fait entrer l'engine en **OVERDUBBING**. Depuis un **STOPPED-loaded** (boucle chargée, en pause), tap REC produit la transition équivalente : l'engine repart en **PLAYING + OVERDUBBING simultanés** (reprise de la lecture à la position 0 + armement overdub). Le musicien reprend le jeu sans avoir à faire PLAY explicite. Décision Q5 pré-plan Phase 1 — voir §28. Le LED garde le fond jaune solide et passe du flash vert (PLAYING) au flash orange (OVERDUBBING) à chaque wrap (voir LED spec §17). Le loop continue de jouer. Tout ce que le musicien frappe est capturé dans un buffer temporaire d'overdub, avec la même résolution microseconde.
 
 Deux sorties possibles :
 - **Tap REC** → l'overdub est **mergé** dans la boucle principale. Les events sont fusionnés par ordre temporel, les pads tenus sont flushés (comme à la clôture d'un RECORDING initial). La boucle repart en PLAYING avec son nouveau contenu.
@@ -352,7 +352,7 @@ Table détaillée :
 
 | Geste pendant WAITING_* | WAITING_PLAY | WAITING_STOP | WAITING_LOAD |
 |---|---|---|---|
-| Tap PLAY/STOP **dans** doubleTapMs (double-tap bypass) | → PLAYING immédiat | → STOPPED immédiat | Annule load + STOPPED immédiat (1er tap annule load, 2e tap = bypass) |
+| Tap PLAY/STOP **dans** doubleTapMs (double-tap bypass) | → PLAYING immédiat | → STOPPED immédiat | Double-tap = geste atomique annule load + commit STOPPED immédiat (bypass quantize). L'engine quitte WAITING_LOAD vers STOPPED en une seule transition. |
 | Tap PLAY/STOP **hors** doubleTapMs | Annule, retour STOPPED | Annule, retour PLAYING | Annule load, puis tap applique play/stop sur PLAYING → WAITING_STOP |
 | Tap REC | Ignoré (REC n'a aucun sens sur STOPPED) | **Annule STOP + entre OVERDUBBING** | Annule load + entre OVERDUBBING |
 | Tap slot (court ou long) | **Interdit** | **Interdit** | **Interdit** (pas de changement de slot en plein load pending) |
@@ -386,7 +386,7 @@ Sur une bank ARPEG, le geste déclenche `ArpEngine::setCaptured()` — toggle pl
 Conséquences :
 - Sur la bank LOOP FG, LEFT + double-tap est **équivalent** au tap PLAY/STOP (mais plus rapide à atteindre si on est déjà en hold-left pour autre chose)
 - Sur une bank LOOP BG, LEFT + double-tap est le **seul moyen** de piloter cette bank sans la passer en FG
-- Le feedback LED (confirm HOLD_ON / HOLD_OFF) s'applique sur le LED de la bank cible, pas sur le LED FG
+- Le feedback LED (events PLAY / STOP depuis la grammaire unifiée LED spec §12) s'applique sur le LED de la bank cible, pas sur le LED FG
 
 Spécificité LOOP vs ARPEG :
 - ARPEG : double-tap sur bank pile vide → rien (aucun pile à capturer)
@@ -400,8 +400,8 @@ Le geste ne change jamais la bank courante (comportement identique à ARPEG). Le
 
 | Store | Rôle | Statut | Persisté |
 |---|---|---|---|
-| **LoopPadStore** | 3 control pads (REC, PLAY/STOP, CLEAR) + 16 slot pads | ❌ TODO Phase 1-3 | Namespace prévu : `illpad_lpad` / `pads` |
-| **LoopPotStore** | 5 effets per-bank (shuffle depth/template, chaos, vel pattern/depth) | ❌ TODO Phase 1-5 | Per-bank dans `illpad_lpot` / `loop_0..7` |
+| **LoopPadStore** | 3 control pads (REC, PLAY/STOP, CLEAR) + 16 slot pads | ❌ TODO Phase 1 (struct + validator + descriptor, pas de consommateur runtime — §27) | Namespace prévu : `illpad_lpad` / `pads`, **size 23 B strict packed** (décision Q1) |
+| **LoopPotStore** | 5 effets per-bank (shuffle depth/template, chaos, vel pattern/depth) | ❌ TODO Phase 1 (struct + validator + descriptor, layout NVS figé pour éviter 2e reset user) ; câblage effets Phase 5 | Per-bank dans `illpad_lpot` / `loop_0..7` |
 | **Slot files** | 1 fichier LittleFS par slot occupé | ❌ TODO Phase 6 | `/loops/slotNN.lpb`, partition LittleFS dédiée |
 
 Extensions des Store existants :
@@ -432,7 +432,7 @@ Le feedback LED du mode LOOP est défini par la **LED feedback unified design** 
 - **Phase 0 LED** ✅ **DONE** (commits Phase 0 + Phase 0.1). Les Phases 1-6 LOOP peuvent démarrer — les events LOOP arriveront dans un système unifié prêt.
 - **Couleurs principales LOOP** — toutes **présentes dans ColorSlotStore v5** (commit `cad7530`) : `CSLOT_MODE_LOOP` (jaune Gold preset 7), `CSLOT_VERB_PLAY` (Green preset 11), `CSLOT_VERB_REC` (Coral preset 8), `CSLOT_VERB_OVERDUB` (Amber preset 6), `CSLOT_VERB_CLEAR_LOOP` (Cyan preset 5), `CSLOT_VERB_SLOT_CLEAR` (Amber preset 6 + hue+20), `CSLOT_VERB_SAVE` (Magenta preset 10), `CSLOT_CONFIRM_OK` (Pure White preset 0, universel SPARK).
 - **Refus** : réutilise `CSLOT_VERB_REC` (Coral) via pattern `BLINK_FAST` cycles=3. Pas de color slot dédié. ✅ Pattern implémenté, callsites LOOP à câbler Phase 2+.
-- **WAITING_*** : pattern `CROSSFADE_COLOR` entre `CSLOT_MODE_LOOP` (jaune) et `CSLOT_VERB_PLAY` (vert), period hardcoded 800 ms (LED spec §4.3). ✅ Pattern implémenté.
+- **WAITING_*** : pattern `CROSSFADE_COLOR` unifié mode-invariant — **colorA = `CSLOT_VERB_PLAY` (vert, éditable Tool 8), colorB = `CSLOT_CONFIRM_OK` (blanc, hardcodé dans `triggerEvent`)**, period hardcoded 800 ms (Tool 8 respec §4.3 "Éléments non exposés"), brightness = `_fgPlayMax` / breathing max ×`bgFactor` en BG (Phase 1 step dédié §27). ✅ Pattern `CROSSFADE_COLOR` moteur implémenté ; câblage colorB blanc + brightness BG-aware = Phase 2/4 (~10 LOC). Décision Q3 — voir §28.
 - **EVT_LOOP_* enum** ✅ **réservés** dans `LedGrammar.h` (EVT_LOOP_REC, OVERDUB, SLOT_LOADED, SLOT_WRITTEN, SLOT_CLEARED, SLOT_REFUSED, CLEAR) — mapping par défaut `PTN_NONE` actuellement. À wirer Phase 4 (PotRouter + LED wiring) avec le bon `{patternId, colorSlot, fgPct}` selon LED spec §12.
 - **Tick durations BAR/WRAP** ✅ **persistées** dans LedSettingsStore v7 + **cachées** dans LedController (`_tickBarDurationMs`, `_tickWrapDurationMs`). Non consommées runtime — attendent `consumeBarFlash()` / `consumeWrapFlash()` flags dans LoopEngine Phase 2+.
 
@@ -478,6 +478,7 @@ Ces règles doivent être vraies tout au long de l'exécution. Toute modificatio
 8. **Setup/Runtime 4-link chain**. Tout paramètre persisté a son Store, son Tool UI, son chemin de load au boot, son chemin de save au runtime. Un Store sans Tool UI ou un Tool case sans consommateur runtime est un bug.
 9. **No new/delete runtime**. Toutes les allocations sont statiques. Le buffer de sérialisation LittleFS (~8 KB) est un static reusable.
 10. **No blocking on Core 0**. Le Slot Drive utilise la flash, donc bloque Core 1 pendant 20-160 ms selon l'opération. C'est accepté tant que les opérations se passent sous hold-left (musique pad gelée de toute façon). Aucune opération slot ne doit jamais se passer sur Core 0 ni pendant un jeu actif sans hold.
+11. **Au plus une bank LOOP en RECORDING ou OVERDUBBING à un instant t**. Les autres banks LOOP sont forcément PLAYING, STOPPED, ou EMPTY. Conséquence combinée des invariants 2 (bank switch refusé pendant REC/OD) et §18 (pads REC/PS/CLEAR sur FG layer musical uniquement). Décision Q8 — voir §28.
 
 ### §24 — Non-goals
 
@@ -552,11 +553,7 @@ Structure en trois groupes : **questions tranchées** (pour traçabilité), **qu
 - Color slot bank switch → `CSLOT_BANK_SWITCH` = Pure White preset 0, implémenté v4.
 - Nav keys Tool 8 → redéfinies Phase 0.1 respec (single-view, paradigme géométrique §4.4 conventions, `d` sans confirm).
 
-**Items encore à trancher spécifiquement pour la rédaction du plan d'implémentation LOOP** :
-- Max banks LOOP : 2 (archive) confirmé ici §14 + §25. À figer dans le plan.
-- Storage timestamps : µs (spec §16) confirmé — pas de PPQN. OK pour le plan.
-- Shared `PendingEvent` struct entre ArpEngine et LoopEngine (mentionné comme "Nice refactor" archive §Pre-Implementation) — décision à prendre au plan d'implémentation Phase 1 : factoriser ou dupliquer ?
-- SRAM pour 2 banks : 18.8 KB budget (§25) — à vérifier par mesure lors de Phase 2 (LoopEngine core).
+**Items encore à trancher** : **aucun**. Les 8 questions résiduelles (audit 2026-04-20) ont été tranchées — voir **§28 Décisions pré-plan Phase 1**. SRAM 2 banks reste à vérifier par mesure lors de Phase 2 (non-bloquant, suivi).
 
 #### Items LED déférés — **résolus par la LED spec 2026-04-19**
 
@@ -582,9 +579,22 @@ Ce document sert de **référence de haut niveau** pour les plans d'implémentat
 
 **Phases LOOP à venir** :
 
-1. **Phase 1** — Skeleton + guards : extension `BankType` enum (+`BANK_LOOP`), structs `LoopPadStore` / `LoopPotStore` + validators + NVS descriptors, guards dans BankManager / ScaleManager / MidiTransport pour ignorer scale sur bank LOOP. Aucune nouvelle feature visible.
+1. **Phase 1** — Skeleton + guards + LED preparation :
+   - Extension `BankType` enum (+`BANK_LOOP = 2`) ; impact cascade : validator `BankTypeStore`, Tool 5, LedController dispatch default case, main.cpp process switch.
+   - Struct `LoopPadStore` **23 B strict packed** (décision Q1, §28) + validator + NVS descriptor. Pas de consommateur runtime — layout figé pour éviter 2e reset user.
+   - Struct `LoopPotStore` per-bank + validator + NVS descriptor. Idem, câblage effets Phase 5.
+   - Guards `BankManager::switchToBank` / `ScaleManager` / `MidiTransport` pour ignorer scale + pitch bend + AT sur bank LOOP.
+   - **Step LED prep** : rename `LedSettingsStore::fgArpPlayMax` → `fgPlayMax` (propager LedController + Tool 8), déplacer ligne "FG playing brightness" vers Tool 8 section TRANSPORT (retirer de ARPEG et LOOP), panel description "shared ARPEG + LOOP playing state" (décision Q4, §28). Pas de bump NVS (rename de symbole, layout binaire identique).
+   - **Step LED WAITING BG-aware** : dans `LedController::triggerEvent`, hardcode `colorB = _colors[CSLOT_CONFIRM_OK]` pour `PTN_CROSSFADE_COLOR`, substituer `fgPct = _fgArpStopMax`, et ajouter scaling `× bgFactor` pour les LEDs non-FG dans `renderPattern` CROSSFADE_COLOR (décision Q3, §28). ~10 LOC.
+   - Aucune nouvelle feature visible pour le musicien.
 2. **Phase 2** — LoopEngine core + main wiring : classe `LoopEngine` (state machine EMPTY / RECORDING / PLAYING / OVERDUBBING / STOPPED + WAITING_* transitoires), recording avec timestamps µs, playback scalé proportionnellement, refcount noteOn/noteOff, `processLoopMode` dans main.cpp, `renderBankLoop` dans LedController (câble `EVT_LOOP_*` overrides dans `EVENT_RENDER_DEFAULT`, consomme `tickBeat/Bar/WrapDurationMs` via flags à définir). Test mode activable via `ENABLE_LOOP_MODE`.
-3. **Phase 3** — Setup tools : refactor **Tool 3 vers b1 contextuel** (3 sous-pages Banks / ARPEG / LOOP), extension **Tool 5** (3-way type cycle NORMAL/ARPEG/LOOP + `loopQuantize` per-bank), refactor **Tool 7** en 3 pages (NORMAL / ARPEG / LOOP, sans touche `t` — spec §22), extension **Tool 4** pour refuser ControlPad sur pad LOOP control (règle collision §5).
+   - **Précondition** : `PendingEvent` struct dupliqué entre ArpEngine et LoopEngine — pas de factorisation préparatoire (décision Q2, §28). LoopEngine définit son propre buffer + logique refcount, indépendant de ArpScheduler.
+   - Transition **STOPPED-loaded → tap REC = PLAYING + OVERDUBBING simultanés** (décision Q5, §28) : documenter dans la state machine LoopEngine.
+3. **Phase 3** — Setup tools :
+   - Refactor **Tool 3 vers b1 contextuel** (3 sous-pages Banks / ARPEG / LOOP). Miroir de la règle collision §5 rule 2 : refus d'assigner LOOP REC/PS/CLEAR sur un pad déjà ControlPad.
+   - Extension **Tool 5** (3-way type cycle NORMAL/ARPEG/LOOP + `loopQuantize` per-bank) en **présentation inline existante** — refactor "colonnes" évoqué §6 footnote **deferred post-Phase 6 only if needed** (décision Q6, §28).
+   - Refactor **Tool 7** en 3 pages (NORMAL / ARPEG / LOOP, sans touche `t` — spec §22).
+   - Extension **Tool 4** pour refuser ControlPad sur pad LOOP control (règle collision §5 rule 2, **bundle Phase 3** avec Tool 3 b1 — décision Q7, §28). Validation bi-directionnelle via helper `LoopPadStore::isLoopControlPad(padIndex)`.
 4. **Phase 4** — PotRouter + LED wiring : `PotMappingStore` passe à 3 contextes (+8 slots LOOP), rendu `renderBankLoop` complet, mapping `EVT_LOOP_*` → patterns concrets dans `EVENT_RENDER_DEFAULT` (LED spec §12), câblage `consumeBarFlash`/`consumeWrapFlash` flags depuis LoopEngine vers LedController.
 5. **Phase 5** — Effets : shuffle (shared templates avec ARPEG), chaos avec re-seed sur retour à zéro, velocity patterns (4 LUTs), bloc pots LOOP complet.
 6. **Phase 6** — Slot Drive : partition LittleFS 512 KB, `LoopSlotStore` (format fichier binaire), serialize/deserialize, `handleLoopSlots` (load/save/delete gestes), Tool 3 slot role section (16 slot pads hold-left context LOOP).
@@ -595,4 +605,32 @@ Chaque phase aura son **plan détaillé** séparé (via skill `superpowers:writi
 
 ---
 
-**Spec VALIDÉE post Phase 0.1** (2026-04-20). Prête à servir d'entrée pour la rédaction du plan d'implémentation Phase 1.
+## Partie 8 — Décisions pré-plan Phase 1
+
+### §28 — Tranchage des 8 questions résiduelles (2026-04-20)
+
+Suite à l'audit de cohérence `docs/superpowers/reports/rapport_audit_loop_spec.md`, 8 questions résiduelles ont été identifiées et tranchées en session brainstorming. Section de traçabilité :
+
+| # | Question | Décision actée | Référence |
+|---|---|---|---|
+| Q1 | `LoopPadStore` size | **23 B strict packed** (3 controls + 16 slots). nvs-reference.md corrigé (8 B → 23 B). | §20 |
+| Q2 | `PendingEvent` factorisé ou dupliqué entre ArpEngine et LoopEngine | **Dupliqué**. LoopEngine définit sa propre struct + buffer + logique refcount. Raison : besoins divergents (timestamps µs vs ticks PPQN), éviter refactor ArpEngine qui marche (principe DO NOT MODIFY étendu aux pièces musicales calibrées), budget SRAM non contraint (+64-128 B négligeable). | §27 Phase 2 |
+| Q3 | `EVT_WAITING` mode-aware (ARPEG bleu vs LOOP jaune) | **1 event unique**. colorA = `CSLOT_VERB_PLAY` (vert, éditable Tool 8), colorB = `CSLOT_CONFIRM_OK` (blanc, hardcodé dans `triggerEvent`), brightness = `_fgArpStopMax` (breathing max, partagé avec "Breathing" ligne Tool 8) × `_bgFactor` en BG. Mode-invariant assumé : WAITING est une transition courte (800 ms), la couleur de fond du mode réapparaît au résultat. Alignement avec critère F1 "Action = pattern invariant" (LED spec §2). ~10 LOC, 0 bump NVS. | §21, §27 Phase 1 step |
+| Q4 | `LOOP FG brightness` : field séparé ou partagé avec ARPEG | **Partagé + refactor**. Renommer `LedSettingsStore::fgArpPlayMax` → `fgPlayMax` (layout NVS identique, pas de bump). Tool 8 : retirer "FG brightness" des sections ARPEG + LOOP, ajouter ligne unique "Playing FG brightness (ARPEG + LOOP)" en section TRANSPORT à côté de Breathing. Rationale : LED spec §16+§17 specifient 70% pour les deux modes (aucun besoin de différenciation démontré) ; section TRANSPORT est le home sémantique cohérent (tout ce qui concerne les états de transport). | §27 Phase 1 step |
+| Q5 | Comportement STOPPED-loaded + tap REC | **PLAYING + OVERDUBBING simultanés** (option a). Reprise de la lecture position 0 + armement overdub en un geste. Cohérent avec §8 (PLAYING → REC = OVERDUBBING). Le musicien n'a pas à faire PLAY explicite avant d'overdub. | §8, §27 Phase 2 |
+| Q6 | Tool 5 refactor "présentation en colonnes" | **Phase 3 minimal, refactor deferred**. Tool 5 Phase 3 conserve la présentation inline actuelle, ajoute juste 3-way type + `loopQuantize` per-bank. Refactor colonnes reportable post-Phase 6 si nécessaire — avec 3 types + 1 param par bank, l'inline reste lisible. Aligné avec CLAUDE.md principe "scope strict". | §27 Phase 3 |
+| Q7 | Tool 4 extension (refus ControlPad sur pad LOOP control) | **Phase 3 bundle** avec Tool 3 b1. Validation bi-directionnelle (Tool 3 et Tool 4 se connaissent mutuellement via helper `LoopPadStore::isLoopControlPad`). Pas de pré-wiring Phase 1/2 (pas de chemin de création du conflit avant Phase 3). | §27 Phase 3 |
+| Q8 | Max 1 bank LOOP en REC/OD à un instant t ? | **Oui, expliciter comme invariant 11 §23**. Conséquence combinée des invariants 2 (bank switch refusé pendant REC/OD) et §18 (pads REC/PS/CLEAR sur FG layer musical uniquement). Coût : 1 ligne spec, permet LoopEngine + `renderBankLoop` de faire des hypothèses explicites sans code défensif. Aligne spec LOOP avec LED spec §17 table ("BG RECORDING/OVERDUBBING : impossible"). | §23 |
+
+### §29 — Drifts spec↔code résolus via ces décisions
+
+L'audit a flagué 4 drifts spec↔code (cf rapport §3) :
+
+- **F2.2** (`EVT_WAITING` colorA hardcodé ARPEG) → résolu par Q3 (pas de scission, hardcode colorB blanc via `triggerEvent`, brightness BG-aware). Step Phase 1 spécifié §27.
+- **F2.3** (`LINE_LOOP_FG_PCT` partage silencieusement `fgArpPlayMax`) → résolu par Q4 (rename field + déplacement Tool 8 TRANSPORT). Step Phase 1 spécifié §27.
+- **F2.4** (`LoopPadStore` size=8 B dans nvs-reference) → corrigé nvs-reference.md à 23 B (Q1).
+- **F2.5** (`renderPreviewPattern` signature drift) : Tool 8 respec §6.6 à mettre à jour rétroactivement (signature sans `ledMask`). Non-bloquant — à traiter en tâche séparée ou ignorer.
+
+---
+
+**Spec VALIDÉE post Phase 0.1 + tranchage pré-plan** (2026-04-20). Prête à servir d'entrée pour la rédaction du plan d'implémentation Phase 1.

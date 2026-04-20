@@ -104,7 +104,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `ControlPadStore` | `illpad_ctrl` | `pads` | 0xBEEF | 2 | 82B | 12 sparse entries + 3 global DSP params (v2) for Tool 4 Control Pads. Globals : `smoothMs` (EMA tau, CONTINUOUS pressed), `sampleHoldMs` (ring-buffer look-back for HOLD_LAST capture), `releaseMs` (linear fade-out duration for RETURN_TO_ZERO). Each entry : padIndex, ccNumber, channel, mode, deadzone, releaseMode. Validator : `validateControlPadStore()` clamps globals + entries + enforces LATCH-requires-fixed-channel invariant. |
 | `ArpPadStore` | `illpad_apad` | `pads` | 0xBEEF | 2 | 12B | 2 separate keys (hold_pad, oct_pads) — v2 drops legacy play/stop pad |
 | `BankTypeStore` | `illpad_btype` | `config` | 0xBEEF | 2 | 28B | raw types[8] + qmode[8] (2 blobs, desync risk). v2 adds `scaleGroup[8]` (0=none, 1..4=A..D) for inter-bank scale linking |
-| `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 8B | **PLANNED** — not yet in code |
+| `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 23B | **PLANNED** Phase 1 — 3 controls (REC/PS/CLR) + 16 slots, strict packed, not yet in code |
 
 ### Non-Blob Namespaces (scalar values, not Store structs)
 
