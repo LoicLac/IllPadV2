@@ -2,131 +2,208 @@
 #define TOOL_LED_SETTINGS_H
 
 #include <stdint.h>
-#include "../core/KeyboardData.h"  // ColorSlotStore, COLOR_SLOT_COUNT
-
-// =================================================================
-// Tool 8 — LED Settings (Phase 0 step 0.8 refactor)
-// =================================================================
-// Three-page editor aligned with the unified LED grammar (LED spec) and
-// the setup-tools-conventions (grid / pool / field editor paradigms) :
-//
-//   PAGE_PATTERNS : pool of 9 palette patterns + field editor for the
-//                   selected pattern's params. Live preview on LED 3-4.
-//   PAGE_COLORS   : vertical list of 15 color slots (rows). ENTER opens
-//                   an edit sub-state with 2 focusable fields :
-//                   preset (pool of 14) + hue offset (field editor).
-//                   Preview = SOLID on LED 3-4 with current slot color.
-//   PAGE_EVENTS   : vertical field list. Each event row edits
-//                   pattern (pool) + color slot (pool) + fgPct (field).
-//
-// Inter-page nav : 't' cycles PATTERNS -> COLORS -> EVENTS -> PATTERNS
-//                  (not arrows — arrows stay for cursor nav per §6).
-// Save policy     : save on ENTER commit of pool / field editor ; never
-//                   on arrow-key navigation (conventions §1). One
-//                   flashSaved() per commit (conventions §2).
-//
-// Step 0.8a : skeleton with page navigation and stub content per page.
-// Step 0.8b : COLORS page implementation (this commit).
-// Step 0.8c : PATTERNS page implementation.
-// Step 0.8d : EVENTS page implementation (wires NVS eventOverrides[]).
-// Step 0.8e : polish, preview integration, flashSaved audit.
-// =================================================================
+#include "../core/KeyboardData.h"
+#include "ToolLedPreview.h"
 
 class LedController;
 class SetupUI;
+class PotRouter;
+
+// =================================================================
+// Tool 8 — LED Settings (Phase 0.1 respec : single-view 6 sections)
+// =================================================================
+// Spec: docs/superpowers/specs/2026-04-20-tool8-ux-respec-design.md
+//
+// Single scrollable view with 6 semantic sections (NORMAL / ARPEG / LOOP /
+// TRANSPORT / CONFIRMATIONS / GLOBAL). NAV+EDIT paradigm:
+//   NAV   : up/down = line, left/right = skip section, ENTER = edit,
+//           d = reset line to default, q = exit tool
+//   EDIT  : context-sensitive — color line: left/right cycle preset,
+//                                           up/down cycle hue
+//                              single num: left/right ±10, up/down ±1
+//                              multi num : left/right focus field,
+//                                          up/down adjust focused value
+//
+// Live preview via ToolLedPreview — context set on cursor move or value
+// change. Gamma hot-reloads on commit (no reboot required).
+// =================================================================
 
 class ToolLedSettings {
 public:
   ToolLedSettings();
-  void begin(LedController* leds, SetupUI* ui);
+  void begin(LedController* leds, SetupUI* ui, PotRouter* potRouter,
+             BankSlot* banks);
   void run();
 
+  // Enums promoted to public scope for file-scope static tables that index
+  // by these values (SECTION_LABELS[], LINE_LABELS[], LINE_DESCRIPTIONS[]).
+  // Purely internal semantics — no external consumer.
+
+  // -------- Section model --------
+  enum Section : uint8_t {
+    SEC_NORMAL         = 0,
+    SEC_ARPEG          = 1,
+    SEC_LOOP           = 2,
+    SEC_TRANSPORT      = 3,
+    SEC_CONFIRMATIONS  = 4,
+    SEC_GLOBAL         = 5,
+    SEC_COUNT          = 6,
+  };
+
+  // Flat enum of every navigable/editable line. Order = visible layout
+  // order (spec §4.1). Section resolution via sectionOf() helper.
+  enum LineId : uint8_t {
+    LINE_NORMAL_BASE_COLOR = 0,
+    LINE_NORMAL_FG_PCT,
+
+    LINE_ARPEG_BASE_COLOR,
+    LINE_ARPEG_FG_PCT,
+
+    LINE_LOOP_BASE_COLOR,
+    LINE_LOOP_FG_PCT,
+    LINE_LOOP_SAVE_COLOR,
+    LINE_LOOP_SAVE_DURATION,
+    LINE_LOOP_CLEAR_COLOR,
+    LINE_LOOP_CLEAR_DURATION,
+    LINE_LOOP_SLOT_COLOR,
+    LINE_LOOP_SLOT_DURATION,
+
+    LINE_TRANSPORT_PLAY_COLOR,
+    LINE_TRANSPORT_PLAY_TIMING,        // multi : brightness + duration
+    LINE_TRANSPORT_STOP_COLOR,
+    LINE_TRANSPORT_STOP_TIMING,        // multi : brightness + duration
+    LINE_TRANSPORT_WAITING_COLOR,
+    LINE_TRANSPORT_BREATHING,          // multi : min + max + period
+    LINE_TRANSPORT_TICK_COMMON,        // multi : FG + BG %
+    LINE_TRANSPORT_TICK_PLAY_COLOR,
+    LINE_TRANSPORT_TICK_REC_COLOR,
+    LINE_TRANSPORT_TICK_OVERDUB_COLOR,
+    LINE_TRANSPORT_TICK_BEAT_DUR,
+    LINE_TRANSPORT_TICK_BAR_DUR,
+    LINE_TRANSPORT_TICK_WRAP_DUR,
+
+    LINE_CONFIRM_BANK_COLOR,
+    LINE_CONFIRM_BANK_TIMING,          // multi : brightness + duration
+    LINE_CONFIRM_SCALE_ROOT_COLOR,
+    LINE_CONFIRM_SCALE_ROOT_TIMING,    // multi : brightness (override) + duration
+    LINE_CONFIRM_SCALE_MODE_COLOR,
+    LINE_CONFIRM_SCALE_MODE_TIMING,
+    LINE_CONFIRM_SCALE_CHROM_COLOR,
+    LINE_CONFIRM_SCALE_CHROM_TIMING,
+    LINE_CONFIRM_OCTAVE_COLOR,
+    LINE_CONFIRM_OCTAVE_TIMING,        // multi : brightness (override) + duration
+    LINE_CONFIRM_OK_COLOR,
+    LINE_CONFIRM_OK_SPARK,             // multi : on + gap + cycles
+
+    LINE_GLOBAL_BG_FACTOR,
+    LINE_GLOBAL_GAMMA,
+
+    LINE_COUNT,
+  };
+
 private:
-  enum Page : uint8_t {
-    PAGE_PATTERNS = 0,
-    PAGE_COLORS   = 1,
-    PAGE_EVENTS   = 2,
-    PAGE_COUNT    = 3,
+  enum UiMode : uint8_t {
+    UI_NAV  = 0,  // cursor on a line, no edit
+    UI_EDIT = 1,  // editing the selected line (paradigm depends on LineId)
   };
 
-  // COLORS page sub-states
-  enum ColorsSubState : uint8_t {
-    COLORS_NAV   = 0,  // cursor selecting a slot row
-    COLORS_EDIT  = 1,  // editing the selected slot (preset + hue)
+  // Line shape (drives the edit paradigm + renderer branch).
+  enum LineShape : uint8_t {
+    SHAPE_COLOR        = 0,  // [preset] +hue  ; left/right preset, up/down hue
+    SHAPE_SINGLE_NUM   = 1,  // one numeric   ; left/right ±coarse, up/down ±fine
+    SHAPE_MULTI_NUM    = 2,  // N>=2 numerics ; left/right focus, up/down adjust
   };
 
-  // COLORS edit focus : which of the 2 fields is active
-  enum ColorsEditField : uint8_t {
-    EDIT_FIELD_PRESET = 0,
-    EDIT_FIELD_HUE    = 1,
-  };
+  // -------- Working copies + backups --------
+  LedSettingsStore _lwk;        // working copy for LED settings (v7)
+  ColorSlotStore   _cwk;        // working copy for color slots (v5)
+  SettingsStore    _ses;        // working copy for LOOP timers (v11, shared w/ Tool 6)
 
-  // PATTERNS page sub-states
-  enum PatternsSubState : uint8_t {
-    PATTERNS_NAV  = 0,  // pool cursor over 9 patterns
-    PATTERNS_EDIT = 1,  // field editor for selected pattern's globals
-  };
+  LedSettingsStore _lwkBackup;  // snapshot at enterEdit, restored on cancelEdit
+  ColorSlotStore   _cwkBackup;
+  SettingsStore    _sesBackup;
 
-  // EVENTS page sub-states
-  enum EventsSubState : uint8_t {
-    EVENTS_NAV  = 0,  // cursor over event rows
-    EVENTS_EDIT = 1,  // editing an event : focus cycles pattern/color/fgPct
-  };
+  // Snapshot of foreground bank type at setup entry (for WAITING preview
+  // §11.5 — source color of the crossfade = current mode color).
+  BankType         _setupEntryBankType;
 
-  // EVENTS edit focus : which of the 3 fields is active
-  enum EventsEditField : uint8_t {
-    EVT_FIELD_PATTERN = 0,
-    EVT_FIELD_COLOR   = 1,
-    EVT_FIELD_FG_PCT  = 2,
-  };
+  // -------- Injected deps --------
+  LedController*   _leds;
+  SetupUI*         _ui;
+  PotRouter*       _potRouter;   // tempo source for ToolLedPreview
+  BankSlot*        _banks;       // read isForeground + type at run() entry
 
-  LedController* _leds;
-  SetupUI*       _ui;
-  Page           _page;
-  bool           _nvsSaved;  // NVS badge state in header
+  // -------- Cursor + mode --------
+  LineId   _cursor;
+  UiMode   _uiMode;
+  uint8_t  _editFocus;     // for SHAPE_MULTI_NUM : 0..N-1 field under focus
+  bool     _nvsSaved;
+  uint8_t  _viewportStart; // first visible LineId (scroll)
 
-  // COLORS page state
-  ColorSlotStore   _cwk;                  // working copy loaded from NVS
-  uint8_t          _colorsCursor;         // 0..COLOR_SLOT_COUNT-1
-  ColorsSubState   _colorsSub;
-  ColorsEditField  _colorsEditField;
-  ColorSlot        _colorsEditBackup;     // for cancel (q) during edit
+  // -------- Preview --------
+  ToolLedPreview _preview;
 
-  // PATTERNS page state
-  LedSettingsStore _lwk;                  // working copy for pattern globals + event overrides
-  uint8_t          _patternsCursor;       // 0..8 (PatternId pool index)
-  PatternsSubState _patternsSub;
-  uint8_t          _patternsEditField;    // 0..N-1 per selected pattern
-  LedSettingsStore _patternsEditBackup;   // for cancel (q)
-
-  // EVENTS page state
-  uint8_t          _eventsCursor;         // 0..NUM_PHASE0_EVENTS-1 (visible events)
-  EventsSubState   _eventsSub;
-  EventsEditField  _eventsEditField;
-  EventRenderEntry _eventsEditBackup;     // for cancel (q) during edit
-
-  // Page renderers
-  void renderPagePatterns();
-  void renderPageColors();
-  void renderPageEvents();
-
-  // COLORS page helpers
-  void handlePageColors(const struct NavEvent& ev, bool& screenDirty);
-  void previewCurrentColor();
-  bool saveColorSlots();
-  void resetCurrentColorToDefault();
-
-  // PATTERNS page helpers
-  void handlePagePatterns(const struct NavEvent& ev, bool& screenDirty);
-  uint8_t patternEditFieldCount(uint8_t patternId) const;
-  void adjustPatternField(uint8_t patternId, uint8_t field, int dir, bool accel);
+  // -------- Run loop helpers --------
+  void loadAll();
   bool saveLedSettings();
-  void renderPatternParamsPanel(uint8_t patternId, bool editing) const;
+  bool saveColorSlots();
+  bool saveSettings();
+  void refreshBadge();
 
-  // EVENTS page helpers
-  void handlePageEvents(const struct NavEvent& ev, bool& screenDirty);
-  void adjustEventField(uint8_t eventIdx, uint8_t field, int dir, bool accel);
-  void resetCurrentEventToDefault();
+  // -------- Navigation --------
+  Section sectionOf(LineId line) const;
+  LineId  firstLineOfSection(Section s) const;
+  LineId  lastLineOfSection(Section s) const;
+  void    cursorUp();
+  void    cursorDown();
+  void    cursorNextSection();
+  void    cursorPrevSection();
+  void    ensureCursorVisible();
+
+  // -------- Edit dispatch --------
+  void    enterEdit();
+  void    commitEdit();              // ENTER
+  void    cancelEdit();               // q in edit : restore backup
+  void    resetLineDefault();         // d : no confirm, immediate save
+
+  // Edit paradigms — dir values : dx ∈ {-1, 0, +1}, dy ∈ {-1, 0, +1}.
+  // accel = InputParser rapid-repeat flag.
+  void    editColor(LineId line, int dx, int dy, bool accel);
+  void    editSingleNumeric(LineId line, int dx, int dy, bool accel);
+  void    editMultiNumeric(LineId line, int dx, int dy, bool accel);
+
+  // -------- Line introspection (centralizes line -> data mapping) --------
+  LineShape   shapeForLine(LineId line) const;
+  ColorSlot*  colorSlotForLine(LineId line);                         // SHAPE_COLOR
+  uint8_t     numericFieldCountForLine(LineId line) const;            // SHAPE_SINGLE/MULTI
+  int32_t     readNumericField(LineId line, uint8_t fieldIdx) const;
+  void        writeNumericField(LineId line, uint8_t fieldIdx, int32_t newVal);
+  void        getNumericFieldBounds(LineId line, uint8_t fieldIdx,
+                                    int32_t& minOut, int32_t& maxOut,
+                                    int32_t& stepCoarseOut,
+                                    int32_t& stepFineOut) const;
+
+  // -------- Rendering --------
+  void drawScreen();
+  void drawLine(LineId line, bool isCursor, bool inEdit);
+  void drawDescriptionPanel();
+  const char* descriptionForLine(LineId line, bool inEdit) const;
+
+  // Preview context dispatch — called on cursor move or value change.
+  void updatePreviewContext();
+
+  // Default reset per line (spec §9 defaults).
+  void resetDefaultForLine(LineId line);
+
+  // Helper : resolve the "effective" fgPct for event-override-based
+  // brightness fields (scale root/mode/chrom, octave, play, stop).
+  // If eventOverrides[evt].patternId == PTN_NONE, return EVENT_RENDER_DEFAULT
+  // fgPct ; else return override fgPct.
+  uint8_t  effectiveEventFgPct(uint8_t evt) const;
+  // Writing back respects the override activation pattern : sets patternId
+  // to EVENT_RENDER_DEFAULT[evt].patternId if currently PTN_NONE, preserves
+  // the default colorSlot, and stores the new fgPct.
+  void     setEventOverrideFgPct(uint8_t evt, uint8_t newFgPct);
 };
 
 #endif // TOOL_LED_SETTINGS_H

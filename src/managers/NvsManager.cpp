@@ -52,24 +52,24 @@ NvsManager::NvsManager()
   _ledSettings.tickBarDurationMs  = 60;
   _ledSettings.tickWrapDurationMs = 100;
   _ledSettings.gammaTenths = 20;  // gamma 2.0 default
-  // SPARK params (v6 new)
-  _ledSettings.sparkOnMs = 50;
-  _ledSettings.sparkGapMs = 70;
-  _ledSettings.sparkCycles = 2;
-  // Confirmations (legacy v5, still used until event engine takes over)
+  // SPARK params (Phase 0.1 tuning : shorter + more cycles)
+  _ledSettings.sparkOnMs = 20;
+  _ledSettings.sparkGapMs = 40;
+  _ledSettings.sparkCycles = 4;
+  // Confirmations (Phase 0.1 tuning : snappier bank/scale/octave)
   _ledSettings.bankBlinks = 3;
-  _ledSettings.bankDurationMs = 300;
+  _ledSettings.bankDurationMs = 150;
   _ledSettings.bankBrightnessPct = 80;
   _ledSettings.scaleRootBlinks = 2;
-  _ledSettings.scaleRootDurationMs = 200;
+  _ledSettings.scaleRootDurationMs = 130;
   _ledSettings.scaleModeBlinks = 2;
-  _ledSettings.scaleModeDurationMs = 200;
+  _ledSettings.scaleModeDurationMs = 130;
   _ledSettings.scaleChromBlinks = 2;
-  _ledSettings.scaleChromDurationMs = 200;
+  _ledSettings.scaleChromDurationMs = 130;
   _ledSettings.holdOnFadeMs = 500;
   _ledSettings.holdOffFadeMs = 500;
   _ledSettings.octaveBlinks = 3;
-  _ledSettings.octaveDurationMs = 300;
+  _ledSettings.octaveDurationMs = 130;
   // Event overrides : all PTN_NONE by default -> fallback on EVENT_RENDER_DEFAULT
   for (uint8_t i = 0; i < EVT_COUNT; i++) {
     _ledSettings.eventOverrides[i].patternId = PTN_NONE;

@@ -1,838 +1,1393 @@
+// =================================================================
+// Tool 8 — LED Settings (Phase 0.1 respec : single-view 6 sections)
+// =================================================================
+// Complete rewrite replacing the 3-page PATTERNS/COLORS/EVENTS UI with a
+// single scrollable view organized around musician-facing semantics :
+//   [NORMAL] [ARPEG] [LOOP] [TRANSPORT] [CONFIRMATIONS] [GLOBAL]
+//
+// Spec : docs/superpowers/specs/2026-04-20-tool8-ux-respec-design.md
+// Plan : docs/superpowers/plans/2026-04-20-tool8-ux-respec-plan.md §4
+// =================================================================
+
 #include "ToolLedSettings.h"
-#include "SetupUI.h"
-#include "InputParser.h"
+#include "../managers/NvsManager.h"
+#include "../managers/PotRouter.h"
 #include "../core/LedController.h"
 #include "../core/LedGrammar.h"
-#include "../core/HardwareConfig.h"
-#include "../managers/NvsManager.h"
+#include "SetupUI.h"
+#include "InputParser.h"
 #include <Arduino.h>
+#include <string.h>
 
 // =================================================================
-// Tool 8 — LED Settings (Phase 0 step 0.8e — polish complete)
-// =================================================================
-// Three-page editor for the unified LED grammar :
-//   COLORS   : 15 color slots (preset + hue offset)   [§0.8b]
-//   PATTERNS : 9 palette patterns, 4 with editable globals  [§0.8c]
-//   EVENTS   : 10 Phase 0 events, per-event {pattern, color, fgPct}
-//              override ; PTN_NONE sentinel = fallback on
-//              EVENT_RENDER_DEFAULT                      [§0.8d]
-//
-// Conventions respected :
-//   §1 Save on commit only. ENTER commits, 'q' cancels (no save).
-//      'd' on an item resets it to default, which IS a commit (saves).
-//   §2 One flashSaved() per commit — audited via grep.
-//   §3 LED 3-4 driven by the tool in preview mode (COLORS page).
-//   §4 3 canonical paradigms : grid-like cursor list (NAV), pool
-//      (pattern / color / preset cycling via LEFT/RIGHT), field editor
-//      (numeric adjustments with accel).
-//   §6 't' toggles pages ; arrows strictly intra-page.
-//      Two-step exit : 'q' in sub-state cancels edit, 'q' in NAV exits tool.
+// Static tables (file scope) — labels, section metadata, descriptions.
+// All const, flash-resident (zero impact on SRAM).
 // =================================================================
 
-// Short labels (max 16 chars) for each color slot — indexed by ColorSlotId.
-static const char* const COLOR_SLOT_LABELS[COLOR_SLOT_COUNT] = {
-  "MODE_NORMAL",      // 0
-  "MODE_ARPEG",       // 1
-  "MODE_LOOP",        // 2
-  "VERB_PLAY",        // 3
-  "VERB_REC",         // 4
-  "VERB_OVERDUB",     // 5
-  "VERB_CLEAR_LOOP",  // 6
-  "VERB_SLOT_CLEAR",  // 7
-  "VERB_SAVE",        // 8
-  "BANK_SWITCH",      // 9
-  "SCALE_ROOT",       // 10
-  "SCALE_MODE",       // 11
-  "SCALE_CHROM",      // 12
-  "OCTAVE",           // 13
-  "CONFIRM_OK",       // 14
-  "VERB_STOP",        // 15 (Phase 0.1)
+// Section display labels (upper-case, no ANSI prefix — SetupUI::drawSection applies).
+static const char* const SECTION_LABELS[ToolLedSettings::SEC_COUNT] = {
+  "NORMAL", "ARPEG", "LOOP", "TRANSPORT", "CONFIRMATIONS", "GLOBAL",
 };
 
-// Default preset per slot (mirrors NvsManager::_colorSlots init).
-static const uint8_t DEFAULT_SLOT_PRESETS[COLOR_SLOT_COUNT] = {
-  1, 3, 7, 11, 8, 6, 5, 6, 10, 0, 6, 7, 8, 9, 0, 8  // last: CSLOT_VERB_STOP = Coral (Phase 0.1)
-};
-// Default hue offset per slot (VERB_SLOT_CLEAR = +20 to distinguish from VERB_OVERDUB).
-static const int8_t DEFAULT_SLOT_HUES[COLOR_SLOT_COUNT] = {
-  0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0
+// Visible line labels. Ordered by LineId. Used by drawLine().
+static const char* const LINE_LABELS[ToolLedSettings::LINE_COUNT] = {
+  // NORMAL
+  "Base color",
+  "FG brightness",
+  // ARPEG
+  "Base color",
+  "FG brightness",
+  // LOOP
+  "Base color",
+  "FG brightness",
+  "Save slot",
+  "  duration",
+  "Clear loop (hold)",
+  "  duration",
+  "Clear slot (combo)",
+  "  duration",
+  // TRANSPORT
+  "Play fade-in",
+  "  timing",
+  "Stop fade-out",
+  "  timing",
+  "Waiting quantise",
+  "Breathing",
+  "Tick common",
+  "Tick PLAY",
+  "Tick REC",
+  "Tick OVERDUB",
+  "Tick BEAT duration",
+  "Tick BAR duration",
+  "Tick WRAP duration",
+  // CONFIRMATIONS
+  "Bank switch",
+  "  timing",
+  "Scale root",
+  "  timing",
+  "Scale mode",
+  "  timing",
+  "Scale chromatic",
+  "  timing",
+  "Octave",
+  "  timing",
+  "Confirm OK (SPARK)",
+  "  timing",
+  // GLOBAL
+  "BG factor",
+  "Master gamma",
 };
 
-// Phase 0 events (Tool 8 PAGE_EVENTS shows these, hides LOOP reserved).
-// Index is the EventId ; the EVENTS page cursor traverses this array in
-// order.
-static const uint8_t PHASE0_EVENT_IDS[] = {
-  EVT_BANK_SWITCH,
-  EVT_SCALE_ROOT,
-  EVT_SCALE_MODE,
-  EVT_SCALE_CHROM,
-  EVT_OCTAVE,
-  EVT_PLAY,
-  EVT_STOP,
-  EVT_WAITING,
-  EVT_REFUSE,
-  EVT_CONFIRM_OK,
+// Description panel (spec §5.3) — one line per LineId, optionally multi-line
+// separated by '\n' (caller wraps). Flash-resident.
+static const char* const LINE_DESCRIPTIONS[ToolLedSettings::LINE_COUNT] = {
+  "NORMAL base color - identifies NORMAL banks. FG shown at FG brightness, BG via BG factor.",
+  "Foreground brightness for NORMAL banks (10-100%). BG derives as FG x BG factor.",
+  "ARPEG base color - identifies ARPEG banks. Breathing when stopped-loaded.",
+  "Foreground brightness for ARPEG banks (10-100%). Applied when playing (solid).",
+  "LOOP base color - identifies LOOP banks. Consumed Phase 1+ (runtime dormant).",
+  "Foreground brightness for LOOP banks (10-100%). Consumed Phase 1+.",
+  "Save slot color - shown during the long-press ramp on slot pad (LOOP Phase 1+).",
+  "Hold duration to trigger slot save (500-2000 ms). Shared with Tool 6.",
+  "Clear loop color - shown during the long-press ramp on clear pad (LOOP Phase 1+).",
+  "Hold duration to clear a LOOP bank (200-1500 ms). Shared with Tool 6.",
+  "Slot delete color - visual feedback for the instant delete combo (not a hold).",
+  "Visual duration of the slot delete feedback (400-1500 ms). Gesture is instant.",
+  "Play fade-in color - flashes on Hold on or double-tap Play.",
+  "Left/right focus: brightness (0-100) or duration (0-1000 ms). Up/down adjusts.",
+  "Stop fade-out color - flashes on Hold off or double-tap Stop.",
+  "Left/right focus: brightness (0-100) or duration (0-1000 ms). Up/down adjusts.",
+  "Waiting quantise color - crossfades with mode color while waiting for beat/bar.",
+  "Breathing min%, max%, period. Applies to FG ARPEG / LOOP stopped-loaded.",
+  "Tick FG% and BG% - shared flash intensity across PLAY/REC/OVERDUB ticks.",
+  "Tick PLAY color - ARPEG step flash and LOOP playing wrap tick.",
+  "Tick REC color - LOOP recording bar and wrap ticks (Phase 1+).",
+  "Tick OVERDUB color - LOOP overdubbing wrap tick (Phase 1+).",
+  "Tick BEAT duration (5-500 ms). Consumed now for ARPEG step flash.",
+  "Tick BAR duration (5-500 ms). Consumed Phase 1+ for LOOP bar flash.",
+  "Tick WRAP duration (5-500 ms). Consumed Phase 1+ for LOOP wrap flash.",
+  "Bank switch confirmation color - blinks on destination bank pad.",
+  "Left/right focus: brightness (0-100) or duration (100-500 ms). Up/down adjusts.",
+  "Scale root change color - blinks on changed pads (fires group when linked).",
+  "Left/right focus: brightness or duration (100-500 ms). Up/down adjusts.",
+  "Scale mode change color - blinks on changed pads.",
+  "Left/right focus: brightness or duration (100-500 ms). Up/down adjusts.",
+  "Scale chromatic toggle color - blinks on changed pads.",
+  "Left/right focus: brightness or duration (100-500 ms). Up/down adjusts.",
+  "Octave change color - blinks on the octave pad (ARPEG only).",
+  "Left/right focus: brightness or duration (100-500 ms). Up/down adjusts.",
+  "Confirm OK color - universal SPARK suffix (e.g. after a Tool save).",
+  "Left/right focus: on (20-200 ms), gap (20-300 ms), cycles (1-4). Up/down adjusts.",
+  "BG factor (10-50%). All BG banks render as FG color x this ratio.",
+  "Master gamma (1.0-3.0). Affects perceptual LED intensity curve. Hot-reloaded.",
 };
-static const uint8_t NUM_PHASE0_EVENTS = sizeof(PHASE0_EVENT_IDS);
 
-static const char* const PHASE0_EVENT_LABELS[NUM_PHASE0_EVENTS] = {
-  "BANK_SWITCH",
-  "SCALE_ROOT",
-  "SCALE_MODE",
-  "SCALE_CHROM",
-  "OCTAVE",
-  "PLAY",
-  "STOP",
-  "WAITING",
-  "REFUSE",
-  "CONFIRM_OK",
-};
+// Viewport size (content lines visible simultaneously). Sized for a 40-line
+// terminal : ~1 header + frame top + 25 content + description (3) + frame
+// bottom + control bar. Section titles render inline and do not count here ;
+// a small slack absorbs the overhead (1 title per section = up to 6 extra rows
+// if viewport spans all sections — in practice 1-2 visible at a time).
+static const uint8_t VIEWPORT_SIZE = 22;
 
-// Pattern pool labels (short, aligned with LED spec §10 palette).
-static const char* const PATTERN_POOL_LABELS[PTN_COUNT] = {
-  "SOLID",            // 0
-  "PULSE_SLOW",       // 1
-  "CROSSFADE_COLOR",  // 2
-  "BLINK_SLOW",       // 3
-  "BLINK_FAST",       // 4
-  "FADE",             // 5
-  "FLASH",            // 6
-  "RAMP_HOLD",        // 7
-  "SPARK",            // 8
-};
+// =================================================================
+// Constructor + begin
+// =================================================================
 
 ToolLedSettings::ToolLedSettings()
-  : _leds(nullptr), _ui(nullptr), _page(PAGE_COLORS),
-    _nvsSaved(false),
-    _cwk{},
-    _colorsCursor(0),
-    _colorsSub(COLORS_NAV),
-    _colorsEditField(EDIT_FIELD_PRESET),
-    _colorsEditBackup{},
-    _lwk{},
-    _patternsCursor(0),
-    _patternsSub(PATTERNS_NAV),
-    _patternsEditField(0),
-    _patternsEditBackup{},
-    _eventsCursor(0),
-    _eventsSub(EVENTS_NAV),
-    _eventsEditField(EVT_FIELD_PATTERN),
-    _eventsEditBackup{} {}
-
-void ToolLedSettings::begin(LedController* leds, SetupUI* ui) {
-  _leds = leds;
-  _ui = ui;
+    : _setupEntryBankType(BANK_NORMAL),
+      _leds(nullptr),
+      _ui(nullptr),
+      _potRouter(nullptr),
+      _banks(nullptr),
+      _cursor((LineId)0),
+      _uiMode(UI_NAV),
+      _editFocus(0),
+      _nvsSaved(false),
+      _viewportStart(0) {
+  memset(&_lwk, 0, sizeof(_lwk));
+  memset(&_cwk, 0, sizeof(_cwk));
+  memset(&_ses, 0, sizeof(_ses));
+  memset(&_lwkBackup, 0, sizeof(_lwkBackup));
+  memset(&_cwkBackup, 0, sizeof(_cwkBackup));
+  memset(&_sesBackup, 0, sizeof(_sesBackup));
 }
 
-// --- COLORS page ---
+void ToolLedSettings::begin(LedController* leds, SetupUI* ui,
+                             PotRouter* potRouter, BankSlot* banks) {
+  _leds = leds;
+  _ui = ui;
+  _potRouter = potRouter;
+  _banks = banks;
+}
 
-void ToolLedSettings::previewCurrentColor() {
-  // Show the currently-selected slot's color on LED 3-4 (convention §3.2
-  // for tool-driven preview). Uses resolveColorSlot() so hue rotation is
-  // reflected live as the user adjusts hueOffset.
-  if (!_leds) return;
-  if (_colorsCursor >= COLOR_SLOT_COUNT) return;
-  RGBW color = resolveColorSlot(_cwk.slots[_colorsCursor]);
-  _leds->previewClear();
-  _leds->previewSetPixel(3, color, 100);
-  _leds->previewSetPixel(4, color, 100);
-  _leds->previewShow();
+// =================================================================
+// NVS load / save
+// =================================================================
+
+void ToolLedSettings::loadAll() {
+  // LedSettingsStore v7
+  bool ledOk = NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE,
+                                     LED_SETTINGS_NVS_KEY,
+                                     EEPROM_MAGIC, LED_SETTINGS_VERSION,
+                                     &_lwk, sizeof(_lwk));
+  if (!ledOk) {
+    // Fallback to defaults. NvsManager already logged the rejection.
+    // Mirror NvsManager::NvsManager() defaults (kept in sync manually).
+    memset(&_lwk, 0, sizeof(_lwk));
+    _lwk.magic   = EEPROM_MAGIC;
+    _lwk.version = LED_SETTINGS_VERSION;
+    _lwk.normalFgIntensity = 85; _lwk.normalBgIntensity = 10;
+    _lwk.fgArpStopMin = 30; _lwk.fgArpStopMax = 100;
+    _lwk.fgArpPlayMax = 80; _lwk.bgArpStopMin = 8; _lwk.bgArpPlayMin = 8;
+    _lwk.tickFlashFg = 100; _lwk.tickFlashBg = 25;
+    _lwk.bgFactor = 25;
+    _lwk.pulsePeriodMs = 1472;
+    _lwk.tickBeatDurationMs = 30;
+    _lwk.tickBarDurationMs  = 60;
+    _lwk.tickWrapDurationMs = 100;
+    _lwk.gammaTenths = 20;
+    _lwk.sparkOnMs = 20; _lwk.sparkGapMs = 40; _lwk.sparkCycles = 4;
+    _lwk.bankBlinks = 3; _lwk.bankDurationMs = 150; _lwk.bankBrightnessPct = 80;
+    _lwk.scaleRootBlinks = 2; _lwk.scaleRootDurationMs = 130;
+    _lwk.scaleModeBlinks = 2; _lwk.scaleModeDurationMs = 130;
+    _lwk.scaleChromBlinks = 2; _lwk.scaleChromDurationMs = 130;
+    _lwk.holdOnFadeMs = 500; _lwk.holdOffFadeMs = 500;
+    _lwk.octaveBlinks = 3; _lwk.octaveDurationMs = 130;
+    for (uint8_t i = 0; i < EVT_COUNT; i++) {
+      _lwk.eventOverrides[i].patternId = PTN_NONE;
+      _lwk.eventOverrides[i].colorSlot = 0;
+      _lwk.eventOverrides[i].fgPct = 0;
+    }
+  }
+  validateLedSettingsStore(_lwk);
+
+  // ColorSlotStore v5
+  bool colOk = NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE,
+                                     COLOR_SLOT_NVS_KEY,
+                                     COLOR_SLOT_MAGIC, COLOR_SLOT_VERSION,
+                                     &_cwk, sizeof(_cwk));
+  if (!colOk) {
+    memset(&_cwk, 0, sizeof(_cwk));
+    _cwk.magic   = COLOR_SLOT_MAGIC;
+    _cwk.version = COLOR_SLOT_VERSION;
+    // Compile-time defaults mirror NvsManager.cpp (Phase 0.1 respec).
+    static const uint8_t dp[COLOR_SLOT_COUNT] = {
+      1, 3, 7, 11, 8, 6, 5, 6, 10, 0, 6, 7, 8, 9, 0, 8,
+    };
+    static const int8_t  dh[COLOR_SLOT_COUNT] = {
+      0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
+      _cwk.slots[i].presetId  = dp[i];
+      _cwk.slots[i].hueOffset = dh[i];
+    }
+  }
+
+  // SettingsStore v11 (LOOP timers, shared with Tool 6)
+  bool setOk = NvsManager::loadBlob(SETTINGS_NVS_NAMESPACE,
+                                     SETTINGS_NVS_KEY,
+                                     EEPROM_MAGIC, SETTINGS_VERSION,
+                                     &_ses, sizeof(_ses));
+  if (!setOk) {
+    memset(&_ses, 0, sizeof(_ses));
+    _ses.magic   = EEPROM_MAGIC;
+    _ses.version = SETTINGS_VERSION;
+    _ses.clearLoopTimerMs = 500;
+    _ses.slotSaveTimerMs  = 1000;
+    _ses.slotClearTimerMs = 800;
+  }
+  validateSettingsStore(_ses);
+
+  // Snapshot foreground bank type for WAITING preview (spec §11.5).
+  _setupEntryBankType = BANK_NORMAL;
+  if (_banks) {
+    for (uint8_t i = 0; i < NUM_BANKS; i++) {
+      if (_banks[i].isForeground) {
+        _setupEntryBankType = _banks[i].type;
+        break;
+      }
+    }
+  }
+}
+
+bool ToolLedSettings::saveLedSettings() {
+  _lwk.magic   = EEPROM_MAGIC;
+  _lwk.version = LED_SETTINGS_VERSION;
+  _lwk.reserved = 0;
+  validateLedSettingsStore(_lwk);
+  bool ok = NvsManager::saveBlob(LED_SETTINGS_NVS_NAMESPACE,
+                                  LED_SETTINGS_NVS_KEY,
+                                  &_lwk, sizeof(_lwk));
+  if (ok && _leds) _leds->loadLedSettings(_lwk);
+  return ok;
 }
 
 bool ToolLedSettings::saveColorSlots() {
-  _cwk.magic    = COLOR_SLOT_MAGIC;
-  _cwk.version  = COLOR_SLOT_VERSION;
+  _cwk.magic   = COLOR_SLOT_MAGIC;
+  _cwk.version = COLOR_SLOT_VERSION;
   _cwk.reserved = 0;
-  if (!NvsManager::saveBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
-                             &_cwk, sizeof(_cwk))) {
-    return false;
-  }
-  if (_leds) _leds->loadColorSlots(_cwk);  // refresh cached _colors[]
-  return true;
+  bool ok = NvsManager::saveBlob(LED_SETTINGS_NVS_NAMESPACE,
+                                  COLOR_SLOT_NVS_KEY,
+                                  &_cwk, sizeof(_cwk));
+  if (ok && _leds) _leds->loadColorSlots(_cwk);
+  return ok;
 }
 
-void ToolLedSettings::resetCurrentColorToDefault() {
-  if (_colorsCursor >= COLOR_SLOT_COUNT) return;
-  _cwk.slots[_colorsCursor].presetId  = DEFAULT_SLOT_PRESETS[_colorsCursor];
-  _cwk.slots[_colorsCursor].hueOffset = DEFAULT_SLOT_HUES[_colorsCursor];
+bool ToolLedSettings::saveSettings() {
+  _ses.magic   = EEPROM_MAGIC;
+  _ses.version = SETTINGS_VERSION;
+  // NOTE: SettingsStore byte 3 = baselineProfile, NOT reserved — do NOT zero.
+  validateSettingsStore(_ses);
+  return NvsManager::saveBlob(SETTINGS_NVS_NAMESPACE,
+                               SETTINGS_NVS_KEY,
+                               &_ses, sizeof(_ses));
 }
 
-void ToolLedSettings::handlePageColors(const NavEvent& ev, bool& screenDirty) {
-  if (_colorsSub == COLORS_NAV) {
-    // ----- Grid navigation -----
-    if (ev.type == NAV_UP) {
-      _colorsCursor = (_colorsCursor == 0) ? (COLOR_SLOT_COUNT - 1)
-                                            : (_colorsCursor - 1);
-      screenDirty = true;
-    } else if (ev.type == NAV_DOWN) {
-      _colorsCursor = (_colorsCursor + 1) % COLOR_SLOT_COUNT;
-      screenDirty = true;
-    } else if (ev.type == NAV_ENTER) {
-      _colorsSub        = COLORS_EDIT;
-      _colorsEditField  = EDIT_FIELD_PRESET;
-      _colorsEditBackup = _cwk.slots[_colorsCursor];  // for 'q' cancel
-      screenDirty       = true;
-    } else if (ev.type == NAV_DEFAULTS) {
-      resetCurrentColorToDefault();
-      if (saveColorSlots()) {
-        _nvsSaved = true;
-        _ui->flashSaved();
-      }
-      screenDirty = true;
-    }
-  } else {
-    // ----- Edit sub-state : preset pool + hue field -----
-    if (ev.type == NAV_UP || ev.type == NAV_DOWN) {
-      // Toggle focused field
-      _colorsEditField = (_colorsEditField == EDIT_FIELD_PRESET)
-                          ? EDIT_FIELD_HUE : EDIT_FIELD_PRESET;
-      screenDirty = true;
-    } else if (ev.type == NAV_LEFT || ev.type == NAV_RIGHT) {
-      int dir = (ev.type == NAV_RIGHT) ? 1 : -1;
-      ColorSlot& s = _cwk.slots[_colorsCursor];
-      if (_colorsEditField == EDIT_FIELD_PRESET) {
-        // Pool : cycle through 14 presets
-        int p = (int)s.presetId + dir;
-        if (p < 0) p = COLOR_PRESET_COUNT - 1;
-        if (p >= (int)COLOR_PRESET_COUNT) p = 0;
-        s.presetId = (uint8_t)p;
-      } else {
-        // Field editor : adjust hue offset, accelerated step of 10
-        int step = ev.accelerated ? 10 : 1;
-        int h = (int)s.hueOffset + dir * step;
-        if (h < -128) h = -128;
-        if (h >  127) h =  127;
-        s.hueOffset = (int8_t)h;
-      }
-      screenDirty = true;
-    } else if (ev.type == NAV_ENTER) {
-      // Commit + save on ENTER (conventions §1 : save on commit only)
-      if (saveColorSlots()) {
-        _nvsSaved = true;
-        _ui->flashSaved();
-      }
-      _colorsSub = COLORS_NAV;  // back to grid
-      screenDirty = true;
-    } else if (ev.type == NAV_QUIT) {
-      // Cancel : restore backup, back to grid (consumed by outer loop too,
-      // but we handle it first via two-step exit convention §6.4).
-      _cwk.slots[_colorsCursor] = _colorsEditBackup;
-      _colorsSub = COLORS_NAV;
-      screenDirty = true;
-    }
+void ToolLedSettings::refreshBadge() {
+  bool a = NvsManager::checkBlob(LED_SETTINGS_NVS_NAMESPACE,
+                                  LED_SETTINGS_NVS_KEY,
+                                  EEPROM_MAGIC, LED_SETTINGS_VERSION,
+                                  sizeof(LedSettingsStore));
+  bool b = NvsManager::checkBlob(LED_SETTINGS_NVS_NAMESPACE,
+                                  COLOR_SLOT_NVS_KEY,
+                                  COLOR_SLOT_MAGIC, COLOR_SLOT_VERSION,
+                                  sizeof(ColorSlotStore));
+  _nvsSaved = a && b;
+}
+
+// =================================================================
+// Section / Line navigation helpers
+// =================================================================
+
+ToolLedSettings::Section ToolLedSettings::sectionOf(LineId line) const {
+  if (line <= LINE_NORMAL_FG_PCT)          return SEC_NORMAL;
+  if (line <= LINE_ARPEG_FG_PCT)           return SEC_ARPEG;
+  if (line <= LINE_LOOP_SLOT_DURATION)     return SEC_LOOP;
+  if (line <= LINE_TRANSPORT_TICK_WRAP_DUR) return SEC_TRANSPORT;
+  if (line <= LINE_CONFIRM_OK_SPARK)       return SEC_CONFIRMATIONS;
+  return SEC_GLOBAL;
+}
+
+ToolLedSettings::LineId ToolLedSettings::firstLineOfSection(Section s) const {
+  switch (s) {
+    case SEC_NORMAL:        return LINE_NORMAL_BASE_COLOR;
+    case SEC_ARPEG:         return LINE_ARPEG_BASE_COLOR;
+    case SEC_LOOP:          return LINE_LOOP_BASE_COLOR;
+    case SEC_TRANSPORT:     return LINE_TRANSPORT_PLAY_COLOR;
+    case SEC_CONFIRMATIONS: return LINE_CONFIRM_BANK_COLOR;
+    case SEC_GLOBAL:        return LINE_GLOBAL_BG_FACTOR;
+    default:                return LINE_NORMAL_BASE_COLOR;
   }
 }
 
-void ToolLedSettings::renderPageColors() {
-  _ui->drawSection("COLOR SLOTS");
-  for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
-    bool selected = (i == _colorsCursor);
-    bool editing  = selected && (_colorsSub == COLORS_EDIT);
-
-    const ColorSlot& s = _cwk.slots[i];
-    const char* presetName = (s.presetId < COLOR_PRESET_COUNT)
-                              ? COLOR_PRESET_NAMES[s.presetId] : "?";
-
-    if (editing) {
-      const char* presetFocus = (_colorsEditField == EDIT_FIELD_PRESET) ? VT_CYAN VT_BOLD : "";
-      const char* hueFocus    = (_colorsEditField == EDIT_FIELD_HUE)    ? VT_CYAN VT_BOLD : "";
-      _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET "%-16s  %s[%s]" VT_RESET "  hue %s%+d" VT_RESET,
-                         COLOR_SLOT_LABELS[i], presetFocus, presetName, hueFocus, s.hueOffset);
-    } else if (selected) {
-      _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET "%-16s  " VT_BRIGHT_WHITE "[%s]" VT_RESET "  hue %+d",
-                         COLOR_SLOT_LABELS[i], presetName, s.hueOffset);
-    } else {
-      _ui->drawFrameLine("  %-16s  [%s]  hue %+d",
-                         COLOR_SLOT_LABELS[i], presetName, s.hueOffset);
-    }
-  }
-  _ui->drawFrameEmpty();
-  _ui->drawSection("INFO");
-  if (_colorsSub == COLORS_EDIT) {
-    _ui->drawFrameLine(VT_DIM "Editing %s — %s focused." VT_RESET,
-                       COLOR_SLOT_LABELS[_colorsCursor],
-                       (_colorsEditField == EDIT_FIELD_PRESET) ? "PRESET" : "HUE");
-    _ui->drawFrameLine(VT_DIM "UP/DOWN : switch field. LEFT/RIGHT : adjust." VT_RESET);
-    _ui->drawFrameLine(VT_DIM "ENTER : save & exit edit. 'q' : cancel." VT_RESET);
-  } else {
-    _ui->drawFrameLine(VT_DIM "%s" VT_RESET, COLOR_SLOT_LABELS[_colorsCursor]);
-    _ui->drawFrameLine(VT_DIM "Preview shown on LED 3-4. Choose preset + hue offset" VT_RESET);
-    _ui->drawFrameLine(VT_DIM "via ENTER. 'd' resets this slot to its default." VT_RESET);
+ToolLedSettings::LineId ToolLedSettings::lastLineOfSection(Section s) const {
+  switch (s) {
+    case SEC_NORMAL:        return LINE_NORMAL_FG_PCT;
+    case SEC_ARPEG:         return LINE_ARPEG_FG_PCT;
+    case SEC_LOOP:          return LINE_LOOP_SLOT_DURATION;
+    case SEC_TRANSPORT:     return LINE_TRANSPORT_TICK_WRAP_DUR;
+    case SEC_CONFIRMATIONS: return LINE_CONFIRM_OK_SPARK;
+    case SEC_GLOBAL:        return LINE_GLOBAL_GAMMA;
+    default:                return LINE_NORMAL_FG_PCT;
   }
 }
 
-// --- PATTERNS page ---
-//
-// Pool of 9 patterns (selected via UP/DOWN). Some patterns have editable
-// global params stored in LedSettingsStore ; others are entirely
-// event-specific (edit via EVENTS page in 0.8d) or not-yet-configurable.
-//
-// Global params map :
-//   PTN_SOLID            : none (per-event)
-//   PTN_PULSE_SLOW       : 1 field  (pulsePeriodMs)
-//   PTN_CROSSFADE_COLOR  : none (not yet a store field)
-//   PTN_BLINK_SLOW       : none (per-event)
-//   PTN_BLINK_FAST       : none (per-event)
-//   PTN_FADE             : none (per-event)
-//   PTN_FLASH            : 3 fields (tickBeatDurationMs, tickFlashFg, tickFlashBg)
-//   PTN_RAMP_HOLD        : 3 fields (sparkOnMs, sparkGapMs, sparkCycles — shared with SPARK)
-//   PTN_SPARK            : 3 fields (sparkOnMs, sparkGapMs, sparkCycles — shared with RAMP_HOLD)
-
-bool ToolLedSettings::saveLedSettings() {
-  _lwk.magic    = EEPROM_MAGIC;
-  _lwk.version  = LED_SETTINGS_VERSION;
-  _lwk.reserved = 0;
-  validateLedSettingsStore(_lwk);
-  if (!NvsManager::saveBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
-                             &_lwk, sizeof(_lwk))) {
-    return false;
-  }
-  if (_leds) _leds->loadLedSettings(_lwk);  // push to runtime cache
-  return true;
+void ToolLedSettings::cursorUp() {
+  if (_cursor > 0) _cursor = (LineId)(_cursor - 1);
+  ensureCursorVisible();
 }
-
-uint8_t ToolLedSettings::patternEditFieldCount(uint8_t patternId) const {
-  switch (patternId) {
-    case PTN_PULSE_SLOW:  return 1;
-    case PTN_FLASH:       return 3;
-    case PTN_RAMP_HOLD:   return 3;  // suffix = spark
-    case PTN_SPARK:       return 3;
-    default:              return 0;
+void ToolLedSettings::cursorDown() {
+  if (_cursor + 1 < LINE_COUNT) _cursor = (LineId)(_cursor + 1);
+  ensureCursorVisible();
+}
+void ToolLedSettings::cursorNextSection() {
+  Section s = sectionOf(_cursor);
+  if (s + 1 < SEC_COUNT) {
+    _cursor = firstLineOfSection((Section)(s + 1));
+    ensureCursorVisible();
+  }
+}
+void ToolLedSettings::cursorPrevSection() {
+  Section s = sectionOf(_cursor);
+  if (s > 0) {
+    _cursor = firstLineOfSection((Section)(s - 1));
+    ensureCursorVisible();
+  }
+}
+void ToolLedSettings::ensureCursorVisible() {
+  if (_cursor < _viewportStart) _viewportStart = _cursor;
+  if (_cursor >= _viewportStart + VIEWPORT_SIZE) {
+    _viewportStart = _cursor - VIEWPORT_SIZE + 1;
+  }
+  if (_viewportStart + VIEWPORT_SIZE > LINE_COUNT) {
+    _viewportStart = (LINE_COUNT > VIEWPORT_SIZE)
+                      ? (uint8_t)(LINE_COUNT - VIEWPORT_SIZE) : 0;
   }
 }
 
-void ToolLedSettings::adjustPatternField(uint8_t patternId, uint8_t field, int dir, bool accel) {
-  switch (patternId) {
-    case PTN_PULSE_SLOW: {
-      // field 0 : pulsePeriodMs (500-4000 ms, step 100 / accel 500)
-      int step = accel ? 500 : 100;
-      int v = (int)_lwk.pulsePeriodMs + dir * step;
-      if (v < 500) v = 500;
-      if (v > 4000) v = 4000;
-      _lwk.pulsePeriodMs = (uint16_t)v;
+// =================================================================
+// Line shape + field introspection
+// =================================================================
+
+ToolLedSettings::LineShape ToolLedSettings::shapeForLine(LineId line) const {
+  switch (line) {
+    // COLOR lines (15 total)
+    case LINE_NORMAL_BASE_COLOR:
+    case LINE_ARPEG_BASE_COLOR:
+    case LINE_LOOP_BASE_COLOR:
+    case LINE_LOOP_SAVE_COLOR:
+    case LINE_LOOP_CLEAR_COLOR:
+    case LINE_LOOP_SLOT_COLOR:
+    case LINE_TRANSPORT_PLAY_COLOR:
+    case LINE_TRANSPORT_STOP_COLOR:
+    case LINE_TRANSPORT_WAITING_COLOR:
+    case LINE_TRANSPORT_TICK_PLAY_COLOR:
+    case LINE_TRANSPORT_TICK_REC_COLOR:
+    case LINE_TRANSPORT_TICK_OVERDUB_COLOR:
+    case LINE_CONFIRM_BANK_COLOR:
+    case LINE_CONFIRM_SCALE_ROOT_COLOR:
+    case LINE_CONFIRM_SCALE_MODE_COLOR:
+    case LINE_CONFIRM_SCALE_CHROM_COLOR:
+    case LINE_CONFIRM_OCTAVE_COLOR:
+    case LINE_CONFIRM_OK_COLOR:
+      return SHAPE_COLOR;
+    // MULTI lines
+    case LINE_TRANSPORT_PLAY_TIMING:
+    case LINE_TRANSPORT_STOP_TIMING:
+    case LINE_TRANSPORT_BREATHING:
+    case LINE_TRANSPORT_TICK_COMMON:
+    case LINE_CONFIRM_BANK_TIMING:
+    case LINE_CONFIRM_SCALE_ROOT_TIMING:
+    case LINE_CONFIRM_SCALE_MODE_TIMING:
+    case LINE_CONFIRM_SCALE_CHROM_TIMING:
+    case LINE_CONFIRM_OCTAVE_TIMING:
+    case LINE_CONFIRM_OK_SPARK:
+      return SHAPE_MULTI_NUM;
+    // Everything else = SINGLE numeric
+    default:
+      return SHAPE_SINGLE_NUM;
+  }
+}
+
+ColorSlot* ToolLedSettings::colorSlotForLine(LineId line) {
+  switch (line) {
+    case LINE_NORMAL_BASE_COLOR:        return &_cwk.slots[CSLOT_MODE_NORMAL];
+    case LINE_ARPEG_BASE_COLOR:         return &_cwk.slots[CSLOT_MODE_ARPEG];
+    case LINE_LOOP_BASE_COLOR:          return &_cwk.slots[CSLOT_MODE_LOOP];
+    case LINE_LOOP_SAVE_COLOR:          return &_cwk.slots[CSLOT_VERB_SAVE];
+    case LINE_LOOP_CLEAR_COLOR:         return &_cwk.slots[CSLOT_VERB_CLEAR_LOOP];
+    case LINE_LOOP_SLOT_COLOR:          return &_cwk.slots[CSLOT_VERB_SLOT_CLEAR];
+    case LINE_TRANSPORT_PLAY_COLOR:     return &_cwk.slots[CSLOT_VERB_PLAY];
+    case LINE_TRANSPORT_STOP_COLOR:     return &_cwk.slots[CSLOT_VERB_STOP];
+    case LINE_TRANSPORT_WAITING_COLOR:  return &_cwk.slots[CSLOT_VERB_PLAY];  // WAITING target = PLAY per spec §11.5
+    case LINE_TRANSPORT_TICK_PLAY_COLOR:    return &_cwk.slots[CSLOT_VERB_PLAY];
+    case LINE_TRANSPORT_TICK_REC_COLOR:     return &_cwk.slots[CSLOT_VERB_REC];
+    case LINE_TRANSPORT_TICK_OVERDUB_COLOR: return &_cwk.slots[CSLOT_VERB_OVERDUB];
+    case LINE_CONFIRM_BANK_COLOR:       return &_cwk.slots[CSLOT_BANK_SWITCH];
+    case LINE_CONFIRM_SCALE_ROOT_COLOR: return &_cwk.slots[CSLOT_SCALE_ROOT];
+    case LINE_CONFIRM_SCALE_MODE_COLOR: return &_cwk.slots[CSLOT_SCALE_MODE];
+    case LINE_CONFIRM_SCALE_CHROM_COLOR:return &_cwk.slots[CSLOT_SCALE_CHROM];
+    case LINE_CONFIRM_OCTAVE_COLOR:     return &_cwk.slots[CSLOT_OCTAVE];
+    case LINE_CONFIRM_OK_COLOR:         return &_cwk.slots[CSLOT_CONFIRM_OK];
+    default: return nullptr;
+  }
+}
+
+uint8_t ToolLedSettings::numericFieldCountForLine(LineId line) const {
+  switch (line) {
+    // Multi : 2 fields
+    case LINE_TRANSPORT_PLAY_TIMING:
+    case LINE_TRANSPORT_STOP_TIMING:
+    case LINE_TRANSPORT_TICK_COMMON:
+    case LINE_CONFIRM_BANK_TIMING:
+    case LINE_CONFIRM_SCALE_ROOT_TIMING:
+    case LINE_CONFIRM_SCALE_MODE_TIMING:
+    case LINE_CONFIRM_SCALE_CHROM_TIMING:
+    case LINE_CONFIRM_OCTAVE_TIMING:
+      return 2;
+    // Multi : 3 fields
+    case LINE_TRANSPORT_BREATHING:
+    case LINE_CONFIRM_OK_SPARK:
+      return 3;
+    // Single : 1 field
+    default:
+      return 1;
+  }
+}
+
+uint8_t ToolLedSettings::effectiveEventFgPct(uint8_t evt) const {
+  if (evt >= EVT_COUNT) return 100;
+  const EventRenderEntry& e = _lwk.eventOverrides[evt];
+  if (e.patternId == PTN_NONE) return EVENT_RENDER_DEFAULT[evt].fgPct;
+  return e.fgPct;
+}
+
+void ToolLedSettings::setEventOverrideFgPct(uint8_t evt, uint8_t newFgPct) {
+  if (evt >= EVT_COUNT) return;
+  EventRenderEntry& e = _lwk.eventOverrides[evt];
+  // Activate override : patternId must be non-NONE. If currently NONE, copy default.
+  if (e.patternId == PTN_NONE) {
+    e.patternId = EVENT_RENDER_DEFAULT[evt].patternId;
+    e.colorSlot = EVENT_RENDER_DEFAULT[evt].colorSlot;
+  }
+  e.fgPct = newFgPct;
+}
+
+int32_t ToolLedSettings::readNumericField(LineId line, uint8_t f) const {
+  switch (line) {
+    case LINE_NORMAL_FG_PCT:              return _lwk.normalFgIntensity;
+    case LINE_ARPEG_FG_PCT:               return _lwk.fgArpPlayMax;
+    case LINE_LOOP_FG_PCT:                return _lwk.fgArpPlayMax; // LOOP reuses ARPEG FG pct (no separate field yet)
+    case LINE_LOOP_SAVE_DURATION:         return _ses.slotSaveTimerMs;
+    case LINE_LOOP_CLEAR_DURATION:        return _ses.clearLoopTimerMs;
+    case LINE_LOOP_SLOT_DURATION:         return _ses.slotClearTimerMs;
+    case LINE_TRANSPORT_PLAY_TIMING:      return (f == 0) ? (int32_t)effectiveEventFgPct(EVT_PLAY)
+                                                          : (int32_t)_lwk.holdOnFadeMs;
+    case LINE_TRANSPORT_STOP_TIMING:      return (f == 0) ? (int32_t)effectiveEventFgPct(EVT_STOP)
+                                                          : (int32_t)_lwk.holdOffFadeMs;
+    case LINE_TRANSPORT_BREATHING:        return (f == 0) ? (int32_t)_lwk.fgArpStopMin
+                                                          : (f == 1) ? (int32_t)_lwk.fgArpStopMax
+                                                                     : (int32_t)_lwk.pulsePeriodMs;
+    case LINE_TRANSPORT_TICK_COMMON:      return (f == 0) ? (int32_t)_lwk.tickFlashFg
+                                                          : (int32_t)_lwk.tickFlashBg;
+    case LINE_TRANSPORT_TICK_BEAT_DUR:    return _lwk.tickBeatDurationMs;
+    case LINE_TRANSPORT_TICK_BAR_DUR:     return _lwk.tickBarDurationMs;
+    case LINE_TRANSPORT_TICK_WRAP_DUR:    return _lwk.tickWrapDurationMs;
+    case LINE_CONFIRM_BANK_TIMING:        return (f == 0) ? (int32_t)_lwk.bankBrightnessPct
+                                                          : (int32_t)_lwk.bankDurationMs;
+    case LINE_CONFIRM_SCALE_ROOT_TIMING:  return (f == 0) ? (int32_t)effectiveEventFgPct(EVT_SCALE_ROOT)
+                                                          : (int32_t)_lwk.scaleRootDurationMs;
+    case LINE_CONFIRM_SCALE_MODE_TIMING:  return (f == 0) ? (int32_t)effectiveEventFgPct(EVT_SCALE_MODE)
+                                                          : (int32_t)_lwk.scaleModeDurationMs;
+    case LINE_CONFIRM_SCALE_CHROM_TIMING: return (f == 0) ? (int32_t)effectiveEventFgPct(EVT_SCALE_CHROM)
+                                                          : (int32_t)_lwk.scaleChromDurationMs;
+    case LINE_CONFIRM_OCTAVE_TIMING:      return (f == 0) ? (int32_t)effectiveEventFgPct(EVT_OCTAVE)
+                                                          : (int32_t)_lwk.octaveDurationMs;
+    case LINE_CONFIRM_OK_SPARK:           return (f == 0) ? (int32_t)_lwk.sparkOnMs
+                                                          : (f == 1) ? (int32_t)_lwk.sparkGapMs
+                                                                     : (int32_t)_lwk.sparkCycles;
+    case LINE_GLOBAL_BG_FACTOR:           return _lwk.bgFactor;
+    case LINE_GLOBAL_GAMMA:               return _lwk.gammaTenths;
+    default: return 0;
+  }
+}
+
+void ToolLedSettings::writeNumericField(LineId line, uint8_t f, int32_t v) {
+  switch (line) {
+    case LINE_NORMAL_FG_PCT:              _lwk.normalFgIntensity = (uint8_t)v; break;
+    case LINE_ARPEG_FG_PCT:               _lwk.fgArpPlayMax = (uint8_t)v; break;
+    case LINE_LOOP_FG_PCT:                _lwk.fgArpPlayMax = (uint8_t)v; break; // shared w/ ARPEG
+    case LINE_LOOP_SAVE_DURATION:         _ses.slotSaveTimerMs = (uint16_t)v; break;
+    case LINE_LOOP_CLEAR_DURATION:        _ses.clearLoopTimerMs = (uint16_t)v; break;
+    case LINE_LOOP_SLOT_DURATION:         _ses.slotClearTimerMs = (uint16_t)v; break;
+    case LINE_TRANSPORT_PLAY_TIMING:
+      if (f == 0) setEventOverrideFgPct(EVT_PLAY, (uint8_t)v);
+      else        _lwk.holdOnFadeMs = (uint16_t)v;
       break;
-    }
-    case PTN_FLASH: {
-      if (field == 0) {
-        int step = accel ? 10 : 5;
-        int v = (int)_lwk.tickBeatDurationMs + dir * step;
-        if (v < 10) v = 10;
-        if (v > 100) v = 100;
-        _lwk.tickBeatDurationMs = (uint16_t)v;
-      } else if (field == 1) {
-        int v = (int)_lwk.tickFlashFg + dir * (accel ? 10 : 1);
-        if (v < 0) v = 0;
-        if (v > 100) v = 100;
-        _lwk.tickFlashFg = (uint8_t)v;
-      } else if (field == 2) {
-        int v = (int)_lwk.tickFlashBg + dir * (accel ? 10 : 1);
-        if (v < 0) v = 0;
-        if (v > 100) v = 100;
-        _lwk.tickFlashBg = (uint8_t)v;
-      }
+    case LINE_TRANSPORT_STOP_TIMING:
+      if (f == 0) setEventOverrideFgPct(EVT_STOP, (uint8_t)v);
+      else        _lwk.holdOffFadeMs = (uint16_t)v;
       break;
-    }
-    case PTN_RAMP_HOLD:
-    case PTN_SPARK: {
-      // Both edit the same sparkOnMs / sparkGapMs / sparkCycles fields
-      // (RAMP_HOLD uses them for its suffix).
-      if (field == 0) {
-        int step = accel ? 10 : 5;
-        int v = (int)_lwk.sparkOnMs + dir * step;
-        if (v < 20) v = 20;
-        if (v > 200) v = 200;
-        _lwk.sparkOnMs = (uint16_t)v;
-      } else if (field == 1) {
-        int step = accel ? 10 : 5;
-        int v = (int)_lwk.sparkGapMs + dir * step;
-        if (v < 20) v = 20;
-        if (v > 300) v = 300;
-        _lwk.sparkGapMs = (uint16_t)v;
-      } else if (field == 2) {
-        int v = (int)_lwk.sparkCycles + dir;
-        if (v < 1) v = 1;
-        if (v > 4) v = 4;
-        _lwk.sparkCycles = (uint8_t)v;
-      }
+    case LINE_TRANSPORT_BREATHING:
+      if (f == 0) _lwk.fgArpStopMin = (uint8_t)v;
+      else if (f == 1) _lwk.fgArpStopMax = (uint8_t)v;
+      else        _lwk.pulsePeriodMs = (uint16_t)v;
       break;
-    }
+    case LINE_TRANSPORT_TICK_COMMON:
+      if (f == 0) _lwk.tickFlashFg = (uint8_t)v;
+      else        _lwk.tickFlashBg = (uint8_t)v;
+      break;
+    case LINE_TRANSPORT_TICK_BEAT_DUR:    _lwk.tickBeatDurationMs = (uint16_t)v; break;
+    case LINE_TRANSPORT_TICK_BAR_DUR:     _lwk.tickBarDurationMs  = (uint16_t)v; break;
+    case LINE_TRANSPORT_TICK_WRAP_DUR:    _lwk.tickWrapDurationMs = (uint16_t)v; break;
+    case LINE_CONFIRM_BANK_TIMING:
+      if (f == 0) _lwk.bankBrightnessPct = (uint8_t)v;
+      else        _lwk.bankDurationMs = (uint16_t)v;
+      break;
+    case LINE_CONFIRM_SCALE_ROOT_TIMING:
+      if (f == 0) setEventOverrideFgPct(EVT_SCALE_ROOT, (uint8_t)v);
+      else        _lwk.scaleRootDurationMs = (uint16_t)v;
+      break;
+    case LINE_CONFIRM_SCALE_MODE_TIMING:
+      if (f == 0) setEventOverrideFgPct(EVT_SCALE_MODE, (uint8_t)v);
+      else        _lwk.scaleModeDurationMs = (uint16_t)v;
+      break;
+    case LINE_CONFIRM_SCALE_CHROM_TIMING:
+      if (f == 0) setEventOverrideFgPct(EVT_SCALE_CHROM, (uint8_t)v);
+      else        _lwk.scaleChromDurationMs = (uint16_t)v;
+      break;
+    case LINE_CONFIRM_OCTAVE_TIMING:
+      if (f == 0) setEventOverrideFgPct(EVT_OCTAVE, (uint8_t)v);
+      else        _lwk.octaveDurationMs = (uint16_t)v;
+      break;
+    case LINE_CONFIRM_OK_SPARK:
+      if (f == 0) _lwk.sparkOnMs = (uint16_t)v;
+      else if (f == 1) _lwk.sparkGapMs = (uint16_t)v;
+      else        _lwk.sparkCycles = (uint8_t)v;
+      break;
+    case LINE_GLOBAL_BG_FACTOR:           _lwk.bgFactor = (uint8_t)v; break;
+    case LINE_GLOBAL_GAMMA:               _lwk.gammaTenths = (uint8_t)v; break;
     default: break;
   }
 }
 
-void ToolLedSettings::renderPatternParamsPanel(uint8_t patternId, bool editing) const {
-  auto fieldLine = [&](uint8_t fieldIdx, const char* label, const char* value) {
-    bool focus = editing && (_patternsEditField == fieldIdx);
-    if (focus) {
-      _ui->drawFrameLine(VT_CYAN VT_BOLD "  > %-20s" VT_RESET VT_CYAN "[%s]" VT_RESET, label, value);
+void ToolLedSettings::getNumericFieldBounds(LineId line, uint8_t f,
+                                             int32_t& mn, int32_t& mx,
+                                             int32_t& coarse, int32_t& fine) const {
+  // Defaults (most common).
+  mn = 0; mx = 100; coarse = 10; fine = 1;
+  switch (line) {
+    case LINE_NORMAL_FG_PCT:
+    case LINE_ARPEG_FG_PCT:
+    case LINE_LOOP_FG_PCT:                mn = 10; mx = 100; break;
+    case LINE_LOOP_SAVE_DURATION:         mn = 500; mx = 2000; coarse = 100; fine = 10; break;
+    case LINE_LOOP_CLEAR_DURATION:        mn = 200; mx = 1500; coarse = 100; fine = 10; break;
+    case LINE_LOOP_SLOT_DURATION:         mn = 400; mx = 1500; coarse = 100; fine = 10; break;
+    case LINE_TRANSPORT_PLAY_TIMING:
+    case LINE_TRANSPORT_STOP_TIMING:
+      if (f == 0) { mn = 0; mx = 100; coarse = 10; fine = 1; }
+      else        { mn = 0; mx = 1000; coarse = 100; fine = 10; }
+      break;
+    case LINE_TRANSPORT_BREATHING:
+      if (f == 2) { mn = 500; mx = 4000; coarse = 100; fine = 50; }
+      else        { mn = 0; mx = 100; coarse = 10; fine = 1; }
+      break;
+    case LINE_TRANSPORT_TICK_COMMON:      mn = 0; mx = 100; coarse = 10; fine = 1; break;
+    case LINE_TRANSPORT_TICK_BEAT_DUR:
+    case LINE_TRANSPORT_TICK_BAR_DUR:
+    case LINE_TRANSPORT_TICK_WRAP_DUR:    mn = 5; mx = 500; coarse = 10; fine = 1; break;
+    case LINE_CONFIRM_BANK_TIMING:
+    case LINE_CONFIRM_SCALE_ROOT_TIMING:
+    case LINE_CONFIRM_SCALE_MODE_TIMING:
+    case LINE_CONFIRM_SCALE_CHROM_TIMING:
+    case LINE_CONFIRM_OCTAVE_TIMING:
+      if (f == 0) { mn = 0; mx = 100; coarse = 10; fine = 1; }
+      else        { mn = 100; mx = 500; coarse = 50; fine = 10; }
+      break;
+    case LINE_CONFIRM_OK_SPARK:
+      if (f == 0)      { mn = 20; mx = 200; coarse = 10; fine = 1; }   // on
+      else if (f == 1) { mn = 20; mx = 300; coarse = 10; fine = 1; }   // gap
+      else             { mn = 1; mx = 4; coarse = 1; fine = 1; }        // cycles
+      break;
+    case LINE_GLOBAL_BG_FACTOR:           mn = 10; mx = 50; coarse = 5; fine = 1; break;
+    case LINE_GLOBAL_GAMMA:               mn = 10; mx = 30; coarse = 2; fine = 1; break;
+    default: break;
+  }
+}
+
+// =================================================================
+// Edit paradigms
+// =================================================================
+
+void ToolLedSettings::editColor(LineId line, int dx, int dy, bool accel) {
+  ColorSlot* s = colorSlotForLine(line);
+  if (!s) return;
+  if (dx != 0) {
+    // Cycle preset, wrap.
+    int p = (int)s->presetId + dx;
+    if (p < 0) p = COLOR_PRESET_COUNT - 1;
+    if (p >= (int)COLOR_PRESET_COUNT) p = 0;
+    s->presetId = (uint8_t)p;
+  }
+  if (dy != 0) {
+    int step = accel ? 10 : 1;
+    int h = (int)s->hueOffset + dy * step;
+    if (h < -128) h = -128;
+    if (h > 127)  h = 127;
+    s->hueOffset = (int8_t)h;
+  }
+  updatePreviewContext();
+}
+
+void ToolLedSettings::editSingleNumeric(LineId line, int dx, int dy, bool /*accel*/) {
+  int32_t mn, mx, coarse, fine;
+  getNumericFieldBounds(line, 0, mn, mx, coarse, fine);
+  int32_t cur = readNumericField(line, 0);
+  int32_t dir = dx + dy;  // horizontal coarse, vertical fine — same net sign
+  int32_t step = (dx != 0) ? coarse : fine;
+  int32_t nv = cur + dir * step;
+  if (nv < mn) nv = mn;
+  if (nv > mx) nv = mx;
+  writeNumericField(line, 0, nv);
+  updatePreviewContext();
+}
+
+void ToolLedSettings::editMultiNumeric(LineId line, int dx, int dy, bool accel) {
+  uint8_t count = numericFieldCountForLine(line);
+  if (count == 0) return;
+  if (dx != 0) {
+    // Focus navigation.
+    int f = (int)_editFocus + dx;
+    if (f < 0) f = count - 1;
+    if (f >= (int)count) f = 0;
+    _editFocus = (uint8_t)f;
+    return;
+  }
+  if (dy != 0) {
+    int32_t mn, mx, coarse, fine;
+    getNumericFieldBounds(line, _editFocus, mn, mx, coarse, fine);
+    int32_t cur = readNumericField(line, _editFocus);
+    int32_t step = accel ? coarse : fine;
+    int32_t nv = cur + dy * step;
+    if (nv < mn) nv = mn;
+    if (nv > mx) nv = mx;
+    writeNumericField(line, _editFocus, nv);
+    updatePreviewContext();
+  }
+}
+
+// =================================================================
+// Edit dispatch
+// =================================================================
+
+void ToolLedSettings::enterEdit() {
+  _lwkBackup = _lwk;
+  _cwkBackup = _cwk;
+  _sesBackup = _ses;
+  _uiMode = UI_EDIT;
+  _editFocus = 0;
+  updatePreviewContext();
+}
+
+void ToolLedSettings::commitEdit() {
+  LineShape shape = shapeForLine(_cursor);
+  // Save target depends on which store the line touches.
+  bool wroteAny = false;
+  if (shape == SHAPE_COLOR) {
+    wroteAny = saveColorSlots();
+  } else {
+    // Numeric : determine target store.
+    switch (_cursor) {
+      case LINE_LOOP_SAVE_DURATION:
+      case LINE_LOOP_CLEAR_DURATION:
+      case LINE_LOOP_SLOT_DURATION:
+        wroteAny = saveSettings();
+        break;
+      default:
+        wroteAny = saveLedSettings();
+        // Gamma hot-reload (spec §3 decision 9) — LedController::rebuildGammaLut
+        // is already invoked via loadLedSettings() inside saveLedSettings().
+        break;
+    }
+  }
+  if (wroteAny && _ui) _ui->flashSaved();
+  refreshBadge();
+  _uiMode = UI_NAV;
+  _editFocus = 0;
+  updatePreviewContext();
+}
+
+void ToolLedSettings::cancelEdit() {
+  _lwk = _lwkBackup;
+  _cwk = _cwkBackup;
+  _ses = _sesBackup;
+  _uiMode = UI_NAV;
+  _editFocus = 0;
+  updatePreviewContext();
+}
+
+// =================================================================
+// Default reset per line (spec §9)
+// =================================================================
+
+void ToolLedSettings::resetDefaultForLine(LineId line) {
+  // Colors : restore preset + hue per Phase 0.1 defaults.
+  static const uint8_t dp[COLOR_SLOT_COUNT] = {
+    1, 3, 7, 11, 8, 6, 5, 6, 10, 0, 6, 7, 8, 9, 0, 8,
+  };
+  static const int8_t  dh[COLOR_SLOT_COUNT] = {
+    0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0,
+  };
+  ColorSlot* s = colorSlotForLine(line);
+  if (s) {
+    // Reverse-map line → CSLOT id to pick the default.
+    // Simpler : walk _cwk.slots pointer-equal to s, read index.
+    for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
+      if (&_cwk.slots[i] == s) {
+        s->presetId  = dp[i];
+        s->hueOffset = dh[i];
+        break;
+      }
+    }
+    return;
+  }
+  // Numerics
+  switch (line) {
+    case LINE_NORMAL_FG_PCT:              _lwk.normalFgIntensity = 85; break;
+    case LINE_ARPEG_FG_PCT:               _lwk.fgArpPlayMax = 80; break;
+    case LINE_LOOP_FG_PCT:                _lwk.fgArpPlayMax = 80; break;
+    case LINE_LOOP_SAVE_DURATION:         _ses.slotSaveTimerMs = 1000; break;
+    case LINE_LOOP_CLEAR_DURATION:        _ses.clearLoopTimerMs = 500; break;
+    case LINE_LOOP_SLOT_DURATION:         _ses.slotClearTimerMs = 800; break;
+    case LINE_TRANSPORT_PLAY_TIMING:
+      setEventOverrideFgPct(EVT_PLAY, 100);
+      _lwk.holdOnFadeMs = 500;
+      break;
+    case LINE_TRANSPORT_STOP_TIMING:
+      setEventOverrideFgPct(EVT_STOP, 100);
+      _lwk.holdOffFadeMs = 500;
+      break;
+    case LINE_TRANSPORT_BREATHING:
+      _lwk.fgArpStopMin = 60;
+      _lwk.fgArpStopMax = 90;
+      _lwk.pulsePeriodMs = 2500;
+      break;
+    case LINE_TRANSPORT_TICK_COMMON:
+      _lwk.tickFlashFg = 100;
+      _lwk.tickFlashBg = 25;
+      break;
+    case LINE_TRANSPORT_TICK_BEAT_DUR:    _lwk.tickBeatDurationMs = 30; break;
+    case LINE_TRANSPORT_TICK_BAR_DUR:     _lwk.tickBarDurationMs  = 60; break;
+    case LINE_TRANSPORT_TICK_WRAP_DUR:    _lwk.tickWrapDurationMs = 100; break;
+    case LINE_CONFIRM_BANK_TIMING:
+      _lwk.bankBrightnessPct = 80;
+      _lwk.bankDurationMs = 150;
+      break;
+    case LINE_CONFIRM_SCALE_ROOT_TIMING:
+      setEventOverrideFgPct(EVT_SCALE_ROOT, 100);
+      _lwk.scaleRootDurationMs = 130;
+      break;
+    case LINE_CONFIRM_SCALE_MODE_TIMING:
+      setEventOverrideFgPct(EVT_SCALE_MODE, 100);
+      _lwk.scaleModeDurationMs = 130;
+      break;
+    case LINE_CONFIRM_SCALE_CHROM_TIMING:
+      setEventOverrideFgPct(EVT_SCALE_CHROM, 100);
+      _lwk.scaleChromDurationMs = 130;
+      break;
+    case LINE_CONFIRM_OCTAVE_TIMING:
+      setEventOverrideFgPct(EVT_OCTAVE, 100);
+      _lwk.octaveDurationMs = 130;
+      break;
+    case LINE_CONFIRM_OK_SPARK:
+      _lwk.sparkOnMs = 20;
+      _lwk.sparkGapMs = 40;
+      _lwk.sparkCycles = 4;
+      break;
+    case LINE_GLOBAL_BG_FACTOR:           _lwk.bgFactor = 25; break;
+    case LINE_GLOBAL_GAMMA:               _lwk.gammaTenths = 20; break;
+    default: break;
+  }
+}
+
+void ToolLedSettings::resetLineDefault() {
+  resetDefaultForLine(_cursor);
+  // Save the relevant store (mirrors commitEdit logic).
+  LineShape shape = shapeForLine(_cursor);
+  bool wrote = false;
+  if (shape == SHAPE_COLOR) {
+    wrote = saveColorSlots();
+  } else {
+    switch (_cursor) {
+      case LINE_LOOP_SAVE_DURATION:
+      case LINE_LOOP_CLEAR_DURATION:
+      case LINE_LOOP_SLOT_DURATION:
+        wrote = saveSettings();
+        break;
+      default:
+        wrote = saveLedSettings();
+        break;
+    }
+  }
+  if (wrote && _ui) _ui->flashSaved();
+  refreshBadge();
+  updatePreviewContext();
+}
+
+// =================================================================
+// Preview context dispatch (spec §6.2)
+// =================================================================
+
+void ToolLedSettings::updatePreviewContext() {
+  ToolLedPreview::Params p;
+  memset(&p, 0, sizeof(p));
+  p.bgFactorPct = _lwk.bgFactor;
+
+  // Resolve PLAY color once (used by multiple contexts for tickColorPlayBg etc).
+  RGBW playColor = resolveColorSlot(_cwk.slots[CSLOT_VERB_PLAY]);
+
+  ToolLedPreview::PreviewContext ctx = ToolLedPreview::PV_NONE;
+
+  switch (_cursor) {
+    // --- Base color / FG brightness : mono-FG mockup ---
+    case LINE_NORMAL_BASE_COLOR:
+    case LINE_NORMAL_FG_PCT:
+      ctx = ToolLedPreview::PV_BASE_COLOR;
+      p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_NORMAL]);
+      p.fgPct   = _lwk.normalFgIntensity;
+      break;
+    case LINE_ARPEG_BASE_COLOR:
+    case LINE_ARPEG_FG_PCT:
+      ctx = ToolLedPreview::PV_BASE_COLOR;
+      p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_ARPEG]);
+      p.fgPct   = _lwk.fgArpPlayMax;
+      break;
+    case LINE_LOOP_BASE_COLOR:
+    case LINE_LOOP_FG_PCT:
+      ctx = ToolLedPreview::PV_BASE_COLOR;
+      p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_LOOP]);
+      p.fgPct   = _lwk.fgArpPlayMax;
+      break;
+
+    // --- LOOP gestures : event replay (RAMP_HOLD-ish, preview as FADE) ---
+    case LINE_LOOP_SAVE_COLOR:
+    case LINE_LOOP_SAVE_DURATION:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_FADE;
+      p.replayInst.fgPct     = 100;
+      p.replayInst.ledMask   = 0x08;  // LED 3 only
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_VERB_SAVE]);
+      p.replayInst.params.fade.durationMs = _ses.slotSaveTimerMs;
+      p.replayInst.params.fade.startPct   = 0;
+      p.replayInst.params.fade.endPct     = 100;
+      p.effectDurationMs = _ses.slotSaveTimerMs;
+      break;
+    case LINE_LOOP_CLEAR_COLOR:
+    case LINE_LOOP_CLEAR_DURATION:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_FADE;
+      p.replayInst.fgPct     = 100;
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_VERB_CLEAR_LOOP]);
+      p.replayInst.params.fade.durationMs = _ses.clearLoopTimerMs;
+      p.replayInst.params.fade.startPct   = 0;
+      p.replayInst.params.fade.endPct     = 100;
+      p.effectDurationMs = _ses.clearLoopTimerMs;
+      break;
+    case LINE_LOOP_SLOT_COLOR:
+    case LINE_LOOP_SLOT_DURATION:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_FADE;
+      p.replayInst.fgPct     = 100;
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_VERB_SLOT_CLEAR]);
+      p.replayInst.params.fade.durationMs = _ses.slotClearTimerMs;
+      p.replayInst.params.fade.startPct   = 100;
+      p.replayInst.params.fade.endPct     = 0;
+      p.effectDurationMs = _ses.slotClearTimerMs;
+      break;
+
+    // --- Transport fades ---
+    case LINE_TRANSPORT_PLAY_COLOR:
+    case LINE_TRANSPORT_PLAY_TIMING:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_FADE;
+      p.replayInst.fgPct     = effectiveEventFgPct(EVT_PLAY);
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_VERB_PLAY]);
+      p.replayInst.params.fade.durationMs = _lwk.holdOnFadeMs;
+      p.replayInst.params.fade.startPct   = 0;
+      p.replayInst.params.fade.endPct     = effectiveEventFgPct(EVT_PLAY);
+      p.effectDurationMs = _lwk.holdOnFadeMs;
+      break;
+    case LINE_TRANSPORT_STOP_COLOR:
+    case LINE_TRANSPORT_STOP_TIMING:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_FADE;
+      p.replayInst.fgPct     = effectiveEventFgPct(EVT_STOP);
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_VERB_STOP]);
+      p.replayInst.params.fade.durationMs = _lwk.holdOffFadeMs;
+      p.replayInst.params.fade.startPct   = effectiveEventFgPct(EVT_STOP);
+      p.replayInst.params.fade.endPct     = 0;
+      p.effectDurationMs = _lwk.holdOffFadeMs;
+      break;
+
+    // --- Waiting quantise : crossfade mode color <-> PLAY ---
+    case LINE_TRANSPORT_WAITING_COLOR:
+      ctx = ToolLedPreview::PV_WAITING;
+      // Source color = current mode color snapshot.
+      if (_setupEntryBankType == BANK_ARPEG) {
+        p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_ARPEG]);
+      } else {
+        p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_NORMAL]);
+      }
+      // Target = edited color (WAITING uses PLAY slot per spec).
+      p.crossfadeTargetColor = resolveColorSlot(_cwk.slots[CSLOT_VERB_PLAY]);
+      p.fgPct = 100;
+      break;
+
+    // --- Breathing ---
+    case LINE_TRANSPORT_BREATHING:
+      ctx = ToolLedPreview::PV_BREATHING;
+      p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_ARPEG]);
+      p.breathMinPct   = _lwk.fgArpStopMin;
+      p.breathMaxPct   = _lwk.fgArpStopMax;
+      p.breathPeriodMs = _lwk.pulsePeriodMs;
+      break;
+
+    // --- Tick common / tick colors / tick durations : LOOP ticks mockup ---
+    case LINE_TRANSPORT_TICK_COMMON:
+    case LINE_TRANSPORT_TICK_PLAY_COLOR:
+    case LINE_TRANSPORT_TICK_REC_COLOR:
+    case LINE_TRANSPORT_TICK_OVERDUB_COLOR:
+    case LINE_TRANSPORT_TICK_BEAT_DUR:
+    case LINE_TRANSPORT_TICK_BAR_DUR:
+    case LINE_TRANSPORT_TICK_WRAP_DUR:
+      ctx = ToolLedPreview::PV_TICKS_MOCKUP;
+      p.modeColorFg = resolveColorSlot(_cwk.slots[CSLOT_MODE_LOOP]);
+      p.modeColorBg = p.modeColorFg;
+      // Active tick color depends on the cursor line.
+      switch (_cursor) {
+        case LINE_TRANSPORT_TICK_REC_COLOR:
+          p.tickColorActive = resolveColorSlot(_cwk.slots[CSLOT_VERB_REC]);
+          p.activeTickKind  = 1;  // BAR
+          break;
+        case LINE_TRANSPORT_TICK_OVERDUB_COLOR:
+          p.tickColorActive = resolveColorSlot(_cwk.slots[CSLOT_VERB_OVERDUB]);
+          p.activeTickKind  = 2;  // WRAP
+          break;
+        case LINE_TRANSPORT_TICK_BAR_DUR:
+          p.tickColorActive = resolveColorSlot(_cwk.slots[CSLOT_VERB_REC]);
+          p.activeTickKind  = 1;
+          break;
+        case LINE_TRANSPORT_TICK_WRAP_DUR:
+          p.tickColorActive = resolveColorSlot(_cwk.slots[CSLOT_VERB_OVERDUB]);
+          p.activeTickKind  = 2;
+          break;
+        default:  // TICK_COMMON, TICK_PLAY_COLOR, TICK_BEAT_DUR
+          p.tickColorActive = playColor;
+          p.activeTickKind  = 0;  // BEAT
+          break;
+      }
+      p.tickColorPlayBg   = playColor;
+      p.tickBeatMs        = _lwk.tickBeatDurationMs;
+      p.tickBarMs         = _lwk.tickBarDurationMs;
+      p.tickWrapMs        = _lwk.tickWrapDurationMs;
+      p.tickCommonFgPct   = _lwk.tickFlashFg;
+      p.tickCommonBgPct   = _lwk.tickFlashBg;
+      break;
+
+    // --- Confirmations : event replay on LED 3 ---
+    case LINE_CONFIRM_BANK_COLOR:
+    case LINE_CONFIRM_BANK_TIMING:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_BLINK_SLOW;
+      p.replayInst.fgPct     = _lwk.bankBrightnessPct;
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_BANK_SWITCH]);
+      p.replayInst.params.blinkSlow.onMs   = _lwk.bankDurationMs / 2;
+      p.replayInst.params.blinkSlow.offMs  = _lwk.bankDurationMs / 2;
+      p.replayInst.params.blinkSlow.cycles = _lwk.bankBlinks;
+      p.replayInst.params.blinkSlow.blackoutOff = 1;
+      p.effectDurationMs = _lwk.bankDurationMs * _lwk.bankBlinks;
+      break;
+    case LINE_CONFIRM_SCALE_ROOT_COLOR:
+    case LINE_CONFIRM_SCALE_ROOT_TIMING:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_BLINK_FAST;
+      p.replayInst.fgPct     = effectiveEventFgPct(EVT_SCALE_ROOT);
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_SCALE_ROOT]);
+      p.replayInst.params.blinkFast.onMs   = _lwk.scaleRootDurationMs / 2;
+      p.replayInst.params.blinkFast.offMs  = _lwk.scaleRootDurationMs / 2;
+      p.replayInst.params.blinkFast.cycles = _lwk.scaleRootBlinks;
+      p.replayInst.params.blinkFast.blackoutOff = 1;
+      p.effectDurationMs = _lwk.scaleRootDurationMs * _lwk.scaleRootBlinks;
+      break;
+    case LINE_CONFIRM_SCALE_MODE_COLOR:
+    case LINE_CONFIRM_SCALE_MODE_TIMING:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_BLINK_FAST;
+      p.replayInst.fgPct     = effectiveEventFgPct(EVT_SCALE_MODE);
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_SCALE_MODE]);
+      p.replayInst.params.blinkFast.onMs   = _lwk.scaleModeDurationMs / 2;
+      p.replayInst.params.blinkFast.offMs  = _lwk.scaleModeDurationMs / 2;
+      p.replayInst.params.blinkFast.cycles = _lwk.scaleModeBlinks;
+      p.replayInst.params.blinkFast.blackoutOff = 1;
+      p.effectDurationMs = _lwk.scaleModeDurationMs * _lwk.scaleModeBlinks;
+      break;
+    case LINE_CONFIRM_SCALE_CHROM_COLOR:
+    case LINE_CONFIRM_SCALE_CHROM_TIMING:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_BLINK_FAST;
+      p.replayInst.fgPct     = effectiveEventFgPct(EVT_SCALE_CHROM);
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_SCALE_CHROM]);
+      p.replayInst.params.blinkFast.onMs   = _lwk.scaleChromDurationMs / 2;
+      p.replayInst.params.blinkFast.offMs  = _lwk.scaleChromDurationMs / 2;
+      p.replayInst.params.blinkFast.cycles = _lwk.scaleChromBlinks;
+      p.replayInst.params.blinkFast.blackoutOff = 1;
+      p.effectDurationMs = _lwk.scaleChromDurationMs * _lwk.scaleChromBlinks;
+      break;
+    case LINE_CONFIRM_OCTAVE_COLOR:
+    case LINE_CONFIRM_OCTAVE_TIMING:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_BLINK_FAST;
+      p.replayInst.fgPct     = effectiveEventFgPct(EVT_OCTAVE);
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_OCTAVE]);
+      p.replayInst.params.blinkFast.onMs   = _lwk.octaveDurationMs / 2;
+      p.replayInst.params.blinkFast.offMs  = _lwk.octaveDurationMs / 2;
+      p.replayInst.params.blinkFast.cycles = _lwk.octaveBlinks;
+      p.replayInst.params.blinkFast.blackoutOff = 1;
+      p.effectDurationMs = _lwk.octaveDurationMs * _lwk.octaveBlinks;
+      break;
+    case LINE_CONFIRM_OK_COLOR:
+    case LINE_CONFIRM_OK_SPARK:
+      ctx = ToolLedPreview::PV_EVENT_REPLAY;
+      p.replayInst.patternId = PTN_SPARK;
+      p.replayInst.fgPct     = 100;
+      p.replayInst.ledMask   = 0x08;
+      p.replayInst.colorA    = resolveColorSlot(_cwk.slots[CSLOT_CONFIRM_OK]);
+      p.replayInst.params.spark.onMs   = _lwk.sparkOnMs;
+      p.replayInst.params.spark.gapMs  = _lwk.sparkGapMs;
+      p.replayInst.params.spark.cycles = _lwk.sparkCycles;
+      p.effectDurationMs = (_lwk.sparkOnMs + _lwk.sparkGapMs) * _lwk.sparkCycles;
+      break;
+
+    // --- GLOBAL : BG factor / gamma — reuse TICKS_MOCKUP ---
+    case LINE_GLOBAL_BG_FACTOR:
+    case LINE_GLOBAL_GAMMA:
+      ctx = (_cursor == LINE_GLOBAL_BG_FACTOR)
+              ? ToolLedPreview::PV_BG_FACTOR
+              : ToolLedPreview::PV_GAMMA_TEST;
+      p.modeColorFg = resolveColorSlot(_cwk.slots[CSLOT_MODE_LOOP]);
+      p.modeColorBg = p.modeColorFg;
+      p.tickColorActive = playColor;
+      p.tickColorPlayBg = playColor;
+      p.activeTickKind  = 1;  // BAR cadence, decent pacing
+      p.tickBeatMs = _lwk.tickBeatDurationMs;
+      p.tickBarMs  = _lwk.tickBarDurationMs;
+      p.tickWrapMs = _lwk.tickWrapDurationMs;
+      p.tickCommonFgPct = _lwk.tickFlashFg;
+      p.tickCommonBgPct = _lwk.tickFlashBg;
+      break;
+
+    default:
+      break;
+  }
+
+  _preview.setContext(ctx, p);
+}
+
+// =================================================================
+// Rendering
+// =================================================================
+
+void ToolLedSettings::drawLine(LineId line, bool isCursor, bool inEdit) {
+  if (!_ui) return;
+  const char* prefix = isCursor
+                         ? (inEdit ? VT_YELLOW VT_BOLD "> " VT_RESET
+                                   : VT_CYAN VT_BOLD "> " VT_RESET)
+                         : "  ";
+  // Label color : bright-red+bold in EDIT (visual "live value, handle with
+  // care"), cyan+bold under cursor in NAV, plain otherwise.
+  const char* lblPre = inEdit                 ? VT_BRIGHT_RED VT_BOLD
+                       : isCursor             ? VT_CYAN VT_BOLD
+                                              : "";
+  const char* lblPost = (inEdit || isCursor)  ? VT_RESET : "";
+  const char* lbl = LINE_LABELS[line];
+
+  LineShape shape = shapeForLine(line);
+
+  if (shape == SHAPE_COLOR) {
+    const ColorSlot* s = ((ToolLedSettings*)this)->colorSlotForLine(line);
+    const char* presetName = (s && s->presetId < COLOR_PRESET_COUNT)
+                               ? COLOR_PRESET_NAMES[s->presetId] : "?";
+    int hue = s ? s->hueOffset : 0;
+    _ui->drawFrameLine("%s%s%-22s%s [%-12s] %+4d",
+                       prefix, lblPre, lbl, lblPost, presetName, hue);
+    return;
+  }
+
+  // Numeric lines : emit label + N values.
+  uint8_t count = numericFieldCountForLine(line);
+  char val[96];
+  val[0] = 0;
+  if (shape == SHAPE_SINGLE_NUM) {
+    int32_t v = readNumericField(line, 0);
+    // Unit hint by line (simple switch).
+    const char* unit = "";
+    switch (line) {
+      case LINE_NORMAL_FG_PCT:
+      case LINE_ARPEG_FG_PCT:
+      case LINE_LOOP_FG_PCT:
+      case LINE_GLOBAL_BG_FACTOR:          unit = "%"; break;
+      case LINE_GLOBAL_GAMMA:
+        snprintf(val, sizeof(val), "%d.%d", (int)(v/10), (int)(v%10));
+        unit = "";
+        _ui->drawFrameLine("%s%s%-22s%s %s", prefix, lblPre, lbl, lblPost, val);
+        return;
+      case LINE_LOOP_SAVE_DURATION:
+      case LINE_LOOP_CLEAR_DURATION:
+      case LINE_LOOP_SLOT_DURATION:
+      case LINE_TRANSPORT_TICK_BEAT_DUR:
+      case LINE_TRANSPORT_TICK_BAR_DUR:
+      case LINE_TRANSPORT_TICK_WRAP_DUR:   unit = "ms"; break;
+      default:                             unit = ""; break;
+    }
+    snprintf(val, sizeof(val), "%ld %s", (long)v, unit);
+    _ui->drawFrameLine("%s%s%-22s%s %s", prefix, lblPre, lbl, lblPost, val);
+    return;
+  }
+
+  // SHAPE_MULTI_NUM : render fields with focus marker on the active one.
+  char f0[48]; char f1[48]; char f2[48];
+  f0[0] = 0; f1[0] = 0; f2[0] = 0;
+  auto fmtField = [](char* buf, size_t n, int32_t v, const char* name, const char* unit,
+                      bool focus, bool editing) {
+    if (focus && editing) {
+      snprintf(buf, n, VT_YELLOW VT_BOLD "%s %ld%s" VT_RESET,
+               name, (long)v, unit);
     } else {
-      _ui->drawFrameLine("    %-20s%s", label, value);
+      snprintf(buf, n, "%s %ld%s", name, (long)v, unit);
     }
   };
-  char buf[24];
-
-  switch (patternId) {
-    case PTN_PULSE_SLOW:
-      snprintf(buf, sizeof(buf), "%d ms  (500-4000)", _lwk.pulsePeriodMs);
-      fieldLine(0, "periodMs:", buf);
-      break;
-    case PTN_FLASH:
-      snprintf(buf, sizeof(buf), "%d ms  (5-500)", _lwk.tickBeatDurationMs);
-      fieldLine(0, "durationMs:", buf);
-      snprintf(buf, sizeof(buf), "%d %%  (0-100)", _lwk.tickFlashFg);
-      fieldLine(1, "fgPct:", buf);
-      snprintf(buf, sizeof(buf), "%d %%  (0-100)", _lwk.tickFlashBg);
-      fieldLine(2, "bgPct:", buf);
-      break;
-    case PTN_RAMP_HOLD:
-      _ui->drawFrameLine(VT_DIM "    rampMs:             derived from Tool 6 timers" VT_RESET);
-      // Fallthrough to SPARK : suffix params
-      snprintf(buf, sizeof(buf), "%d ms  (20-200)", _lwk.sparkOnMs);
-      fieldLine(0, "suffix onMs:", buf);
-      snprintf(buf, sizeof(buf), "%d ms  (20-300)", _lwk.sparkGapMs);
-      fieldLine(1, "suffix gapMs:", buf);
-      snprintf(buf, sizeof(buf), "%d  (1-4)", _lwk.sparkCycles);
-      fieldLine(2, "suffix cycles:", buf);
-      break;
-    case PTN_SPARK:
-      snprintf(buf, sizeof(buf), "%d ms  (20-200)", _lwk.sparkOnMs);
-      fieldLine(0, "onMs:", buf);
-      snprintf(buf, sizeof(buf), "%d ms  (20-300)", _lwk.sparkGapMs);
-      fieldLine(1, "gapMs:", buf);
-      snprintf(buf, sizeof(buf), "%d  (1-4)", _lwk.sparkCycles);
-      fieldLine(2, "cycles:", buf);
-      break;
-    default:
-      _ui->drawFrameLine(VT_DIM "    No global params. Edit via EVENTS page (0.8d)." VT_RESET);
-      break;
+  // Field labels and units per line (consistent with descriptions).
+  const char* n0 = ""; const char* u0 = "";
+  const char* n1 = ""; const char* u1 = "";
+  const char* n2 = ""; const char* u2 = "";
+  switch (line) {
+    case LINE_TRANSPORT_PLAY_TIMING:
+    case LINE_TRANSPORT_STOP_TIMING:
+      n0 = "brightness"; u0 = "%"; n1 = "duration"; u1 = "ms"; break;
+    case LINE_TRANSPORT_BREATHING:
+      n0 = "min"; u0 = "%"; n1 = "max"; u1 = "%"; n2 = "period"; u2 = "ms"; break;
+    case LINE_TRANSPORT_TICK_COMMON:
+      n0 = "FG"; u0 = "%"; n1 = "BG"; u1 = "%"; break;
+    case LINE_CONFIRM_BANK_TIMING:
+    case LINE_CONFIRM_SCALE_ROOT_TIMING:
+    case LINE_CONFIRM_SCALE_MODE_TIMING:
+    case LINE_CONFIRM_SCALE_CHROM_TIMING:
+    case LINE_CONFIRM_OCTAVE_TIMING:
+      n0 = "brightness"; u0 = "%"; n1 = "duration"; u1 = "ms"; break;
+    case LINE_CONFIRM_OK_SPARK:
+      n0 = "on"; u0 = "ms"; n1 = "gap"; u1 = "ms"; n2 = "cycles"; u2 = ""; break;
+    default: break;
   }
-}
-
-void ToolLedSettings::handlePagePatterns(const NavEvent& ev, bool& screenDirty) {
-  if (_patternsSub == PATTERNS_NAV) {
-    // Pool navigation over 9 patterns
-    if (ev.type == NAV_UP) {
-      _patternsCursor = (_patternsCursor == 0) ? (PTN_COUNT - 1) : (_patternsCursor - 1);
-      screenDirty = true;
-    } else if (ev.type == NAV_DOWN) {
-      _patternsCursor = (_patternsCursor + 1) % PTN_COUNT;
-      screenDirty = true;
-    } else if (ev.type == NAV_ENTER) {
-      if (patternEditFieldCount(_patternsCursor) > 0) {
-        _patternsSub         = PATTERNS_EDIT;
-        _patternsEditField   = 0;
-        _patternsEditBackup  = _lwk;  // backup full store for cancel
-        screenDirty          = true;
-      }
-      // else : pattern has no editable globals, ENTER is a no-op (user sees
-      // the "No global params" message in the panel).
-    }
+  fmtField(f0, sizeof(f0), readNumericField(line, 0), n0, u0,
+           inEdit && _editFocus == 0, inEdit);
+  fmtField(f1, sizeof(f1), readNumericField(line, 1), n1, u1,
+           inEdit && _editFocus == 1, inEdit);
+  if (count >= 3) {
+    fmtField(f2, sizeof(f2), readNumericField(line, 2), n2, u2,
+             inEdit && _editFocus == 2, inEdit);
+    _ui->drawFrameLine("%s%s%-22s%s %s   %s   %s",
+                       prefix, lblPre, lbl, lblPost, f0, f1, f2);
   } else {
-    // PATTERNS_EDIT : field editor over N params of selected pattern
-    uint8_t count = patternEditFieldCount(_patternsCursor);
-    if (count == 0) {
-      // Should not happen (we only enter EDIT if count > 0) but handle safely
-      _patternsSub = PATTERNS_NAV;
-      screenDirty = true;
-      return;
-    }
-    if (ev.type == NAV_UP) {
-      _patternsEditField = (_patternsEditField == 0) ? (count - 1) : (_patternsEditField - 1);
-      screenDirty = true;
-    } else if (ev.type == NAV_DOWN) {
-      _patternsEditField = (_patternsEditField + 1) % count;
-      screenDirty = true;
-    } else if (ev.type == NAV_LEFT) {
-      adjustPatternField(_patternsCursor, _patternsEditField, -1, ev.accelerated);
-      screenDirty = true;
-    } else if (ev.type == NAV_RIGHT) {
-      adjustPatternField(_patternsCursor, _patternsEditField, +1, ev.accelerated);
-      screenDirty = true;
-    } else if (ev.type == NAV_ENTER) {
-      if (saveLedSettings()) {
-        _nvsSaved = true;
-        _ui->flashSaved();
-      }
-      _patternsSub = PATTERNS_NAV;
-      screenDirty = true;
-    } else if (ev.type == NAV_QUIT) {
-      // Cancel : restore backup, back to NAV
-      _lwk = _patternsEditBackup;
-      _patternsSub = PATTERNS_NAV;
-      screenDirty = true;
-    }
+    _ui->drawFrameLine("%s%s%-22s%s %s   %s",
+                       prefix, lblPre, lbl, lblPost, f0, f1);
   }
 }
 
-void ToolLedSettings::renderPagePatterns() {
-  _ui->drawSection("PATTERNS");
-  for (uint8_t i = 0; i < PTN_COUNT; i++) {
-    bool selected = (i == _patternsCursor);
-    bool editing  = selected && (_patternsSub == PATTERNS_EDIT);
-    uint8_t fieldCount = patternEditFieldCount(i);
+const char* ToolLedSettings::descriptionForLine(LineId line, bool /*inEdit*/) const {
+  if (line >= LINE_COUNT) return "";
+  return LINE_DESCRIPTIONS[line];
+}
 
-    char hint[32];
-    if (fieldCount > 0) snprintf(hint, sizeof(hint), "%d global", fieldCount);
-    else                snprintf(hint, sizeof(hint), "per-event (see EVENTS)");
-
-    if (editing) {
-      _ui->drawFrameLine(VT_CYAN VT_BOLD "> %-18s" VT_RESET VT_DIM " [editing]" VT_RESET, PATTERN_POOL_LABELS[i]);
-    } else if (selected) {
-      _ui->drawFrameLine(VT_CYAN VT_BOLD "> " VT_RESET "%-18s" VT_DIM " %s" VT_RESET, PATTERN_POOL_LABELS[i], hint);
-    } else {
-      _ui->drawFrameLine("  %-18s" VT_DIM " %s" VT_RESET, PATTERN_POOL_LABELS[i], hint);
-    }
-  }
+void ToolLedSettings::drawDescriptionPanel() {
+  if (!_ui) return;
   _ui->drawFrameEmpty();
-
-  _ui->drawSection(_patternsSub == PATTERNS_EDIT ? "EDITING" : "PARAMS");
-  renderPatternParamsPanel(_patternsCursor, _patternsSub == PATTERNS_EDIT);
+  const char* txt = descriptionForLine(_cursor, _uiMode == UI_EDIT);
+  _ui->drawFrameLine(VT_DIM "%s" VT_RESET, txt);
 }
 
-// --- EVENTS page ---
-//
-// Vertical field list of Phase 0 events (LOOP reserved events hidden
-// until Phase 1+). Each row shows the event name + 3 fields :
-//   - pattern   (pool : 9 patterns + PTN_NONE "default")
-//   - color     (pool : 15 color slots)
-//   - fgPct     (numeric, 0-100)
-//
-// Sentinel PTN_NONE means "use EVENT_RENDER_DEFAULT[evt]" — the
-// compile-time fallback takes over. Any other PatternId value is a
-// user override stored in LedSettingsStore.eventOverrides[].
+void ToolLedSettings::drawScreen() {
+  if (!_ui) return;
+  _ui->vtFrameStart();
+  _ui->vtHome();
+  _ui->drawConsoleHeader("TOOL 8: LED SETTINGS", _nvsSaved);
+  _ui->drawFrameTop();
 
-void ToolLedSettings::adjustEventField(uint8_t eventIdx, uint8_t field, int dir, bool accel) {
-  if (eventIdx >= NUM_PHASE0_EVENTS) return;
-  uint8_t evt = PHASE0_EVENT_IDS[eventIdx];
-  EventRenderEntry& entry = _lwk.eventOverrides[evt];
-
-  if (field == EVT_FIELD_PATTERN) {
-    // Cycle through 9 patterns + PTN_NONE (default) = 10 options.
-    // Storage : 0..8 are PatternId, 0xFF is PTN_NONE.
-    // We map them to a linear cursor : 0..8 = patterns, 9 = default.
-    uint8_t cur = (entry.patternId == PTN_NONE) ? 9 : entry.patternId;
-    int n = (int)cur + dir;
-    if (n < 0)  n = 9;
-    if (n > 9)  n = 0;
-    entry.patternId = (n == 9) ? PTN_NONE : (uint8_t)n;
-  } else if (field == EVT_FIELD_COLOR) {
-    int c = (int)entry.colorSlot + dir;
-    if (c < 0) c = COLOR_SLOT_COUNT - 1;
-    if (c >= (int)COLOR_SLOT_COUNT) c = 0;
-    entry.colorSlot = (uint8_t)c;
-  } else if (field == EVT_FIELD_FG_PCT) {
-    int step = accel ? 10 : 1;
-    int v = (int)entry.fgPct + dir * step;
-    if (v < 0) v = 0;
-    if (v > 100) v = 100;
-    entry.fgPct = (uint8_t)v;
+  // Scroll indicator (top) : yellow+bold, centered (~CONSOLE_INNER/2 leading
+  // spaces). Shown only when content exists above viewport.
+  if (_viewportStart > 0) {
+    _ui->drawFrameLine("                                             "
+                       VT_BRIGHT_YELLOW VT_BOLD
+                       "\xe2\x96\xb2 %u more lines above"
+                       VT_RESET,
+                       (unsigned)_viewportStart);
   }
-}
 
-void ToolLedSettings::resetCurrentEventToDefault() {
-  if (_eventsCursor >= NUM_PHASE0_EVENTS) return;
-  uint8_t evt = PHASE0_EVENT_IDS[_eventsCursor];
-  _lwk.eventOverrides[evt].patternId = PTN_NONE;  // fallback active
-  _lwk.eventOverrides[evt].colorSlot = 0;
-  _lwk.eventOverrides[evt].fgPct     = 0;
-}
+  // Render the viewport : VIEWPORT_SIZE lines starting at _viewportStart.
+  // Emit a section title whenever the viewport crosses a section boundary.
+  Section lastSection = (Section)0xFF;
+  uint8_t end = _viewportStart + VIEWPORT_SIZE;
+  if (end > LINE_COUNT) end = LINE_COUNT;
+  for (uint8_t i = _viewportStart; i < end; i++) {
+    LineId line = (LineId)i;
+    Section s = sectionOf(line);
+    if (s != lastSection) {
+      _ui->drawSection(SECTION_LABELS[s]);
+      lastSection = s;
+    }
+    drawLine(line, line == _cursor, _uiMode == UI_EDIT && line == _cursor);
+  }
 
-void ToolLedSettings::handlePageEvents(const NavEvent& ev, bool& screenDirty) {
-  if (_eventsSub == EVENTS_NAV) {
-    if (ev.type == NAV_UP) {
-      _eventsCursor = (_eventsCursor == 0) ? (NUM_PHASE0_EVENTS - 1) : (_eventsCursor - 1);
-      screenDirty = true;
-    } else if (ev.type == NAV_DOWN) {
-      _eventsCursor = (_eventsCursor + 1) % NUM_PHASE0_EVENTS;
-      screenDirty = true;
-    } else if (ev.type == NAV_ENTER) {
-      _eventsSub        = EVENTS_EDIT;
-      _eventsEditField  = EVT_FIELD_PATTERN;
-      uint8_t evt       = PHASE0_EVENT_IDS[_eventsCursor];
-      _eventsEditBackup = _lwk.eventOverrides[evt];
-      screenDirty       = true;
-    } else if (ev.type == NAV_DEFAULTS) {
-      resetCurrentEventToDefault();
-      if (saveLedSettings()) {
-        _nvsSaved = true;
-        _ui->flashSaved();
-      }
-      screenDirty = true;
+  // Scroll indicator (bottom) : yellow+bold, centered.
+  if (end < LINE_COUNT) {
+    _ui->drawFrameLine("                                             "
+                       VT_BRIGHT_YELLOW VT_BOLD
+                       "\xe2\x96\xbc %u more lines below"
+                       VT_RESET,
+                       (unsigned)(LINE_COUNT - end));
+  }
+
+  drawDescriptionPanel();
+  _ui->drawFrameBottom();
+
+  if (_uiMode == UI_EDIT) {
+    LineShape sh = shapeForLine(_cursor);
+    switch (sh) {
+      case SHAPE_COLOR:
+        _ui->drawControlBar(VT_DIM "[<>] preset  [^v] hue  [ENTER] save  [q] cancel" VT_RESET);
+        break;
+      case SHAPE_SINGLE_NUM:
+        _ui->drawControlBar(VT_DIM "[<>] +/-10  [^v] +/-1  [ENTER] save  [q] cancel" VT_RESET);
+        break;
+      case SHAPE_MULTI_NUM:
+        _ui->drawControlBar(VT_DIM "[<>] focus  [^v] adjust  [ENTER] save  [q] cancel" VT_RESET);
+        break;
     }
   } else {
-    // EVENTS_EDIT
-    if (ev.type == NAV_UP || ev.type == NAV_DOWN) {
-      // Cycle focused field among 3
-      int n = (int)_eventsEditField + (ev.type == NAV_DOWN ? 1 : -1);
-      if (n < 0) n = 2;
-      if (n > 2) n = 0;
-      _eventsEditField = (EventsEditField)n;
-      screenDirty = true;
-    } else if (ev.type == NAV_LEFT) {
-      adjustEventField(_eventsCursor, _eventsEditField, -1, ev.accelerated);
-      screenDirty = true;
-    } else if (ev.type == NAV_RIGHT) {
-      adjustEventField(_eventsCursor, _eventsEditField, +1, ev.accelerated);
-      screenDirty = true;
-    } else if (ev.type == NAV_ENTER) {
-      if (saveLedSettings()) {
-        _nvsSaved = true;
-        _ui->flashSaved();
-      }
-      _eventsSub = EVENTS_NAV;
-      screenDirty = true;
-    } else if (ev.type == NAV_QUIT) {
-      // Cancel : restore backup for this event only
-      uint8_t evt = PHASE0_EVENT_IDS[_eventsCursor];
-      _lwk.eventOverrides[evt] = _eventsEditBackup;
-      _eventsSub = EVENTS_NAV;
-      screenDirty = true;
-    }
+    _ui->drawControlBar(VT_DIM "[^v] nav  [<>] section  [ENTER] edit  [d] default  [q] exit" VT_RESET);
   }
+  _ui->vtFrameEnd();
 }
 
-void ToolLedSettings::renderPageEvents() {
-  _ui->drawSection("EVENTS");
-  for (uint8_t i = 0; i < NUM_PHASE0_EVENTS; i++) {
-    bool selected = (i == _eventsCursor);
-    bool editing  = selected && (_eventsSub == EVENTS_EDIT);
-
-    uint8_t evt = PHASE0_EVENT_IDS[i];
-    const EventRenderEntry& entry = _lwk.eventOverrides[evt];
-
-    // Derive visible pattern/color/fgPct : if override is PTN_NONE,
-    // show the default values (informational) but tag as "(default)".
-    bool isOverride = (entry.patternId != PTN_NONE);
-    const EventRenderEntry& effective = isOverride ? entry : EVENT_RENDER_DEFAULT[evt];
-
-    const char* patLabel = (entry.patternId == PTN_NONE)
-                             ? "default"
-                             : (effective.patternId < PTN_COUNT
-                                ? PATTERN_POOL_LABELS[effective.patternId]
-                                : "?");
-    const char* colLabel = (effective.colorSlot < COLOR_SLOT_COUNT)
-                             ? COLOR_SLOT_LABELS[effective.colorSlot]
-                             : "?";
-
-    // Build each of the 3 fields with its focus tag (cyan bold when edited,
-    // bright white when just selected, plain otherwise). snprintf to a
-    // per-field buffer to avoid a single-static-buffer aliasing issue.
-    char fgBuf[8];
-    snprintf(fgBuf, sizeof(fgBuf), "%d%%", effective.fgPct);
-
-    char patBuf[48], colBuf[48], fgOutBuf[48], rowBuf[192];
-    bool focusPat = editing && _eventsEditField == EVT_FIELD_PATTERN;
-    bool focusCol = editing && _eventsEditField == EVT_FIELD_COLOR;
-    bool focusFg  = editing && _eventsEditField == EVT_FIELD_FG_PCT;
-    snprintf(patBuf, sizeof(patBuf), "%s[%s]%s",
-             focusPat ? VT_CYAN VT_BOLD : (selected ? VT_BRIGHT_WHITE : ""), patLabel, VT_RESET);
-    snprintf(colBuf, sizeof(colBuf), "%s[%-16s]%s",
-             focusCol ? VT_CYAN VT_BOLD : (selected ? VT_BRIGHT_WHITE : ""), colLabel, VT_RESET);
-    snprintf(fgOutBuf, sizeof(fgOutBuf), "%s[%s]%s",
-             focusFg ? VT_CYAN VT_BOLD : (selected ? VT_BRIGHT_WHITE : ""), fgBuf, VT_RESET);
-
-    const char* leader = selected ? (VT_CYAN VT_BOLD "> " VT_RESET) : "  ";
-    snprintf(rowBuf, sizeof(rowBuf), "%s%-12s %-28s %-28s %-12s",
-             leader, PHASE0_EVENT_LABELS[i], patBuf, colBuf, fgOutBuf);
-    _ui->drawFrameLine("%s", rowBuf);
-  }
-
-  _ui->drawFrameEmpty();
-  _ui->drawSection("INFO");
-  if (_eventsSub == EVENTS_EDIT) {
-    const char* fieldName = (_eventsEditField == EVT_FIELD_PATTERN) ? "PATTERN"
-                          : (_eventsEditField == EVT_FIELD_COLOR)   ? "COLOR" : "FG%";
-    _ui->drawFrameLine(VT_DIM "Editing %s — %s focused." VT_RESET,
-                       PHASE0_EVENT_LABELS[_eventsCursor], fieldName);
-    _ui->drawFrameLine(VT_DIM "UP/DOWN : switch field. LEFT/RIGHT : adjust." VT_RESET);
-    _ui->drawFrameLine(VT_DIM "ENTER : save & exit edit. 'q' : cancel." VT_RESET);
-  } else {
-    uint8_t evt = PHASE0_EVENT_IDS[_eventsCursor];
-    bool isDefault = (_lwk.eventOverrides[evt].patternId == PTN_NONE);
-    _ui->drawFrameLine(VT_DIM "%s %s" VT_RESET,
-                       PHASE0_EVENT_LABELS[_eventsCursor],
-                       isDefault ? "(using compile-time default)" : "(overridden)");
-    _ui->drawFrameLine(VT_DIM "ENTER edits pattern / color / fgPct. 'd' resets to default." VT_RESET);
-  }
-}
-
-// --- run() ---
+// =================================================================
+// Main run loop — follows setup-tools-conventions §10 skeleton.
+// =================================================================
 
 void ToolLedSettings::run() {
-  if (!_ui) return;
+  if (!_leds || !_ui) return;
 
-  // Reset state on entry
-  _page = PAGE_PATTERNS;
-  _colorsCursor    = 0;
-  _colorsSub       = COLORS_NAV;
-  _colorsEditField = EDIT_FIELD_PRESET;
-  _patternsCursor  = 0;
-  _patternsSub     = PATTERNS_NAV;
-  _patternsEditField = 0;
-  _eventsCursor    = 0;
-  _eventsSub       = EVENTS_NAV;
-  _eventsEditField = EVT_FIELD_PATTERN;
-
-  // Load ColorSlotStore from NVS
-  bool colorLoaded = NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
-                                           COLOR_SLOT_MAGIC, COLOR_SLOT_VERSION,
-                                           &_cwk, sizeof(_cwk));
-  if (!colorLoaded) {
-    _cwk.magic    = COLOR_SLOT_MAGIC;
-    _cwk.version  = COLOR_SLOT_VERSION;
-    _cwk.reserved = 0;
-    for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
-      _cwk.slots[i].presetId  = DEFAULT_SLOT_PRESETS[i];
-      _cwk.slots[i].hueOffset = DEFAULT_SLOT_HUES[i];
-    }
-  }
-
-  // Load LedSettingsStore from NVS — needed for PATTERNS page.
-  bool ledLoaded = NvsManager::loadBlob(LED_SETTINGS_NVS_NAMESPACE, LED_SETTINGS_NVS_KEY,
-                                         EEPROM_MAGIC, LED_SETTINGS_VERSION,
-                                         &_lwk, sizeof(_lwk));
-  if (ledLoaded) {
-    validateLedSettingsStore(_lwk);
-  } else {
-    // Not saved yet : NvsManager has compile-time defaults loaded in its
-    // internal cache, but we need our own working copy. Seed minimal
-    // defaults matching NvsManager init body for the fields we edit here.
-    _lwk.magic                = EEPROM_MAGIC;
-    _lwk.version              = LED_SETTINGS_VERSION;
-    _lwk.reserved             = 0;
-    _lwk.normalFgIntensity    = 85;
-    _lwk.normalBgIntensity    = 10;
-    _lwk.fgArpStopMin         = 30;
-    _lwk.fgArpStopMax         = 100;
-    _lwk.fgArpPlayMax         = 80;
-    _lwk.bgArpStopMin         = 8;
-    _lwk.bgArpPlayMin         = 8;
-    _lwk.tickFlashFg          = 100;
-    _lwk.tickFlashBg          = 25;
-    _lwk.bgFactor             = 25;
-    _lwk.pulsePeriodMs        = 1472;
-    _lwk.tickBeatDurationMs   = 30;
-    _lwk.gammaTenths          = 20;
-    _lwk.sparkOnMs            = 50;
-    _lwk.sparkGapMs           = 70;
-    _lwk.sparkCycles          = 2;
-    _lwk.bankBlinks           = 3;
-    _lwk.bankDurationMs       = 300;
-    _lwk.bankBrightnessPct    = 80;
-    _lwk.scaleRootBlinks      = 2;
-    _lwk.scaleRootDurationMs  = 200;
-    _lwk.scaleModeBlinks      = 2;
-    _lwk.scaleModeDurationMs  = 200;
-    _lwk.scaleChromBlinks     = 2;
-    _lwk.scaleChromDurationMs = 200;
-    _lwk.holdOnFadeMs         = 500;
-    _lwk.holdOffFadeMs        = 500;
-    _lwk.octaveBlinks         = 3;
-    _lwk.octaveDurationMs     = 300;
-    for (uint8_t i = 0; i < EVT_COUNT; i++) {
-      _lwk.eventOverrides[i].patternId = PTN_NONE;
-      _lwk.eventOverrides[i].colorSlot = 0;
-      _lwk.eventOverrides[i].fgPct     = 0;
-    }
-  }
-
-  // NVS badge : "saved" if both blobs loaded cleanly.
-  _nvsSaved = colorLoaded && ledLoaded;
-
-  if (_leds) _leds->previewBegin();
-
-  InputParser input;
-  bool screenDirty = true;
+  loadAll();
+  refreshBadge();
+  _cursor = (LineId)0;
+  _uiMode = UI_NAV;
+  _editFocus = 0;
+  _viewportStart = 0;
 
   _ui->vtClear();
 
+  // Preview : take LED strip ownership, init helper.
+  _leds->previewBegin();
+  uint16_t tempoBpm = _potRouter ? _potRouter->getTempoBPM() : 120;
+  _preview.begin(_leds, tempoBpm);
+  updatePreviewContext();
+
+  static InputParser sInput;
+
+  bool screenDirty = true;
+
   while (true) {
-    NavEvent ev = input.update();
+    _leds->update();
+    unsigned long now = millis();
+    _preview.update(now);
 
-    // Determine if we're in a page sub-state (sub-state consumes 'q' and 't'
-    // for cancel / field switch rather than top-level exit / page toggle).
-    bool inSubState = (_page == PAGE_COLORS   && _colorsSub   != COLORS_NAV)
-                   || (_page == PAGE_PATTERNS && _patternsSub != PATTERNS_NAV)
-                   || (_page == PAGE_EVENTS   && _eventsSub   != EVENTS_NAV);
+    NavEvent ev = sInput.update();
+    UiMode modeAtStart = _uiMode;
 
-    if (inSubState) {
-      switch (_page) {
-        case PAGE_COLORS:   handlePageColors(ev, screenDirty);   break;
-        case PAGE_PATTERNS: handlePagePatterns(ev, screenDirty); break;
-        case PAGE_EVENTS:   handlePageEvents(ev, screenDirty);   break;
-        default: break;
-      }
-    } else {
-      // Top-level page nav
-      if (ev.type == NAV_QUIT) break;
-      if (ev.type == NAV_TOGGLE) {
-        _page = (Page)((_page + 1) % PAGE_COUNT);
-        screenDirty = true;
-      } else {
-        // Route to active page
-        switch (_page) {
-          case PAGE_COLORS:   handlePageColors(ev, screenDirty);   break;
-          case PAGE_PATTERNS: handlePagePatterns(ev, screenDirty); break;
-          case PAGE_EVENTS:   handlePageEvents(ev, screenDirty);   break;
-          default: break;
+    switch (ev.type) {
+      case NAV_UP:
+        if (_uiMode == UI_NAV) { cursorUp(); updatePreviewContext(); screenDirty = true; }
+        else {
+          LineShape sh = shapeForLine(_cursor);
+          if (sh == SHAPE_COLOR)            editColor(_cursor, 0, +1, ev.accelerated);
+          else if (sh == SHAPE_SINGLE_NUM)  editSingleNumeric(_cursor, 0, +1, ev.accelerated);
+          else                              editMultiNumeric(_cursor, 0, +1, ev.accelerated);
+          screenDirty = true;
         }
-      }
+        break;
+      case NAV_DOWN:
+        if (_uiMode == UI_NAV) { cursorDown(); updatePreviewContext(); screenDirty = true; }
+        else {
+          LineShape sh = shapeForLine(_cursor);
+          if (sh == SHAPE_COLOR)            editColor(_cursor, 0, -1, ev.accelerated);
+          else if (sh == SHAPE_SINGLE_NUM)  editSingleNumeric(_cursor, 0, -1, ev.accelerated);
+          else                              editMultiNumeric(_cursor, 0, -1, ev.accelerated);
+          screenDirty = true;
+        }
+        break;
+      case NAV_LEFT:
+        if (_uiMode == UI_NAV) { cursorPrevSection(); updatePreviewContext(); screenDirty = true; }
+        else {
+          LineShape sh = shapeForLine(_cursor);
+          if (sh == SHAPE_COLOR)            editColor(_cursor, -1, 0, ev.accelerated);
+          else if (sh == SHAPE_SINGLE_NUM)  editSingleNumeric(_cursor, -1, 0, ev.accelerated);
+          else                              editMultiNumeric(_cursor, -1, 0, ev.accelerated);
+          screenDirty = true;
+        }
+        break;
+      case NAV_RIGHT:
+        if (_uiMode == UI_NAV) { cursorNextSection(); updatePreviewContext(); screenDirty = true; }
+        else {
+          LineShape sh = shapeForLine(_cursor);
+          if (sh == SHAPE_COLOR)            editColor(_cursor, +1, 0, ev.accelerated);
+          else if (sh == SHAPE_SINGLE_NUM)  editSingleNumeric(_cursor, +1, 0, ev.accelerated);
+          else                              editMultiNumeric(_cursor, +1, 0, ev.accelerated);
+          screenDirty = true;
+        }
+        break;
+      case NAV_ENTER:
+        if (_uiMode == UI_NAV) { enterEdit(); screenDirty = true; }
+        else                   { commitEdit(); screenDirty = true; }
+        break;
+      case NAV_DEFAULTS:
+        if (_uiMode == UI_NAV) { resetLineDefault(); screenDirty = true; }
+        break;
+      case NAV_QUIT:
+        if (_uiMode == UI_EDIT) { cancelEdit(); screenDirty = true; }
+        break;
+      default: break;
     }
 
-    // Live preview for COLORS page : refreshes each frame when cursor moves
-    // or hue/preset changes (screenDirty triggers it here).
-    if (_page == PAGE_COLORS && screenDirty) {
-      previewCurrentColor();
+    // Exit on q at top level (two-step pattern).
+    if (ev.type == NAV_QUIT && modeAtStart == UI_NAV) {
+      _preview.end();
+      _leds->previewEnd();
+      _ui->vtClear();
+      return;
     }
 
     if (screenDirty) {
+      drawScreen();
       screenDirty = false;
-      _ui->vtFrameStart();
-      _ui->drawConsoleHeader("TOOL 8: LED SETTINGS", _nvsSaved);
-      _ui->drawFrameEmpty();
-
-      // Page tabs line
-      {
-        const char* pn = (_page == PAGE_PATTERNS) ? VT_CYAN VT_BOLD "[PATTERNS]" VT_RESET : VT_DIM " PATTERNS " VT_RESET;
-        const char* cn = (_page == PAGE_COLORS)   ? VT_CYAN VT_BOLD "[COLORS]"   VT_RESET : VT_DIM " COLORS "   VT_RESET;
-        const char* en = (_page == PAGE_EVENTS)   ? VT_CYAN VT_BOLD "[EVENTS]"   VT_RESET : VT_DIM " EVENTS "   VT_RESET;
-        _ui->drawFrameLine("  %s   %s   %s", pn, cn, en);
-      }
-      _ui->drawFrameEmpty();
-
-      switch (_page) {
-        case PAGE_PATTERNS: renderPagePatterns(); break;
-        case PAGE_COLORS:   renderPageColors();   break;
-        case PAGE_EVENTS:   renderPageEvents();   break;
-        default: break;
-      }
-      _ui->drawFrameEmpty();
-
-      // Control bar — context-aware
-      if (_page == PAGE_COLORS && _colorsSub == COLORS_EDIT) {
-        _ui->drawControlBar(VT_DIM "[^v] FIELD" CBAR_SEP "[</>] ADJUST" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
-      } else if (_page == PAGE_COLORS) {
-        _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT" CBAR_SEP "[d] DFLT" CBAR_SEP "[t] PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
-      } else if (_page == PAGE_PATTERNS && _patternsSub == PATTERNS_EDIT) {
-        _ui->drawControlBar(VT_DIM "[^v] FIELD" CBAR_SEP "[</>] ADJUST" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
-      } else if (_page == PAGE_PATTERNS) {
-        _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT" CBAR_SEP "[t] PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
-      } else if (_page == PAGE_EVENTS && _eventsSub == EVENTS_EDIT) {
-        _ui->drawControlBar(VT_DIM "[^v] FIELD" CBAR_SEP "[</>] ADJUST" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
-      } else if (_page == PAGE_EVENTS) {
-        _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT" CBAR_SEP "[d] DFLT" CBAR_SEP "[t] PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
-      } else {
-        _ui->drawControlBar(VT_DIM "[t] NEXT PAGE" CBAR_SEP "[q] EXIT" VT_RESET);
-      }
-
-      _ui->vtFrameEnd();
     }
 
-    delay(10);
-  }
-
-  if (_leds) {
-    _leds->previewClear();
-    _leds->previewEnd();
+    delay(5);
   }
 }

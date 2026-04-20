@@ -145,7 +145,10 @@ void ToolLedPreview::renderBreathing(unsigned long now) {
 // (cohérence UX Phase 0.1, non exposed — spec §4.3 non-éditable).
 // -----------------------------------------------------------------
 void ToolLedPreview::renderWaiting(unsigned long now) {
-  const uint16_t periodMs = 1500;
+  // Period matches the runtime hardcoded 800 ms (spec §4.3 "WAITING period
+  // hardcoded 800 ms constant dans renderPattern"). Keep preview in sync so
+  // what the user sees = what they'll get when LOOP engine triggers WAITING.
+  const uint16_t periodMs = 800;
   uint32_t elapsed = now % periodMs;
   uint32_t phase16 = (elapsed * 65536UL) / periodMs;
   uint8_t idx  = (phase16 >> 8) & 0xFF;
@@ -186,6 +189,9 @@ void ToolLedPreview::renderEventReplay(unsigned long now) {
     for (uint8_t i = 0; i < 8; i++) _leds->previewSetPixel(i, off, 0);
     LedController::PatternInstance inst = _p.replayInst;
     inst.startTime = _replayPhaseStart;
+    inst.active    = true;  // renderPattern bails if !active (LedController.cpp:724).
+                             // Callers don't set it (Tool 8 builds partial Params),
+                             // so the helper forces it here.
     _leds->renderPreviewPattern(inst, now);
     if (phaseElapsed >= effectMs) {
       _replayInBlack = true;
