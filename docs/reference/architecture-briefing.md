@@ -92,9 +92,13 @@ clear). Normal display encodes multi-bank state (FG solid / BG dim via
 `_bgFactor` / tick flashes via `renderFlashOverlay()` / sine pulse for
 stopped-loaded ARPEG). The 3-layer LED grammar (patterns × color slots
 × event mapping, see P5) is the single source of truth for all visual
-events since Phase 0 refactor 2026-04-19. **Don't**: design a new visual
-by writing pixels — declare a pattern + color slot + event entry first
-(or add a new PatternId to the palette if truly novel).
+events since Phase 0 refactor 2026-04-19. Phase 0.1 respec (2026-04-20)
+adds `CSLOT_VERB_STOP` (16th slot) and 3 tick duration caches
+(BEAT/BAR/WRAP) without changing the grammar structure ; BEAT is wired
+now for ARPEG step, BAR/WRAP are stored but consumed Phase 1+ by
+LoopEngine. **Don't**: design a new visual by writing pixels — declare
+a pattern + color slot + event entry first (or add a new PatternId to
+the palette if truly novel).
 
 ### MM8 — Setup is a config mirror
 Setup Tools are the UI surface of runtime config. Every persisted user-param
@@ -296,7 +300,7 @@ it is probably **broad** — go back to §0 Q2 and treat as exploration.
 | Add a new scale mode | `ScaleResolver.cpp` (`scaleIntervals[][7]`) | `ScaleResolver::resolve()` table | MidiEngine, ArpEngine (re-résolvent auto) |
 | Add a new ARP pattern | `ArpEngine.h` (enum `ArpPattern`, array sizes), `ArpEngine.cpp` (`rebuildSequence()`), `main.cpp` (`s_patNames[]`) | `ArpEngine::rebuildSequence()` switch case | ScaleResolver, ArpScheduler, NVS, LED |
 | Add a new pot target (pure param, no new UX) | `PotRouter.h` (enum `PotTarget`), `PotRouter.cpp` (`applyBinding()`, `isPerBankTarget()`, `getDiscreteSteps()`), `ToolPotMapping.cpp` (pool + label + color) | `PotRouter::applyBinding()` switch + getter | MidiEngine, ArpEngine (sauf si cible les alimente) |
-| Add a new LED event (unified grammar) | `LedGrammar.h` (enum `EventId` entry), `LedGrammar.cpp` (`EVENT_RENDER_DEFAULT[]` row pointing to a pattern + color slot), `LedSettingsStore` field if the pattern needs a new global, `ToolLedSettings` if the event should appear in EVENTS page (add to `PHASE0_EVENT_IDS[]`) | `LedController::triggerEvent` callsite in metier flow | Flow métier (bank/scale/arp) sauf pour déclencher |
+| Add a new LED event (unified grammar) | `LedGrammar.h` (enum `EventId` entry), `LedGrammar.cpp` (`EVENT_RENDER_DEFAULT[]` row pointing to a pattern + color slot), `LedSettingsStore` field if the pattern needs a new global, `ToolLedSettings` if the event should be tunable by the user (add a new `LineId` in the relevant section ; wire metadata in `shapeForLine`/`colorSlotForLine`/`readNumericField`/`writeNumericField`/`descriptionForLine`) | `LedController::triggerEvent` callsite in metier flow | Flow métier (bank/scale/arp) sauf pour déclencher |
 
 ---
 
@@ -319,8 +323,8 @@ setup Tools. Walk through these tables before ANY user-configurable change.
 | Global settings (profile, AT rate, BLE, clock, doubleTap, bargraph, panic, batCal) | `SettingsStore` | Tool 6 ToolSettings | `illpad_set` / `settings` | Nouveau field → Tool 6 case switch + validator + bump version + apply dans `main.cpp` setup() ([main.cpp:329-339](../../src/main.cpp:329)) |
 | Pot bindings (user-configurable pot → parameter) | `PotMappingStore` (normalMap + arpegMap) | Tool 7 ToolPotMapping | `illpad_pmap` / `mapping` | Nouveau `PotTarget` enum → pool line, label+color, `getDiscreteSteps()`, `isPerBankTarget()`, `applyBinding()` case |
 | Pot filter tuning (snap, deadband, sleep, wake) | `PotFilterStore` | **none** (descriptor in T7 "Monitor" range but no UI) | `illpad_pflt` / `config` | **Friction zone** : modifiable only via code + flash. Intent "Monitor in T7" unimplemented. |
-| LED pattern globals + event overrides + intensities + gamma | `LedSettingsStore` v6 | Tool 8 ToolLedSettings (3 pages : PATTERNS / COLORS / EVENTS) | `illpad_lset` / `settings` | Nouveau event → `EventId` + `EVENT_RENDER_DEFAULT[]` + optional entry in Tool 8 PHASE0_EVENT_IDS ; nouveau global pattern param → field in v6 Store + edit case in PATTERNS page + apply in `renderPattern()` |
-| Color slots (13 preset+hue) | `ColorSlotStore` | Tool 8 ToolLedSettings | `illpad_lset` / `colors` | Ajouter un slot → `COLOR_SLOT_COUNT` + Tool 8 color grid + `resolveColorSlot()` |
+| LED pattern globals + event overrides + intensities + gamma | `LedSettingsStore` v7 | Tool 8 ToolLedSettings (single-view 6 sections : NORMAL / ARPEG / LOOP / TRANSPORT / CONFIRMATIONS / GLOBAL, Phase 0.1 respec) | `illpad_lset` / `settings` | Nouveau event → `EventId` + `EVENT_RENDER_DEFAULT[]` + optional line in Tool 8 LineId enum ; nouveau global pattern param → field in v7 Store + line in Tool 8 + apply dans `renderPattern()` |
+| Color slots (14 preset + hue, 16 slot IDs) | `ColorSlotStore` v5 | Tool 8 ToolLedSettings | `illpad_lset` / `colors` | Ajouter un slot → `COLOR_SLOT_COUNT` + Tool 8 LineId (nouvelle ligne COLOR) + `resolveColorSlot()` + default dans NvsManager.cpp |
 
 ### Table 2 — Runtime-managed persisted state (no Setup Tool, written via pot/pad gestures)
 
@@ -383,8 +387,8 @@ Temporary event visualization on top of normal display via a unified
   1. **Patterns** — palette of 9 fixed behaviors (SOLID, PULSE_SLOW,
      CROSSFADE_COLOR, BLINK_SLOW, BLINK_FAST, FADE, FLASH, RAMP_HOLD,
      SPARK) declared in `src/core/LedGrammar.h`.
-  2. **Color slots** — 15 `ColorSlotId` entries (MODE_*, VERB_*,
-     SETUP/NAV, CONFIRM_OK) in `ColorSlotStore` v4.
+  2. **Color slots** — 16 `ColorSlotId` entries (MODE_*, VERB_*,
+     SETUP/NAV, CONFIRM_OK, VERB_STOP) in `ColorSlotStore` v5.
   3. **Events** — each `EventId` maps to `{patternId, colorSlot, fgPct}`.
      Per-event NVS override in `LedSettingsStore.eventOverrides[]` ;
      compile-time fallback in `EVENT_RENDER_DEFAULT[]`.
@@ -393,14 +397,24 @@ API : `triggerEvent(EventId, ledMask)` preempts the single-slot
 `_eventOverlay` PatternInstance. Auto-expires per pattern math.
 `renderPattern(inst, now)` dispatches on `patternId`. Tick ARPEG rendering
 shares `renderFlashOverlay()` with the pattern engine (FLASH visual logic
-in one place).
+in one place). Public wrapper `renderPreviewPattern(inst, now)` exposes
+the private dispatch to Tool 8 preview (via `ToolLedPreview` helper) with
+zero duplication.
 
 **Reuse** for new visual events : add `EventId` entry + row in
-`EVENT_RENDER_DEFAULT` (LedGrammar.cpp). Tunable params — per-event
-override via Tool 8 EVENTS page ; global pattern params (SPARK,
-PULSE_SLOW period, FLASH intensities) via Tool 8 PATTERNS page ;
-color via Tool 8 COLORS page. Legacy `ConfirmType` / `triggerConfirm`
-removed in step 0.9.
+`EVENT_RENDER_DEFAULT` (LedGrammar.cpp). Tunable params — Tool 8 single-view
+(Phase 0.1 respec) groups them under musician-facing sections : NORMAL /
+ARPEG / LOOP base colors + brightness ; TRANSPORT play/stop/waiting/breathing
++ tick common FG/BG / tick verb colors (PLAY/REC/OVERDUB) / tick durations
+(BEAT/BAR/WRAP) ; CONFIRMATIONS bank/scale/octave/SPARK ; GLOBAL bg factor
++ gamma. Legacy `ConfirmType` / `triggerConfirm` removed in step 0.9.
+
+Phase 0.1 note : Tool 8 now uses a single scrollable view with 6 sections
+and a new horizontal-focus edit paradigm (see
+[setup-tools-conventions §4.4](setup-tools-conventions.md#44-multi-value-row--geometric-visual-navigation-phase-01--tool-8-canonical)).
+Live preview is decoupled into [`ToolLedPreview`](../../src/setup/ToolLedPreview.h)
+which routes pattern previews through `LedController::renderPreviewPattern` —
+zero runtime duplication.
 
 #### P6 — Store + validate + version (NVS)
 Zero-migration-policy persistence: struct `{magic, version, fields}` +
@@ -497,6 +511,16 @@ role collision warning).
 potential buzzer, haptic). **Don't**: re-render the whole state machine —
 just override the relevant pixels.
 
+Phase 0.1 : Tool 8 ships a richer preview via the helper
+[`ToolLedPreview`](../../src/setup/ToolLedPreview.h). Tool 8 owns it, calls
+`begin(leds, potRouter->getTempoBPM())` at `run()` entry and
+`setContext(ctx, params)` on cursor / value change. The helper encapsulates
+mono-FG mockup, LOOP-ticks mockup (tempo-synced), one-shot replay with black
+timer (§6.4 formula), breathing, and crossfade. Pattern rendering dispatches
+to `LedController::renderPreviewPattern` (public wrapper, zero runtime
+duplication). Rate-capped at 50 Hz via internal `_lastUpdateMs` gate to spare
+Core 1 under burst arrow-key edits.
+
 ---
 
 ## 6. Cross-cutting Affinity Matrix
@@ -508,7 +532,7 @@ skip, what existing system to read as reference.
 |---|---|---|---|
 | **New mode of play** (loop, beat, sequencer, drum pad) | Clock, BankType, State machine, Scheduling, Pile, LED, PotMapping, Setup Tool 4, NVS | Pressure pipeline, ScaleResolver (sauf si notes), Battery, BLE transport detail | ArpEngine + ArpScheduler (pattern complet) + BankManager |
 | **New pad role category** (loop controls, macro pads, etc.) | Tool 3 collision check, nouveau manager runtime, LED state, NVS nouveau Store, main.cpp dispatch | ArpEngine internals, MIDI transport, Clock | ScaleManager (template role-based) + BankManager (template pad-detection) + Tool 3 |
-| **Rethink visual feedback** (nouveau pattern, animation, priorité) | LedController (pattern engine + renderFlashOverlay), LedGrammar (PatternId/EventId/defaults), LedSettingsStore v6 (globals + eventOverrides[]), ColorSlotStore v4 (15 slots), Tool 8 (3 pages), tous les callsites de `triggerEvent()` | Runtime métier (consomment l'API mais pas l'animation) | LedController::update() + renderPattern + Tool 8 PATTERNS/EVENTS/COLORS pages |
+| **Rethink visual feedback** (nouveau pattern, animation, priorité) | LedController (pattern engine + renderFlashOverlay + `renderPreviewPattern` wrapper), LedGrammar (PatternId/EventId/defaults), LedSettingsStore v7 (globals + eventOverrides[] + 3 tick durations), ColorSlotStore v5 (16 slots incl. CSLOT_VERB_STOP), Tool 8 (single-view 6 sections, Phase 0.1 respec) + ToolLedPreview helper, tous les callsites de `triggerEvent()` | Runtime métier (consomment l'API mais pas l'animation) | LedController::update() + renderPattern + Tool 8 LineId enum + ToolLedPreview context dispatch |
 | **New MIDI output class** (MPE, MCU, program change, etc.) | MidiTransport, MidiEngine, PotRouter (si déclencheur), setup Tool 5 (si user-config) | Arp internals, LED, Battery | MidiTransport::sendCC / sendPitchBend / sendPolyAftertouch |
 | **Redesign clock/tempo** (tap tempo, tempo per bank, swing global) | ClockManager complet, ArpScheduler tick loop, PotRouter tempo target, setup Tool 5 | Pressure, Battery, LED (sauf pulse) | ClockManager + tout consommateur de `getCurrentTick()` / `getSmoothedBPM()` |
 | **Refactor pot/catch system** | PotFilter, PotRouter (rebuild + catch + bargraph), main.cpp handlePotPipeline, Tool 6 | Tout sauf ça | PotRouter::applyBinding full |
@@ -545,7 +569,7 @@ the task spans multiple files.
 | **Arp scheduling** | `ArpScheduler::tick` [98-131] + `processEvents` [140-146] | Per-engine tick accumulator + event dispatch. |
 | **Clock/PLL** | `ClockManager::update` [45-63] → `processIncomingTicks` [66-116], `generateTicks` [181-203] | Source cascade + PLL smoothing. |
 | **Pot → parameter** | `PotRouter::applyBinding` [386-546] | Catch system + value conversion + dirty flags. |
-| **LEDs** | `LedController::update` | 9-level priority ladder + event overlay. Event grammar : `triggerEvent(EventId, ledMask)` -> `renderPattern(_eventOverlay, now)`. Tick ARPEG uses shared `renderFlashOverlay()`. See `LedGrammar.h` for palette. |
+| **LEDs** | `LedController::update` | 9-level priority ladder + event overlay. Event grammar : `triggerEvent(EventId, ledMask)` -> `renderPattern(_eventOverlay, now)`. Tick ARPEG uses shared `renderFlashOverlay()`. See `LedGrammar.h` for palette. Preview wrapper `renderPreviewPattern(inst, now)` is the public entry for Tool 8 via [`ToolLedPreview`](../../src/setup/ToolLedPreview.h) (Phase 0.1). |
 | **NVS** | `NvsManager::loadBlob/saveBlob/checkBlob` | Persistence API + descriptor table. |
 | **Battery** | `BatteryMonitor::update` | Voltage divider + thresholds + low flag. |
 | **Setup mode** | `SetupManager::run` + individual `ToolX::run` | VT100 menu + Tool dispatch. |

@@ -117,12 +117,54 @@ Reference : [`ToolPadRoles`](../../src/setup/ToolPadRoles.cpp) pool with 5 role-
 
 Reference : [`ToolSettings`](../../src/setup/ToolSettings.cpp) (Tool 6) for numeric params.
 
-### 4.4 Choice rule
+**Note — relation with §4.4**: §4.3 uses `↑↓` for field navigation (vertical
+list of fields) and `←→` for value adjust. §4.4 uses the opposite mapping
+because fields are laid out **horizontally on one row** rather than stacked
+vertically. Both are "arrows follow the visual layout" — the layout differs.
+Tool 6 currently uses §4.3 for its continuous fields. If a future Tool 6
+refactor revisits field layout (unlikely Phase 0.1), it should adopt §4.4
+only if the fields become multi-column. Otherwise §4.3 remains canonical for
+vertical lists.
+
+### 4.4 Multi-value row — geometric visual navigation (Phase 0.1 — Tool 8 canonical)
+
+When a single visual row carries **2+ distinct numeric fields** side by side
+(e.g. `brightness 100 %  duration 500 ms`), use the following paradigm:
+
+- `←→` moves **focus** horizontally between the fields on the row (no value change).
+- `↑↓` **adjusts** the value of the field currently under focus.
+  - Default step: ±1 fine. `ev.accelerated` → ±10 coarse.
+  - Each field has its own range + step, looked up via a per-line metadata table.
+- `ENTER` commits all fields on the row (one `flashSaved`) and returns to NAV.
+- `q` cancels, restoring the full row's pre-edit values from a snapshot backup.
+
+**Geometric principle** (why ←→ = focus, ↑↓ = adjust, contrary to §4.3):
+arrows follow the **visual layout of the row**. The row is laid out
+horizontally, so horizontal arrows traverse it horizontally (between fields).
+Vertical arrows are reserved for "amplitude of value" — the universal
+vertical-as-magnitude intuition (up = more, down = less). This gives a
+**single mental model across every edit mode in Tool 8**: vertical arrows
+always adjust, regardless of paradigm (color, single, multi).
+
+**Exception — color row `[preset] +hue`**: the 2 components belong to the same
+logical entity (color = preset + hue shift), so there is no "focus" to cycle.
+All 4 arrows act simultaneously on the same entity :
+- `←→` cycles the preset (traverse the preset pool).
+- `↑↓` cycles the hue offset (adjust magnitude of the hue shift).
+
+Vertical-as-magnitude still holds. Horizontal as "alternate dimension of the
+same concept" (preset family) is the degenerate case.
+
+Reference implementation: [`ToolLedSettings`](../../src/setup/ToolLedSettings.cpp)
+(Tool 8, Phase 0.1 respec 2026-04-20).
+
+### 4.5 Choice rule
 
 | Parameter domain | Paradigm |
 |---|---|
-| Enum with ≤ 12 options (mode, preset, color) | Pool |
-| Continuous 0-127 / 0-16383 / similar | Field editor |
+| Enum with ≤ 12 options (mode, preset, color) | Pool (§4.2) |
+| Continuous 0-127 / 0-16383 / similar, vertical list | Field editor (§4.3) |
+| Multi-value row laid out horizontally | Geometric visual nav (§4.4) |
 | Tool has both types | Pool for enums + field editor sub-state for numerics. Never auto-save during field adjust. |
 
 ---
@@ -163,12 +205,18 @@ If the tool does not use the pool for selection (e.g., edit mode is a field edit
 | `n`, `N`, or any other key | Confirm NO / cancel prompt (loose confirm) |
 | `d`, `D` | Reset to defaults (with y/n confirm) |
 
+**Exception — Tool 8 Phase 0.1** : `d` resets the current line to its default
+**without y/n confirm** and commits immediately to NVS. The reset is
+line-scoped (one numeric field or one color slot), not tool-wide, so the blast
+radius is minimal. This deviation is user-validated (rapport Phase 0 §4.3 U9).
+Any future tool needing tool-wide `d` reset must restore the y/n confirm.
+
 ### 6.2 Conventional (documented shared meaning when used)
 
 | Key | Meaning | Example |
 |---|---|---|
 | `r`, `R` | Clear all roles / entries (with y/n confirm) | Tool 3 clear-all |
-| `t`, `T` | Toggle context / page | Tool 7 NORMAL/ARPEG toggle ; Tool 8 COLOR/CONFIRM page |
+| `t`, `T` | Toggle context / page | Tool 7 NORMAL/ARPEG toggle (Tool 8 Phase 0.1 no longer uses `t` — single-view supersedes the legacy page model) |
 | `x`, `X` | Remove individual item (with y/n confirm) | Tool 4 remove pad |
 
 ### 6.3 Custom keys

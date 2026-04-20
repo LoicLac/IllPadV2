@@ -183,3 +183,40 @@ Each `saveBlob` that succeeds updates its live pointers immediately. If one fail
 ## SettingsStore Byte-3 Trap
 
 `SettingsStore` has `baselineProfile` at byte 3, NOT `reserved`. Many Store structs use byte 3 as padding, so a generic `s.reserved = 0` pattern would zero the baseline profile. The `static_assert(offsetof(...) == 3)` in KeyboardData.h defends this layout. In `saveSettings()`, do NOT add `toSave.reserved = 0` — there is no reserved field.
+
+---
+
+## Phase 0.1 Notes (2026-04-20)
+
+- `ColorSlotStore` v4 → v5 : +`CSLOT_VERB_STOP=15`, `COLOR_SLOT_COUNT=16`.
+  Decouples Stop fade-out color from Play fade-in color (option γ abandoned).
+- `LedSettingsStore` v6 → v7 : rename `tickFlashDurationMs` (uint8) →
+  `tickBeatDurationMs` (uint16), +`tickBarDurationMs`, +`tickWrapDurationMs`.
+  Validator clamps each to [5, 500] ms.
+- Both bumps deliberately grouped into a single commit (cad7530) so users
+  see **one** reset cycle (two warnings), not two. Per Zero-Migration Policy,
+  users re-enter their LED preferences via Tool 8 first run (or press `d` on
+  a line to re-apply the compile-time default).
+- LOOP bar/wrap tick durations are stored now (layout stability) but consumed
+  by runtime only in Phase 1+ (LoopEngine). ARPEG step flash consumes
+  `tickBeatDurationMs` (renamed from the legacy `tickFlashDurationMs`).
+- Tool 8 is fully rebuilt in Phase 0.1 (cc379f5) as a single-view with 6
+  sections and the geometric-visual-navigation paradigm. The 3-page legacy
+  PATTERNS/COLORS/EVENTS layout is retired.
+
+### Phase 0.1 default tuning (compile-time, no struct change)
+
+Tuned based on hardware UX testing ; existing NVS-persisted values stay
+unchanged until the user presses `d` on a line in Tool 8 or the NVS blob
+is rejected (magic/version/size mismatch).
+
+| Field | v6 default | v7 default | Tool 8 line |
+|---|---|---|---|
+| `bankDurationMs` | 300 | 150 | Bank switch timing |
+| `scaleRootDurationMs` | 200 | 130 | Scale root timing |
+| `scaleModeDurationMs` | 200 | 130 | Scale mode timing |
+| `scaleChromDurationMs` | 200 | 130 | Scale chromatic timing |
+| `octaveDurationMs` | 300 | 130 | Octave timing |
+| `sparkOnMs` | 50 | 20 | Confirm OK SPARK : on |
+| `sparkGapMs` | 70 | 40 | Confirm OK SPARK : gap |
+| `sparkCycles` | 2 | 4 | Confirm OK SPARK : cycles |
