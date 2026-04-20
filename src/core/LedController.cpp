@@ -327,13 +327,14 @@ bool LedController::renderBargraph(unsigned long now) {
     _showingPotBar = false;
     return false;
   }
-  // Determine bar color based on foreground bank type
-  // Bar color : mode base. Dim : same hue at bgFactor%. v4 derives BG from FG
-  // via bgFactor (bgArp no longer a distinct slot).
+  // Determine bar color based on foreground bank type.
+  // Bar color : mode base. Dim : same hue ; intensity hardcoded at 30 %
+  // for uncaught pot visualization (not derived from bgFactor — the bargraph
+  // has its own aesthetic and is not a BG-bank rendering).
   const RGBW& barColor = (_slots && _slots[_currentBank].type == BANK_ARPEG)
                          ? _colors[CSLOT_MODE_ARPEG]
                          : _colors[CSLOT_MODE_NORMAL];
-  const RGBW& barDim   = barColor;  // same hue ; bgFactor is applied at setPixel intensity
+  const RGBW& barDim   = barColor;  // same hue, intensity scaled below
 
   clearPixels();
 
@@ -416,10 +417,12 @@ void LedController::renderCalibration(unsigned long now) {
 
 void LedController::renderBankNormal(uint8_t led, bool isFg) {
   // v4 : FG uses MODE_NORMAL. BG uses same color at reduced intensity
-  // (normalBgIntensity, which in step 0.6 acts as the effective bgFactor
-  // for NORMAL banks — tuned independently of the global bgFactor).
-  setPixel(led, _colors[CSLOT_MODE_NORMAL],
-           isFg ? _normalFgIntensity : _normalBgIntensity);
+  // derived from FG via global _bgFactor (v6 unified grammar, post-audit fix).
+  // Legacy field _normalBgIntensity kept in Store for NVS compat but unused.
+  uint8_t intensity = isFg
+                      ? _normalFgIntensity
+                      : (uint8_t)((uint16_t)_normalFgIntensity * _bgFactor / 100);
+  setPixel(led, _colors[CSLOT_MODE_NORMAL], intensity);
 }
 
 void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
@@ -440,7 +443,12 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
 
   if (playing) {
     // Base state : solid bright (FG) or solid dim (BG) — no pulse.
-    setPixel(led, col, isFg ? _fgArpPlayMax : _bgArpPlayMin);
+    // v4 : BG intensity derived from FG via _bgFactor (post-audit fix).
+    // Legacy _bgArpPlayMin kept in Store for NVS compat but unused.
+    uint8_t intensity = isFg
+                        ? _fgArpPlayMax
+                        : (uint8_t)((uint16_t)_fgArpPlayMax * _bgFactor / 100);
+    setPixel(led, col, intensity);
     // Tick flash overlay : uses VERB_PLAY color (green, v4 grammar).
     // Replaces the base during the tickFlashDurationMs window.
     if (_flashStartTime[led] != 0) {
@@ -464,8 +472,13 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
                       + (uint8_t)((uint32_t)sine16 * (_fgArpStopMax - _fgArpStopMin) / 65280);
     setPixel(led, col, intensity);
   } else {
-    // BG (all states) or FG idle (no notes) : solid dim
-    setPixel(led, col, isFg ? _fgArpStopMin : _bgArpStopMin);
+    // BG (all states) or FG idle (no notes) : solid dim.
+    // v4 : BG intensity derived from FG via _bgFactor (post-audit fix).
+    // Legacy _bgArpStopMin kept in Store for NVS compat but unused.
+    uint8_t intensity = isFg
+                        ? _fgArpStopMin
+                        : (uint8_t)((uint16_t)_fgArpStopMin * _bgFactor / 100);
+    setPixel(led, col, intensity);
   }
 }
 
@@ -623,11 +636,12 @@ void LedController::triggerEvent(EventId evt, uint8_t ledMask) {
       break;
     }
     case PTN_SPARK: {
-      // SPARK params come from LedSettingsStore directly (v6 new fields).
-      // Phase 0 : not yet wired (step 0.5+). Use reasonable defaults.
-      _eventOverlay.params.spark.onMs   = 50;
-      _eventOverlay.params.spark.gapMs  = 70;
-      _eventOverlay.params.spark.cycles = 2;
+      // SPARK params come from LedSettingsStore v6 fields, loaded into
+      // _sparkOnMs/_sparkGapMs/_sparkCycles by loadLedSettings().
+      // Editable via Tool 8 PATTERNS page (SPARK row).
+      _eventOverlay.params.spark.onMs   = _sparkOnMs;
+      _eventOverlay.params.spark.gapMs  = _sparkGapMs;
+      _eventOverlay.params.spark.cycles = _sparkCycles;
       break;
     }
     case PTN_CROSSFADE_COLOR: {
@@ -638,13 +652,14 @@ void LedController::triggerEvent(EventId evt, uint8_t ledMask) {
       break;
     }
     case PTN_RAMP_HOLD:
-      // RAMP_HOLD is driven by LOOP timers (clearLoopTimerMs, slotSaveTimerMs,
-      // slotClearTimerMs) — wired in Phase 1+ when LOOP callsites land.
-      // Phase 0 : reserved pattern, no consumer yet.
-      _eventOverlay.params.rampHold.rampMs       = 500;
-      _eventOverlay.params.rampHold.suffixOnMs   = 50;
-      _eventOverlay.params.rampHold.suffixGapMs  = 70;
-      _eventOverlay.params.rampHold.suffixCycles = 2;
+      // rampMs stays a Phase 1+ derivation from SettingsStore timers
+      // (clearLoopTimerMs / slotSaveTimerMs / slotClearTimerMs per event).
+      // Suffix params (onMs/gapMs/cycles) are shared with SPARK, coming
+      // from LedSettingsStore v6 and editable via Tool 8 PATTERNS page.
+      _eventOverlay.params.rampHold.rampMs       = 500;  // Phase 1+ will derive per-event
+      _eventOverlay.params.rampHold.suffixOnMs   = _sparkOnMs;
+      _eventOverlay.params.rampHold.suffixGapMs  = _sparkGapMs;
+      _eventOverlay.params.rampHold.suffixCycles = _sparkCycles;
       break;
     case PTN_PULSE_SLOW:
     case PTN_SOLID:
