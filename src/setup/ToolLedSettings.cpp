@@ -273,7 +273,7 @@ void ToolLedSettings::renderPageColors() {
 //   PTN_BLINK_SLOW       : none (per-event)
 //   PTN_BLINK_FAST       : none (per-event)
 //   PTN_FADE             : none (per-event)
-//   PTN_FLASH            : 3 fields (tickFlashDurationMs, tickFlashFg, tickFlashBg)
+//   PTN_FLASH            : 3 fields (tickBeatDurationMs, tickFlashFg, tickFlashBg)
 //   PTN_RAMP_HOLD        : 3 fields (sparkOnMs, sparkGapMs, sparkCycles — shared with SPARK)
 //   PTN_SPARK            : 3 fields (sparkOnMs, sparkGapMs, sparkCycles — shared with RAMP_HOLD)
 
@@ -314,10 +314,10 @@ void ToolLedSettings::adjustPatternField(uint8_t patternId, uint8_t field, int d
     case PTN_FLASH: {
       if (field == 0) {
         int step = accel ? 10 : 5;
-        int v = (int)_lwk.tickFlashDurationMs + dir * step;
+        int v = (int)_lwk.tickBeatDurationMs + dir * step;
         if (v < 10) v = 10;
         if (v > 100) v = 100;
-        _lwk.tickFlashDurationMs = (uint8_t)v;
+        _lwk.tickBeatDurationMs = (uint16_t)v;
       } else if (field == 1) {
         int v = (int)_lwk.tickFlashFg + dir * (accel ? 10 : 1);
         if (v < 0) v = 0;
@@ -376,7 +376,7 @@ void ToolLedSettings::renderPatternParamsPanel(uint8_t patternId, bool editing) 
       fieldLine(0, "periodMs:", buf);
       break;
     case PTN_FLASH:
-      snprintf(buf, sizeof(buf), "%d ms  (10-100)", _lwk.tickFlashDurationMs);
+      snprintf(buf, sizeof(buf), "%d ms  (5-500)", _lwk.tickBeatDurationMs);
       fieldLine(0, "durationMs:", buf);
       snprintf(buf, sizeof(buf), "%d %%  (0-100)", _lwk.tickFlashFg);
       fieldLine(1, "fgPct:", buf);
@@ -710,7 +710,7 @@ void ToolLedSettings::run() {
     _lwk.tickFlashBg          = 25;
     _lwk.bgFactor             = 25;
     _lwk.pulsePeriodMs        = 1472;
-    _lwk.tickFlashDurationMs  = 30;
+    _lwk.tickBeatDurationMs   = 30;
     _lwk.gammaTenths          = 20;
     _lwk.sparkOnMs            = 50;
     _lwk.sparkGapMs           = 70;

@@ -48,7 +48,9 @@ NvsManager::NvsManager()
   _ledSettings.bgFactor = 25;  // provisional, tune on hardware in 0.9
   // Timing
   _ledSettings.pulsePeriodMs = 1472;
-  _ledSettings.tickFlashDurationMs = 30;
+  _ledSettings.tickBeatDurationMs = 30;
+  _ledSettings.tickBarDurationMs  = 60;
+  _ledSettings.tickWrapDurationMs = 100;
   _ledSettings.gammaTenths = 20;  // gamma 2.0 default
   // SPARK params (v6 new)
   _ledSettings.sparkOnMs = 50;
@@ -100,6 +102,7 @@ NvsManager::NvsManager()
     /* CSLOT_SCALE_CHROM      */ 8,   // Coral
     /* CSLOT_OCTAVE           */ 9,   // Violet
     /* CSLOT_CONFIRM_OK       */ 0,   // Pure White (SPARK universal)
+    /* CSLOT_VERB_STOP        */ 8,   // Coral (Phase 0.1 — Stop fade-out)
   };
   static const int8_t defaultHueOffsets[COLOR_SLOT_COUNT] = {
     /* MODE_NORMAL      */ 0,
@@ -117,6 +120,7 @@ NvsManager::NvsManager()
     /* SCALE_CHROM      */ 0,
     /* OCTAVE           */ 0,
     /* CONFIRM_OK       */ 0,
+    /* VERB_STOP        */ 0,
   };
   for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
     _colorSlots.slots[i].presetId  = defaultPresets[i];

@@ -164,7 +164,7 @@ static const char* const COLOR_PRESET_NAMES[COLOR_PRESET_COUNT] = {
 // to bgFactor% intensity (step 0.6). HOLD_OFF slot retired : STOP uses
 // VERB_PLAY color with inverted FADE direction (LED spec option γ).
 // =================================================================
-#define COLOR_SLOT_COUNT       15
+#define COLOR_SLOT_COUNT       16
 #define COLOR_SLOT_NVS_KEY     "ledcolors"
 #define COLOR_SLOT_MAGIC       0xC010
 
@@ -188,6 +188,8 @@ enum ColorSlotId : uint8_t {
   CSLOT_OCTAVE           = 13,  // Violet      — octave change
   // Confirmation
   CSLOT_CONFIRM_OK       = 14,  // Pure White  — SPARK suffix universal (LOOP Phase 1+)
+  // Phase 0.1 respec — decouple STOP color from PLAY (option γ abandoned)
+  CSLOT_VERB_STOP        = 15,  // Coral       — Stop fade-out (Phase 0.1)
 };
 
 struct ColorSlot {
@@ -258,7 +260,7 @@ inline RGBW resolveColorSlot(const ColorSlot& slot) {
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       6   // v5 -> v6 : remove 3 legacy unused fields, add bgFactor + spark params + eventOverrides[EVT_COUNT]
+#define LED_SETTINGS_VERSION       7   // v6 -> v7 : rename tickFlashDurationMs (uint8) -> tickBeatDurationMs (uint16), +tickBarDurationMs, +tickWrapDurationMs (Phase 0.1 respec, LOOP BAR/WRAP consumed Phase 1+)
 
 struct LedSettingsStore {
   uint16_t magic;
@@ -278,7 +280,9 @@ struct LedSettingsStore {
   uint8_t  bgFactor;              // default 25  — BG = FG color x bgFactor%. Range [10, 50]. Provisional, tune on hardware in 0.9.
   // --- Timing ---
   uint16_t pulsePeriodMs;         // default 1472 — PULSE_SLOW period FG ARPEG stopped-loaded
-  uint8_t  tickFlashDurationMs;   // default 30  — FLASH pattern durationMs (ARPEG tick)
+  uint16_t tickBeatDurationMs;    // default 30  — FLASH pattern durationMs for ARPEG step / LOOP beat ticks (v7 rename + widen)
+  uint16_t tickBarDurationMs;     // default 60  — FLASH pattern durationMs for LOOP bar ticks (v7 new, consumed Phase 1+)
+  uint16_t tickWrapDurationMs;    // default 100 — FLASH pattern durationMs for LOOP wrap ticks (v7 new, consumed Phase 1+)
   uint8_t  gammaTenths;           // 10-30 -> gamma 1.0-3.0, default 20 (2.0). Reboot-only.
   // --- SPARK params (v6 new — used by RAMP_HOLD suffix and CONFIRM_OK) ---
   uint16_t sparkOnMs;             // default 50  — SPARK pattern on duration per flash
@@ -497,7 +501,7 @@ struct BankTypeStore {
 };
 static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds NVS blob max");
 
-#define COLOR_SLOT_VERSION  4
+#define COLOR_SLOT_VERSION  5
 
 // =================================================================
 // PotTarget — all possible pot-controlled parameters
@@ -653,8 +657,12 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
   // Timing ranges
   if (s.pulsePeriodMs < 500)  s.pulsePeriodMs = 500;
   if (s.pulsePeriodMs > 4000) s.pulsePeriodMs = 4000;
-  if (s.tickFlashDurationMs < 10)  s.tickFlashDurationMs = 10;
-  if (s.tickFlashDurationMs > 100) s.tickFlashDurationMs = 100;
+  if (s.tickBeatDurationMs < 5)   s.tickBeatDurationMs = 5;
+  if (s.tickBeatDurationMs > 500) s.tickBeatDurationMs = 500;
+  if (s.tickBarDurationMs  < 5)   s.tickBarDurationMs  = 5;
+  if (s.tickBarDurationMs  > 500) s.tickBarDurationMs  = 500;
+  if (s.tickWrapDurationMs < 5)   s.tickWrapDurationMs = 5;
+  if (s.tickWrapDurationMs > 500) s.tickWrapDurationMs = 500;
   if (s.gammaTenths < 10) s.gammaTenths = 10;
   if (s.gammaTenths > 30) s.gammaTenths = 30;
   // SPARK timing (range loose enough to support experimentation)

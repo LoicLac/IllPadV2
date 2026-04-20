@@ -160,7 +160,7 @@ private:
   uint8_t  _bgArpPlayMin;         // BG ARPEG playing solid (v6: bgArpPlayMax removed — was LEGACY unused)
   uint8_t  _tickFlashFg, _tickFlashBg;
   uint16_t _pulsePeriodMs;
-  uint8_t  _tickFlashDurationMs;
+  uint16_t _tickBeatDurationMs;   // Phase 0.1 : renamed + widened from _tickFlashDurationMs (uint8). ARPEG step uses this now. BAR/WRAP caches land in Task 2.
   uint8_t  _bankBlinks;
   uint16_t _bankDurationMs;
   uint8_t  _bankBrightnessPct;

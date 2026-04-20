@@ -73,7 +73,7 @@ Menu (`SetupUI::printMainMenu`) loops over these to check all stores in one pass
 | `validateArpPadStore` | holdPad, octavePads (all < NUM_KEYS) |
 | `validateBankPadStore` | bankPads (all < NUM_KEYS) |
 | `validateNoteMapStore` | noteMap entries (all < NUM_KEYS) |
-| `validateLedSettingsStore` | intensity cross-validation (min<=max), timing ranges, gamma, bgFactor [10,50], SPARK params (onMs/gapMs/cycles), legacy confirmation blink counts/durations, eventOverrides[] clamp (PTN_NONE or valid PatternId, colorSlot < COLOR_SLOT_COUNT, fgPct <= 100) |
+| `validateLedSettingsStore` | intensity cross-validation (min<=max), timing ranges, gamma, bgFactor [10,50], SPARK params (onMs/gapMs/cycles), legacy confirmation blink counts/durations, tickBeat/Bar/WrapDurationMs [5..500] each (v7 Phase 0.1), eventOverrides[] clamp (PTN_NONE or valid PatternId, colorSlot < COLOR_SLOT_COUNT, fgPct <= 100) |
 | `validatePotFilterStore` | snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
 
 ---
@@ -93,8 +93,8 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `PotParamsStore` | `illpad_pot` | `params` | 0xBEEF | 2 | 10B | NvsManager (runtime) |
 | `PotMappingStore` | `illpad_pmap` | `mapping` | 0xBEEF | 1 | 36B | T7 PotMapping |
 | `PotFilterStore` | `illpad_pflt` | `cfg` | 0xBEEF | 1 | 12B | PotFilter (runtime, tuned via T7 Monitor). Fields: snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
-| `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 6 | ~90B | T8 LedSettings (v6 unified grammar : 3 legacy unused fields retired ; new : bgFactor, sparkOnMs/GapMs/Cycles, eventOverrides[EVT_COUNT] array) |
-| `ColorSlotStore` | `illpad_lset` | `ledcolors` | 0xC010 | 4 | 34B | T8 LedSettings (v4 : 12->15 slots, MODE_*/VERB_*/setup/CONFIRM_OK families ; NORMAL_BG/ARPEG_BG/HOLD_OFF retired — BG derives from FG via bgFactor) |
+| `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 7 | ~96B | T8 LedSettings (v7 Phase 0.1 respec : rename tickFlashDurationMs -> tickBeatDurationMs (uint16), add tickBarDurationMs + tickWrapDurationMs for LOOP bar/wrap ticks Phase 1+) |
+| `ColorSlotStore` | `illpad_lset` | `ledcolors` | 0xC010 | 5 | 36B | T8 LedSettings (v5 Phase 0.1 respec : add CSLOT_VERB_STOP slot 15 for Stop fade-out — decouples STOP from PLAY color) |
 
 ### V2 Stores (replace raw formats)
 

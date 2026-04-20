@@ -21,7 +21,7 @@ LedController::LedController()
     _bgArpStopMin(8),
     _bgArpPlayMin(8),
     _tickFlashFg(100), _tickFlashBg(25),
-    _pulsePeriodMs(1472), _tickFlashDurationMs(30),
+    _pulsePeriodMs(1472), _tickBeatDurationMs(30),
     _bankBlinks(3), _bankDurationMs(300), _bankBrightnessPct(80),
     _scaleRootBlinks(2), _scaleRootDurationMs(200),
     _scaleModeBlinks(2), _scaleModeDurationMs(200),
@@ -450,11 +450,11 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
                         : (uint8_t)((uint16_t)_fgArpPlayMax * _bgFactor / 100);
     setPixel(led, col, intensity);
     // Tick flash overlay : uses VERB_PLAY color (green, v4 grammar).
-    // Replaces the base during the tickFlashDurationMs window.
+    // Replaces the base during the tickBeatDurationMs window (Phase 0.1 : BEAT kind only, ARPEG step).
     if (_flashStartTime[led] != 0) {
-      if ((now - _flashStartTime[led]) < _tickFlashDurationMs) {
+      if ((now - _flashStartTime[led]) < _tickBeatDurationMs) {
         renderFlashOverlay(led, _colors[CSLOT_VERB_PLAY], _tickFlashFg, _tickFlashBg,
-                           _flashStartTime[led], _tickFlashDurationMs, isFg, now);
+                           _flashStartTime[led], _tickBeatDurationMs, isFg, now);
       } else {
         _flashStartTime[led] = 0;
       }
@@ -630,7 +630,7 @@ void LedController::triggerEvent(EventId evt, uint8_t ledMask) {
       break;
     }
     case PTN_FLASH: {
-      _eventOverlay.params.flash.durationMs = _tickFlashDurationMs;
+      _eventOverlay.params.flash.durationMs = _tickBeatDurationMs;
       _eventOverlay.params.flash.fgPct      = _tickFlashFg;
       _eventOverlay.params.flash.bgPct      = _tickFlashBg;
       break;
@@ -878,7 +878,7 @@ void LedController::loadLedSettings(const LedSettingsStore& s) {
   _tickFlashFg = s.tickFlashFg;
   _tickFlashBg = s.tickFlashBg;
   _pulsePeriodMs = s.pulsePeriodMs;
-  _tickFlashDurationMs = s.tickFlashDurationMs;
+  _tickBeatDurationMs = s.tickBeatDurationMs;
   _bankBlinks = (s.bankBlinks > 0) ? s.bankBlinks : 3;
   _bankDurationMs = s.bankDurationMs;
   _bankBrightnessPct = s.bankBrightnessPct;
