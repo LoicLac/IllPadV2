@@ -172,7 +172,7 @@ New confirmation preempts active one. `LedController` no longer depends on `Cloc
 3. Chase pattern      (calibration entry — white chase)
 4. Error              (LEDs 3-4 blink red 500ms — sensing task stall)
 5. Battery gauge      (8-LED red→green gradient bar, 3s)
-6. Pot bargraph       (solid bar + catch visualization; tempo bargraph adds BPM pulse on tip LED)
+6. Pot bargraph       (solid bar + catch visualization — unifié pour tous les pots, tempo inclus)
 7. Confirmation state tracking (10 types, auto-expire timers)
 8. Calibration mode   (all off + validation flash)
 9. Normal bank display + confirmation overlays (multi-bank solid/pulse/tick + overlay blinks/fades)
@@ -180,9 +180,7 @@ New confirmation preempts active one. `LedController` no longer depends on `Cloc
 
 ### Pot Bargraph
 
-`showPotBargraph(realLevel, potLevel, caught)` — 3 params. Shows target level as solid bar + physical pot position indicator. Catch state visualized: uncaught pots show pot position dimly until caught. Configurable duration via Tool 6 Settings (parameter 6, 0-indexed as case 5). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
-
-`showTempoBargraph(realLevel, potLevel, caught, bpm)` — 4 params. Same as pot bargraph but with **tempo pulse**: the tip LED (highest lit) blinks on/off at the displayed BPM rate (period = 60000/bpm, duty 50%). Only pulses when caught. Called from `handlePotPipeline()` when `PotRouter::getBargraphTarget() == TARGET_TEMPO_BPM`.
+`showPotBargraph(realLevel, potLevel, caught)` — 3 params. Unique bargraph pour tous les pots (tempo inclus). Shows target level as solid bar + physical pot position indicator. Catch state visualized: uncaught pots show pot position dimly until caught. Configurable duration via Tool 6 Settings (parameter 6, 0-indexed as case 5). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
 
 ## Buttons
 

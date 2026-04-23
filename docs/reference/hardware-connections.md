@@ -205,7 +205,7 @@ If battery drops below 20%, the foreground bank LED does 3 rapid blinks every 3 
 
 **Pot bargraph (after pot movement):**
 
-LEDs become a solid bar graph showing the current pot value (0–8 LEDs) with fractional tip brightness. Caught state shows solid bar; uncaught shows dim stored-value bar + bright dot at physical pot position. Tempo bargraph adds BPM pulse on tip LED. Duration: 3 seconds (configurable via Tool 5, range 1-10s).
+LEDs become a solid bar graph showing the current pot value (0–8 LEDs) with fractional tip brightness. Caught state shows solid bar; uncaught shows dim stored-value bar + bright dot at physical pot position. Duration: 3 seconds (configurable via Tool 5, range 1-10s).
 
 **Battery gauge (after pressing rear button):**
 

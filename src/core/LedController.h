@@ -72,9 +72,6 @@ public:
   // Pot bargraph with catch visualization
   void showPotBargraph(float realLevel, uint8_t potLevel, bool caught);
 
-  // Tempo bargraph (level bar + BPM pulse on tip LED)
-  void showTempoBargraph(float realLevel, uint8_t potLevel, bool caught, uint16_t bpm);
-
   // Calibration
   void setCalibrationMode(bool active);
   void playValidation();
@@ -213,8 +210,6 @@ private:
   float   _potBarRealLevel;
   uint8_t _potBarPotLevel;
   bool    _potBarCaught;
-  bool     _potBarIsTempo;
-  uint16_t _potBarBpm;
   unsigned long _potBarStart;
 
   // Boot

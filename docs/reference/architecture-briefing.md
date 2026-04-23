@@ -284,8 +284,10 @@ handlePotPipeline(): read getters → write to BankSlot/ArpEngine/atomics
   → consumeCC/consumePitchBend → MidiTransport sends
 ```
 Entry points: `PotFilter::updateAll`, `PotRouter::update` [318-327] +
-`resolveBindings` [334-381] + `applyBinding` [386-546],
-`main.cpp::handlePotPipeline` [701-765] + `pushParamsToEngine` [688-698].
+`resolveBindings` [334-381] + `applyBinding` [386-544],
+`main.cpp::handlePotPipeline` [715-770] + `pushParamsToEngine` [702-714].
+Bargraph unifié : `PotRouter::hasBargraphUpdate()` déclenche systématiquement
+`LedController::showPotBargraph()` (tempo inclus — pas de variante pulsée).
 
 ---
 
@@ -534,7 +536,7 @@ skip, what existing system to read as reference.
 | **New pad role category** (loop controls, macro pads, etc.) | Tool 3 collision check, nouveau manager runtime, LED state, NVS nouveau Store, main.cpp dispatch | ArpEngine internals, MIDI transport, Clock | ScaleManager (template role-based) + BankManager (template pad-detection) + Tool 3 |
 | **Rethink visual feedback** (nouveau pattern, animation, priorité) | LedController (pattern engine + renderFlashOverlay + `renderPreviewPattern` wrapper), LedGrammar (PatternId/EventId/defaults), LedSettingsStore v7 (globals + eventOverrides[] + 3 tick durations), ColorSlotStore v5 (16 slots incl. CSLOT_VERB_STOP), Tool 8 (single-view 6 sections, Phase 0.1 respec) + ToolLedPreview helper, tous les callsites de `triggerEvent()` | Runtime métier (consomment l'API mais pas l'animation) | LedController::update() + renderPattern + Tool 8 LineId enum + ToolLedPreview context dispatch |
 | **New MIDI output class** (MPE, MCU, program change, etc.) | MidiTransport, MidiEngine, PotRouter (si déclencheur), setup Tool 5 (si user-config) | Arp internals, LED, Battery | MidiTransport::sendCC / sendPitchBend / sendPolyAftertouch |
-| **Redesign clock/tempo** (tap tempo, tempo per bank, swing global) | ClockManager complet, ArpScheduler tick loop, PotRouter tempo target, setup Tool 5 | Pressure, Battery, LED (sauf pulse) | ClockManager + tout consommateur de `getCurrentTick()` / `getSmoothedBPM()` |
+| **Redesign clock/tempo** (tap tempo, tempo per bank, swing global) | ClockManager complet, ArpScheduler tick loop, PotRouter tempo target, setup Tool 5 | Pressure, Battery, LED | ClockManager + tout consommateur de `getCurrentTick()` / `getSmoothedBPM()` |
 | **Refactor pot/catch system** | PotFilter, PotRouter (rebuild + catch + bargraph), main.cpp handlePotPipeline, Tool 6 | Tout sauf ça | PotRouter::applyBinding full |
 
 ---

@@ -36,8 +36,6 @@ LedController::LedController()
     _potBarRealLevel(0),
     _potBarPotLevel(0),
     _potBarCaught(true),
-    _potBarIsTempo(false),
-    _potBarBpm(120),
     _potBarStart(0),
     _bootMode(false),
     _bootStep(0),
@@ -101,8 +99,14 @@ LedController::LedController()
 
 void LedController::begin() {
   rebuildGammaLut(20);  // default gamma 2.0 until NVS loads
+  // SK6812 reset: data LOW >=50us avant premiere trame (cold boot clean latch)
+  pinMode(LED_DATA_PIN, OUTPUT);
+  digitalWrite(LED_DATA_PIN, LOW);
+  delay(2);
   _strip.begin();
+  clearPixels();
   _strip.show();  // All pixels off
+  delay(1);
 }
 
 // =================================================================
@@ -340,8 +344,14 @@ bool LedController::renderBargraph(unsigned long now) {
 
   clearPixels();
 
-  uint8_t full = (uint8_t)_potBarRealLevel;           // fully-lit LED count
-  float   frac = _potBarRealLevel - (float)full;       // fractional tip brightness
+  // Remap [0, NUM_LEDS] → [0.5, NUM_LEDS] so that the minimum value shows
+  // LED 0 at 50% (instead of no LED at all). The rest of the range
+  // distributes linearly up to 8 LEDs at 100%.
+  constexpr float BAR_FLOOR = 0.5f;
+  float displayLevel = BAR_FLOOR + _potBarRealLevel * (NUM_LEDS - BAR_FLOOR) / (float)NUM_LEDS;
+
+  uint8_t full = (uint8_t)displayLevel;               // fully-lit LED count
+  float   frac = displayLevel - (float)full;           // fractional tip brightness
 
   if (_potBarCaught) {
     for (uint8_t i = 0; i < full && i < NUM_LEDS; i++) {
@@ -361,17 +371,6 @@ bool LedController::renderBargraph(unsigned long now) {
     // Bright dot = physical pot position
     if (_potBarPotLevel < NUM_LEDS) {
       setPixel(_potBarPotLevel, barColor, 100);
-    }
-  }
-
-  // Tempo pulse: tip LED blinks at BPM rate
-  if (_potBarIsTempo && _potBarCaught && _potBarBpm > 0) {
-    uint32_t periodMs = 60000UL / _potBarBpm;
-    bool beatOn = ((now % periodMs) < (periodMs / 2));
-    uint8_t tipLed = (uint8_t)_potBarRealLevel;
-    if (tipLed >= NUM_LEDS) tipLed = NUM_LEDS - 1;
-    if (!beatOn) {
-      _strip.setPixelColor(tipLed, 0);  // Off phase of pulse
     }
   }
 
@@ -964,17 +963,6 @@ void LedController::showPotBargraph(float realLevel, uint8_t potLevel, bool caug
   _potBarRealLevel = (realLevel > (float)NUM_LEDS) ? (float)NUM_LEDS : (realLevel < 0.0f ? 0.0f : realLevel);
   _potBarPotLevel = (potLevel >= NUM_LEDS) ? (NUM_LEDS - 1) : potLevel;
   _potBarCaught = caught;
-  _potBarIsTempo = false;
-  _potBarStart = millis();
-  _showingPotBar = true;
-}
-
-void LedController::showTempoBargraph(float realLevel, uint8_t potLevel, bool caught, uint16_t bpm) {
-  _potBarRealLevel = (realLevel > (float)NUM_LEDS) ? (float)NUM_LEDS : (realLevel < 0.0f ? 0.0f : realLevel);
-  _potBarPotLevel = (potLevel >= NUM_LEDS) ? (NUM_LEDS - 1) : potLevel;
-  _potBarCaught = caught;
-  _potBarIsTempo = true;
-  _potBarBpm = bpm;
   _potBarStart = millis();
   _showingPotBar = true;
 }
@@ -1011,7 +999,6 @@ void LedController::allOff() {
   _validationFlashing = false;
   _error = false;
   _showingPotBar = false;
-  _potBarIsTempo = false;
   _showingBattery = false;
   _eventOverlay.active = false;
   _eventOverlay.patternId = PTN_NONE;

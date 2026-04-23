@@ -146,7 +146,7 @@ static void midiPanic() {
 void setup() {
   uint32_t bootStartMs = millis();  // True boot time for setup window
   Serial.begin(115200);
-  delay(500);
+  delay(800);  // Laisse monter le rail d'alim (cold boot apres longue pause)
   Serial.println();
   Serial.println("=== ILLPAD48 V2 ===");
 
@@ -157,6 +157,7 @@ void setup() {
 
   // I2C
   Wire.begin(SDA_PIN, SCL_PIN, I2C_CLOCK_HZ);
+  delay(200);  // Stabilisation 3.3V + power-up MPR121 avant premiere transaction
   s_leds.showBootProgress(2);  // Step 2: I2C bus ready
   s_leds.update();
   #if DEBUG_SERIAL
@@ -754,20 +755,11 @@ static void handlePotPipeline(bool leftHeld, bool rearHeld) {
 
   // LED bargraph from pot movement
   if (s_potRouter.hasBargraphUpdate()) {
-    if (s_potRouter.getBargraphTarget() == TARGET_TEMPO_BPM) {
-      s_leds.showTempoBargraph(
-        s_potRouter.getBargraphLevel(),
-        s_potRouter.getBargraphPotLevel(),
-        s_potRouter.isBargraphCaught(),
-        s_potRouter.getTempoBPM()
-      );
-    } else {
-      s_leds.showPotBargraph(
-        s_potRouter.getBargraphLevel(),
-        s_potRouter.getBargraphPotLevel(),
-        s_potRouter.isBargraphCaught()
-      );
-    }
+    s_leds.showPotBargraph(
+      s_potRouter.getBargraphLevel(),
+      s_potRouter.getBargraphPotLevel(),
+      s_potRouter.isBargraphCaught()
+    );
   }
 
   // Battery monitor + low battery LED flag

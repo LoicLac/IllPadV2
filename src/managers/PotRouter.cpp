@@ -65,7 +65,6 @@ PotRouter::PotRouter()
   , _bargraphLevel(0.0f)
   , _bargraphPotLevel(0)
   , _bargraphCaught(false)            // F-CODE-1: align init order with .h declaration
-  , _bargraphTarget(TARGET_EMPTY)
   , _dirty(false)
 {
   // Init per-pot state (ADC arrays now in PotFilter)
@@ -417,7 +416,6 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       }
       _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f + 0.5f);
       _bargraphCaught = false;
-      _bargraphTarget = bind.target;
       _bargraphDirty = true;
       return;
     }
@@ -537,7 +535,6 @@ void PotRouter::applyBinding(uint8_t potIndex) {
   }
   _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f + 0.5f);
   _bargraphCaught = true;
-  _bargraphTarget = bind.target;
   _bargraphDirty = true;
   // Only set NVS dirty for non-volatile targets (CC/PB are volatile, not saved)
   if (bind.target != TARGET_MIDI_CC && bind.target != TARGET_MIDI_PITCHBEND) {
@@ -677,7 +674,6 @@ bool PotRouter::hasBargraphUpdate() {
 float     PotRouter::getBargraphLevel() const     { return _bargraphLevel; }
 uint8_t   PotRouter::getBargraphPotLevel() const { return _bargraphPotLevel; }
 bool      PotRouter::isBargraphCaught() const    { return _bargraphCaught; }
-PotTarget PotRouter::getBargraphTarget() const   { return _bargraphTarget; }
 
 bool PotRouter::isDirty() const   { return _dirty; }
 void PotRouter::clearDirty()      { _dirty = false; }
