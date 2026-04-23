@@ -73,7 +73,7 @@ Menu (`SetupUI::printMainMenu`) loops over these to check all stores in one pass
 | `validateArpPadStore` | holdPad, octavePads (all < NUM_KEYS) |
 | `validateBankPadStore` | bankPads (all < NUM_KEYS) |
 | `validateNoteMapStore` | noteMap entries (all < NUM_KEYS) |
-| `validateLedSettingsStore` | intensity cross-validation (min<=max), timing ranges, gamma, bgFactor [10,50], SPARK params (onMs/gapMs/cycles), legacy confirmation blink counts/durations, tickBeat/Bar/WrapDurationMs [5..500] each (v7 Phase 0.1), eventOverrides[] clamp (PTN_NONE or valid PatternId, colorSlot < COLOR_SLOT_COUNT, fgPct <= 100) |
+| `validateLedSettingsStore` | intensity cross-validation (min<=max), timing ranges, gamma, bgFactor [10,50], SPARK params (onMs/gapMs/cycles), legacy confirmation blink counts/durations, tickBeat/Bar/WrapDurationMs [5..500] each (v7 Phase 0.1), eventOverrides[] clamp (PTN_NONE or valid PatternId, colorSlot < COLOR_SLOT_COUNT, fgPct <= 100). v8 : normalBgIntensity/bgArpStopMin/bgArpPlayMin retirés (dérivés désormais de FG via bgFactor). |
 | `validatePotFilterStore` | snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
 
 ---
@@ -93,7 +93,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `PotParamsStore` | `illpad_pot` | `params` | 0xBEEF | 2 | 10B | NvsManager (runtime) |
 | `PotMappingStore` | `illpad_pmap` | `mapping` | 0xBEEF | 1 | 36B | T7 PotMapping |
 | `PotFilterStore` | `illpad_pflt` | `cfg` | 0xBEEF | 1 | 12B | PotFilter (runtime, tuned via T7 Monitor). Fields: snap, actThresh, sleepEn, sleepMs, deadband, edgeSnap, wakeThresh |
-| `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 7 | ~96B | T8 LedSettings (v7 Phase 0.1 respec : rename tickFlashDurationMs -> tickBeatDurationMs (uint16), add tickBarDurationMs + tickWrapDurationMs for LOOP bar/wrap ticks Phase 1+) |
+| `LedSettingsStore` | `illpad_lset` | `ledsettings` | 0xBEEF | 8 | ~93B | T8 LedSettings (v8 post-audit cleanup : retire 3 zombie fields normalBgIntensity/bgArpStopMin/bgArpPlayMin, BG désormais dérivé via bgFactor. v7 (historique) : rename tickFlashDurationMs -> tickBeatDurationMs (uint16), +tickBarDurationMs +tickWrapDurationMs pour LOOP Phase 1+) |
 | `ColorSlotStore` | `illpad_lset` | `ledcolors` | 0xC010 | 5 | 36B | T8 LedSettings (v5 Phase 0.1 respec : add CSLOT_VERB_STOP slot 15 for Stop fade-out — decouples STOP from PLAY color) |
 
 ### V2 Stores (replace raw formats)
@@ -193,6 +193,11 @@ Each `saveBlob` that succeeds updates its live pointers immediately. If one fail
 - `LedSettingsStore` v6 → v7 : rename `tickFlashDurationMs` (uint8) →
   `tickBeatDurationMs` (uint16), +`tickBarDurationMs`, +`tickWrapDurationMs`.
   Validator clamps each to [5, 500] ms.
+- `LedSettingsStore` v7 → v8 (post-audit cleanup) : retire les 3 zombie
+  fields `normalBgIntensity`, `bgArpStopMin`, `bgArpPlayMin` obsolètes
+  depuis que BG est dérivé de FG via `bgFactor` (Phase 0 step 0.6).
+  Per Zero-Migration Policy : NVS reset silencieux au prochain boot,
+  l'utilisateur re-règle ses intensités FG dans Tool 8.
 - Both bumps deliberately grouped into a single commit (cad7530) so users
   see **one** reset cycle (two warnings), not two. Per Zero-Migration Policy,
   users re-enter their LED preferences via Tool 8 first run (or press `d` on

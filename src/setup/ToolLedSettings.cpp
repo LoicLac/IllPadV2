@@ -176,9 +176,9 @@ void ToolLedSettings::loadAll() {
     memset(&_lwk, 0, sizeof(_lwk));
     _lwk.magic   = EEPROM_MAGIC;
     _lwk.version = LED_SETTINGS_VERSION;
-    _lwk.normalFgIntensity = 85; _lwk.normalBgIntensity = 10;
+    _lwk.normalFgIntensity = 85;
     _lwk.fgArpStopMin = 30; _lwk.fgArpStopMax = 100;
-    _lwk.fgArpPlayMax = 80; _lwk.bgArpStopMin = 8; _lwk.bgArpPlayMin = 8;
+    _lwk.fgArpPlayMax = 80;
     _lwk.tickFlashFg = 100; _lwk.tickFlashBg = 25;
     _lwk.bgFactor = 25;
     _lwk.pulsePeriodMs = 1472;

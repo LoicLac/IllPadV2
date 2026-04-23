@@ -34,14 +34,11 @@ NvsManager::NvsManager()
   _ledSettings.magic = EEPROM_MAGIC;
   _ledSettings.version = LED_SETTINGS_VERSION;
   _ledSettings.reserved = 0;
-  // Intensities
+  // Intensities (BG derived from FG via bgFactor)
   _ledSettings.normalFgIntensity = 85;
-  _ledSettings.normalBgIntensity = 10;
   _ledSettings.fgArpStopMin = 30;
   _ledSettings.fgArpStopMax = 100;
   _ledSettings.fgArpPlayMax = 80;
-  _ledSettings.bgArpStopMin = 8;
-  _ledSettings.bgArpPlayMin = 8;
   _ledSettings.tickFlashFg = 100;
   _ledSettings.tickFlashBg = 25;
   // Global background factor (v6 new — step 0.6 activates in BG rendering)

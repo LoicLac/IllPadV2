@@ -15,11 +15,9 @@ LedController::LedController()
     _currentBank(0),
     _batteryLow(false),
     _slots(nullptr),
-    _normalFgIntensity(85), _normalBgIntensity(10),
+    _normalFgIntensity(85),
     _fgArpStopMin(30), _fgArpStopMax(100),
     _fgArpPlayMax(80),
-    _bgArpStopMin(8),
-    _bgArpPlayMin(8),
     _tickFlashFg(100), _tickFlashBg(25),
     _pulsePeriodMs(1472), _tickBeatDurationMs(30),
     _tickBarDurationMs(60), _tickWrapDurationMs(100),
@@ -219,7 +217,20 @@ void LedController::update() {
   if (_chaseActive)                      { renderChase(now); return; }
   if (_error)                            { renderError(now); return; }
   if (renderBattery(now))                return;
-  if (renderBargraph(now))               return;
+
+  // Event overlay (bank switch, EVT_PLAY/STOP, scale, octave...) preempts
+  // bargraph so user-action feedback is never visually swallowed by pot
+  // movement. Battery gauge stays above (explicit user request via rear).
+  // The overlay also cancels any running bargraph : once the user-action
+  // feedback plays, normal display resumes directly, never re-entering a
+  // stale bargraph (even if its duration had not expired).
+  bool hasActiveOverlay = _eventOverlay.active && !isPatternExpired(_eventOverlay, now);
+  if (hasActiveOverlay) {
+    _showingPotBar = false;
+  } else if (renderBargraph(now)) {
+    return;
+  }
+
   renderConfirmation(now);  // State tracking only — all overlays in renderNormalDisplay
   if (_calibrationMode)                  { renderCalibration(now); return; }
   renderNormalDisplay(now);
@@ -417,9 +428,8 @@ void LedController::renderCalibration(unsigned long now) {
 // --- Per-type bank render (extracted for LOOP extensibility) ---
 
 void LedController::renderBankNormal(uint8_t led, bool isFg) {
-  // v4 : FG uses MODE_NORMAL. BG uses same color at reduced intensity
-  // derived from FG via global _bgFactor (v6 unified grammar, post-audit fix).
-  // Legacy field _normalBgIntensity kept in Store for NVS compat but unused.
+  // FG uses MODE_NORMAL. BG uses same color at reduced intensity
+  // derived from FG via global _bgFactor.
   uint8_t intensity = isFg
                       ? _normalFgIntensity
                       : (uint8_t)((uint16_t)_normalFgIntensity * _bgFactor / 100);
@@ -444,8 +454,7 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
 
   if (playing) {
     // Base state : solid bright (FG) or solid dim (BG) — no pulse.
-    // v4 : BG intensity derived from FG via _bgFactor (post-audit fix).
-    // Legacy _bgArpPlayMin kept in Store for NVS compat but unused.
+    // BG intensity derived from FG via _bgFactor.
     uint8_t intensity = isFg
                         ? _fgArpPlayMax
                         : (uint8_t)((uint16_t)_fgArpPlayMax * _bgFactor / 100);
@@ -474,8 +483,7 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
     setPixel(led, col, intensity);
   } else {
     // BG (all states) or FG idle (no notes) : solid dim.
-    // v4 : BG intensity derived from FG via _bgFactor (post-audit fix).
-    // Legacy _bgArpStopMin kept in Store for NVS compat but unused.
+    // BG intensity derived from FG via _bgFactor.
     uint8_t intensity = isFg
                         ? _fgArpStopMin
                         : (uint8_t)((uint16_t)_fgArpStopMin * _bgFactor / 100);
@@ -869,13 +877,10 @@ void LedController::setPotBarDuration(uint16_t ms) {
 
 void LedController::loadLedSettings(const LedSettingsStore& s) {
   _normalFgIntensity = s.normalFgIntensity;
-  _normalBgIntensity = s.normalBgIntensity;
   // Guard against inverted min/max from corrupted NVS
   _fgArpStopMin = s.fgArpStopMin;
   _fgArpStopMax = (s.fgArpStopMax >= s.fgArpStopMin) ? s.fgArpStopMax : s.fgArpStopMin;
   _fgArpPlayMax = s.fgArpPlayMax;
-  _bgArpStopMin = s.bgArpStopMin;
-  _bgArpPlayMin = s.bgArpPlayMin;
   _tickFlashFg = s.tickFlashFg;
   _tickFlashBg = s.tickFlashBg;
   _pulsePeriodMs = s.pulsePeriodMs;

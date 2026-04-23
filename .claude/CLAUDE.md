@@ -139,14 +139,12 @@ LedController drives a SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel` (NEO_G
 | Current ARPEG idle (pile empty) | Blue | Solid dim | fgArpStopMin | — |
 | Current ARPEG stopped (notes loaded) | Blue | Sine pulse | fgArpStopMin↔fgArpStopMax | ~1.5s period |
 | Current ARPEG playing | Blue | Solid + white tick flash | fgArpPlayMax, spike tickFlashFg on step | flash 30ms |
-| Background NORMAL | White dim | Solid | ~10% | — |
-| Background ARPEG (all states) | Blue dim | Solid (+ tick flash if playing) | bgArpStopMin or bgArpPlayMin | flash 30ms if playing |
+| Background NORMAL | White dim | Solid | normalFgIntensity × bgFactor% | — |
+| Background ARPEG (all states) | Blue dim | Solid (+ tick flash if playing) | fgArpStopMin or fgArpPlayMax × bgFactor% | flash 30ms if playing |
 
 **Sine pulse (FG stopped-loaded only)**: 256-entry precomputed `LED_SINE_LUT[256]` in HardwareConfig.h, shared with ToolLedSettings. 16-bit phase + linear interpolation. Only used for FG arpeg stopped with notes loaded ("breathing = ready to play"). All other states are solid.
 
-**Tick flash**: `ArpEngine::consumeTickFlash()` returns true once per arp step. LedController stores `_flashStartTime[i]` and holds the flash for `tickFlashDurationMs` (default 30ms). Only fires during playback.
-
-**Legacy fields**: `fgArpPlayMin`, `bgArpStopMax`, `bgArpPlayMax` exist in LedSettingsStore for NVS compatibility but are unused at runtime (no pulse on playing/BG states). Hidden in Tool 7 UI.
+**Tick flash**: `ArpEngine::consumeTickFlash()` returns true once per arp step. LedController stores `_flashStartTime[i]` and holds the flash for `tickBeatDurationMs` (default 30ms). Only fires during playback.
 
 ### Confirmation Blinks (ALL overlay — bar never blanks)
 

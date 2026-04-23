@@ -260,7 +260,7 @@ inline RGBW resolveColorSlot(const ColorSlot& slot) {
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       7   // v6 -> v7 : rename tickFlashDurationMs (uint8) -> tickBeatDurationMs (uint16), +tickBarDurationMs, +tickWrapDurationMs (Phase 0.1 respec, LOOP BAR/WRAP consumed Phase 1+)
+#define LED_SETTINGS_VERSION       8   // v7 -> v8 : remove zombie fields normalBgIntensity, bgArpStopMin, bgArpPlayMin (superseded by bgFactor derivation, post-Phase-0 audit R1 cleanup)
 
 struct LedSettingsStore {
   uint16_t magic;
@@ -268,12 +268,9 @@ struct LedSettingsStore {
   uint8_t  reserved;
   // --- Intensities (0-100, perceptual %) ---
   uint8_t  normalFgIntensity;     // default 85  — SOLID intensity FG NORMAL
-  uint8_t  normalBgIntensity;     // default 10  — SOLID intensity BG NORMAL (will be replaced by bgFactor in step 0.6)
   uint8_t  fgArpStopMin;          // default 30  — PULSE_SLOW min intensity FG ARPEG stopped-loaded
   uint8_t  fgArpStopMax;          // default 100 — PULSE_SLOW max intensity idem
   uint8_t  fgArpPlayMax;          // default 80  — SOLID intensity FG ARPEG playing (between FLASH ticks)
-  uint8_t  bgArpStopMin;          // default 8   — SOLID intensity BG ARPEG stopped/idle
-  uint8_t  bgArpPlayMin;          // default 8   — SOLID intensity BG ARPEG playing (between FLASH ticks)
   uint8_t  tickFlashFg;           // default 100 — FLASH pattern fgPct
   uint8_t  tickFlashBg;           // default 25  — FLASH pattern bgPct
   // --- Global background factor (v6 new — applied in step 0.6 when BG slots retire) ---
@@ -714,23 +711,27 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
 // ── Pot Filter ──────────────────────────────────
 #define POTFILTER_NVS_NAMESPACE "illpad_pflt"
 #define POTFILTER_NVS_KEY       "cfg"
-const uint8_t POT_FILTER_VERSION = 2;  // v2: MCP3208 — removed snap100/actThresh10 (no EMA)
+const uint8_t POT_FILTER_VERSION = 3;  // v3: per-pot deadband (pot 4 noisier than 0-3 by design)
 
 struct PotFilterStore {
-    uint16_t magic;        // EEPROM_MAGIC
-    uint8_t  version;      // POT_FILTER_VERSION
-    uint8_t  sleepEn;      // 0=off, 1=on (default 1)
-    uint16_t sleepMs;      // sleep delay ms (100-2000, default 500)
-    uint8_t  deadband;     // ADC units (1-10, default 3)
-    uint8_t  edgeSnap;     // ADC units from edges (0-10, default 3)
-    uint8_t  wakeThresh;   // ADC units to wake from sleep (3-30, default 8)
+    uint16_t magic;                        // EEPROM_MAGIC
+    uint8_t  version;                      // POT_FILTER_VERSION
+    uint8_t  sleepEn;                      // 0=off, 1=on (default 1, applied to pot 4 only at runtime)
+    uint16_t sleepMs;                      // sleep delay ms (100-2000, default 500)
+    uint8_t  perPotDeadband[NUM_POTS];     // per-pot deadband LSB (defaults: 5/5/5/5/8)
+    uint8_t  edgeSnap;                     // ADC units from edges (0-10, default 3)
+    uint8_t  wakeThresh;                   // ADC units to wake from sleep (3-30, default 8)
 };
 static_assert(sizeof(PotFilterStore) <= NVS_BLOB_MAX_SIZE, "PotFilterStore too large");
 
 inline void validatePotFilterStore(PotFilterStore& s) {
     if (s.sleepEn > 1)                             s.sleepEn = 1;
     if (s.sleepMs < 100 || s.sleepMs > 2000)       s.sleepMs = 500;
-    if (s.deadband < 1 || s.deadband > 10)         s.deadband = 4;
+    for (uint8_t i = 0; i < NUM_POTS; i++) {
+        if (s.perPotDeadband[i] < 1 || s.perPotDeadband[i] > 15) {
+            s.perPotDeadband[i] = (i == 4) ? 8 : 5;
+        }
+    }
     if (s.edgeSnap > 10)                           s.edgeSnap = 3;
     if (s.wakeThresh < 3 || s.wakeThresh > 30)    s.wakeThresh = 8;
 }
