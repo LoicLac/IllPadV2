@@ -432,18 +432,20 @@ bool CapacitiveKeyboard::runAutoconfiguration(uint16_t targetBaseline) {
     Serial.println(addr, HEX);
     #endif
 
-    // Test I2C connection (retry transient errors; only code 2 = address NACK = absent)
+    // Test I2C connection (retry transient + cold-boot NACK).
+    // At cold boot, NACK (err==2) can mean "chip not yet powered up", not "absent".
+    // First attempt tolerates NACK; from attempt 2, NACK = really absent -> bail out.
     {
       bool deviceFound = false;
-      for (int attempt = 0; attempt < 3; attempt++) {
+      for (int attempt = 0; attempt < 8; attempt++) {
         Wire.beginTransmission(addr);
         uint8_t err = Wire.endTransmission();
         if (err == 0) {
           deviceFound = true;
           break;
         }
-        if (err == 2) break;  // Address NACK — device not present, no point retrying
-        delay(10);  // Transient error (1=data too long, 3=data NACK, 4=other) — retry
+        if (err == 2 && attempt >= 1) break;  // Address NACK persistent -> absent, bail
+        delay(25);  // Let VDD / MPR121 power-up settle, then retry
       }
       if (!deviceFound) {
         #if DEBUG_SERIAL

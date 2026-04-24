@@ -711,7 +711,7 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
 // ── Pot Filter ──────────────────────────────────
 #define POTFILTER_NVS_NAMESPACE "illpad_pflt"
 #define POTFILTER_NVS_KEY       "cfg"
-const uint8_t POT_FILTER_VERSION = 3;  // v3: per-pot deadband (pot 4 noisier than 0-3 by design)
+const uint8_t POT_FILTER_VERSION = 5;  // v5: pot 4 back to deadband=8 (brightness UX), pots 0-3 stay at 10
 
 struct PotFilterStore {
     uint16_t magic;                        // EEPROM_MAGIC
@@ -728,8 +728,8 @@ inline void validatePotFilterStore(PotFilterStore& s) {
     if (s.sleepEn > 1)                             s.sleepEn = 1;
     if (s.sleepMs < 100 || s.sleepMs > 2000)       s.sleepMs = 500;
     for (uint8_t i = 0; i < NUM_POTS; i++) {
-        if (s.perPotDeadband[i] < 1 || s.perPotDeadband[i] > 15) {
-            s.perPotDeadband[i] = (i == 4) ? 8 : 5;
+        if (s.perPotDeadband[i] < 1 || s.perPotDeadband[i] > 20) {
+            s.perPotDeadband[i] = (i == 4) ? 8 : 10;
         }
     }
     if (s.edgeSnap > 10)                           s.edgeSnap = 3;

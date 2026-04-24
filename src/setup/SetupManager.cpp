@@ -55,8 +55,10 @@ void SetupManager::run() {
   // No restore needed — setup always ends with ESP.restart().
   {
     PotFilterStore setupCfg = PotFilter::getConfig();
-    setupCfg.deadband = 2;    // finer for setup UI (runtime default 3)
-    setupCfg.sleepEn  = 0;    // no sleep in setup
+    for (uint8_t i = 0; i < NUM_POTS; i++) {
+      setupCfg.perPotDeadband[i] = 2;   // finer for setup UI navigation
+    }
+    setupCfg.sleepEn = 0;                // no sleep in setup
     PotFilter::setConfig(setupCfg);
   }
 
