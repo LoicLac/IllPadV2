@@ -97,21 +97,21 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
         continue;  // never fall through — 2nd tap on ARPEG is always consumed
       }
 
+      // --- 2nd tap on NORMAL (wasRecent, but no play/stop semantics) ---
+      // Ignore: preserve pending switch and 1st-tap timestamp so the
+      // natural timeout still commits at T0 + _doubleTapMs. Re-arming
+      // would postpone the switch on every repeat tap.
+      if (wasRecent) continue;
+
       // --- 1st-tap logic ---
       _lastBankPadPressTime[b] = now;
       if (b == _currentBank) continue;
 
-      if (_banks[b].type == BANK_ARPEG) {
-        // Defer switch ~doubleTapMs to allow double-tap detection.
-        _pendingSwitchBank = (int8_t)b;
-        _pendingSwitchTime = now;
-      } else {
-        // NORMAL: instant switch
-        switchToBank(b);
-        _switchedDuringHold = true;
-        switched = true;
-        _pendingSwitchBank = -1;  // cancel any pending ARPEG switch
-      }
+      // Defer switch ~doubleTapMs for ALL bank types so the tactile
+      // feel is uniform (NORMAL and ARPEG switches use the same delay).
+      // ARPEG also uses this window to detect double-tap Play/Stop.
+      _pendingSwitchBank = (int8_t)b;
+      _pendingSwitchTime = now;
     }
   } else {
     // LEFT not held — reset edge tracking so next hold detects rising edges cleanly

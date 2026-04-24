@@ -937,9 +937,26 @@ void loop() {
   // --- Poll USB MIDI (clock ticks arrive here) ---
   s_transport.update();
 
-  // --- Read buttons (active LOW) ---
-  bool leftHeld = (digitalRead(BTN_LEFT_PIN) == LOW);
-  bool rearHeld = (digitalRead(BTN_REAR_PIN) == LOW);
+  // --- Read buttons (active LOW) with 20ms software debounce ---
+  // Defense-in-depth alongside the HW RC debounce: covers a faulty cap
+  // or worn switch contact. 20ms latency is imperceptible for a button.
+  static uint32_t s_leftChangeMs = 0, s_rearChangeMs = 0;
+  static bool s_leftRaw = false, s_rearRaw = false;
+  static bool s_leftStable = false, s_rearStable = false;
+  {
+    bool raw = (digitalRead(BTN_LEFT_PIN) == LOW);
+    if (raw != s_leftRaw) { s_leftRaw = raw; s_leftChangeMs = millis(); }
+    if (s_leftRaw != s_leftStable && (millis() - s_leftChangeMs) >= 20)
+      s_leftStable = s_leftRaw;
+  }
+  {
+    bool raw = (digitalRead(BTN_REAR_PIN) == LOW);
+    if (raw != s_rearRaw) { s_rearRaw = raw; s_rearChangeMs = millis(); }
+    if (s_rearRaw != s_rearStable && (millis() - s_rearChangeMs) >= 20)
+      s_rearStable = s_rearRaw;
+  }
+  bool leftHeld = s_leftStable;
+  bool rearHeld = s_rearStable;
 
   // --- CRITICAL PATH ---
   handleManagerUpdates(state, leftHeld);

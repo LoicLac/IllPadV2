@@ -273,7 +273,7 @@ const uint8_t DEFAULT_ARP_START_MODE = ARP_START_IMMEDIATE;
 // --- Double-Tap Window (ARPEG HOLD mode) ---
 const uint8_t DOUBLE_TAP_MS_MIN     = 100;
 const uint8_t DOUBLE_TAP_MS_MAX     = 250;
-const uint8_t DOUBLE_TAP_MS_DEFAULT = 150;
+const uint8_t DOUBLE_TAP_MS_DEFAULT = 200;
 
 // =================================================================
 // 5. LED DISPLAY — Setup-mode timing (not user-configurable)

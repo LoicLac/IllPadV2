@@ -190,7 +190,7 @@ switchToBank() calls [BankManager.cpp:181-210]:
 #### LEFT + Bank Pad: deferral and double-tap Play/Stop toggle
 `BankManager::update()` uses rising-edge detection on bank pads while LEFT is
 held, plus a per-pad timestamp (`_lastBankPadPressTime[b]`) for double-tap
-tracking. Window = `_doubleTapMs` (100–250ms, settings default 150ms, same
+tracking. Window = `_doubleTapMs` (100–250ms, settings default 200ms, same
 value as Play-mode note double-tap).
 
 ```
@@ -219,14 +219,17 @@ Rising edge on bank pad b (while LEFT held):
     (processArpMode in main.cpp).
     clearAllNotes(), setCaptured(true), and addPadPosition() all reset _pausedPile=false.
 
+  2nd tap on NORMAL bank (wasRecent but no play/stop semantics):
+    ignore — preserve pending switch and 1st-tap timestamp so the natural
+    timeout still commits at T0 + _doubleTapMs. Re-arming would postpone the
+    switch on every repeat tap.
+
   Else (1st tap):
     _lastBankPadPressTime[b] = now
     if b == _currentBank: continue
-    if _banks[b].type == BANK_ARPEG:
-      arm pending switch: _pendingSwitchBank = b, _pendingSwitchTime = now
-                          (switch deferred ~doubleTapMs to allow 2nd tap detection)
-    else (NORMAL):
-      switchToBank(b) immediately, clear pending switch
+    arm pending switch: _pendingSwitchBank = b, _pendingSwitchTime = now
+    (switch deferred ~doubleTapMs for ALL bank types — uniform tactile feel ;
+     ARPEG also uses this window to detect the 2nd tap for Play/Stop toggle)
 ```
 
 Pending switch resolution:
