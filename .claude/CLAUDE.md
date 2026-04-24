@@ -1,438 +1,171 @@
 # ILLPAD48 V2 — 48-Pad Capacitive MIDI Controller
 
-**Prototype — fresh start, no backward compatibility. Change freely.**
+**Objet unique, pas un prototype.** Vendu, joué live, traité comme une œuvre :
+qualité finale attendue, finition soignée, fiabilité non négociable. Le mot
+"prototype" est interdit ici — il autorise le bricolage. « Ça suffit pour un
+proto » ne s'applique jamais.
+
+---
 
 ## NVS & Persistence — Zero Migration Policy
 
-**This is a prototype. There is NO backward compatibility requirement.**
+Cette règle n'est PAS une permission de bricolage. Elle découle d'une
+contrainte propre : le user est à côté de l'instrument, peut entrer en setup
+mode et re-saisir ses préférences en 2 minutes via les Tools 1-8. Cela rend
+une stratégie "reset sur incompatibilité" tenable sans dette technique liée
+aux anciennes versions de struct. La règle s'applique **uniquement au NVS** :
 
-1. **No NVS migration code.** When a Store struct changes (new fields, reordered fields, size change), simply bump the version number or change the struct. Old NVS data that fails `loadBlob()` validation (wrong size, wrong version, wrong magic) is silently discarded and replaced by compile-time defaults. Do NOT write migration code, compatibility shims, or version-upgrade paths.
+1. **No NVS migration code.** Quand une Store struct change (field, taille,
+   ordre), bumper la version. Toute donnée NVS qui rate `loadBlob()`
+   (taille / magic / version invalide) est silencieusement rejetée et
+   remplacée par les defaults compile-time. Pas de shim, pas de path
+   d'upgrade.
+2. **Les valeurs user sont re-saisies après update touchant le NVS.** Un
+   `Serial.printf` d'avertissement au boot suffit.
 
-2. **User-stored values are expendable.** It is accepted that any firmware update touching NVS structures will reset the affected settings to defaults on first boot. The user re-enters their preferences via setup mode (Tools 1-7). A `Serial.printf` warning at boot ("NVS: xyz reset to defaults") is sufficient — no other mitigation needed.
+Conséquence : jamais de version stale "pour compat", jamais de padding
+"pour préserver un layout", jamais de struct dupliquée "pour supporter
+l'ancien format". Change la struct, bump la version, passe à la suite.
 
-**Consequence:** never keep a stale version number "for compatibility", never add padding "to preserve layout", never duplicate a struct "to support old format". Change the struct, bump the version, move on.
+**Ce qui n'est JAMAIS autorisé**, en dehors du NVS : code approximatif,
+gestion d'erreur bâclée, workarounds hardware non documentés, "ça marche
+sur mon poste", regressions ignorées.
+
+---
 
 ## Build
 
 ```bash
-~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1          # build
-~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1 -t upload # upload
-~/.platformio/penv/bin/pio device monitor -b 115200             # monitor
+~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1              # build
+~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1 -t upload    # upload
+~/.platformio/penv/bin/pio device monitor -b 115200                # monitor
 ```
 
-`pio` is NOT in PATH — always use full path.
-
-## Hardware
-
-- **MCU**: ESP32-S3-N8R16 (8MB QIO flash, 16MB OPI PSRAM), dual-core 240MHz
-- **Sensors**: 4× MPR121 capacitive touch (I2C 0x5A–0x5D) → 48 aluminium pads, circular/radial layout
-- **MIDI**: USB MIDI (TinyUSB composite) + BLE MIDI (ESP32-BLE-MIDI), simultaneous
-- **USB**: Single USB-C on GPIO 19/20 (native USB, no UART bridge). ALL traffic on this one port: MIDI, CDC serial, upload, VT100 setup. Board has a 2nd USB-C (COM/UART bridge GPIO 43/44) but it is unused. JTAG builtin shares GPIO 19/20 — conflicts with TinyUSB.
-- **2 Buttons**: left GPIO 12 (bank+scale+arp single-layer control), rear GPIO 21 (battery/setup/modifier pot rear). Active LOW, internal pull-up.
-- **5 Pots**: 4 right GPIO 4/5/6/7 (tempo, shape/gate, slew/shuffle, velocity), 1 rear GPIO 1 (LED brightness/sensitivity). All on ADC1 for BLE compatibility.
-- **8 LEDs**: SK6812 RGBW NeoPixel Stick, single data pin GPIO 13, Adafruit_NeoPixel driver (NEO_GRBW)
-- **Battery**: LiPo 3.7V, BQ25185 charger, ADC voltage divider
-
-Pads measure **skin contact surface area**, not mechanical force. Aftertouch = yes. Velocity from pressure = unreliable.
-
-## Architecture
-
-### Dual-Core FreeRTOS
-
-- **Core 0** — `sensingTask`: I2C poll 4× MPR121, pressure pipeline, publish to double buffer.
-- **Core 1** — `loop()`: read double buffer, edge detection, MIDI, arp ticks, pots, buttons, LEDs, NVS.
-
-### Double Buffer (NOT mutex)
-
-Inter-core sync uses `std::atomic<uint8_t>` `s_active` — not mutex, not volatile.
-- Core 0 computes `writeIdx = 1 - s_active.load()` locally, writes to `s_buffers[writeIdx]`, then publishes via `s_active.store(writeIdx, memory_order_release)`.
-- Core 1 reads via `s_active.load(memory_order_acquire)` to get the latest buffer. Never blocks.
-- Slow params (pots → Core 0): `std::atomic<float>` / `std::atomic<uint16_t>` with `memory_order_relaxed`.
-
-### 8 Banks Always Alive
-
-Every bank (= fixed MIDI channel 1-8) is a `BankSlot` that stays alive. Bank select only changes which slot receives pad input ("foreground"). ARPEG engines run in background.
-
-```
-BankSlot { channel, type(NORMAL|ARPEG), scaleConfig, arpEngine*, isForeground,
-           baseVelocity, velocityVariation, pitchBendOffset }
-```
-
-- **NORMAL**: pads → notes + poly-aftertouch. Only plays when foreground. Velocity = baseVelocity ± random(velocityVariation), per-bank. Pitch bend offset per-bank.
-- **ARPEG**: arpeggiator. No aftertouch. Velocity = baseVelocity ± variation, per-bank. Max 4 ARPEG banks.
-
-### 3 Mapping Layers
-
-1. **Pad Ordering** `padOrder[48]`: physical pad → rank 0-47 (low to high). Set once in Tool 2. All banks share it.
-2. **Scale Config** per bank: chromatic or scale (root + mode). Root = base note in both modes. Runtime-switchable via left button hold.
-3. **Control Pad Assignment**: 29 pads with control roles (bank 8 + scale 15 + arp 6 incl. 4 octave). One role per pad. Set in Tool 3.
-
-### Note Resolution
-
-`ScaleResolver::resolve(padIndex, padOrder, scaleConfig)` → MIDI note or 0xFF.
-- Chromatic: `rootBase + padOrder[padIndex]`
-- Scale: `rootBase + (order/7)*12 + scaleIntervals[mode][order%7]`
-
-**Critical**: `lastResolvedNote[padIndex]` stores the note sent at noteOn. noteOff ALWAYS uses this stored value, never re-resolves. Prevents orphan notes on scale change during play.
-
-### Loop Execution Order (Core 1)
-
-Critical path first, secondary after. MIDI latency depends on this order.
-
-```
-1. Read double buffer (instant)              ← CRITICAL PATH START
-2. USB MIDI transport update (clock polling)
-3. Read buttons (left + rear)
-── handleManagerUpdates(state, leftHeld) ──
-4. BankManager.update()                       ← left button
-5. ScaleManager.update()                      ← left button (same as bank)
-5b. Consume scale/octave/hold flags + LED confirmations
-    (ARPEG scale change: no flush needed — events store resolved MIDI notes)
-6. ClockManager.update()                      ← PLL + tick generation
-── handleHoldPad(state) ──
-7. Hold pad (ARPEG only) — toggles Play/Stop via ArpEngine::setCaptured()
-── handlePadInput(state, now) ──
-8. processNormalMode() or processArpMode()
-8b. Stuck-note cleanup on left-release edge
-8c. Edge state sync (s_lastKeys = keyIsPressed) ← before arp tick
-9. ArpScheduler.tick()                       ← all background arps
-9b. ArpScheduler.processEvents()             ← gate noteOff + shuffle noteOn
-10. MidiEngine.flush()                        ← CRITICAL PATH END
-── handlePotPipeline(leftHeld, rearHeld) ──
-11. PotRouter.update()                        ← SECONDARY (PotFilter::updateAll + 5 pots)
-11b. Send MIDI CC/PB if dirty                 ← from user-assigned pot mappings
-12. BatteryMonitor.update()
-13. LedController.update()                    ← multi-bank state + confirmations
-── handlePanicChecks(now, rearHeld) ──
-14. NvsManager.notifyIfDirty()                ← non-blocking signal to NVS task
-── debugOutput(leftHeld, rearHeld) ──
-15. vTaskDelay(1)
-```
-
-## Boot Sequence
-
-LEDs show progressive fill during boot (1 LED per step). On failure, the failed step blinks rapidly while prior steps stay solid.
-
-```
-Step 1: ●○○○○○○○  LED hardware ready
-Step 2: ●●○○○○○○  I2C bus ready
-Step 3: ●●●○○○○○  Keyboard OK
-        ●●◉○○○○○  ← Step 3 BLINKS = keyboard/MPR121 FAILED (halts forever)
-        [setup mode detection: 3s window to press rear button, then hold 3s — chase pattern during hold]
-Step 4: ●●●●○○○○  MIDI Transport (USB + BLE) started
-Step 5: ●●●●●○○○  NVS loaded
-Step 6: ●●●●●●○○  Arp system ready
-Step 7: ●●●●●●●○  Managers ready (Bank, Scale, Pot)
-Step 8: ●●●●●●●●  All systems go (200ms full bar)
-        → endBoot() → normal bank display
-```
-
-## LED Display
-
-### Normal Display (multi-bank state)
-
-LedController drives a SK6812 RGBW NeoPixel strip via `Adafruit_NeoPixel` (NEO_GRBW). Colors come from 13 configurable color slots (preset + hue offset), resolved at load time via `resolveColorSlot()`. System colors (error, boot, battery) are hardcoded RGBW in HardwareConfig.h. A single `setPixel(led, rgbw, intensityPct)` method combines intensity × master brightness × 255 in one 32-bit multiply (no truncation at low values), then applies gamma correction via runtime LUT (`_gammaLut[256]`, rebuilt at boot from configurable `gammaTenths` in LedSettingsStore, default gamma 2.0, range 1.0-3.0). Brightness pot acts as master perceptual fader (0-100%) via `POT_BRIGHTNESS_CURVE[]` (compile-time selectable: LOW_BIASED/LINEAR/SIGMOID). All intensities are 0-100% perceptual in `LedSettingsStore`.
-
-| State | Color | Pattern | Intensity | Rate |
-|---|---|---|---|---|
-| Current NORMAL | White (W channel) | Solid | 85% | — |
-| Current ARPEG idle (pile empty) | Blue | Solid dim | fgArpStopMin | — |
-| Current ARPEG stopped (notes loaded) | Blue | Sine pulse | fgArpStopMin↔fgArpStopMax | ~1.5s period |
-| Current ARPEG playing | Blue | Solid + white tick flash | fgArpPlayMax, spike tickFlashFg on step | flash 30ms |
-| Background NORMAL | White dim | Solid | normalFgIntensity × bgFactor% | — |
-| Background ARPEG (all states) | Blue dim | Solid (+ tick flash if playing) | fgArpStopMin or fgArpPlayMax × bgFactor% | flash 30ms if playing |
-
-**Sine pulse (FG stopped-loaded only)**: 256-entry precomputed `LED_SINE_LUT[256]` in HardwareConfig.h, shared with ToolLedSettings. 16-bit phase + linear interpolation. Only used for FG arpeg stopped with notes loaded ("breathing = ready to play"). All other states are solid.
-
-**Tick flash**: `ArpEngine::consumeTickFlash()` returns true once per arp step. LedController stores `_flashStartTime[i]` and holds the flash for `tickBeatDurationMs` (default 30ms). Only fires during playback.
-
-### Confirmation Blinks (ALL overlay — bar never blanks)
-
-All 7 `ConfirmType` values are **overlay-only**: `renderConfirmation()` tracks state/expiry, `renderNormalDisplay()` renders the overlay on top of the normal bank display. No confirmation ever calls `clearPixels()`. The normal display (including tick flashes) runs underneath at all times.
-
-| Event | ConfirmType | Color | Pattern | Duration |
-|---|---|---|---|---|
-| Bank switch | `CONFIRM_BANK_SWITCH` | White | Blink on/off destination LED | bankDurationMs (300ms) |
-| Scale root | `CONFIRM_SCALE_ROOT` | Amber (preset 6) | Blink on/off current LED | scaleRootDurationMs (200ms) |
-| Scale mode | `CONFIRM_SCALE_MODE` | Gold (preset 7) | Blink on/off current LED | scaleModeDurationMs (200ms) |
-| Scale chromatic | `CONFIRM_SCALE_CHROM` | Gold (preset 7) | Blink on/off current LED | scaleChromDurationMs (200ms) |
-| Play (Hold pad or LEFT+double-tap bank pad) | `CONFIRM_HOLD_ON` | Deep blue | Fade IN 0%→100% | holdFadeMs (300ms) |
-| Stop (Hold pad or LEFT+double-tap bank pad) | `CONFIRM_HOLD_OFF` | Deep blue | Fade OUT 100%→0% | holdFadeMs (300ms) |
-| Octave | `CONFIRM_OCTAVE` | Blue-violet | Blink overlay on current LED (1 LED, not 2) | octaveDurationMs (300ms) |
-
-New confirmation preempts active one. `LedController` no longer depends on `ClockManager` (beat-sync removed). All blink counts and durations configurable in Tool 7.
-
-### Priority State Machine (in `update()`)
-
-```
-1. Boot mode          (progressive white fill / red failure blink)
-2. Setup comet        (violet comet during Tools 1-7)
-3. Chase pattern      (calibration entry — white chase)
-4. Error              (LEDs 3-4 blink red 500ms — sensing task stall)
-5. Battery gauge      (8-LED red→green gradient bar, 3s)
-6. Pot bargraph       (solid bar + catch visualization — unifié pour tous les pots, tempo inclus)
-7. Confirmation state tracking (10 types, auto-expire timers)
-8. Calibration mode   (all off + validation flash)
-9. Normal bank display + confirmation overlays (multi-bank solid/pulse/tick + overlay blinks/fades)
-```
-
-### Pot Bargraph
-
-`showPotBargraph(realLevel, potLevel, caught)` — 3 params. Unique bargraph pour tous les pots (tempo inclus). Shows target level as solid bar + physical pot position indicator. Catch state visualized: uncaught pots show pot position dimly until caught. Configurable duration via Tool 6 Settings (parameter 6, 0-indexed as case 5). Range 1-10s, default 3s, steps of 500ms. Stored in NVS (`illpad_set`, field `potBarDurationMs`).
-
-## Buttons
-
-- **Left (hold + pad)**: single-layer control. 8 bank pads + 15 scale pads (7 root + 7 mode + 1 chromatic) + 1 Hold toggle (ARPEG only) + 4 octave pads (ARPEG only, 1-4 octaves). All visible in one hold. BankManager and ScaleManager share this button — no conflict (pad roles are distinct, checked by Tool 3). All notes off for NORMAL on bank switch. ARPEG: nothing (arp lives/dies by its own logic). Scale change on ARPEG: no allNotesOff — arp re-resolves at next tick.
-- **Left (hold + pot)**: modifier for 4 right pots (2nd slot: division, AT deadzone/pattern, pitch bend/shuffle template, velocity variation).
-- **Left + double-tap on bank pad (ARPEG target)**: toggles Play/Stop on that bank (FG or BG). Same event chain as the Hold pad. Never switches bank. BG target = keys=nullptr → always pauses (no fingers possible off-foreground).
-- **Rear (press)**: battery gauge (3s).
-- **Rear (boot, two-phase)**: press within 3s of boot, then hold 3s → setup mode (chase LED during hold).
-- **Rear (hold + pot rear)**: modifier for rear pot (pad sensitivity).
-
-## Arpeggiator
-
-**Pile stores padOrder positions, NOT MIDI notes.** Resolution happens at each tick via current ScaleConfig. Each arp engine keeps its own ScaleConfig copy (set via `setScaleConfig()` when foreground). Background arps retain their last-set ScaleConfig — scale changes only affect the foreground bank's engine.
-
-### Play/Stop semantic (toggled via Hold pad OR LEFT+double-tap on bank pad)
-
-Two triggers, one event chain (`ArpEngine::setCaptured()`). The only difference: LEFT+double-tap can target a BG bank (keys=nullptr, treated as "no fingers"). Double-tap on a bank pad NEVER switches bank.
-
-**Stop (live mode, `_captured=false`)**:
-- Press pad = add to pile; release = remove from pile. All fingers up → arp stops naturally.
-- If a paused pile exists (Play→Stop with no fingers), the first press wipes it before entering live mode.
-
-**Play (persistent, `_captured=true`)**:
-- Press pad = add to persistent pile. Double-tap (configurable 100-250ms, default 150ms) = remove. Pile is frozen on release.
-- Arp keeps playing as long as the pile has notes. Pile becomes empty → arp stops.
-
-**Play → Stop transition**:
-- Fingers down (excluding Hold pad): pile cleared, live mode takes over.
-- No fingers: pile kept, arp stops, `_pausedPile=true` armed. Next Play relaunches from step 0.
-
-**Stop → Play transition**:
-- Paused pile with notes: relaunch from step 0.
-- Empty pile: state flips, LED confirms, arp silent until notes added.
-
-Bank switch does not affect any bank's Play/Stop state — background arps continue running.
-
-5 patterns (Up/Down/UpDown/Random/Order) via hold+pot right 2. 1-4 octaves via 4 pads in single-layer control (hold left + octave pad). Up to 48 positions (192 steps with 4 oct). Division via hold+pot right 1 (9 binary values: 4/1→1/64). Gate/shuffle/velocity per-bank via pots.
-
-**Quantized start** (per-bank, set in Tool 5): Immediate (fire on next division boundary), Beat (snap to next 1/4 note, 24 ticks), or Bar (snap to next bar, 96 ticks). Stop is always immediate. Stop-mode auto-play (pile 0→1 transition) also respects quantize.
-
-**Shuffle**: 10 groove templates (16 steps each, 0-4 positive-only classic, 5-9 bipolar), depth 0.0–1.0 via pot (extreme: notes can overlap across steps). Template selected via hold+pot right 3 (10 discrete values). Depth controls intensity, template controls groove shape. Shuffle offset = template[step%16] × depth × stepDuration / 100. Gate and shuffle use a unified time-based event system with reference counting (up to 64 pending events per engine): ArpScheduler.tick() schedules noteOn (with shuffle delay) and noteOff (at noteOnTime + stepDuration × gateLength), ArpScheduler.processEvents() fires them in real time. Overlapping notes handled via per-note refcount (MIDI noteOn only on 0→1, noteOff only on 1→0). Shuffle step counter resets on: play/stop toggle, pile 0→1 note, pattern change.
-
-## Pots — PotRouter
-
-PotFilter reads 5 ADCs via 16× oversampling + adaptive EMA + deadband gate + sleep/wake. PotRouter consumes `PotFilter::getStable()` / `hasMoved()`, resolves button combos, applies catch system, exposes getters. Binding table is **runtime data** rebuilt from a user-configurable `PotMappingStore`.
-
-**Button modifiers**: Left button = modifier for 4 right pots. Rear button = modifier for rear pot only. They never cross.
-
-**Pot values**: NORMAL params (shape, slew, AT deadzone) = **GLOBAL**. ARPEG params (gate, shuffle depth, shuffle template, division, pattern) = **PER BANK**. Velocity params (base, variation) = **PER BANK** (NORMAL + ARPEG). Pitch bend offset = **PER BANK** (NORMAL only). Tempo, LED brightness, pad sensitivity = **GLOBAL**. MIDI CC/PB = **volatile per-bank** (sends on foreground channel, no NVS recall). Catch resets on bank switch for per-bank params.
-
-### Default Pot Mapping
-
-| Pot | NORMAL alone | NORMAL + hold left | ARPEG alone | ARPEG + hold left |
-|---|---|---|---|---|
-| Right 1 | Tempo (10-260 BPM) | — empty — | Tempo (10-260 BPM) | Division (9 binary) |
-| Right 2 | Response shape | AT deadzone | Gate length | Pattern (5 discrete) |
-| Right 3 | Slew rate | Pitch bend (per-bank) | Shuffle depth (0.0-1.0) | Shuffle template (10) |
-| Right 4 | Base velocity | Velocity variation | Base velocity | Velocity variation |
-
-| Rear pot | Alone | + hold rear |
-|---|---|---|
-| Rear | LED brightness | Pad sensitivity |
-
-**Empty slot** (Right 1, NORMAL + hold left): reserved for future parameter.
-
-### User-Configurable Mapping (Tool 7)
-
-The 4 right pots × 2 layers = **8 slots per context** (NORMAL and ARPEG independently). Rear pot is fixed (not configurable). Each slot can be assigned any parameter from that context's pool, plus MIDI CC (with CC#) or MIDI Pitchbend.
-
-**PotMappingStore** (NVS `illpad_pmap`): two arrays of 8 `PotMapping` entries (one per context). Each entry = `{PotTarget, ccNumber}`. Has magic/version for NVS compatibility.
-
-**Rebuild flow**: `loadMapping()` or `applyMapping()` → `rebuildBindings()` → `seedCatchValues()`. The binding table, catch states, and CC slot tracking are all regenerated.
-
-**MIDI CC output**: multiple CCs allowed (different CC numbers). CC slot lookup uses binding index (not CC number) to avoid cross-context collision. Only sends on value change (dirty flag pattern, no MIDI flood). Sends on foreground bank's channel.
-
-**MIDI Pitchbend output**: max one per context. Auto-steals if a second is assigned. Sends on foreground bank's channel. Only sends on value change.
-
-**Global target catch propagation**: when a global target (e.g., Tempo) exists in both NORMAL and ARPEG contexts on the same pot, writing to one propagates `storedValue` to all same-target bindings. Prevents stale catch after bank type switch.
-
-## MIDI Clock & Transport
-
-ClockManager receives 0xF8 (clock ticks) via USB+BLE. Priority: USB > BLE > last known > internal (pot right 1). Start/Stop/Continue (0xFA/0xFB/0xFC) are intentionally ignored in both directions — the ILLPAD is an instrument, not a transport follower or controller.
-**PLL** smooths BLE jitter (±15ms → ±1-2ms). ArpEngines sync to smoothed clock. Master mode sends ticks only (0xF8), never Start/Stop.
-
-### Transport Behavior by Mode
-
-| Mode | Clock ticks (0xF8) | Start/Stop/Continue | Sends |
-|---|---|---|---|
-| **Slave** | PLL sync | Ignored | Nothing |
-| **Master** | Generate from pot tempo | Ignored | Ticks only (0xF8) |
-
-## Setup Mode (press rear within 3s of boot, then hold 3s)
-
-VT100 terminal, serial keyboard input only (no physical button in setup mode).
-
-```
-[1] Pressure Calibration  — unchanged from V1
-[2] Pad Ordering           — touch low→high, positions 1-48, no base note
-[3] Pad Roles              — bank(8) + scale(15) + arp(5: hold+4 octave), color grid, collision check
-[4] Control Pads           — 12 sparse CC pads (momentary/latch/continuous). 4-color grid + POOL legend. [RET] picks mode via pool, [e] edits numeric values (CC/channel/deadzone), [g] edits global DSP params (smooth / S&H / release). Save-on-exit, no NVS spam. V2 DSP fix for HOLD_LAST plateau capture.
-[5] Bank Config            — NORMAL/ARPEG per bank (max 4 ARPEG), quantize mode per ARPEG (Immediate/Beat/Bar)
-[6] Settings               — profile, AT rate, BLE interval, clock, double-tap, bargraph duration, panic-on-reconnect, battery cal
-[7] Pot Mapping            — user-configurable pot parameter assignments (per context: NORMAL/ARPEG)
-[8] LED Settings           — color presets + hue + intensity + timing + gamma, confirmation blinks (2 pages: COLOR+TIMING/CONFIRM, toggle with 't', live preview on LEDs 3-4, 'b' preview blink). COLOR page: STOPPED(5 rows)/PLAYING(2 rows)/EVENTS(10 rows)/TIMING(3 rows) = 20 visible params (3 legacy rows hidden). CONFIRM page: hold fade (Play/Stop), octave blinks+duration, scale blinks+duration.
-[0] Reboot
-```
-
-### Tool 7 — Pot Mapping UX
-
-Two context pages (NORMAL / ARPEG), toggle with `t`. Physical pot detection: turn a pot (or hold-left + turn) to select a slot. Pool line always visible showing all assignable parameters, color-coded: GREEN = available, DIM = already assigned. `< >` cycles through pool, Enter confirms assignment and auto-saves to NVS. Steal logic: picking an already-assigned param orphans the source slot to "empty". CC enters CC# sub-mode immediately (`< >` adjusts number, ENTER confirms, `q` cancels and restores previous assignment). PB: max one per context, auto-steals. `d` resets current context to defaults. `q` exits.
-
-## Source Files
-
-```
-src/
-├── main.cpp, HardwareConfig.h
-├── core/       CapacitiveKeyboard†, MidiTransport, LedController, PotFilter, KeyboardData.h
-├── managers/   BankManager, ScaleManager, PotRouter, BatteryMonitor, NvsManager, ControlPadManager
-├── midi/       MidiEngine, ScaleResolver, ClockManager, GrooveTemplates.h
-├── arp/        ArpEngine, ArpScheduler
-└── setup/      SetupManager, ToolCalibration, ToolPadOrdering, ToolPadRoles,
-                ToolControlPads, ToolBankConfig, ToolSettings, ToolPotMapping, ToolLedSettings,
-                SetupUI, SetupPotInput, InputParser, SetupCommon.h
-```
-
-† = DO NOT MODIFY (ported from V1, musically calibrated)
-
-## NVS (via NvsManager only)
-
-### Unified API — 3 static helpers
-
-All setup Tools and `loadAll()` use these 3 static methods on `NvsManager`:
-
-- **`loadBlob(ns, key, magic, version, out, size)`** — read + validate magic/version. Returns false on missing/corrupt.
-- **`saveBlob(ns, key, data, size)`** — write blob. Warns (`DEBUG_SERIAL`) if magic==0. Returns false on write failure.
-- **`checkBlob(ns, key, magic, version, size)`** — validate only (no data copy). Used by menu status badges.
-
-Internally, `loadBlob` and `checkBlob` share `readAndValidateBlob()` (anonymous namespace, no duplication). All error paths log under `DEBUG_SERIAL`.
-
-### Descriptor table + validation
-
-`NVS_DESCRIPTORS[12]` in `KeyboardData.h` — one entry per Store blob (ns, key, magic, version, size). `TOOL_NVS_FIRST[8]`/`TOOL_NVS_LAST[8]` map Tools 1-8 to descriptor ranges (T3 spans 3, T4 spans 1, T7 spans 2, T8 spans 2). Menu uses a loop over these to check all stores.
-
-`NVS_BLOB_MAX_SIZE` (128) — all Store structs must fit. `static_assert` on every Store struct enforces this at compile time. `static_assert(offsetof(SettingsStore, baselineProfile) == 3)` guards the byte-3 layout.
-
-8 `inline validate*()` functions in `KeyboardData.h` — shared by `loadAll()`, setup Tools, and future WiFi handler. Single source of truth for field bounds.
-
-### Store structs (V2 — replace raw formats)
-
-| Struct | Namespace | Key | Size | Replaces |
-|---|---|---|---|---|
-| `ScalePadStore` | `illpad_spad` | `"pads"` | 20B | 3 separate keys (root_pads, mode_pads, chrom_pad) |
-| `ArpPadStore` | `illpad_apad` | `"pads"` | 12B | 2 separate keys (hold_pad, oct_pads) |
-| `BankTypeStore` | `illpad_btype` | `"config"` | 28B | raw types[8] + qmode[8] (2 blobs, desync risk). v2 adds `scaleGroup[8]` (0=none, 1..4=A..D) for inter-bank scale linking |
-
-### Namespace table
-
-| Namespace | Content |
-|---|---|
-| `illpad_cal` | CalDataStore (maxDelta[48]) |
-| `illpad_nmap` | NoteMapStore — padOrder[48] (positions, NOT MIDI notes) |
-| `illpad_bpad` | BankPadStore — bankPads[8] |
-| `illpad_bank` | current bank (0-7) — scalar, not blob |
-| `illpad_set` | SettingsStore (profile, AT rate, BLE interval, clock mode, double-tap, bargraph duration, panic-on-reconnect, battery ADC cal) |
-| `illpad_pot` | PotParamsStore (shape, slew, AT deadzone) |
-| `illpad_tempo` | tempo BPM (global) — scalar, not blob |
-| `illpad_btype` | BankTypeStore — types[8] + quantize[8] + scaleGroup[8] (key `"config"`) |
-| `illpad_scale` | ScaleConfig per bank (keys `"cfg_0"` through `"cfg_7"`) |
-| `illpad_spad` | ScalePadStore — 7 root + 7 mode + 1 chrom (key `"pads"`) |
-| `illpad_ctrl` | ControlPadStore v2 — 12 sparse entries + 3 global DSP params (smoothMs, sampleHoldMs, releaseMs) for Tool 4 Control Pads |
-| `illpad_apad` | ArpPadStore — 1 hold + 4 octave (key `"pads"`) |
-| `illpad_apot` | ArpPotStore per bank (gate, shuffle depth, shuffle template, div, pattern, octave range) |
-| `illpad_bvel` | base velocity + velocity variation per bank (NORMAL + ARPEG) |
-| `illpad_pbnd` | pitch bend offset per bank (NORMAL) |
-| `illpad_led` | LED brightness (global) — scalar, not blob |
-| `illpad_sens` | pad sensitivity (global) — scalar, not blob |
-| `illpad_pmap` | PotMappingStore (both NORMAL + ARPEG contexts) |
-| `illpad_pflt` | PotFilterStore (snap, activity threshold, sleep, deadband, edge snap, wake threshold) |
-| `illpad_lset` | LedSettingsStore (intensities, timings, confirmations, gammaTenths) + ColorSlotStore (13 preset+hue slots, magic 0xC010) |
-
-NVS writes happen in a **dedicated FreeRTOS task** (low priority). Loop never blocks on flash.
+`pio` is NOT in PATH — always use the full path.
+
+---
+
+## Invariants (things that MUST stay true)
+
+1. **No orphan notes** : noteOff ALWAYS uses `_lastResolvedNote[padIndex]`,
+   never re-resolves. Scale changes cannot produce stuck notes. Left-button
+   release sweeps all pads on the `s_wasHolding → !holding` edge : NORMAL
+   banks call `noteOff(i)` for every unpressed pad ; ARPEG HOLD OFF banks
+   call `removePadPosition(s_padOrder[i])` for every unpressed pad except
+   the holdPad.
+2. **Arp refcount atomicity** : noteOff is scheduled BEFORE noteOn. If
+   noteOn fails (queue full), noteOff is cancelled. MIDI noteOn sent only
+   on refcount 0 → 1, noteOff only on 1 → 0.
+3. **No blocking on Core 1** : NVS writes happen in a background FreeRTOS
+   task. Core 1 only sets dirty flags.
+4. **Core 0 never writes MIDI** : all MIDI output happens on Core 1. Core 0
+   only reads slow params (relaxed atomics).
+5. **Catch system** : pot must physically reach the stored value before it
+   can change a parameter. Prevents jumps on bank switch or context change.
+6. **Bank slots always alive** : all 8 banks exist, only foreground
+   receives pad input. ARPEG engines run in background regardless of which
+   bank is selected.
+7. **Setup/Runtime coherence** : every runtime parameter that persists
+   across reboots has a 4-link chain Runtime ↔ Store ↔ Tool ↔ NVS. If any
+   link is modified (field added, range widened, enum extended), ALL links
+   must be updated in the same commit. An orphan link (Store field with no
+   Tool access, or Tool case for a removed target) is a bug, not tech debt.
+
+---
 
 ## CRITICAL — DO NOT MODIFY
 
-- **CapacitiveKeyboard.cpp/.h** — pressure pipeline is musically calibrated. Do not change.
-- **Pressure tuning constants** in HardwareConfig.h (thresholds, smoothing, slew, I2C clock).
-- **platformio.ini** (unless adding lib_deps).
+- **`src/core/CapacitiveKeyboard.cpp/.h`** — pressure pipeline is musically
+  calibrated. Do not change.
+- **Pressure tuning constants** in `HardwareConfig.h` (thresholds,
+  smoothing, slew, I2C clock).
+- **`platformio.ini`** (unless adding `lib_deps`).
 
-## CRITICAL — READ FIRST, KEEP IN SYNC
+---
 
-### `docs/reference/architecture-briefing.md` — navigation index for this codebase
+## Documentation index — read BEFORE modifying
 
-**Read-first protocol (D).** Before modifying any file in this repo, consult
-the briefing. Start at §0 Scope Triage — three questions route you to the
-right subset of sections :
+This repository ships a set of specialized reference documents in
+`docs/reference/`. When you touch a subsystem, load the corresponding ref
+first. Maintain it in the same commit (keep-in-sync protocol).
 
-- **Exploring / designing** (open-ended, e.g. "add a loop mode") → load §1
-  Mental Models + §2 Flows + §4 Setup↔Runtime + §5 Patterns + §6 Affinity
-  Matrix. Read broadly. Don't look for a recipe.
-- **Tight modification** (one param, one bug) → check §3 Task Index. If
-  found, follow it. If not, use §8 Domain Entry Points + relevant §2 flow.
-- **Unsure** → read §0 and triage yourself.
+**Navigation start** : always begin at
+[`docs/reference/architecture-briefing.md`](../docs/reference/architecture-briefing.md)
+§0 Scope Triage. It routes you to the right subset of refs based on the
+task (tight modification / broad exploration).
 
-The briefing is an index, not decorative documentation. It exists to let a
-session read 2-4 files instead of grepping the whole codebase. Skipping it
-produces brittle changes and wastes context.
+### When you touch… read and keep in sync
 
-**Keep-in-sync protocol (F).** If you modify a function or pattern
-referenced in §2 (Flows), §4 (Setup↔Runtime contracts), §5 (Patterns), or
-§8 (Domain Entry Points), update the corresponding section in the SAME
-commit. A stale briefing is a bug.
+| Subsystem / topic | Primary ref |
+|---|---|
+| Any runtime flow (pad → MIDI, arp, bank switch, scale, pot) | [`runtime-flows.md`](../docs/reference/runtime-flows.md) |
+| Reusable patterns (P1–P14) before inventing a new mechanism | [`patterns-catalog.md`](../docs/reference/patterns-catalog.md) |
+| NVS code (any Store struct, any `loadBlob`/`saveBlob`) | [`nvs-reference.md`](../docs/reference/nvs-reference.md) |
+| LED visual / event grammar / pattern / color slot | [`led-reference.md`](../docs/reference/led-reference.md) |
+| Arp engine, scheduler, pile, Play/Stop, shuffle | [`arp-reference.md`](../docs/reference/arp-reference.md) |
+| Pot hardware, filter, catch, Tool 7 mapping | [`pot-reference.md`](../docs/reference/pot-reference.md) |
+| Hardware wiring, pins, MCP3208, components | [`hardware-connections.md`](../docs/reference/hardware-connections.md) |
+| Boot code, setup mode entry, LED boot feedback | [`boot-sequence.md`](../docs/reference/boot-sequence.md) |
+| Any setup Tool UI / behavior | [`setup-tools-conventions.md`](../docs/reference/setup-tools-conventions.md) |
+| VT100 aesthetic / frame / colors / cockpit primitives | [`vt100-design-guide.md`](../docs/reference/vt100-design-guide.md) |
 
-Exceptions : typo fixes, comment edits, log-only changes, refactors internal
-to a function (signature unchanged) do not require briefing updates. Only
-semantic or structural changes do.
-- **`docs/reference/vt100-design-guide.md`** — VT100 terminal aesthetic spec: Unicode box drawing, color palette, navigation patterns, frame primitives, grid system, save feedback, Python script conventions. Part 1 is generic (reusable across instruments), Part 2 is ILLPAD-specific (tool layouts, role categories, amber palette). **Read before touching any setup UI code. Update when adding new visual patterns or changing the aesthetic.**
-- **`docs/reference/nvs-reference.md`** — NVS Store struct catalog, load/save/check patterns, how to add a namespace. **Read before touching any NVS code. Update when adding a new Store struct or namespace.**
-- **`ItermCode/vt100_serial_terminal.py`** — the Python serial terminal is the only way to interact with setup mode. When setup tools (`src/setup/`) change input handling, escape sequences, line endings, or VT100 rendering, **always verify and update the terminal script**. The two must stay synchronised (e.g., arrow key atomic send, line ending normalization, DEC 2026 sync support).
+### Side-car : Python terminal
+
+`ItermCode/vt100_serial_terminal.py` is the only way to interact with setup
+mode. When `src/setup/` code changes input handling, escape sequences, line
+endings, or VT100 rendering, verify and update the terminal script in the
+same commit. The two must stay synchronized (arrow key atomic send, line
+ending normalization, DEC 2026 sync support).
+
+---
 
 ## Conventions
 
-- `s_` static globals, `_` members, `SCREAMING_SNAKE_CASE` constants
-- `#if DEBUG_SERIAL` for debug output (1 = all messages, 0 = complete silence, zero overhead)
-- `#if DEBUG_HARDWARE` for runtime pot/button state logging (separate from DEBUG_SERIAL)
-- No `new`/`delete` at runtime — static instantiation only
-- Unsigned arithmetic for `millis()` (overflow-safe subtraction pattern: `(now - startTime) < duration`)
-- Small stack allocations (FreeRTOS task stacks are limited)
-- C++17, Arduino framework, PlatformIO
-- `std::atomic` for inter-core sync — NEVER `volatile`
+- `s_` static globals, `_` members, `SCREAMING_SNAKE_CASE` constants.
+- `#if DEBUG_SERIAL` for debug output (1 = all messages, 0 = complete
+  silence, zero overhead).
+- `#if DEBUG_HARDWARE` for runtime pot/button state logging (separate from
+  DEBUG_SERIAL).
+- No `new`/`delete` at runtime — static instantiation only.
+- Unsigned arithmetic for `millis()` (overflow-safe subtraction pattern :
+  `(now - startTime) < duration`).
+- Small stack allocations (FreeRTOS task stacks are limited).
+- C++17, Arduino framework, PlatformIO.
+- `std::atomic` for inter-core sync — **NEVER** `volatile`.
+
+---
 
 ## Performance Budget
 
 | Resource | Usage | Note |
 |---|---|---|
-| Core 0 | ~92% | Sensing — unchanged, this is the bottleneck |
-| Core 1 | ~16% | Plenty of headroom |
-| BLE MIDI | 30-50% worst case | noteOn/Off bypass queue. Aftertouch overflow tolerated. |
-| SRAM | ~16% | ~51KB / 320KB |
+| Core 0 | ~92 % | Sensing — unchanged, this is the bottleneck |
+| Core 1 | ~16 % | Plenty of headroom |
+| BLE MIDI | 30–50 % worst case | noteOn/Off bypass queue. Aftertouch overflow tolerated. |
+| SRAM | ~16 % | ~51 KB / 320 KB |
 
 ### Budget Philosophy — prefer safe over economical
 
-**SRAM, PSRAM, and flash budgets are generous.** The ESP32-S3-N8R16 has 320KB SRAM, 16MB PSRAM, 8MB flash, and the firmware currently uses ~16% SRAM. The only truly constrained resource is **per-cycle CPU time on Core 0** (~92% used by sensing).
+**SRAM, PSRAM, and flash budgets are generous.** The ESP32-S3-N8R16 has
+320 KB SRAM, 16 MB PSRAM, 8 MB flash. The only truly constrained resource
+is **per-cycle CPU time on Core 0** (~92 % used by sensing).
 
-**Prefer safe/generous over economical** when it comes to:
-- Buffer sizes (pending queues, event buffers — bump them rather than risk drops under load)
-- Defense-in-depth guards (even when upstream already guards)
-- Static allocations for always-alive patterns (e.g. `s_arpEngines[4]` always allocated)
-- State duplication that simplifies invariants (e.g. tracking flags that avoid subtle edge cases)
+**Prefer safe/generous over economical** when it comes to :
+- Buffer sizes (pending queues, event buffers — bump them rather than risk
+  drops under load).
+- Defense-in-depth guards (even when upstream already guards).
+- Static allocations for always-alive patterns (e.g. `s_arpEngines[4]`
+  always allocated).
+- State duplication that simplifies invariants (e.g. tracking flags that
+  avoid subtle edge cases).
 
-**Do NOT economize** on:
-- SRAM bytes for safer margins (a few hundred bytes for a bigger pending queue is fine)
-- PSRAM (still barely touched)
+**Do NOT economize** on :
+- SRAM bytes for safer margins (a few hundred bytes for a bigger pending
+  queue is fine).
+- PSRAM (still barely touched).
 
-**DO economize** on:
-- Core 0 CPU cycles (sensing is the bottleneck)
-- BLE MIDI bandwidth in worst case (noteOn/Off bypass queue, aftertouch overflow tolerated)
-- Flash writes (NVS has wear limits — use dirty flag debouncing)
+**DO economize** on :
+- Core 0 CPU cycles (sensing is the bottleneck).
+- BLE MIDI bandwidth in worst case (noteOn/Off bypass queue, aftertouch
+  overflow tolerated).
+- Flash writes (NVS has wear limits — use dirty flag debouncing).

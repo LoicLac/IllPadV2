@@ -335,16 +335,29 @@ All 7 tools + main menu follow the same frame layout:
 - Pool line shows available targets with color coding
 - CC sub-editor and steal confirmation sub-states
 
-### Tool 8 — LED Settings
+### Tool 8 — LED Settings (Phase 0.1 respec 2026-04-20)
 
-- 2 pages toggled with `t`: DISPLAY (15 params) and CONFIRM (15 params)
-- DISPLAY page: Normal bank fg/bg intensity, Arpeg pulse min/max (fg/bg, stopped/playing), tick flash intensities, absolute max cap, pulse period, tick flash duration
-- CONFIRM page: per-event blink count (1-3) + duration (ms) for bank switch, scale root/mode/chrom, hold on/off, play beats, stop fade, octave
-- Same drawParam/adjustParam pattern as Tool 6
-- NVS namespace `illpad_lset`, struct `LedSettingsStore` with magic/version
-- Save applies immediately via `LedController::loadLedSettings()`
-- Sine LUT: 256 entries (upgraded from 64) for smooth breathing
-- `setPixelAbsolute()` for tick flash and errors — ignores global brightness, capped by `absoluteMax`
+- **Single-view scrollable layout** with 6 musician-facing sections :
+  NORMAL / ARPEG / LOOP / TRANSPORT / CONFIRMATIONS / GLOBAL. The
+  legacy 3-page layout (PATTERNS / COLORS / EVENTS toggled with `t`)
+  is retired.
+- Navigation paradigm §4.4 (geometric visual) : `←→` focus between
+  multi-value fields on a row, `↑↓` adjust focused field. Color rows
+  use all 4 arrows on one entity (`←→` = preset, `↑↓` = hue offset).
+- `d` resets the current line to its default (no y/n confirm — line-scoped,
+  user-validated deviation from §6.1).
+- NVS : `LedSettingsStore` v8 (magic `0xBEEF`, `ledsettings`) + 
+  `ColorSlotStore` v5 (magic `0xC010`, `ledcolors`). Both in namespace
+  `illpad_lset`. Save applies immediately via
+  `LedController::loadLedSettings()`.
+- Live preview via [`ToolLedPreview`](../../src/setup/ToolLedPreview.h) —
+  rate-capped 50 Hz, routes pattern dispatch through the public
+  `LedController::renderPreviewPattern` wrapper. Zero runtime duplication.
+- Sine LUT : 256 entries in `HardwareConfig.h::LED_SINE_LUT`, shared
+  with the preview helper.
+
+Full event grammar, pattern palette, color slots, and bug patterns :
+see [`led-reference.md`](led-reference.md).
 
 ## 2.3 Pad Role Categories and Colors
 

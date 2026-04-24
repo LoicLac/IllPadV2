@@ -1,329 +1,378 @@
 # ILLPAD48 V2 — Hardware Connections
 
+Full wiring reference for the enclosure : components, power buses, GPIO
+pin map, component-by-component wiring, MCP3208 ADC details. Read this
+when building/repairing hardware or touching pin assignments in
+`HardwareConfig.h`.
+
+**Source of truth in code** : `src/core/HardwareConfig.h`.
+
 ---
 
-## What's Inside the Box
+## 1. What's inside the box
 
-| # | Component | Quantity | Role |
-|---|-----------|----------|------|
+| # | Component | Qty | Role |
+|---|---|---|---|
 | 1 | ESP32-S3-N8R16 dev board | 1 | Brain (runs all code) |
-| 2 | Adafruit BQ25185 charger board | 1 | Charges battery, provides 5V power |
-| 3 | LiPo battery (3.7V) | 1 | Power when unplugged from USB |
+| 2 | Adafruit BQ25185 charger board | 1 | Charges battery, provides 5 V power |
+| 3 | LiPo battery (3.7 V) | 1 | Power when unplugged |
 | 4 | MPR121 touch sensor breakout | 4 | Reads the 48 conductive pads |
-| 5 | SK6812 RGBW NeoPixel Stick | 1 (8 LEDs) | Status display (bank state, bargraph, confirmations) |
-| 6 | Momentary push button | 2 | Left (bank+scale+arp) + Rear (battery/setup) |
-| 7 | 10kΩ linear potentiometer | 5 | 4 right (musical params) + 1 rear (brightness/sensitivity) |
-| 8 | USB-C passthrough socket | 1 | Single port on the enclosure |
-| 9 | Resistors (various) | several | See wiring details below |
+| 5 | **MCP3208 external ADC (DIP-16)** | 1 | Reads all 5 potentiometers via SPI |
+| 6 | SK6812 RGBW NeoPixel Stick (8 LEDs) | 1 | Status display |
+| 7 | Momentary push button | 2 | Left + Rear |
+| 8 | 10 kΩ linear potentiometer | 5 | 4 right (musical params) + 1 rear (brightness/sensitivity) |
+| 9 | USB-C passthrough socket | 1 | Single port on the enclosure |
+| 10 | Resistors, caps (various) | several | See wiring details |
 
 ---
 
-## Two Power Buses
+## 2. Power buses
 
-There are two voltage levels in this project. Every component uses one or the other.
+### 5 V bus
 
-### 5V Bus
+Source : charger board **5V OUT** pad (from USB when plugged, or battery
+when unplugged).
 
-Source: the charger board's **5V OUT** pad (comes from USB when plugged in, or from the battery when unplugged).
-
-| What gets 5V | Where it connects |
-|--------------|-------------------|
+| Consumer | Connects to |
+|---|---|
 | ESP32-S3 | **5V** pin on the dev board |
 
-That's it. Only the ESP32 board gets 5V. The ESP32 board has its own built-in voltage regulator that converts 5V down to 3.3V for everything else.
+Only the ESP32 board takes 5 V. Its onboard regulator produces 3.3 V for
+the rest.
 
-### 3.3V Bus
+### 3.3 V bus
 
-Source: the ESP32-S3's **3V3** pin (the board's built-in regulator output).
+Source : ESP32-S3's **3V3** pin.
 
-| What gets 3.3V | Where it connects |
-|-----------------|-------------------|
-| 4× MPR121 sensors | VIN pin on each breakout |
-| I2C pull-up resistors (2×) | One end of each 4.7kΩ resistor |
-| 5× Potentiometers | One outer leg of each |
+| Consumer | Connects to |
+|---|---|
+| 4× MPR121 sensors | VIN on each breakout |
+| 2× I2C pull-ups (4.7 kΩ each) | one end of each resistor |
+| **MCP3208** | VDD + VREF (tied together) |
+| 5× Potentiometers | CCW outer leg |
 
-### GND Bus
+### GND bus
 
-All grounds connect together: charger G pad, ESP32 GND, all sensor GND pins, all LED resistors, all button legs, all pot legs, voltage divider, CC resistors.
-
----
-
-## USB-C Passthrough Cable (6 wires)
-
-One USB-C socket is exposed on the enclosure. A 6-wire cable connects it to the inside. This single port handles **charging**, **USB MIDI**, and **Serial debug** at the same time.
-
-| Wire | USB Signal | Goes to | Why |
-|------|-----------|---------|-----|
-| **Red** | VBUS (+5V) | Charger board **VU** pad | Brings USB power to the charger |
-| **Black** | GND | Charger board **G** pad (and the shared GND bus) | Common ground |
-| **White** | D− (data minus) | ESP32 **GPIO19** | USB data line |
-| **blue** | D+ (data plus) | ESP32 **GPIO20** | USB data line |
-| **green** | CC1 | 5.1kΩ resistor, then to **GND** | Tells the computer "a USB device is here" |
-| **Yellow** | CC2 | 5.1kΩ resistor, then to **GND** | Same (needed for both orientations of USB-C plug) |
-
-The two 5.1kΩ resistors on CC1/CC2 are mandatory. Without them, the computer will not recognize the device.
-
-**Do NOT connect the Red wire directly to the ESP32.** It must go to the charger's VU pad. The charger then outputs regulated 5V to the ESP32.
+All grounds common : charger G, ESP32 GND, sensor GNDs, MCP3208
+AGND+DGND, LED GND, pot CW legs, voltage divider, CC resistors.
 
 ---
 
-## Charger Board — Adafruit BQ25185 (Product 6106)
+## 3. USB-C passthrough cable (6 wires)
 
-The charger sits between USB power and the ESP32. It charges the battery and provides 5V output.
+One USB-C socket exposed on the enclosure. A 6-wire cable carries
+charge, USB MIDI, and serial debug over this single port.
 
-| Charger Pad | Wire / Component | What it does |
-|-------------|-----------------|--------------|
-| **VU** | Red wire from USB-C passthrough | Receives 5V USB power |
-| **G** | Black wire from USB-C + GND bus | Ground |
-| **BAT** (JST connector) | LiPo battery (JST plug) | Charges and discharges the battery |
-| **5V OUT (+)** | ESP32 **5V** pin | Sends 5V power to the ESP32 |
-| **5V OUT (−)** | ESP32 **GND** pin | Ground |
+| Wire | USB signal | Goes to | Why |
+|---|---|---|---|
+| Red | VBUS (+5 V) | Charger **VU** pad | USB power → charger |
+| Black | GND | Charger **G** pad (and GND bus) | Common ground |
+| White | D− | ESP32 **GPIO 19** | USB data line |
+| Blue | D+ | ESP32 **GPIO 20** | USB data line |
+| Green | CC1 | 5.1 kΩ → GND | Tells host "device is here" |
+| Yellow | CC2 | 5.1 kΩ → GND | Same, both plug orientations |
 
-Notes:
-- The charger's own USB-C connector is **not used** — power comes from the passthrough cable to VU
-- Charge rate: 1A default (can reduce to 500mA by cutting the rear jumper on the board)
-- When USB is plugged in: ESP32 runs from USB power, battery charges
-- When USB is unplugged: ESP32 runs from battery automatically
+Both 5.1 kΩ resistors on CC1/CC2 are mandatory (USB-C host detection).
+
+**Never connect the Red wire directly to the ESP32 5 V pin.** It must go
+through the charger's VU pad (charger outputs regulated 5 V to ESP32
+5 V).
 
 ---
 
-## ESP32-S3 — Complete Pin Map
+## 4. Charger — Adafruit BQ25185 (Product 6106)
 
-Every GPIO pin used in this project, and what connects to it.
+Sits between USB power and the ESP32. Charges battery and provides 5 V.
+
+| Pad | Connects to | Role |
+|---|---|---|
+| VU | Red wire from USB-C | Receives 5 V from USB |
+| G | Black wire + GND bus | Ground |
+| BAT (JST) | LiPo (3.7 V) | Charge + discharge |
+| 5V OUT (+) | ESP32 5V pin | Power ESP32 |
+| 5V OUT (−) | ESP32 GND pin | Ground |
+
+Notes :
+- Charger's own USB-C is **unused** — power comes from the passthrough
+  cable to VU.
+- Default charge rate 1 A ; cut rear jumper for 500 mA.
+- USB plugged → ESP32 runs from USB, battery charges.
+- USB unplugged → ESP32 runs from battery automatically.
+
+---
+
+## 5. ESP32-S3 — complete pin map
+
+Every GPIO used in this project, matched to `HardwareConfig.h`.
 
 | GPIO | Direction | Connects to | Notes |
-|------|-----------|-------------|-------|
-| **1** | Input (analog) | Pot Rear wiper | ADC1_CH0 — LED brightness / Pad sensitivity |
-| **4** | Input (analog) | Pot Right 1 wiper | ADC1_CH3 — Tempo / Division |
-| **5** | Input (analog) | Pot Right 2 wiper | ADC1_CH4 — Shape/Gate, Deadzone/Swing |
-| **6** | Input (analog) | Pot Right 3 wiper | ADC1_CH5 — Slew/Pattern, PitchBend/Octave |
-| **7** | Input (analog) | Pot Right 4 wiper | ADC1_CH6 — Base velocity / Velocity variation |
-| **8** | Bidirectional | I2C SDA line (to 4× MPR121) | Needs 4.7kΩ pull-up to 3.3V |
-| **9** | Output | I2C SCL line (to 4× MPR121) | Needs 4.7kΩ pull-up to 3.3V |
-| **10** | Input (analog) | Battery voltage divider output | ADC1_CH9 — reads battery voltage |
-| **12** | Input (digital) | Left button → GND | Active LOW, internal pull-up enabled |
-| **13** | Output | NeoPixel data (SK6812 RGBW ×8) | Single data pin, GRBW wire order |
-| **19** | Bidirectional | USB D− (White wire) | Native USB — do not use for anything else |
-| **20** | Bidirectional | USB D+ (BLUE wire) | Native USB — do not use for anything else |
-| **21** | Input (digital) | Rear button → GND | Active LOW, internal pull-up enabled |
+|---|---|---|---|
+| **1** | — | *(unused, formerly pot rear ADC)* | Freed by MCP3208 migration |
+| **4** | — | *(unused, formerly pot R1 ADC)* | Freed by MCP3208 migration |
+| **5** | — | *(unused, formerly pot R2 ADC)* | Freed |
+| **6** | — | *(unused, formerly pot R3 ADC)* | Freed |
+| **7** | — | *(unused, formerly pot R4 ADC)* | Freed |
+| **8** | Bidirectional | I2C SDA (4× MPR121) | 4.7 kΩ pull-up to 3.3 V |
+| **9** | Output | I2C SCL (4× MPR121) | 4.7 kΩ pull-up to 3.3 V |
+| **10** | Input (analog) | Battery voltage divider | ADC1_CH9 — battery SOC |
+| **12** | Input (digital) | Left button → GND | Active LOW, internal pull-up |
+| **13** | Output | NeoPixel DIN (SK6812 ×8) | GRBW wire order |
+| **15** | Output | MCP3208 DIN (MOSI) | SPI |
+| **16** | Input | MCP3208 DOUT (MISO) | SPI |
+| **17** | Output | MCP3208 /CS | SPI (active LOW) |
+| **18** | Output | MCP3208 SCK | SPI clock |
+| **19** | Bidirectional | USB D− (White) | Native USB — do not repurpose |
+| **20** | Bidirectional | USB D+ (Blue) | Native USB — do not repurpose |
+| **21** | Input (digital) | Rear button → GND | Active LOW, internal pull-up |
 
-All analog inputs use **ADC1 (GPIO 1–10)** for reliable operation with BLE active. ADC2 (GPIO 11–20) is blocked by the BLE radio driver.
-
-Power pins (not GPIO):
+Power pins :
 
 | Pin | Connects to |
-|-----|-------------|
-| **5V** | Charger 5V OUT (+) |
-| **GND** | Charger 5V OUT (−) and shared GND bus |
-| **3V3** | 3.3V bus (sensors, pull-ups, pots) |
+|---|---|
+| 5V | Charger 5V OUT (+) |
+| GND | Charger 5V OUT (−) and shared GND bus |
+| 3V3 | 3.3 V bus (sensors, pull-ups, MCP3208, pots) |
 
-### GPIOs You Must NOT Use
-
-These pins are taken by hardware on the dev board. Do not connect anything to them.
+### GPIOs you must NOT use
 
 | GPIO | Why |
-|------|-----|
-| 0 | BOOT button (strapping pin — used during flashing) |
-| 19, 20 | Native USB (TinyUSB MIDI + CDC serial + upload) |
-| 26–32 | Connected to internal flash (QIO) |
-| 33–37 | Connected to PSRAM chip (OPI, enabled in this project) |
-| 43, 44 | UART bridge hardware (COM port, unused but reserved) |
+|---|---|
+| 0 | BOOT button (strapping pin — flashing) |
+| 19, 20 | Native USB (TinyUSB MIDI + CDC + upload) |
+| 26–32 | Internal flash (QIO) |
+| 33–37 | PSRAM (OPI) |
+| 43, 44 | UART bridge hardware (unused but reserved) |
 | 45, 46 | Strapping pins (VDD_SPI / boot mode) |
 
-### GPIOs Available But Unused
+### GPIOs available but unused
 
-| GPIO | Notes |
-|------|-------|
-| 2, 3 | Free (formerly buttons, now reassigned) |
-| 11, 14–18 | Free digital GPIO |
-| 38–42, 47, 48 | Free digital GPIO |
+GPIO 1, 2, 3, 4, 5, 6, 7 (ex-pots — 5 freed by MCP3208 migration),
+GPIO 11, 14, 38–42, 47, 48.
 
 ---
 
-## Wiring — Component by Component
+## 6. MPR121 touch sensors (×4)
 
-### 1. MPR121 Touch Sensors (×4)
+All four share the I2C bus (GPIO 8 SDA, GPIO 9 SCL). Each has a
+different address set by its ADDR pin.
 
-All four sensors share the same I2C bus (GPIO8 and GPIO9). Each sensor has a different address set by its ADDR pin.
-
-| Sensor | I2C Address | ADDR pin wired to | Pad keys |
-|--------|-------------|-------------------|----------|
+| Sensor | I2C address | ADDR pin wired to | Pads |
+|---|---|---|---|
 | A | 0x5A | GND | 0–11 |
-| B | 0x5B | 3.3V (VCC) | 12–23 |
-| C | 0x5C | SDA line (GPIO8) | 24–35 |
-| D | 0x5D | SCL line (GPIO9) | 36–47 |
+| B | 0x5B | 3.3 V (VCC) | 12–23 |
+| C | 0x5C | SDA line (GPIO 8) | 24–35 |
+| D | 0x5D | SCL line (GPIO 9) | 36–47 |
 
-Each MPR121 breakout board has these connections:
+Per-breakout connections :
 
 | MPR121 pin | Connects to |
-|------------|-------------|
-| VIN | ESP32 **3V3** pin |
+|---|---|
+| VIN | ESP32 3V3 |
 | GND | GND bus |
-| SDA | ESP32 **GPIO8** |
-| SCL | ESP32 **GPIO9** |
-| ADDR | See table above (different for each sensor) |
+| SDA | GPIO 8 |
+| SCL | GPIO 9 |
+| ADDR | Per table above |
 | ELE0–ELE11 | 12 conductive aluminium pads |
 
-### I2C Pull-Up Resistors (×2)
+I2C bus speed : 400 kHz.
 
-The SDA and SCL lines each need one 4.7kΩ pull-up resistor. Skip these if your MPR121 breakout boards already have pull-ups built in (check the board's documentation).
+### I2C pull-ups (×2)
 
 ```
-ESP32 3V3 pin ──┤4.7kΩ├──► SDA line (GPIO8)
-ESP32 3V3 pin ──┤4.7kΩ├──► SCL line (GPIO9)
+ESP32 3V3 ──┤4.7 kΩ├──► SDA (GPIO 8)
+ESP32 3V3 ──┤4.7 kΩ├──► SCL (GPIO 9)
 ```
 
-I2C bus speed: 400 kHz.
+Skip these if your MPR121 breakouts already have pull-ups built in
+(Adafruit boards do).
 
 ---
 
-### 2. LEDs — SK6812 RGBW NeoPixel Stick (×8)
+## 7. LEDs — SK6812 RGBW NeoPixel Stick (×8)
 
-A single Adafruit SK6812 RGBW NeoPixel Stick (8 LEDs). Only one data wire from the ESP32.
-
-**Wiring:**
+Single data wire :
 
 ```
-ESP32 GPIO13 ──► NeoPixel DIN (data in)
-ESP32 3V3    ──► NeoPixel VCC (or 5V from charger if available)
-         GND ──► NeoPixel GND
+ESP32 GPIO 13 ──► NeoPixel DIN
+ESP32 3V3     ──► NeoPixel VCC (or 5V if needed)
+          GND ──► NeoPixel GND
 ```
 
-- Wire order: NEO_GRBW (set in software)
-- No resistors needed between GPIO and DIN (short wire)
-- All 8 LEDs are on the stick, no per-LED GPIO assignment
+- Wire order : NEO_GRBW (configured in `HardwareConfig.h`).
+- No DIN resistor (short wire).
+- All 8 LEDs on the stick, no per-LED GPIO.
 
-#### What the LEDs Display
-
-The 8 LEDs have multiple display modes. Only one mode is active at a time (priority-based state machine in `LedController::update()`).
-
-**Normal — Multi-bank state (default at runtime):**
-
-All 8 LEDs show simultaneously. Each LED represents one bank (1-8). The foreground bank is bright, background banks are dim. NORMAL banks use white (W channel), ARPEG banks use blue (configurable via Tool 7 color slots). ARPEG foreground stopped-with-notes shows a sine breathing pulse. ARPEG playing shows a tick flash on each arp step. Brightness is controlled by the rear pot.
-
-If battery drops below 20%, the foreground bank LED does 3 rapid blinks every 3 seconds.
-
-**Pot bargraph (after pot movement):**
-
-LEDs become a solid bar graph showing the current pot value (0–8 LEDs) with fractional tip brightness. Caught state shows solid bar; uncaught shows dim stored-value bar + bright dot at physical pot position. Duration: 3 seconds (configurable via Tool 5, range 1-10s).
-
-**Battery gauge (after pressing rear button):**
-
-Static bar graph (red-to-green gradient) showing battery level. Lasts 3 seconds, then returns to normal mode.
-
-| Battery level | LEDs lit |
-|---------------|----------|
-| 100% | all 8 |
-| 75% | 6 |
-| 50% | 4 |
-| 25% | 2 |
-| 0% | none |
-
-**Error — LEDs 3 and 4 blink red (~1 Hz, 500ms period).**
+Visual behavior : see [`led-reference.md`](led-reference.md) and
+[`boot-sequence.md`](boot-sequence.md).
 
 ---
 
-### 3. Left Button (GPIO 12)
+## 8. MCP3208 external ADC — pot readout
 
-A simple momentary push button. One leg goes to the GPIO, the other leg goes to GND. Nothing else needed — the ESP32 enables an internal pull-up resistor in software.
+Introduced because the ESP32's internal ADC2 is blocked by the BLE
+radio, and ADC1's shared pin usage caused readback glitches on the
+original wiring. MCP3208 moves the analog chain off-chip : clean 12-bit
+reads, deterministic SPI timing.
+
+### Pinout (chip, notch left)
 
 ```
-ESP32 GPIO 12 ──► button leg 1 ── [BUTTON] ── button leg 2 ──► GND
+                   notch
+                 ┌────╨────┐
+  POT_RIGHT1 CH0│ 1    16 │VDD  ── 3.3 V
+  POT_RIGHT2 CH1│ 2    15 │VREF ── 3.3 V
+  POT_RIGHT3 CH2│ 3    14 │AGND ── GND
+  POT_RIGHT4 CH3│ 4    13 │CLK  ── GPIO 18
+    POT_REAR CH4│ 5    12 │DOUT ── GPIO 16
+       spare CH5│ 6    11 │DIN  ── GPIO 15
+       spare CH6│ 7    10 │/CS  ── GPIO 17
+       spare CH7│ 8     9 │DGND ── GND
+                 └─────────┘
 ```
 
-Functions:
-- **Hold + pad**: single-layer control — bank select (8 pads), root note (7 pads), scale mode (7 pads), chromatic toggle (1 pad), HOLD toggle (1 pad, ARPEG only)
-- **Hold + right pot**: modifier slot — accesses secondary pot params (division, deadzone/swing, pitch bend/octave, velocity variation)
+CH5–CH7 unconnected (spare for future sensors).
+
+### SPI connections
+
+| Chip pin | Signal | ESP32 GPIO |
+|---|---|---|
+| 13 | CLK | 18 |
+| 12 | DOUT | 16 (MISO) |
+| 11 | DIN | 15 (MOSI) |
+| 10 | /CS | 17 |
+
+### Power
+
+| Chip pin | Net | Notes |
+|---|---|---|
+| 16 (VDD) | 3.3 V | 100 nF decoupling to GND, close to chip |
+| 15 (VREF) | 3.3 V | 100 nF + 10 µF to GND, close to chip |
+| 14 (AGND) | GND | Same star point as DGND |
+| 9 (DGND) | GND | Same star point as AGND |
+
+### RC filter per channel
+
+Between each pot wiper and the MCP3208 channel input :
+
+```
+Wiper ──[100 Ω]──┬── CHx
+                 │
+            [100 nF]
+                 │
+                GND
+```
+
+Low-pass at ~16 kHz. Bounds source impedance to ~100 Ω
+(MCP3208 wants < 1 kΩ @ 1 MHz for full precision). Blocks RF
+interference.
+
+### Pot → channel mapping
+
+| Pot | MCP3208 channel | Function (default) |
+|---|---|---|
+| Right 1 | CH0 | Tempo |
+| Right 2 | CH1 | Shape / Gate |
+| Right 3 | CH2 | Slew / Shuffle depth |
+| Right 4 | CH3 | Base velocity |
+| Rear | CH4 | LED brightness |
+
+All pots are 10 kΩ linear, 3-pin wiring :
+
+```
+3.3 V ─── CCW outer leg
+  GND ─── CW outer leg
+  CHx ─── wiper (middle leg)
+```
+
+If rotation feels inverted, swap CCW ↔ CW at the wiring (not in code).
+The firmware inverts the reading in software by default (`readPotRaw` :
+`4095 - v`) so CW matches user-up expectation.
+
+### Consumption
+
+| Part | Typ current |
+|---|---|
+| MCP3208 | ~175 µA |
+
+Negligible vs ESP32 (~150 mA).
+
+### Details & filter pipeline
+
+Pot filter behavior (no EMA, no oversampling — deadband + edge snap +
+sleep/wake for rear pot only), boot sequence (median-of-5 seed, discard
+first 2 conversions), per-pot tuning : see
+[`pot-reference.md`](pot-reference.md).
 
 ---
 
-### 4. Rear Button (GPIO 21)
+## 9. Buttons (×2)
 
-Same wiring as the left button, on a different GPIO.
+Simple momentary pushes, one leg to GPIO, other leg to GND. ESP32
+enables internal pull-up ; no external resistors.
 
 ```
-ESP32 GPIO 21 ──► button leg 1 ── [BUTTON] ── button leg 2 ──► GND
+ESP32 GPIO 12 ──► [LEFT BUTTON] ──► GND
+ESP32 GPIO 21 ──► [REAR BUTTON] ──► GND
 ```
 
-Functions:
-- **Press**: reads battery voltage, shows battery gauge on LEDs for 3 seconds
-- **Hold 3s at boot**: enters setup mode (VT100 terminal)
-- **Hold + rear pot**: modifier for rear pot (pad sensitivity instead of LED brightness)
+### Left button functions
+
+- **Hold + pad** : single-layer control (bank 8, scale 15 roots+modes+chrom,
+  arp 5 incl. hold + 4 octave). All visible at once.
+- **Hold + right pot** : modifier layer for 4 right pots (R1–R4).
+
+### Rear button functions
+
+- **Press** : reads battery voltage, shows gauge on LEDs for 3 s.
+- **Hold 3 s at boot** (two-phase : press within 3 s of boot, then hold
+  3 s) : enters setup mode.
+- **Hold + rear pot** : modifier for rear pot (→ pad sensitivity
+  instead of LED brightness).
+
+### Tunables
+
+`CAL_WAIT_WINDOW_MS = 3000`, `CAL_HOLD_DURATION_MS = 3000` in
+`HardwareConfig.h`.
 
 ---
 
-### 5. Potentiometers (×5)
+## 10. Battery voltage divider
 
-Five 10kΩ linear pots. All wired identically:
-
-```
-ESP32 3V3 pin ──► pot outer leg 1
-                  pot wiper (middle leg) ──► ESP32 GPIO (see table)
-           GND ──► pot outer leg 2
-```
-
-Turning a pot sweeps its GPIO from 0V to 3.3V. The software reads 12-bit ADC values (0–4095).
-
-| Pot | GPIO | ADC | Physical position | Function |
-|-----|------|-----|-------------------|----------|
-| Right 1 | 4 | ADC1_CH3 | Right side, top | Tempo (alone) / Division (hold left, ARPEG) |
-| Right 2 | 5 | ADC1_CH4 | Right side | Shape or Gate (alone) / Deadzone or Swing (hold left) |
-| Right 3 | 6 | ADC1_CH5 | Right side | Slew or Pattern (alone) / Pitch bend or Octave (hold left) |
-| Right 4 | 7 | ADC1_CH6 | Right side, bottom | Base velocity (alone) / Velocity variation (hold left) |
-| Rear | 1 | ADC1_CH0 | Rear | LED brightness (alone) / Pad sensitivity (hold rear) |
-
-The PotRouter software handles:
-- **Catch system**: pot must pass through the stored value before taking effect (prevents value jumps on bank switch)
-- **Smoothing**: EMA filter on ADC reads to suppress noise
-- **Button modifiers**: left button modifies right pots, rear button modifies rear pot
-
----
-
-### 6. Battery Voltage Divider
-
-The LiPo battery voltage (3.0V–4.2V) is too high for the ESP32 ADC to read safely. A voltage divider made of two 100kΩ resistors cuts the voltage in half.
+LiPo voltage (3.0–4.2 V) is too high for ESP32 ADC. Two 100 kΩ in series
+divide by 2.
 
 ```
-Charger BAT pad ──┤100kΩ├──┬──► ESP32 GPIO10
+Charger BAT pad ──┤100 kΩ├──┬── GPIO 10
                             │
-                          100kΩ
+                       100 kΩ
                             │
                            GND
 ```
 
-- Input: 3.0V–4.2V from battery → Output: 1.5V–2.1V to GPIO10 (safe for ADC)
-- Total resistance: 200kΩ → draws only ~21µA from the battery (negligible)
-- The "Charger BAT pad" is the same point as the battery terminal on the charger
+- Input 3.0–4.2 V → Output 1.5–2.1 V (safe for ADC1_CH9).
+- Total 200 kΩ → ~21 µA drain from battery (negligible).
+- "Charger BAT pad" = battery terminal on the charger board.
+
+Calibration constants : `BAT_VOLTAGE_FULL = 4.2 V`, `BAT_VOLTAGE_EMPTY =
+3.3 V`, `BAT_LOW_THRESHOLD_PCT = 20 %` — all in `HardwareConfig.h`.
 
 ---
 
-### 7. CC Resistors (×2)
+## 11. Current budget
 
-Two 5.1kΩ resistors tell the USB host that a USB device is connected. They go between the CC wires from the USB-C passthrough and GND.
-
-```
-green wire (CC1) ──┤5.1kΩ├──► GND
-Yellow wire (CC2) ──┤5.1kΩ├──► GND
-```
-
-These are mandatory for USB-C to work.
-
----
-
-## Current Budget
-
-| Component | Typical current |
-|-----------|----------------|
+| Component | Typical |
+|---|---|
 | ESP32-S3 (active, BLE on) | ~150 mA |
-| 4× MPR121 sensors | ~4 mA |
-| 8× LEDs (worst case, all on) | ~80 mA |
+| 4× MPR121 | ~4 mA |
+| MCP3208 | ~0.2 mA |
+| 8× LEDs (worst case) | ~80 mA |
 | **Total** | **~240 mA** |
 
-The charger's 5V output supports up to 1A — well within budget.
+Charger 5V OUT supports up to 1 A → comfortable headroom.
 
 ---
 
-## Complete Wiring Diagram
+## 12. Complete wiring diagram
 
 ```
                           ┌─────────────────┐
@@ -339,35 +388,33 @@ The charger's 5V output supports up to 1A — well within budget.
         │  ┌─────────┐      │  │  │  │  │  │  ┌──────────────┐  │
         │  │ CHARGER  │      │  │  │  │  │  │  │  ESP32-S3    │  │
         │  │ BQ25185  │      │  │  │  │  │  │  │              │  │
-        │  │          │      │  │  │  │  │  │  │              │  │
         │  │ VU ◄─────┼─ Red─┘  │  │  │  │  │  │ 5V ◄────────┼──┤
         │  │ G  ◄─────┼─ Black──┘  │  │  │  │  │ GND ◄───────┼──┤
-        │  │          │      │     │  │  │  │  │ 3V3 ────────┼──┼─► 3.3V bus
-        │  │ 5V OUT + ┼──────┼─────┼──┼──┼──┼─►│              │  │
-        │  │ 5V OUT - ┼──────┼─ GND┘  │  │  │  │              │  │
-        │  │          │      │     │  │  │  │  │ GPIO19 ◄─────┼──┼─ White (D-)
-        │  │ BAT ─────┼──►🔋│     │  │  │  │  │ GPIO20 ◄─────┼──┼─ blue (D+)
-        │  │   │      │      │     │  │  │  │  │              │  │
-        │  └───┼──────┘      │     │  │  │  │  │ GPIO8 (SDA) ─┼──┼─► MPR121 ×4
-        │      │             │     │  │  │  │  │ GPIO9 (SCL) ─┼──┼─► MPR121 ×4
-        │      ├─ 100kΩ ─┬───┼─────┼──┼──┼──┼─►│ GPIO10 (ADC)│  │
-        │      │       100kΩ │     │  │  │  │  │              │  │
-        │      │         │   │     │  │  │  │  │ GPIO13 ──────┼──┼─► NeoPixel DIN (8× SK6812)
-        │      │        GND  │     │  │  │  │  │              │  │
-        │      │             │     │  │  │  │  │ GPIO12   ◄───┼──┼─ Left button ─► GND
-        │      │             │     │  │  │  │  │ GPIO21   ◄───┼──┼─ Rear button ─► GND
-        │      │             │     │  │  │  │  │              │  │
-        │      │             │     │  │  │  │  │ GPIO 4   ◄───┼──┼─ Pot Right 1 (ADC1)
-        │      │             │     │  │  │  │  │ GPIO 5   ◄───┼──┼─ Pot Right 2 (ADC1)
-        │      │             │     │  │  │  │  │ GPIO 6   ◄───┼──┼─ Pot Right 3 (ADC1)
-        │      │             │     │  │  │  │  │ GPIO 7   ◄───┼──┼─ Pot Right 4 (ADC1)
-        │      │             │     │  │  │  │  │ GPIO 1   ◄───┼──┼─ Pot Rear (ADC1)
-        │      │             │     │  │  │  │  │              │  │
-        │      │             │     │  │  │  │  └──────────────┘  │
-        │      │             │     │  │  │  │                    │
-        │    green ──┤5.1kΩ├──► GND │  │  │  │                    │
-        │   Yellow ─┤5.1kΩ├──► GND │  │  │  │                    │
-        │                          │  │  │  │                    │
-        └──────────────────────────┼──┼──┼──┼────────────────────┘
-                                                ENCLOSURE
+        │  │ 5V OUT+ ─┼──────► ESP32 5V               │ 3V3 ────────┼──► 3.3V bus
+        │  │ 5V OUT- ─┼──────► ESP32 GND              │              │
+        │  │ BAT ─────┼──► 🔋                          │ GPIO19 ◄─────┼── White (D−)
+        │  │   │      │                                │ GPIO20 ◄─────┼── Blue (D+)
+        │  └───┼──────┘                                │              │
+        │      ├─ 100 kΩ ─┬───► GPIO10                 │ GPIO8  (SDA) ┼──► 4× MPR121
+        │      │       100 kΩ                          │ GPIO9  (SCL) ┼──► 4× MPR121
+        │      │          │                            │              │
+        │      │         GND                           │ GPIO13       ┼──► NeoPixel stick DIN
+        │      │                                       │              │
+        │      │                                       │ GPIO12   ◄───┼── LEFT button → GND
+        │      │                                       │ GPIO21   ◄───┼── REAR button → GND
+        │      │                                       │              │
+        │      │                                       │ GPIO15 (MOSI)┼──► MCP3208 DIN
+        │      │                                       │ GPIO16 (MISO)┼──◄ MCP3208 DOUT
+        │      │                                       │ GPIO17 (/CS) ┼──► MCP3208 /CS
+        │      │                                       │ GPIO18 (SCK) ┼──► MCP3208 CLK
+        │      │                                       │              │
+        │      │                         ┌─────────────┴──────────────┘
+        │      │                         │                    MCP3208
+        │      │                         │         (5 pots → CH0-CH4 via RC filters)
+        │      │                         │
+        │    Green ──┤5.1 kΩ├──► GND     │
+        │   Yellow ──┤5.1 kΩ├──► GND     │
+        │                                │
+        └────────────────────────────────┘
+                              ENCLOSURE
 ```
