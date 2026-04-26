@@ -19,7 +19,9 @@ ArpEngine::ArpEngine()
     _stepIndex(-1), _playing(false), _captured(false), _pausedPile(false),
     _shuffleStepCounter(0), _tickFlash(false),
     _waitingForQuantize(false), _quantizeMode(ARP_START_IMMEDIATE),
-    _lastDispatchedGlobalTick(0xFFFFFFFF) {
+    _lastDispatchedGlobalTick(0xFFFFFFFF),
+    _engineMode(EngineMode::CLASSIC), _sequenceGenDirty(false),
+    _bonusPilex10(15), _marginWalk(7) {
   // Init pile arrays
   for (uint8_t i = 0; i < MAX_ARP_NOTES; i++) {
     _positions[i] = 0xFF;
@@ -70,6 +72,29 @@ void ArpEngine::setVelocityVariation(uint8_t pct)     { _velocityVariation = pct
 void ArpEngine::setStartMode(uint8_t mode) {
   _quantizeMode = (mode < NUM_ARP_START_MODES) ? mode : ARP_START_IMMEDIATE;
   if (_quantizeMode == ARP_START_IMMEDIATE) _waitingForQuantize = false;
+}
+
+// --- Engine mode ---
+// Boot path : derives mode from BankType (ARPEG -> CLASSIC, ARPEG_GEN -> GENERATIVE).
+// CLASSIC->GENERATIVE transition flags _sequenceGenDirty so Phase 5 Task 10 forces a regen on next seed.
+void ArpEngine::setEngineMode(BankType type) {
+  EngineMode newMode = (type == BANK_ARPEG_GEN) ? EngineMode::GENERATIVE : EngineMode::CLASSIC;
+  if (_engineMode == EngineMode::CLASSIC && newMode == EngineMode::GENERATIVE) {
+    _sequenceGenDirty = true;
+  }
+  _engineMode = newMode;
+}
+
+EngineMode ArpEngine::getEngineMode() const { return _engineMode; }
+
+// --- ARPEG_GEN per-bank params ---
+// Phase 4 stubs : just store. Phase 5 Tasks 9-11 consume in walk + mutation logic.
+void ArpEngine::setBonusPile(uint8_t x10) {
+  if (x10 >= 10 && x10 <= 20) _bonusPilex10 = x10;
+}
+
+void ArpEngine::setMarginWalk(uint8_t margin) {
+  if (margin >= 3 && margin <= 12) _marginWalk = margin;
 }
 
 // =================================================================

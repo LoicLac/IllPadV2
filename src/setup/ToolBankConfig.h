@@ -17,8 +17,9 @@ public:
   void run();  // Blocking — unified arrow navigation for bank type + quantize
 
 private:
-  bool saveConfig(const BankType* types, const uint8_t* quantize, const uint8_t* groups);
-  void drawDescription(uint8_t cursor, bool isArpeg);
+  bool saveConfig(const BankType* types, const uint8_t* quantize, const uint8_t* groups,
+                  const uint8_t* bonusPilex10, const uint8_t* marginWalk);
+  void drawDescription(uint8_t cursor, BankType type);
 
   LedController* _leds;
   NvsManager*    _nvs;

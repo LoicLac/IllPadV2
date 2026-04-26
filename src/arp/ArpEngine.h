@@ -20,6 +20,19 @@ enum class ArpState {
 };
 
 // =================================================================
+// EngineMode — selects sequence semantics
+// =================================================================
+// CLASSIC    : ARPEG bank — uses _sequence[] built by rebuildSequence() from _pattern.
+// GENERATIVE : ARPEG_GEN bank — uses _sequenceGen[] built from walk + mutation
+//              (Phase 5 Tasks 8-12 implement the algo). Phase 4 ships the field
+//              and boot wiring only ; tick() branching arrives in Task 12.
+
+enum class EngineMode : uint8_t {
+  CLASSIC    = 0,
+  GENERATIVE = 1
+};
+
+// =================================================================
 // Event Queue — time-based noteOn/noteOff scheduling
 // =================================================================
 
@@ -51,6 +64,16 @@ public:
   void setBaseVelocity(uint8_t vel);           // 1-127
   void setVelocityVariation(uint8_t pct);      // 0-100
   void setStartMode(uint8_t mode);             // ArpStartMode (0=immediate, 1=beat)
+
+  // --- Engine mode (CLASSIC = ARPEG, GENERATIVE = ARPEG_GEN) ---
+  // Set at boot from BankType. D4 (plan §0) : Tool 5 type switch takes effect at next reboot,
+  // so runtime engine-mode reassignment is not needed.
+  void       setEngineMode(BankType type);
+  EngineMode getEngineMode() const;
+
+  // --- ARPEG_GEN per-bank params (Phase 4 stubs ; Phase 5 Tasks 9-11 consume these) ---
+  void setBonusPile(uint8_t x10);              // 10..20 (bonus_pile x10), defaults 15
+  void setMarginWalk(uint8_t margin);          // 3..12 degres, defaults 7
 
   // --- Pile management ---
   // Stores padOrder positions (0-47), NOT MIDI notes.
@@ -145,6 +168,12 @@ private:
   // Boundary crossing detection for quantized start.
   // Value 0xFFFFFFFF = sentinel: first tick initializes tracking.
   uint32_t _lastDispatchedGlobalTick;
+
+  // --- Engine mode (CLASSIC vs GENERATIVE) ---
+  EngineMode _engineMode;
+  bool       _sequenceGenDirty;   // marked true on CLASSIC->GENERATIVE transition (Phase 5 Task 10 consumes)
+  uint8_t    _bonusPilex10;       // ARPEG_GEN per-bank, 10..20 (defaults 15)
+  uint8_t    _marginWalk;         // ARPEG_GEN per-bank, 3..12 (defaults 7)
 
   // --- State classification ---
   ArpState currentState() const;

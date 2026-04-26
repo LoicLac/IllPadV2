@@ -346,12 +346,13 @@ void setup() {
   s_clockManager.setInternalBPM(s_potRouter.getTempoBPM());
 
   // Assign ArpEngines to ARPEG/ARPEG_GEN banks (after NVS load).
-  // Phase 3 : engine reste en mode CLASSIC defensive — Phase 4 Task 6 ajoutera setEngineMode.
+  // setEngineMode derives CLASSIC vs GENERATIVE from BankType ; Phase 5 Task 12 will branch tick().
   {
     uint8_t arpIdx = 0;
     for (uint8_t i = 0; i < NUM_BANKS && arpIdx < 4; i++) {
       if (isArpType(s_banks[i].type)) {
         s_arpEngines[arpIdx].setChannel(i);
+        s_arpEngines[arpIdx].setEngineMode(s_banks[i].type);
         s_banks[i].arpEngine = &s_arpEngines[arpIdx];
         arpIdx++;
         #if DEBUG_SERIAL
@@ -386,6 +387,9 @@ void setup() {
       s_banks[i].arpEngine->setBaseVelocity(s_banks[i].baseVelocity);
       s_banks[i].arpEngine->setVelocityVariation(s_banks[i].velocityVariation);
       s_banks[i].arpEngine->setStartMode(s_nvsManager.getLoadedQuantizeMode(i));
+      // ARPEG_GEN per-bank params (no-op on engines that stay CLASSIC).
+      s_banks[i].arpEngine->setBonusPile(s_nvsManager.getLoadedBonusPile(i));
+      s_banks[i].arpEngine->setMarginWalk(s_nvsManager.getLoadedMarginWalk(i));
     }
   }
   s_leds.showBootProgress(6);  // Step 6: Arp system ready
