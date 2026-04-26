@@ -827,9 +827,7 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
 
     static const char* s_divNames[] = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64"};
     static const char* s_patNames[] = {
-      "Up","Down","UpDown","Random","Order",
-      "Cascade","Converge","Diverge","PedalUp",
-      "UpOct","DownOct","Chord","OctWave","OctBounce","Probability"
+      "Up","Down","UpDown","Order","PedalUp","Converge"
     };
 
     float    shape   = s_potRouter.getResponseShape();

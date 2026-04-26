@@ -154,7 +154,6 @@ private:
 
   // --- Sequence building ---
   void rebuildSequence();
-  uint8_t effectiveOctaveRange() const;
 
   // --- Event helpers ---
   bool scheduleEvent(uint32_t fireTimeUs, uint8_t note, uint8_t velocity);

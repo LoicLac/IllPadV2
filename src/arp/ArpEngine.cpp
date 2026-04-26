@@ -5,12 +5,6 @@
 
 // Shuffle templates now in midi/GrooveTemplates.h (shared with LoopEngine)
 
-// Fibonacci sequences for OCTAVE_BOUNCE and PROBABILITY patterns
-static const uint8_t FIB_BOUNCE[]   = {1, 2, 3, 5, 8, 13, 21, 13, 8, 5, 3, 2};
-static const uint8_t FIB_BOUNCE_LEN = 12;
-static const uint8_t FIB_SPIRAL[]   = {1, 1, 2, 3, 5, 8, 13, 21, 34, 55, 89};
-static const uint8_t FIB_SPIRAL_LEN = 11;
-
 // =================================================================
 // Constructor
 // =================================================================
@@ -246,22 +240,6 @@ bool ArpEngine::isPaused() const   { return _pausedPile; }
 // =================================================================
 // Sequence building
 // =================================================================
-// effectiveOctaveRange — octave patterns override minimum range
-// =================================================================
-
-uint8_t ArpEngine::effectiveOctaveRange() const {
-  switch (_pattern) {
-    case ARP_UP_OCTAVE:
-    case ARP_DOWN_OCTAVE:    return max((uint8_t)2, _octaveRange);
-    case ARP_OCTAVE_WAVE:
-    case ARP_OCTAVE_BOUNCE:  return max((uint8_t)3, _octaveRange);
-    case ARP_CHORD:
-    case ARP_PROBABILITY:    return max((uint8_t)4, _octaveRange);
-    default:                 return _octaveRange;
-  }
-}
-
-// =================================================================
 // _sequence[] encodes padOrderPos + octaveOffset * 48.
 // Decode at tick: pos = seq % 48, octOffset = seq / 48.
 // Max value = 47 + 3*48 = 191, fits in uint8_t.
@@ -275,7 +253,7 @@ void ArpEngine::rebuildSequence() {
   // Source: sorted positions (most patterns) or chronological (ORDER)
   const uint8_t* source = (_pattern == ARP_ORDER) ? _positionOrder : _positions;
   uint8_t sourceCount = (_pattern == ARP_ORDER) ? _orderCount : _positionCount;
-  uint8_t octaves = effectiveOctaveRange();
+  uint8_t octaves = _octaveRange;
 
   switch (_pattern) {
 
@@ -285,11 +263,7 @@ void ArpEngine::rebuildSequence() {
     case ARP_UP:
     case ARP_DOWN:
     case ARP_UP_DOWN:
-    case ARP_RANDOM:
     case ARP_ORDER:
-    case ARP_UP_OCTAVE:
-    case ARP_DOWN_OCTAVE:
-    case ARP_CHORD:
     default:
     {
       for (uint8_t oct = 0; oct < octaves; oct++) {
@@ -301,7 +275,7 @@ void ArpEngine::rebuildSequence() {
         }
       }
 
-      if (_pattern == ARP_DOWN || _pattern == ARP_DOWN_OCTAVE) {
+      if (_pattern == ARP_DOWN) {
         for (uint8_t i = 0; i < _sequenceLen / 2; i++) {
           uint8_t tmp = _sequence[i];
           _sequence[i] = _sequence[_sequenceLen - 1 - i];
@@ -314,30 +288,6 @@ void ArpEngine::rebuildSequence() {
         for (int16_t i = upLen - 2; i >= 1; i--) {
           if (_sequenceLen >= MAX_ARP_SEQUENCE) break;
           _sequence[_sequenceLen++] = _sequence[i];
-        }
-      }
-
-      if (_pattern == ARP_RANDOM && _sequenceLen > 1) {
-        for (uint8_t i = _sequenceLen - 1; i > 0; i--) {
-          uint8_t j = random(0, i + 1);
-          uint8_t tmp = _sequence[i];
-          _sequence[i] = _sequence[j];
-          _sequence[j] = tmp;
-        }
-      }
-      break;
-    }
-
-    case ARP_CASCADE:
-    {
-      for (uint8_t oct = 0; oct < octaves; oct++) {
-        for (uint8_t i = 0; i < sourceCount; i++) {
-          uint8_t encoded = source[i] + oct * 48;
-          if (encoded > 191) continue;
-          _sequence[_sequenceLen++] = encoded;
-          if (_sequenceLen >= MAX_ARP_SEQUENCE) goto done;
-          _sequence[_sequenceLen++] = encoded;
-          if (_sequenceLen >= MAX_ARP_SEQUENCE) goto done;
         }
       }
       break;
@@ -369,35 +319,6 @@ void ArpEngine::rebuildSequence() {
       break;
     }
 
-    case ARP_DIVERGE:
-    {
-      uint8_t temp[MAX_ARP_SEQUENCE];
-      uint8_t tempLen = 0;
-      for (uint8_t oct = 0; oct < octaves; oct++) {
-        for (uint8_t i = 0; i < sourceCount; i++) {
-          uint8_t encoded = source[i] + oct * 48;
-          if (encoded > 191) continue;
-          temp[tempLen++] = encoded;
-          if (tempLen >= MAX_ARP_SEQUENCE) break;
-        }
-        if (tempLen >= MAX_ARP_SEQUENCE) break;
-      }
-      if (tempLen > 0) {
-        uint8_t center = tempLen / 2;
-        _sequence[_sequenceLen++] = temp[center];
-        for (uint8_t offset = 1; offset < tempLen && _sequenceLen < MAX_ARP_SEQUENCE; offset++) {
-          if (center >= offset) {
-            _sequence[_sequenceLen++] = temp[center - offset];
-          }
-          if (_sequenceLen >= MAX_ARP_SEQUENCE) break;
-          if (center + offset < tempLen) {
-            _sequence[_sequenceLen++] = temp[center + offset];
-          }
-        }
-      }
-      break;
-    }
-
     case ARP_PEDAL_UP:
     {
       uint8_t pedal = source[0];
@@ -413,97 +334,6 @@ void ArpEngine::rebuildSequence() {
       }
       if (_sequenceLen == 0 && sourceCount > 0) {
         _sequence[_sequenceLen++] = source[0];
-      }
-      break;
-    }
-
-    case ARP_OCTAVE_WAVE:
-    {
-      uint8_t octSeq[MAX_ARP_OCTAVES * 2];
-      uint8_t octSeqLen = 0;
-      for (uint8_t o = 0; o < octaves; o++) {
-        octSeq[octSeqLen++] = o;
-      }
-      if (octaves > 2) {
-        for (int8_t o = octaves - 2; o >= 1; o--) {
-          octSeq[octSeqLen++] = (uint8_t)o;
-        }
-      }
-      for (uint8_t oi = 0; oi < octSeqLen; oi++) {
-        for (uint8_t i = 0; i < sourceCount; i++) {
-          uint8_t encoded = source[i] + octSeq[oi] * 48;
-          if (encoded > 191) continue;
-          _sequence[_sequenceLen++] = encoded;
-          if (_sequenceLen >= MAX_ARP_SEQUENCE) goto done;
-        }
-      }
-      break;
-    }
-
-    case ARP_OCTAVE_BOUNCE:
-    {
-      int16_t simIndex = 0;
-      int8_t  simOct   = 0;
-      bool    simDir   = true;
-      uint8_t simFib   = 0;
-
-      for (uint16_t step = 0; step < MAX_ARP_SEQUENCE; step++) {
-        uint8_t encoded = source[simIndex] + (uint8_t)simOct * 48;
-        if (encoded <= 191) {
-          _sequence[_sequenceLen++] = encoded;
-          if (_sequenceLen >= MAX_ARP_SEQUENCE) break;
-        }
-
-        uint8_t stepSize = FIB_BOUNCE[simFib];
-        if (simDir) {
-          simIndex += stepSize;
-          while (simIndex >= (int16_t)sourceCount) {
-            simIndex -= sourceCount;
-            simOct++;
-            if (simOct >= (int8_t)octaves) {
-              simOct = octaves - 1;
-              simDir = false;
-              break;
-            }
-          }
-        } else {
-          simIndex -= stepSize;
-          while (simIndex < 0) {
-            simIndex += sourceCount;
-            simOct--;
-            if (simOct < 0) {
-              simOct = 0;
-              simDir = true;
-              break;
-            }
-          }
-        }
-        simFib = (simFib + 1) % FIB_BOUNCE_LEN;
-      }
-      break;
-    }
-
-    case ARP_PROBABILITY:
-    {
-      int16_t simIndex = 0;
-      uint8_t simFib   = 0;
-      uint8_t simOct   = 0;
-
-      for (uint16_t step = 0; step < MAX_ARP_SEQUENCE; step++) {
-        uint8_t encoded = source[simIndex] + simOct * 48;
-        if (encoded <= 191) {
-          _sequence[_sequenceLen++] = encoded;
-          if (_sequenceLen >= MAX_ARP_SEQUENCE) break;
-        }
-
-        uint8_t stepSize = FIB_SPIRAL[simFib];
-        simIndex = ((int16_t)simIndex + stepSize) % (int16_t)sourceCount;
-        simFib++;
-        if (simFib >= FIB_SPIRAL_LEN) {
-          simFib = 0;
-          simOct++;
-          if (simOct >= octaves) simOct = 0;
-        }
       }
       break;
     }
@@ -576,14 +406,6 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
   _stepIndex++;
   if (_stepIndex >= (int16_t)_sequenceLen) {
     _stepIndex = 0;
-    if (_pattern == ARP_RANDOM) {
-      for (uint8_t i = _sequenceLen - 1; i > 0; i--) {
-        uint8_t j = random(0, i + 1);
-        uint8_t tmp = _sequence[i];
-        _sequence[i] = _sequence[j];
-        _sequence[j] = tmp;
-      }
-    }
   }
 
   uint8_t encoded = _sequence[_stepIndex];

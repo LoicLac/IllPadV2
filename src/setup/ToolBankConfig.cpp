@@ -30,6 +30,12 @@ bool ToolBankConfig::saveConfig(const BankType* types, const uint8_t* quantize, 
   for (uint8_t i = 0; i < NUM_BANKS; i++) bts.types[i] = (uint8_t)types[i];
   memcpy(bts.quantize, quantize, NUM_BANKS);
   memcpy(bts.scaleGroup, groups, NUM_BANKS);
+  // V3 ARPEG_GEN params : Phase 2 ecrit les defaults (Phase 7 etendra la signature pour recevoir
+  // les valeurs editees dans Tool 5).
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    bts.bonusPilex10[i] = 15;
+    bts.marginWalk[i]   = 7;
+  }
   validateBankTypeStore(bts);
 
   if (!NvsManager::saveBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2, &bts, sizeof(bts)))

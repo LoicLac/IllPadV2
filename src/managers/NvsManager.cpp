@@ -29,6 +29,11 @@ NvsManager::NvsManager()
   , _potPendingSave(false)
   , _anyPadPressed(false)
 {
+  // BankTypeStore v3 : ARPEG_GEN per-bank params, defaults 15 (bonus_pile=1.5) / 7 (margin)
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    _loadedBonusPile[i]  = 15;
+    _loadedMarginWalk[i] = 7;
+  }
   // Default LED settings v6 (0-100 perceptual %)
   // See docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md
   _ledSettings.magic = EEPROM_MAGIC;
@@ -144,7 +149,7 @@ NvsManager::NvsManager()
     _pendingBaseVel[i] = DEFAULT_BASE_VELOCITY;
     _pendingVelVar[i] = DEFAULT_VELOCITY_VARIATION;
     _pendingPitchBend[i] = DEFAULT_PITCH_BEND_OFFSET;
-    _pendingArpPot[i] = {2048, 0, DIV_1_8, ARP_UP, 1, 0};  // gate, shuffle, div, pat, oct, tmpl
+    _pendingArpPot[i] = {ARPPOT_MAGIC, ARPPOT_VERSION, 0, 2048, 0, DIV_1_8, ARP_UP, 1, 0};  // hdr + gate, shuffle, div, pat, oct, tmpl
   }
   for (uint8_t i = 0; i < NUM_KEYS; i++) {
     _pendingPadOrder[i] = i;
@@ -265,6 +270,9 @@ void NvsManager::tickPotDebounce(uint32_t now, bool potRouterDirty, const PotRou
   // === Per-bank: arp pot params (ARPEG only) ===
   if (currentType == BANK_ARPEG) {
     ArpPotStore newArp;
+    newArp.magic       = ARPPOT_MAGIC;
+    newArp.version     = ARPPOT_VERSION;
+    newArp.reserved    = 0;
     newArp.gateRaw     = (uint16_t)(potRouter.getGateLength() * 4095.0f);
     newArp.shuffleDepthRaw = (uint16_t)(potRouter.getShuffleDepth() * 4095.0f);
     newArp.division    = (uint8_t)potRouter.getDivision();
@@ -595,9 +603,13 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     prefs.end();
   }
 
-  // --- Bank types + quantize modes + scale groups ---
+  // --- Bank types + quantize modes + scale groups + ARPEG_GEN params ---
   memset(_loadedQuantize, DEFAULT_ARP_START_MODE, NUM_BANKS);
   memset(_loadedScaleGroup, 0, NUM_BANKS);
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    _loadedBonusPile[i]  = 15;
+    _loadedMarginWalk[i] = 7;
+  }
   {
     BankTypeStore bts;
     if (NvsManager::loadBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
@@ -607,20 +619,25 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
         banks[i].type        = (BankType)bts.types[i];
         _loadedQuantize[i]   = bts.quantize[i];
         _loadedScaleGroup[i] = bts.scaleGroup[i];
+        _loadedBonusPile[i]  = bts.bonusPilex10[i];
+        _loadedMarginWalk[i] = bts.marginWalk[i];
       }
       #if DEBUG_SERIAL
-      Serial.println("[NVS] Bank types + quantize + scale groups loaded (v2 store).");
+      Serial.println("[NVS] Bank types + quantize + scale groups + ARPEG_GEN params loaded (v3 store).");
       #endif
     } else {
-      // Premier boot / NVS vierge : defaults usine = 4 NORMAL + 4 ARPEG,
+      // Premier boot / NVS vierge / v2->v3 : defaults usine = 4 NORMAL + 4 ARPEG,
       // group A sur banques 1,2 (NORMAL) et 5,6 (ARPEG). Identique au reset 'd' de Tool 4.
+      // ARPEG_GEN params : bonusPilex10=15, marginWalk=7 (defaults compile-time).
       for (uint8_t i = 0; i < NUM_BANKS; i++) {
         banks[i].type        = (i < 4) ? BANK_NORMAL : BANK_ARPEG;
         _loadedQuantize[i]   = DEFAULT_ARP_START_MODE;
         _loadedScaleGroup[i] = (i == 0 || i == 1 || i == 4 || i == 5) ? 1 : 0;
+        _loadedBonusPile[i]  = 15;
+        _loadedMarginWalk[i] = 7;
       }
       #if DEBUG_SERIAL
-      Serial.println("[NVS] BankTypeStore absent/invalide - defaults usine appliques.");
+      Serial.println("[NVS] BankTypeStore absent/invalide (v2->v3 reset attendu) - defaults usine appliques.");
       #endif
     }
   }
@@ -673,24 +690,34 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     #endif
   }
 
-  // --- Arp pot params per bank ---
+  // --- Arp pot params per bank (v1 = header + 8B payload, post pattern reduction) ---
   if (prefs.begin(ARP_POT_NVS_NAMESPACE, true)) {
+    bool anyReset = false;
     for (uint8_t i = 0; i < NUM_BANKS; i++) {
       char key[8];
       snprintf(key, sizeof(key), "arp_%d", i);
       size_t len = prefs.getBytesLength(key);
+      ArpPotStore tmp;
       if (len == sizeof(ArpPotStore)) {
-        prefs.getBytes(key, &_pendingArpPot[i], sizeof(ArpPotStore));
-        if (_pendingArpPot[i].division >= NUM_ARP_DIVISIONS) _pendingArpPot[i].division = DIV_1_8;  // F-CODE-3: align with ctor default
-        if (_pendingArpPot[i].pattern  >= NUM_ARP_PATTERNS)  _pendingArpPot[i].pattern  = 0;
-        if (_pendingArpPot[i].octaveRange < 1 || _pendingArpPot[i].octaveRange > 4)
-          _pendingArpPot[i].octaveRange = 1;
-        if (_pendingArpPot[i].shuffleTemplate >= NUM_SHUFFLE_TEMPLATES) _pendingArpPot[i].shuffleTemplate = 0;
+        prefs.getBytes(key, &tmp, sizeof(ArpPotStore));
+        if (tmp.magic == ARPPOT_MAGIC && tmp.version == ARPPOT_VERSION) {
+          _pendingArpPot[i] = tmp;
+          validateArpPotStore(_pendingArpPot[i]);
+        } else {
+          // Magic/version mismatch -> defaults compile-time deja en place via constructor.
+          anyReset = true;
+        }
+      } else if (len > 0) {
+        // Size mismatch (typically v0 raw 8B post-reduction) -> defaults compile-time.
+        anyReset = true;
       }
     }
     prefs.end();
+    if (anyReset) {
+      Serial.println("[NVS] ArpPotStore raw/v0 detecte - reset v1 applique (defaults compile-time). User doit re-regler gate/shuffle/division/oct/template.");
+    }
     #if DEBUG_SERIAL
-    Serial.println("[NVS] Arp pot params loaded.");
+    Serial.println("[NVS] Arp pot params loaded (v1).");
     #endif
   }
 
@@ -934,8 +961,26 @@ void NvsManager::setLoadedScaleGroup(uint8_t bank, uint8_t group) {
   if (bank < NUM_BANKS && group <= NUM_SCALE_GROUPS) _loadedScaleGroup[bank] = group;
 }
 
+uint8_t NvsManager::getLoadedBonusPile(uint8_t bank) const {
+  if (bank >= NUM_BANKS) return 15;
+  return _loadedBonusPile[bank];
+}
+
+void NvsManager::setLoadedBonusPile(uint8_t bank, uint8_t x10) {
+  if (bank < NUM_BANKS && x10 >= 10 && x10 <= 20) _loadedBonusPile[bank] = x10;
+}
+
+uint8_t NvsManager::getLoadedMarginWalk(uint8_t bank) const {
+  if (bank >= NUM_BANKS) return 7;
+  return _loadedMarginWalk[bank];
+}
+
+void NvsManager::setLoadedMarginWalk(uint8_t bank, uint8_t margin) {
+  if (bank < NUM_BANKS && margin >= 3 && margin <= 12) _loadedMarginWalk[bank] = margin;
+}
+
 const ArpPotStore& NvsManager::getLoadedArpParams(uint8_t bankIdx) const {
-  static const ArpPotStore defaultArp = {2048, 0, DIV_1_8, ARP_UP, 1, 0};
+  static const ArpPotStore defaultArp = {ARPPOT_MAGIC, ARPPOT_VERSION, 0, 2048, 0, DIV_1_8, ARP_UP, 1, 0};
   if (bankIdx >= NUM_BANKS) return defaultArp;
   return _pendingArpPot[bankIdx];
 }

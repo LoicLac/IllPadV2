@@ -46,6 +46,12 @@ public:
   uint8_t getLoadedScaleGroup(uint8_t bank) const;
   void    setLoadedScaleGroup(uint8_t bank, uint8_t group);
 
+  // Access loaded ARPEG_GEN params (per-bank). Stored in BankTypeStore v3.
+  uint8_t getLoadedBonusPile(uint8_t bank) const;     // x10 (10..20), used only when type == BANK_ARPEG_GEN
+  void    setLoadedBonusPile(uint8_t bank, uint8_t x10);
+  uint8_t getLoadedMarginWalk(uint8_t bank) const;    // 3..12 degres
+  void    setLoadedMarginWalk(uint8_t bank, uint8_t margin);
+
   // Access loaded arp params (for ArpEngine init at boot, after loadAll)
   const ArpPotStore& getLoadedArpParams(uint8_t bankIdx) const;
 
@@ -108,6 +114,8 @@ private:
   ArpPotStore _pendingArpPot[NUM_BANKS];
   uint8_t     _loadedQuantize[NUM_BANKS];    // ArpStartMode per bank (loaded at boot)
   uint8_t     _loadedScaleGroup[NUM_BANKS];  // 0=none, 1..NUM_SCALE_GROUPS=A..D (loaded at boot)
+  uint8_t     _loadedBonusPile[NUM_BANKS];   // BankTypeStore v3 : x10 (10..20), defaults 15
+  uint8_t     _loadedMarginWalk[NUM_BANKS];  // BankTypeStore v3 : 3..12, defaults 7
   uint16_t    _pendingTempo;
   uint8_t     _pendingLedBright;
   uint8_t     _pendingPadSens;

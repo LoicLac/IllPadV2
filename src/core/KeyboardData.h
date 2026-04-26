@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include "HardwareConfig.h"
 #include "LedGrammar.h"   // EventRenderEntry, EVT_COUNT (consumed by LedSettingsStore v6)
+#include "../midi/GrooveTemplates.h"  // NUM_SHUFFLE_TEMPLATES (consumed by validateArpPotStore)
 
 // =================================================================
 // Calibration Data — stored in ESP32 NVS via Preferences
@@ -114,14 +115,25 @@ struct PotParamsStore {
 // Arp Pot Parameters — per-bank arp params, stored in NVS
 // =================================================================
 
+const uint16_t ARPPOT_MAGIC   = EEPROM_MAGIC;  // 0xBEEF (defined in HardwareConfig.h)
+const uint8_t  ARPPOT_VERSION = 1;             // 1 = post pattern reduction (15->6) + ARPEG_GEN cohabit
+
+// `pattern` field interpretation depends on owning bank type :
+//   - BANK_ARPEG     : ArpPattern enum index (0..NUM_ARP_PATTERNS-1 = 0..5)
+//   - BANK_ARPEG_GEN : _genPosition (0..14, 15 positions de grille)
+// Same byte, different semantics. The owning BankType is the discriminator.
 struct ArpPotStore {
-  uint16_t gateRaw;       // gate × 4095 (range 0-32760, i.e. 0.0-8.0; floor 0.005 on load)
-  uint16_t shuffleDepthRaw;  // 0-4095 (maps to 0.0-1.0)
-  uint8_t  division;      // ArpDivision enum (0-8)
-  uint8_t  pattern;       // ArpPattern enum (0-4)
-  uint8_t  octaveRange;      // 1-4
-  uint8_t  shuffleTemplate;  // 0-9 (index into groove templates)
+  uint16_t magic;             // ARPPOT_MAGIC
+  uint8_t  version;           // ARPPOT_VERSION
+  uint8_t  reserved;
+  uint16_t gateRaw;           // gate × 4095 (range 0-32760, i.e. 0.0-8.0; floor 0.005 on load)
+  uint16_t shuffleDepthRaw;   // 0-4095 (maps to 0.0-1.0)
+  uint8_t  division;          // ArpDivision enum (0-8)
+  uint8_t  pattern;           // ArpPattern (0-5) OR _genPosition (0-14) — see comment above
+  uint8_t  octaveRange;       // 1-4 (semantically = mutationLevel for ARPEG_GEN)
+  uint8_t  shuffleTemplate;   // 0-9 (index into groove templates)
 };
+// Total : 4 (header) + 8 = 12 octets.
 
 // =================================================================
 // Color Preset Palette (const, in flash — not NVS)
@@ -310,10 +322,18 @@ static_assert(sizeof(LedSettingsStore) <= 128, "LedSettingsStore exceeds NVS blo
 // =================================================================
 
 enum BankType : uint8_t {
-  BANK_NORMAL = 0,
-  BANK_ARPEG  = 1,
-  BANK_ANY    = 0xFF  // Used in PotRouter bindings (matches any type)
+  BANK_NORMAL    = 0,
+  BANK_ARPEG     = 1,
+  BANK_LOOP      = 2,   // RESERVED : LOOP Phase 1 (not yet implemented)
+  BANK_ARPEG_GEN = 3,   // ARPEG génératif (this plan)
+  BANK_ANY       = 0xFF // Used in PotRouter bindings (matches any type)
 };
+
+// Helper : true si la bank utilise un ArpEngine (ARPEG classique OU ARPEG_GEN).
+// Tous les call-sites qui filtraient sur BANK_ARPEG strict doivent passer par ce helper.
+inline bool isArpType(BankType t) {
+  return t == BANK_ARPEG || t == BANK_ARPEG_GEN;
+}
 
 struct ScaleConfig {
   bool    chromatic;  // true = chromatic, false = scale mode
@@ -405,22 +425,13 @@ inline void validateControlPadStore(ControlPadStore& s) {
 // =================================================================
 
 enum ArpPattern : uint8_t {
-  ARP_UP             = 0,
-  ARP_DOWN           = 1,
-  ARP_UP_DOWN        = 2,
-  ARP_RANDOM         = 3,
-  ARP_ORDER          = 4,
-  ARP_CASCADE        = 5,
-  ARP_CONVERGE       = 6,
-  ARP_DIVERGE        = 7,
-  ARP_PEDAL_UP       = 8,
-  ARP_UP_OCTAVE      = 9,
-  ARP_DOWN_OCTAVE    = 10,
-  ARP_CHORD          = 11,
-  ARP_OCTAVE_WAVE    = 12,
-  ARP_OCTAVE_BOUNCE  = 13,
-  ARP_PROBABILITY    = 14,
-  NUM_ARP_PATTERNS   = 15
+  ARP_UP             = 0,   // (kept) low -> high
+  ARP_DOWN           = 1,   // (kept) high -> low
+  ARP_UP_DOWN        = 2,   // (kept) UP puis indices descendants
+  ARP_ORDER          = 3,   // (was 4) chronologique
+  ARP_PEDAL_UP       = 4,   // (was 8) basse pedale + arpege
+  ARP_CONVERGE       = 5,   // (was 6) zigzag low/high vers centre
+  NUM_ARP_PATTERNS   = 6
 };
 
 enum ArpDivision : uint8_t {
@@ -484,7 +495,7 @@ struct ArpPadStore {
 static_assert(sizeof(ArpPadStore) <= NVS_BLOB_MAX_SIZE, "ArpPadStore exceeds NVS blob max");
 
 #define BANKTYPE_NVS_KEY_V2  "config"
-#define BANKTYPE_VERSION     2   // 1->2 : ajout scaleGroup[]
+#define BANKTYPE_VERSION     3   // 2->3 : ajout bonusPilex10[] + marginWalk[] (ARPEG_GEN per-bank)
 
 #define NUM_SCALE_GROUPS     4   // A, B, C, D (0 = none / banque independante)
 
@@ -492,11 +503,14 @@ struct BankTypeStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  reserved;
-  uint8_t  types[NUM_BANKS];       // BankType enum cast
-  uint8_t  quantize[NUM_BANKS];    // ArpStartMode enum
-  uint8_t  scaleGroup[NUM_BANKS];  // 0 = none, 1..NUM_SCALE_GROUPS = A..D
+  uint8_t  types[NUM_BANKS];          // BankType enum cast (0..3)
+  uint8_t  quantize[NUM_BANKS];       // ArpStartMode enum
+  uint8_t  scaleGroup[NUM_BANKS];     // 0 = none, 1..NUM_SCALE_GROUPS = A..D
+  uint8_t  bonusPilex10[NUM_BANKS];   // V3 : 10..20 (bonus_pile x 10), defaults 15. Used only when type == BANK_ARPEG_GEN.
+  uint8_t  marginWalk[NUM_BANKS];     // V3 : 3..12 (degres). Defaults 7. Used only when type == BANK_ARPEG_GEN.
 };
 static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds NVS blob max");
+// Total v3 : 4 (header) + 8 x 5 = 44 octets. Confortable sous le cap NVS_BLOB_MAX_SIZE = 128.
 
 #define COLOR_SLOT_VERSION  5
 
@@ -607,14 +621,30 @@ inline void validateSettingsStore(SettingsStore& s) {
   if (s.slotClearTimerMs < 400  || s.slotClearTimerMs > 1500) s.slotClearTimerMs = 800;
 }
 
+inline void validateArpPotStore(ArpPotStore& s) {
+  // pattern range etendu pour couvrir les 2 semantiques :
+  //   - ARPEG classique : 0..NUM_ARP_PATTERNS-1 (= 0..5 apres Task 4)
+  //   - ARPEG_GEN     : 0..14 (15 positions de grille)
+  // Le validate clampe au max des deux pour ne pas casser un pattern stocke pour une bank ARPEG_GEN.
+  if (s.pattern > 14) s.pattern = 0;
+  if (s.division >= NUM_ARP_DIVISIONS) s.division = DIV_1_8;
+  if (s.octaveRange < 1 || s.octaveRange > 4) s.octaveRange = 1;
+  if (s.shuffleTemplate >= NUM_SHUFFLE_TEMPLATES) s.shuffleTemplate = 0;
+  // gateRaw / shuffleDepthRaw : pas de clamp strict (uint16 native), clampe a load par les getters float.
+}
+
 inline void validateBankTypeStore(BankTypeStore& s) {
   uint8_t arpCount = 0;
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    if (s.types[i] > BANK_ARPEG) s.types[i] = BANK_NORMAL;
-    if (s.types[i] == BANK_ARPEG) arpCount++;
+    // Type clamp : tout > BANK_ARPEG_GEN (sauf BANK_ANY=0xFF) -> NORMAL
+    if (s.types[i] > BANK_ARPEG_GEN && s.types[i] != BANK_ANY) s.types[i] = BANK_NORMAL;
+    if (isArpType((BankType)s.types[i])) arpCount++;
     if (arpCount > MAX_ARP_BANKS) s.types[i] = BANK_NORMAL;
     if (s.quantize[i] >= NUM_ARP_START_MODES) s.quantize[i] = DEFAULT_ARP_START_MODE;
     if (s.scaleGroup[i] > NUM_SCALE_GROUPS) s.scaleGroup[i] = 0;
+    // V3 : nouveaux champs (clamp aux ranges declares en spec §21)
+    if (s.bonusPilex10[i] < 10 || s.bonusPilex10[i] > 20) s.bonusPilex10[i] = 15;
+    if (s.marginWalk[i]  < 3  || s.marginWalk[i]  > 12) s.marginWalk[i]  = 7;
   }
 }
 
