@@ -937,7 +937,7 @@ void ToolLedSettings::updatePreviewContext() {
     case LINE_TRANSPORT_WAITING_COLOR:
       ctx = ToolLedPreview::PV_WAITING;
       // Source color = current mode color snapshot.
-      if (_setupEntryBankType == BANK_ARPEG) {
+      if (isArpType(_setupEntryBankType)) {
         p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_ARPEG]);
       } else {
         p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_NORMAL]);

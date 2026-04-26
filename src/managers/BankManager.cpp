@@ -78,11 +78,12 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
       bool wasRecent = (_lastBankPadPressTime[b] != 0) &&
                        ((now - _lastBankPadPressTime[b]) < _doubleTapMs);
 
-      // --- Double-tap on ARPEG bank pad = Play/Stop toggle ---
+      // --- Double-tap on ARPEG/ARPEG_GEN bank pad = Play/Stop toggle ---
       // Same event chain as hold pad on FG; BG banks pass keys=nullptr
       // (no fingers possible off-foreground → pile kept, paused).
       // Rule: double-tap NEVER changes bank. Always consume the 2nd tap.
-      if (wasRecent && _banks[b].type == BANK_ARPEG) {
+      // LOOP : double-tap handler à câbler par plan LOOP Phase 1 (else if BANK_LOOP).
+      if (wasRecent && isArpType(_banks[b].type)) {
         if (_banks[b].arpEngine && _transport) {
           bool wasCaptured = _banks[b].arpEngine->isCaptured();
           const uint8_t* keys = (b == _currentBank) ? keyIsPressed : nullptr;
@@ -94,7 +95,7 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
         }
         _lastBankPadPressTime[b] = 0;
         _pendingSwitchBank = -1;
-        continue;  // never fall through — 2nd tap on ARPEG is always consumed
+        continue;  // never fall through — 2nd tap on ARPEG/ARPEG_GEN is always consumed
       }
 
       // --- 2nd tap on NORMAL (wasRecent, but no play/stop semantics) ---
@@ -202,8 +203,15 @@ void BankManager::switchToBank(uint8_t newBank) {
   }
 
   #if DEBUG_SERIAL
+  const char* typeLabel = "?";
+  switch (_banks[_currentBank].type) {
+    case BANK_NORMAL:    typeLabel = "NORMAL";    break;
+    case BANK_ARPEG:     typeLabel = "ARPEG";     break;
+    case BANK_ARPEG_GEN: typeLabel = "ARPEG_GEN"; break;
+    case BANK_LOOP:      typeLabel = "LOOP";      break;  // placeholder LOOP Phase 1
+    default:             typeLabel = "?";         break;
+  }
   Serial.printf("[BANK] Bank %d (ch %d, %s)\n",
-                _currentBank + 1, _currentBank + 1,
-                _banks[_currentBank].type == BANK_ARPEG ? "ARPEG" : "NORMAL");
+                _currentBank + 1, _currentBank + 1, typeLabel);
   #endif
 }

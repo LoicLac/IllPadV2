@@ -348,9 +348,15 @@ bool LedController::renderBargraph(unsigned long now) {
   // Bar color : mode base. Dim : same hue ; intensity hardcoded at 30 %
   // for uncaught pot visualization (not derived from bgFactor — the bargraph
   // has its own aesthetic and is not a BG-bank rendering).
-  const RGBW& barColor = (_slots && _slots[_currentBank].type == BANK_ARPEG)
-                         ? _colors[CSLOT_MODE_ARPEG]
-                         : _colors[CSLOT_MODE_NORMAL];
+  // Switch 3-way : ARPEG/ARPEG_GEN partagent CSLOT_MODE_ARPEG, LOOP a son slot dedie.
+  const RGBW* barColorPtr = &_colors[CSLOT_MODE_NORMAL];
+  if (_slots) {
+    BankType ft = _slots[_currentBank].type;
+    if      (isArpType(ft))    barColorPtr = &_colors[CSLOT_MODE_ARPEG];
+    else if (ft == BANK_LOOP)  barColorPtr = &_colors[CSLOT_MODE_LOOP];
+    // else : NORMAL / default
+  }
+  const RGBW& barColor = *barColorPtr;
   const RGBW& barDim   = barColor;  // same hue, intensity scaled below
 
   clearPixels();
@@ -498,8 +504,11 @@ void LedController::renderNormalDisplay(unsigned long now) {
     for (uint8_t i = 0; i < NUM_LEDS; i++) {
       bool isFg = (i == _currentBank);
       switch (_slots[i].type) {
-        case BANK_NORMAL: renderBankNormal(i, isFg); break;
-        case BANK_ARPEG:  renderBankArpeg(i, isFg, now); break;
+        case BANK_NORMAL:    renderBankNormal(i, isFg);     break;
+        case BANK_ARPEG:
+        case BANK_ARPEG_GEN: renderBankArpeg(i, isFg, now); break;
+        case BANK_LOOP:      /* Phase 1 LOOP wires renderBankLoop(i, isFg, now) */ break;
+        default: break;
       }
 
       // Battery low override: 3-blink burst on foreground bank

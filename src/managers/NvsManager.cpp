@@ -267,8 +267,8 @@ void NvsManager::tickPotDebounce(uint32_t now, bool potRouterDirty, const PotRou
     }
   }
 
-  // === Per-bank: arp pot params (ARPEG only) ===
-  if (currentType == BANK_ARPEG) {
+  // === Per-bank: arp pot params (ARPEG / ARPEG_GEN sauvegardent les memes champs) ===
+  if (isArpType(currentType)) {
     ArpPotStore newArp;
     newArp.magic       = ARPPOT_MAGIC;
     newArp.version     = ARPPOT_VERSION;

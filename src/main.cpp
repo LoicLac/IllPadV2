@@ -125,7 +125,7 @@ static void sensingTask(void* param) {
 static void midiPanic() {
   // Phase 1: flush all arp engines (pending events + refcounts)
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine) {
+    if (isArpType(s_banks[i].type) && s_banks[i].arpEngine) {
       s_banks[i].arpEngine->flushPendingNoteOffs(s_transport);
     }
   }
@@ -345,16 +345,18 @@ void setup() {
   // but ClockManager was initialized before loadAll with default 120)
   s_clockManager.setInternalBPM(s_potRouter.getTempoBPM());
 
-  // Assign ArpEngines to ARPEG banks (after NVS load)
+  // Assign ArpEngines to ARPEG/ARPEG_GEN banks (after NVS load).
+  // Phase 3 : engine reste en mode CLASSIC defensive — Phase 4 Task 6 ajoutera setEngineMode.
   {
     uint8_t arpIdx = 0;
     for (uint8_t i = 0; i < NUM_BANKS && arpIdx < 4; i++) {
-      if (s_banks[i].type == BANK_ARPEG) {
+      if (isArpType(s_banks[i].type)) {
         s_arpEngines[arpIdx].setChannel(i);
         s_banks[i].arpEngine = &s_arpEngines[arpIdx];
         arpIdx++;
         #if DEBUG_SERIAL
-        Serial.printf("[INIT] Bank %d: ARPEG, ArpEngine assigned\n", i + 1);
+        Serial.printf("[INIT] Bank %d: %s, ArpEngine assigned\n", i + 1,
+                      s_banks[i].type == BANK_ARPEG_GEN ? "ARPEG_GEN" : "ARPEG");
         #endif
       }
     }
@@ -368,7 +370,7 @@ void setup() {
   // ArpScheduler — register engines + set scale/padOrder context
   s_arpScheduler.begin(&s_transport, &s_clockManager);
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine) {
+    if (isArpType(s_banks[i].type) && s_banks[i].arpEngine) {
       s_arpScheduler.registerArp(i, s_banks[i].arpEngine);
       s_banks[i].arpEngine->setScaleConfig(s_banks[i].scale);
       s_banks[i].arpEngine->setPadOrder(s_padOrder);
@@ -559,7 +561,7 @@ static void handleLeftReleaseCleanup(const SharedKeyboardState& state) {
           s_midiEngine.noteOff(i);
         }
       }
-    } else if (relSlot.type == BANK_ARPEG && relSlot.arpEngine
+    } else if (isArpType(relSlot.type) && relSlot.arpEngine
                && !relSlot.arpEngine->isCaptured()) {
       for (int i = 0; i < NUM_KEYS; i++) {
         if (i == s_holdPad) continue;
@@ -582,7 +584,11 @@ static void handlePadInput(const SharedKeyboardState& state, uint32_t now) {
         processNormalMode(state, slot);
         break;
       case BANK_ARPEG:
+      case BANK_ARPEG_GEN:
         if (slot.arpEngine) processArpMode(state, slot, now);
+        break;
+      default:
+        // BANK_LOOP : Phase 1 LOOP wires processLoopMode here
         break;
     }
   }
@@ -596,7 +602,7 @@ static void reloadPerBankParams(BankSlot& newSlot) {
   ArpDivision div = DIV_1_8;
   ArpPattern pat = ARP_UP;
   uint8_t shufTmpl = 0;
-  if (newSlot.type == BANK_ARPEG && newSlot.arpEngine) {
+  if (isArpType(newSlot.type) && newSlot.arpEngine) {
     gate      = newSlot.arpEngine->getGateLength();
     shufDepth = newSlot.arpEngine->getShuffleDepth();
     div       = newSlot.arpEngine->getDivision();
@@ -638,7 +644,7 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
 
     // Save + sync arp pour la banque courante
     s_nvsManager.queueScaleWrite(bank, scSlot.scale);
-    if (scSlot.type == BANK_ARPEG && scSlot.arpEngine) {
+    if (isArpType(scSlot.type) && scSlot.arpEngine) {
       scSlot.arpEngine->setScaleConfig(scSlot.scale);
     }
 
@@ -651,7 +657,7 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
         if (s_nvsManager.getLoadedScaleGroup(i) != group) continue;
         s_banks[i].scale = scSlot.scale;
         s_nvsManager.queueScaleWrite(i, scSlot.scale);
-        if (s_banks[i].type == BANK_ARPEG && s_banks[i].arpEngine) {
+        if (isArpType(s_banks[i].type) && s_banks[i].arpEngine) {
           s_banks[i].arpEngine->setScaleConfig(scSlot.scale);
         }
         ledMask |= (uint8_t)(1 << i);
@@ -682,7 +688,7 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
 static void handleHoldPad(const SharedKeyboardState& state) {
   static bool s_lastHoldPadState = false;
   BankSlot& slot = s_bankManager.getCurrentSlot();
-  if (s_holdPad >= NUM_KEYS || slot.type != BANK_ARPEG || !slot.arpEngine) {
+  if (s_holdPad >= NUM_KEYS || !isArpType(slot.type) || !slot.arpEngine) {
     s_lastHoldPadState = (s_holdPad < NUM_KEYS) ? state.keyIsPressed[s_holdPad] : false;
     return;
   }
@@ -699,8 +705,10 @@ static void handleHoldPad(const SharedKeyboardState& state) {
 }
 
 // --- Push live pot params to engine (extracted for LOOP extensibility) ---
+// Phase 3 conserve setPattern(getPattern()) pour ARPEG_GEN — Phase 6 Task 15
+// branchera ARPEG (setPattern) vs ARPEG_GEN (setGenPosition).
 static void pushParamsToEngine(BankSlot& slot) {
-  if (slot.type == BANK_ARPEG && slot.arpEngine) {
+  if (isArpType(slot.type) && slot.arpEngine) {
     slot.arpEngine->setGateLength(s_potRouter.getGateLength());
     slot.arpEngine->setShuffleDepth(s_potRouter.getShuffleDepth());
     slot.arpEngine->setDivision(s_potRouter.getDivision());

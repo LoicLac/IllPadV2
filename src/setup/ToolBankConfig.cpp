@@ -287,7 +287,9 @@ void ToolBankConfig::run() {
       for (uint8_t i = 0; i < NUM_BANKS; i++) {
         bool selected = (cursor == i);
         bool isEditing = selected && editing;
-        bool isArpeg = (wkTypes[i] == BANK_ARPEG);
+        // Phase 3 : cycle Tool 5 reste 3-etats (Phase 4 Task 7 introduit ARPEG_GEN).
+        // isArpType couvre BANK_ARPEG_GEN au cas ou — rendering ARPEG-style commun.
+        bool isArpeg = isArpType(wkTypes[i]);
 
         char line[160];
         int pos = 0;
@@ -365,10 +367,10 @@ void ToolBankConfig::run() {
         _ui->drawFrameEmpty();
         _ui->drawFrameEmpty();
       } else {
-        drawDescription(cursor, wkTypes[cursor] == BANK_ARPEG);
+        drawDescription(cursor, isArpType(wkTypes[cursor]));
 
-        // Quantize description (when editing an ARPEG bank)
-        if (editing && wkTypes[cursor] == BANK_ARPEG) {
+        // Quantize description (when editing an ARPEG/ARPEG_GEN bank)
+        if (editing && isArpType(wkTypes[cursor])) {
           _ui->drawFrameEmpty();
           switch (wkQuantize[cursor]) {
             case 0:

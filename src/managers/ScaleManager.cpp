@@ -177,8 +177,9 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
     _lastScaleKeys[_chromaticPad] = pressed;
   }
 
-  // --- Octave pads (ARPEG only, 1-4 octaves) ---
-  if (slot.type == BANK_ARPEG && slot.arpEngine) {
+  // --- Octave pads (ARPEG/ARPEG_GEN, 1-4 octaves) ---
+  // Phase 3 garde setOctaveRange ; Phase 8 Task 19 branchera setMutationLevel pour ARPEG_GEN selon _engineMode.
+  if (isArpType(slot.type) && slot.arpEngine) {
     for (uint8_t o = 0; o < 4; o++) {
       uint8_t pad = _octavePads[o];
       if (pad >= NUM_KEYS) continue;
