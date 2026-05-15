@@ -751,3 +751,11 @@ bool      PotRouter::isBargraphCaught() const    { return _bargraphCaught; }
 
 bool PotRouter::isDirty() const   { return _dirty; }
 void PotRouter::clearDirty()      { _dirty = false; }
+
+uint8_t PotRouter::getSlotForTarget(PotTarget t, bool isArpContext) const {
+  const PotMapping* map = isArpContext ? _mapping.arpegMap : _mapping.normalMap;
+  for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
+    if (map[i].target == t) return i;
+  }
+  return 0xFF;  // not found
+}

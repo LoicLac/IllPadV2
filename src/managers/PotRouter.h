@@ -54,6 +54,10 @@ public:
   // Apply a new mapping and rebuild binding table (called by Tool 6 on save)
   void applyMapping(const PotMappingStore& store);
 
+  // Reverse lookup : returns the slot index (0..7) in the given context
+  // that routes to `t`, or 0xFF if not found. Caller passes the context.
+  uint8_t getSlotForTarget(PotTarget t, bool isArpContext) const;
+
   // Getters — internal params
   float       getResponseShape() const;
   uint16_t    getSlewRate() const;
