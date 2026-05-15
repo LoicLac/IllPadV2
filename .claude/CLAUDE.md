@@ -77,7 +77,7 @@ sur mon poste", regressions ignorées.
 
 - **`src/core/CapacitiveKeyboard.cpp/.h`** — pressure pipeline is musically
   calibrated. Do not change.
-- **Pressure tuning constants** in `HardwareConfig.h` (thresholds,
+- **Pressure tuning constants** in `src/core/HardwareConfig.h` (thresholds,
   smoothing, slew, I2C clock).
 - **`platformio.ini`** (unless adding `lib_deps`).
 
@@ -103,6 +103,7 @@ task (tight modification / broad exploration).
 | NVS code (any Store struct, any `loadBlob`/`saveBlob`) | [`nvs-reference.md`](../docs/reference/nvs-reference.md) |
 | LED visual / event grammar / pattern / color slot | [`led-reference.md`](../docs/reference/led-reference.md) |
 | Arp engine, scheduler, pile, Play/Stop, shuffle | [`arp-reference.md`](../docs/reference/arp-reference.md) |
+| ARPEG_GEN params musicien-facing (BONUS/MARGIN/PROX/ECART, scenarios live) | [`fonction_regen.md`](../docs/reference/fonction_regen.md) |
 | Pot hardware, filter, catch, Tool 7 mapping | [`pot-reference.md`](../docs/reference/pot-reference.md) |
 | Hardware wiring, pins, MCP3208, components | [`hardware-connections.md`](../docs/reference/hardware-connections.md) |
 | Boot code, setup mode entry, LED boot feedback | [`boot-sequence.md`](../docs/reference/boot-sequence.md) |
@@ -116,6 +117,42 @@ mode. When `src/setup/` code changes input handling, escape sequences, line
 endings, or VT100 rendering, verify and update the terminal script in the
 same commit. The two must stay synchronized (arrow key atomic send, line
 ending normalization, DEC 2026 sync support).
+
+---
+
+## VT100 Setup Console — politique
+
+Le terminal VT100 du setup mode est un **argument de vente esthétique** et
+sert de **mini-manuel utilisateur** à l'instrument. Conséquences directes :
+
+- **Ne jamais simplifier** le rendu visuel pour économiser du code. La
+  qualité visuelle du cockpit (frames, voyants, segmented readouts, colour
+  semantics) est un livrable, pas un détail.
+- Les descriptions / hints / panels INFO doivent être **unifiés en ton et
+  en niveau de détail** — un user qui parcourt les Tools doit recevoir un
+  manuel cohérent, pas des bouts de doc pour développeurs.
+- Toute modification d'un Tool doit re-vérifier que la description info /
+  control bar reste cohérente avec le reste de la console.
+
+Spec technique du rendu : voir [`vt100-design-guide.md`](../docs/reference/vt100-design-guide.md).
+
+---
+
+## Setup mode — boot-only par construction
+
+Le setup mode est accessible **uniquement au boot** (entrée par bouton).
+La sortie du setup mode déclenche un reboot. Conséquences :
+
+- Toutes les valeurs configurées via Tools 1-8 (padOrder, roles, scale
+  pads, hold pad, octave pads, control pads, color slots, etc.) sont
+  **runtime-immutables** : elles ne changent jamais entre deux boots.
+- **Inutile d'écrire les Tools pour gérer du runtime** (pas de hot-reload,
+  pas de sync entre Tool et runtime). Cette complexité serait gaspillée.
+- **Sûr de cacher des valeurs résolues** au boot (pad-index lookup table,
+  scale-degree resolved arrays, etc.). Le cache reste valide toute la
+  session jusqu'au prochain reboot, pas besoin d'invalidation.
+- Cf invariant 7 (Setup/Runtime coherence) : la chaîne Runtime ↔ Store ↔
+  Tool ↔ NVS doit rester complète sous peine d'orphan link.
 
 ---
 
