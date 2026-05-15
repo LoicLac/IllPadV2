@@ -1982,6 +1982,15 @@ void Model::applyState(const StateEvent& e) {
         current.slots[i].displayValue = e.slots[i].value;
         current.slots[i].unit = "";
         current.slots[i].isEmpty = e.slots[i].isEmpty;
+
+        // Hydrate device-global Tempo from slots: target "Tempo" is a global
+        // parameter, not per-bank. Without this, device.tempoBpm stays at 120
+        // until the user physically turns the Tempo pot, even though the
+        // firmware reports the real value in the [STATE] line.
+        // Cross-audit 2026-05-15 finding R2.
+        if (!e.slots[i].isEmpty && e.slots[i].target == "Tempo") {
+            try { device.tempoBpm = std::stoi(e.slots[i].value); } catch (...) {}
+        }
     }
     // also fill the current bank's BankInfo scale fields
     if (e.bank >= 1 && e.bank <= 8) {
@@ -2184,10 +2193,13 @@ MainComponent::MainComponent() {
     });
 
     reader.connect("");  // auto-detect ILLPAD
-    // After 500ms request a fresh state
-    juce::Timer::callAfterDelay(500, [this]() {
-        reader.getOutputQueue().push({'?','B','O','T','H','\n'});
-    });
+    // NOTE: ?BOTH is NOT pushed here. It is pushed by ModeSwitcher::setMode
+    // on every transition INTO Runtime (boot first-detection + every
+    // reconnect). This avoids polluting the firmware's setup-mode InputParser
+    // with stray '?BOTH\n' bytes if the ILLPAD happens to be in setup mode
+    // when the viewer starts — InputParser claims the serial during setup
+    // and would interpret those bytes as keyboard input.
+    // Cross-audit 2026-05-15 findings R3/R4/I1.
 }
 
 MainComponent::~MainComponent() {
@@ -3843,11 +3855,25 @@ ModeSwitcher::ModeSwitcher(Model& m, SerialReader& r)
 
 void ModeSwitcher::setMode(AppMode m) {
     if (m == currentMode) return;
+    AppMode prev = currentMode;
     currentMode = m;
     runtimeMode.setVisible(m == AppMode::Runtime);
     setupMode.setVisible(m == AppMode::Setup);
     if (m == AppMode::Setup) setupMode.grabKeyboardFocus();
     resized();
+
+    // On any transition INTO Runtime (initial boot detection OR reconnect
+    // after disconnect/setup), push ?BOTH to re-hydrate the Model with a
+    // full atomic snapshot. Without this, the viewer would keep stale data
+    // after a replug, or miss the initial dump if the ILLPAD booted before
+    // the viewer connected (USB CDC buffer not guaranteed to retain history).
+    // Gated on (prev != Runtime) to avoid spurious double-pushes; gated on
+    // (m == Runtime) so we never inject ?BOTH bytes into the firmware setup
+    // mode InputParser (which claims the serial during setup).
+    // Cross-audit 2026-05-15 findings R3/R4/I1.
+    if (m == AppMode::Runtime && prev != AppMode::Runtime) {
+        reader.getOutputQueue().push({'?','B','O','T','H','\n'});
+    }
 }
 
 void ModeSwitcher::feedBytes(const std::vector<uint8_t>& bytes) {

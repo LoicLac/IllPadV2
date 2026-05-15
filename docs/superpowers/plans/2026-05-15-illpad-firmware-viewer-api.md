@@ -339,11 +339,16 @@ static void formatSlotValue(char* buf, size_t bufSize, PotTarget t) {
     case TARGET_SLEW_RATE:
       snprintf(buf, bufSize, "Slew:%u", s_potRouter.getSlewRate()); break;
     case TARGET_AT_DEADZONE:
-      snprintf(buf, bufSize, "ATDz:%u", s_potRouter.getAtDeadzone()); break;
+      // Name MUST match the [POT] log table (Task A.2 step 3) — keeping a
+      // single canonical target name across [POT] and [STATE] avoids the
+      // viewer's PotCell label switching between two strings when the user
+      // tweaks a pot. Cross-audit 2026-05-15 finding R1.
+      snprintf(buf, bufSize, "AT_Deadzone:%u", s_potRouter.getAtDeadzone()); break;
     case TARGET_TEMPO_BPM:
       snprintf(buf, bufSize, "Tempo:%u", s_potRouter.getTempoBPM()); break;
     case TARGET_LED_BRIGHTNESS:
-      snprintf(buf, bufSize, "LEDBright:%u", s_potRouter.getLedBrightness()); break;
+      // Same as AT_Deadzone above — single canonical name across [POT]/[STATE].
+      snprintf(buf, bufSize, "LED_Bright:%u", s_potRouter.getLedBrightness()); break;
     case TARGET_PAD_SENSITIVITY:
       snprintf(buf, bufSize, "PadSens:%u", s_potRouter.getPadSensitivity()); break;
     case TARGET_BASE_VELOCITY:
