@@ -177,8 +177,12 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
     _lastScaleKeys[_chromaticPad] = pressed;
   }
 
-  // --- Octave pads (ARPEG/ARPEG_GEN, 1-4 octaves) ---
-  // Phase 3 garde setOctaveRange ; Phase 8 Task 19 branchera setMutationLevel pour ARPEG_GEN selon _engineMode.
+  // --- Octave pads (ARPEG/ARPEG_GEN, 1-4) ---
+  // ARPEG     : pad o+1 = octaveRange (1..4 octaves litterales, spec §7).
+  // ARPEG_GEN : pad o+1 = mutationLevel (1=lock, 2=1/16, 3=1/8, 4=1/4 — spec §15).
+  // Branchement par _engineMode (et non par BankType) : robuste face a une desync hypothetique.
+  // Le champ NVS (ArpPotStore.octaveRange) est dual-semantic et stocke o+1 ∈ [1..4] dans les
+  // deux cas — queueArpOctaveWrite (main.cpp:693) marche sans modif.
   if (isArpType(slot.type) && slot.arpEngine) {
     for (uint8_t o = 0; o < 4; o++) {
       uint8_t pad = _octavePads[o];
@@ -190,11 +194,17 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       if (pressed && !wasPressed) {
         _newOctaveRange = o + 1;  // 1-4
         _octaveChanged = true;
-        slot.arpEngine->setOctaveRange(o + 1);
-
-        #if DEBUG_SERIAL
-        Serial.printf("[ARP] Octave %d\n", o + 1);
-        #endif
+        if (slot.arpEngine->getEngineMode() == EngineMode::GENERATIVE) {
+          slot.arpEngine->setMutationLevel(o + 1);
+          #if DEBUG_SERIAL
+          Serial.printf("[ARP_GEN] MutationLevel %d\n", o + 1);
+          #endif
+        } else {
+          slot.arpEngine->setOctaveRange(o + 1);
+          #if DEBUG_SERIAL
+          Serial.printf("[ARP] Octave %d\n", o + 1);
+          #endif
+        }
       }
       _lastScaleKeys[pad] = pressed;
     }
