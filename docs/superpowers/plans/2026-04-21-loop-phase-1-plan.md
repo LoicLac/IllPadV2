@@ -350,6 +350,24 @@ inline void validateLoopPotStore(LoopPotStore& s) {
 
 **Cross-refs :** spec LOOP §27 Phase 1 item 4 ; invariants §23 (1, 6, 11) ; audit §4.3 item 2.
 
+> **⚠️ AMENDEMENT 2026-04-26 — Steps 4.2 et 4.3 REPORTÉS / OBSOLESCÉS par la refonte GestureDispatcher**
+>
+> La refonte `GestureDispatcher` (spec `2026-04-26-gesture-dispatcher-design.md`, plan `2026-04-26-gesture-dispatcher-plan.md`) supprime `BankManager::update()` (Phase 2 gesture) et `ScaleManager::processScalePads()` (Phase 3 gesture). Les patches Step 4.2 et Step 4.3 ci-dessous seraient écrits pour être immédiatement supprimés.
+>
+> **Décision** (audit cross-vérification du 2026-04-26) :
+> - **Step 4.2** (BankManager double-tap LOOP consume) : **NE PAS écrire**. Le dispatcher Phase 2 unifie le double-tap bank pad et étendra naturellement à `isLoopType()` quand LOOP P2 livrera le `LoopEngine`. Laisser le commentaire `// LOOP : double-tap handler à câbler par plan LOOP Phase 1 (else if BANK_LOOP)` en place ([`BankManager.cpp:85`](../../../src/managers/BankManager.cpp:85)) ; il sera supprimé par la Phase 2 gesture en même temps que le reste du body de `update()`.
+> - **Step 4.3** (ScaleManager early-return BANK_LOOP) : **NE PAS écrire**. La Phase 3 du plan gesture supprime entièrement `ScaleManager::processScalePads()`. Le dispatcher `handleScalePad()` honore l'invariant 6 (`if (slot.type == BANK_LOOP) return;` à insérer dans la branche `SCALE_PAD` du dispatcher quand LOOP P2 sera mergé — à câbler dans le plan gesture Phase 7 ou en LOOP P2).
+> - **Step 4.1** (lecture + grep AT/PB) : peut être exécuté pour vérification, sans écriture. Confirme que les AT/PB sont déjà gardés.
+> - **Step 4.4** (read-only verification AT/PB) : idem, exécutable.
+> - **Step 4.5** (mise à jour briefing) : à exécuter — note simple, indépendante du dispatcher.
+> - **Step 4.6 → 4.8** (compile gate + commit) : Task 4 devient un commit "no-op" si seuls les Steps 4.4/4.5 sont retenus. Recommandé : merger Task 4 dans Task 5 ou Task 6 du plan LOOP P1, ou simplement skip Task 4 entière et reprendre la défense dans la refonte gesture.
+>
+> **Recommandation pragmatique** : skip Task 4 entièrement, marquer "Tasks 4.2 + 4.3 portées par la refonte gesture", et passer à Task 5 (rename `fgArpPlayMax`) qui est indépendante.
+
+---
+
+**Le contenu original de Task 4 ci-dessous reste comme référence historique. Ne pas exécuter Steps 4.2 et 4.3 sans relire l'amendement ci-dessus.**
+
 **Files :**
 - Modify : [`src/managers/BankManager.cpp`](../../../src/managers/BankManager.cpp:81-98) — double-tap LOOP no-op (Phase 2 wires PLAY/STOP via LoopEngine)
 - Modify : [`src/managers/BankManager.cpp`](../../../src/managers/BankManager.cpp:180-209) — `switchToBank` PB restore reste NORMAL-only (déjà OK), debug print 3-way (déjà fait Task 1 ; vérifier en read-back)
