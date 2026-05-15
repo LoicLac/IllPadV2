@@ -554,10 +554,19 @@ static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uin
           s_lastPressTime[i] = now;
         }
       } else {
-        // Stop: live mode. First press after Play→Stop wipes the paused pile.
+        // Stop: 1er press musical wipe la paused pile (si non vide), réactive
+        // Play automatiquement, ajoute la note. Cf spec gesture §13.2 amendée
+        // 2026-05-15 (Option 3) : Stop est une commande momentanée, un geste
+        // musical post-Stop re-engage Play. La pile précédente est wipée pour
+        // permettre "table rase" — pour conserver la pile, le user doit Play
+        // via hold pad / double-tap bank pad (toggle explicite).
+        // LED : EVT_PLAY pour signaler le passage automatique en Play,
+        // cohérent avec handleHoldPad et BankManager double-tap.
         if (slot.arpEngine->isPaused() && slot.arpEngine->hasNotes()) {
           slot.arpEngine->clearAllNotes(s_transport);
         }
+        slot.arpEngine->setCaptured(true, s_transport, nullptr, s_holdPad);
+        s_leds.triggerEvent(EVT_PLAY);
         slot.arpEngine->addPadPosition(pos);
       }
 

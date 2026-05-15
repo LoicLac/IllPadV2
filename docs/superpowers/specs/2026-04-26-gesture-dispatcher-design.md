@@ -271,22 +271,47 @@ Conséquences :
   ```
 - Le sweep release universel (§9) prend le relais pour assurer qu'aucun pad pressé pendant un release LEFT n'ajoute de note à la pile ni ne déclenche de wipe.
 
-#### §13.2 — Chemin de wipe conservé : transition Play paused → Live
+#### §13.2 — Auto-Play sur 1er press musical en Stop (Option 3, amendée 2026-05-15)
 
-Le chemin "1er press d'un pad musical en mode Stop avec `_pausedPile` non vide" reste actif. **Validé par le user** comme comportement souhaité.
+**Sémantique** : `_captured` n'est pas un mode de jeu persistant, c'est un toggle d'engine. Le Stop est une **commande momentanée** : couper le son maintenant. Toute interaction musicale post-Stop (press d'un pad de jeu) est interprétée comme un **re-engagement** : le moteur repart en Play automatiquement, et la pile précédente est wipée pour permettre une construction propre.
 
-**Code conservé** ([main.cpp:550-552](../../../src/main.cpp:550)) :
+**Logique** :
+1. 1er press musical en `!_captured` :
+   - Si `_pausedPile && hasNotes()` → `clearAllNotes()` (wipe table rase).
+   - `setCaptured(true)` (re-engage Play).
+   - `triggerEvent(EVT_PLAY)` (feedback LED, cohérent avec hold pad et double-tap bank pad).
+   - `addPadPosition(pos)` (ajoute la nouvelle note).
+2. Press suivant en `_captured=true` : comportement Play standard (add ou double-tap remove).
+
+**Code après refonte gesture Phase 5** (signature simplifiée `setCaptured(bool, MidiTransport&)`) :
 ```cpp
 } else {
-  // Stop: live mode. First press after Play→Stop wipes the paused pile.
   if (slot.arpEngine->isPaused() && slot.arpEngine->hasNotes()) {
     slot.arpEngine->clearAllNotes(s_transport);
   }
+  slot.arpEngine->setCaptured(true, s_transport);
+  s_leds.triggerEvent(EVT_PLAY);   // feedback LED auto-Play
   slot.arpEngine->addPadPosition(pos);
 }
 ```
 
-**Justification** : ce wipe est déclenché par une **intention engagée** du musicien (presser un pad musical en mode Stop, sans LEFT held, sans geste de transport en cours). Le sens musical est explicite : "j'abandonne la pile dormante et je commence un nouveau live". Ce n'est pas un effet de bord, c'est l'action elle-même.
+**Code transitoire pré-refonte** (signature actuelle `setCaptured(bool, MidiTransport&, const uint8_t*, uint8_t)`, déjà appliqué dans le fix 2026-05-15) :
+```cpp
+slot.arpEngine->setCaptured(true, s_transport, nullptr, s_holdPad);
+```
+
+**Workflow utilisateur résultant** :
+
+| Action | Effet |
+|---|---|
+| Play actif, pile pleine | arpège tourne |
+| Toggle Stop (hold pad ou double-tap bank pad) | engine coupe net, pile préservée |
+| Press pad musical après Stop | wipe pile + add nouvelle note + Play auto → arpège reprend avec la nouvelle pile |
+| Toggle Play (hold pad / double-tap) après Stop sans presser de pad | relaunch la paused pile (cf §13.1) |
+
+**Choix conscient** : le Stop n'a pas à être "défait" manuellement par le musicien. Le seul moyen de conserver la paused pile et reprendre la lecture est de toggle Play **avant** de toucher à un pad musical. Pour repartir from scratch, simplement presser un pad.
+
+**Justification du wipe (Option 3 vs Option 1 "pile sacrée stricte")** : sans wipe, la pile devient immortelle — aucun moyen automatique de la vider, le musicien doit double-tap chaque note individuellement. Avec wipe sur press musical, on a un geste naturel "je presse → je repars propre" qui colle au sens musical du re-engagement.
 
 #### §13.3 — Frontière conceptuelle "pile sacrée" vs "wipe engagé"
 
@@ -297,7 +322,8 @@ Le chemin "1er press d'un pad musical en mode Stop avec `_pausedPile` non vide" 
 | Pads pressés au press/release LEFT (zone de garde §7, §9) | transport | **préservée** (sweep snapshot, pas d'addPadPosition) |
 | Bank switch (commit pendingSwitch) | transport | **préservée** (`switchToBank` ne touche pas la pile) |
 | Panic global (BLE reconnect, triple-click rear) | système | **préservée** (`flushPendingNoteOffs` ne touche pas `_positionCount`) |
-| 1er press pad musical en Stop avec paused pile | musical (live engagé) | **wipée** + nouvelle note ajoutée (§13.2) |
+| 1er press pad musical en Stop avec paused pile | musical (re-engagement Play) | **wipée** + nouvelle note ajoutée + auto-Play (§13.2 Option 3) |
+| 1er press pad musical en Stop sans paused pile | musical (re-engagement Play) | pile vide + nouvelle note ajoutée + auto-Play (§13.2 Option 3) |
 | Double-tap remove sur pad musical en Play (FG ARPEG capturé) | musical (édition pile) | une position retirée (pas de wipe global) |
 
 **Aucun autre chemin** ne wipe la pile dans le code post-refonte.
