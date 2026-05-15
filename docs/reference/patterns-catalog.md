@@ -21,7 +21,9 @@ MIDI fires only on 0→1 and 1→0 transitions.
 API : `refCountNoteOn(transport, note, vel)` /
 `refCountNoteOff(transport, note)`.
 
-Used : `ArpEngine.cpp`.
+Used : `ArpEngine.cpp` (single `_noteRefCount[128]` array shared between
+CLASSIC and GENERATIVE modes — both ARPEG and ARPEG_GEN banks emit through
+the same refcount path).
 
 **Reuse** for any engine that can overlap notes (loop mode, chord sequencer).
 
@@ -48,7 +50,8 @@ Fire a MIDI event when `micros() >= fireTimeUs`. Fixed-size per-engine queue
 API : `scheduleEvent(time, note, vel)` + `processEvents(transport)` every
 frame.
 
-Used : `ArpEngine` for shuffle + gate.
+Used : `ArpEngine` for shuffle + gate (single per-engine queue, fed by both
+CLASSIC and GENERATIVE paths via `executeStepNote` shared helper).
 
 **Reuse** for any sub-frame timed MIDI.
 

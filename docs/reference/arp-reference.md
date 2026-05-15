@@ -126,7 +126,6 @@ Per-bank, configured in Tool 5 :
 |---|---|---|
 | **Immediate** | Next division boundary | 0 |
 | **Beat** | Next 1/4 note | up to 24 |
-| **Bar** | Next bar | up to 96 |
 
 Stop is **always immediate** (no quantize on stop).
 
@@ -165,24 +164,30 @@ Overflow handling :
 
 ---
 
-## 6. Patterns
+## 6. Patterns (CLASSIC mode)
 
-5 patterns via hold-left + R2 pot (discrete 5 values) :
+6 patterns via hold-left + R2 pot (discrete 6 values, post ARPEG_GEN
+reduction 15→6) :
 
 | ID | Name | Position walk |
 |---|---|---|
 | 0 | Up | low → high, wrap |
 | 1 | Down | high → low, wrap |
 | 2 | UpDown | low → high → low, no endpoint repeat |
-| 3 | Random | uniform pick each step |
-| 4 | Order | as-entered into pile |
+| 3 | Order | as-entered into pile |
+| 4 | PedalUp | basse pédale + arpège ascendant |
+| 5 | Converge | zigzag low/high vers centre |
 
-Octave range : 1–4 (hold-left + dedicated octave pads). `rebuildSequence()`
+Octave range : 1–4 littérales (pad oct dédiés). `rebuildSequence()`
 expands pile → sequence (up to 192 entries = 48 positions × 4 octaves)
 lazily via `_sequenceDirty` flag (P2).
 
 Dirty flag set by : `addPadPosition`, `removePadPosition`, `setPattern`,
 `setOctaveRange`.
+
+Patterns dropped from V1 (Random, Cascade, Diverge, UpOctave, DownOctave,
+Chord, OctaveWave, OctaveBounce, Probability) : retired during ARPEG_GEN
+plumbing because their behavior is subsumed by GENERATIVE mode (see §13).
 
 ---
 
@@ -262,12 +267,15 @@ NORMAL, same scheme for ARPEG).
 
 ---
 
-## 11. Adding a new arp pattern
+## 11. Adding a new arp pattern (CLASSIC mode)
+
+Patterns apply to CLASSIC mode only — ARPEG_GEN bank doesn't expose
+patterns (its `pattern` NVS slot stores `_genPosition` instead, see §13).
 
 Minimum steps :
 
 1. `ArpEngine.h` — add entry to `enum ArpPattern`. Bump
-   `NUM_PATTERNS` if referenced elsewhere.
+   `NUM_ARP_PATTERNS` if referenced elsewhere.
 2. `ArpEngine.cpp` — add a case in `rebuildSequence()` switch.
 3. `main.cpp` — add human-readable name in `s_patNames[]`.
 
@@ -295,3 +303,101 @@ Index.
 | `_pausedPile` stuck true | Add-to-pile path missed a reset | `addPadPosition` must clear `_pausedPile = false`. |
 | Step 0 replay on every Play | Correct — paused pile → relaunch from 0 | By design. |
 | Shuffle overlapping kills notes | Refcount missing somewhere | P1 : ALL noteOn/noteOff must go through `refCountNoteOn/Off`. |
+
+---
+
+## 13. Generative mode (ARPEG_GEN)
+
+Bank type `BANK_ARPEG_GEN` shares the engine pool with classic ARPEG
+(at most 4 cumulative arp banks via `MAX_ARP_BANKS`). The engine
+selects its semantic via `_engineMode = EngineMode::GENERATIVE` set
+at boot from `BankType` (cf [arpeg-gen-design.md](../superpowers/specs/2026-04-25-arpeg-gen-design.md) §10).
+
+### Architecture
+
+Two parallel sequence buffers per `ArpEngine` :
+- `_sequence[MAX_ARP_SEQUENCE]` (192 entries) — CLASSIC pattern walk.
+- `_sequenceGen[MAX_ARP_GEN_SEQUENCE]` (96 entries, `int8_t` degrees) — GENERATIVE walk.
+
+`executeStep()` branches on `_engineMode` :
+- CLASSIC → walks `_sequence[]`, resolves pos+oct via `ScaleResolver::resolve`.
+- GENERATIVE → walks `_sequenceGen[]`, resolves degree → MIDI via
+  `ScaleResolver::degreeToMidi(degree, scale)`. Common output via
+  `executeStepNote(transport, stepDurationUs, finalNote)`.
+
+### Pile model (degrees, not pad positions)
+
+Pad presses populate `_positions[]` (CLASSIC pile, padOrder values),
+then `recomputePileDegrees()` mirrors them as signed scale-relative
+degrees in `_pileDegrees[]` plus cached `_pileLo`/`_pileHi`. Hooked from
+`addPadPosition` / `removePadPosition` / `setScaleConfig` /
+`setPadOrder`. Spec §17 : pile additions beyond first don't reseed.
+
+### Walk : pickNextDegree (§12, §16)
+
+```
+pickNextDegree(prev, E, useScalePool) :
+  walkMin = pile_lo - margin_walk
+  walkMax = pile_hi + margin_walk
+  pool = filter(pile + (useScalePool ? scale_window[prev-E..prev+E] : ∅))
+         keeping only candidates in [walkMin, walkMax] AND |d - prev| ≤ E
+  weights : w(Δ) = exp(-|Δ| / (E × 0.4))   [proximity factor compile-time]
+            × bonus_pile if candidate ∈ pile (mutation only)
+  return uniform-weighted pick from pool
+  empty pool → return prev (spec §37 fallback)
+```
+
+### Generation triggers (§14, §17)
+
+| Trigger | Action |
+|---|---|
+| Pile 0 → 1 | Full `seedSequenceGen()` — initial walk from pile uniform start |
+| `clearAllNotes` | `_sequenceGenDirty = true`, regen on next pile add |
+| Pile 1 → N (Option B refinement) | Force 3 ciblées mutations to integrate new pile note audibly |
+| `setGenPosition(newPos)` extension | Walk-extend `_sequenceGen[oldLen..newLen-1]` continu depuis dernier step (avoid monotone trail) |
+| Scale change | `recomputePileDegrees()` only — degrees stay valid, transpose via new `degreeToMidi` mapping |
+| Pile shrink | `recomputePileDegrees()` only — adapts pool naturally on next mutation |
+
+### Mutation (§15, §20)
+
+`maybeMutate(globalStepCount)` called per executed step. Lookup
+`_mutationLevel` (1=lock no-op, 2=1/16, 3=1/8, 4=1/4 step rate),
+modular check on `globalStepCount`, picks one random index, rewrites
+via `pickNextDegree(prev, E_pot, useScalePool=true)`.
+
+`_mutationLevel` driven by pad oct 1-4 via `ScaleManager` (Task 19).
+No memory of pre-mutation state (§20).
+
+### Grid position (§13)
+
+`TABLE_GEN_POSITION[15]` = 15 discrete `{seqLen, ecart}` entries
+(8/1, 8/2, 16/2, …, 96/12). `_genPosition` ∈ [0..14] selected via
+R2+hold pot (`TARGET_GEN_POSITION`, two-binding strategy in
+`PotRouter::rebuildBindings`, plan §0 D3). Hysteresis ±1.5%×4095 in
+`applyBinding` to prevent zone flicker. `_seqLenGen` follows
+`TABLE_GEN_POSITION[_genPosition].seqLen` ; `ecart` (E_pot) drives
+mutation walk amplitude.
+
+### Per-bank parameters (§21)
+
+Stored in `BankTypeStore` v3 (44 octets, magic+ver+reserved + 5×8B
+arrays) :
+- `bonusPilex10[bank]` (10..20 = 1.0..2.0, default 15)
+- `marginWalk[bank]` (3..12, default 7)
+
+`ArpPotStore` v1 (12 octets) `pattern` field is dual-semantic :
+- Bank `BANK_ARPEG` : `ArpPattern` enum (0..5)
+- Bank `BANK_ARPEG_GEN` : `_genPosition` (0..14)
+- `octaveRange` : same dual-semantic (octave range vs mutation level).
+
+Boot path routes the dual-semantic via `bank.type` check (see
+`main.cpp` engine init).
+
+### Tool 5 UI
+
+Bank type cycle 5 states (NORMAL → ARPEG-Imm → ARPEG-Beat →
+ARPEG_GEN-Imm → ARPEG_GEN-Beat → NORMAL). ARPEG_GEN banks render on
+2 lines (line 2 = Bonus pile + Margin). Edit mode field-focus 4
+sub-fields (TYPE → GROUP → BONUS → MARGIN cycle linéaire). ←→ cycles
+focus, ↑↓ adjusts focused field value (§4.4 universal convention,
+plan §0 D5).

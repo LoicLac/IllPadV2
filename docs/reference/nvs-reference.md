@@ -68,7 +68,8 @@ Menu (`SetupUI::printMainMenu`) loops over these to check all stores in one pass
 | Function | Clamps |
 |----------|--------|
 | `validateSettingsStore` | profile, AT rate, BLE interval, clock mode, double-tap, bargraph, panic, batADC, LOOP timers (clearLoop, slotSave, slotClear) |
-| `validateBankTypeStore` | types (max BANK_ARPEG), arpCount (max 4), quantize modes, scaleGroup (max NUM_SCALE_GROUPS) |
+| `validateBankTypeStore` | types (max BANK_ARPEG_GEN sauf BANK_ANY), arpCount cumulé ARPEG+ARPEG_GEN (max MAX_ARP_BANKS=4) via isArpType, quantize modes, scaleGroup (max NUM_SCALE_GROUPS), bonusPilex10 [10..20] (default 15), marginWalk [3..12] (default 7) — V3 |
+| `validateArpPotStore` | pattern ≤14 (dual-semantic ArpPattern OR _genPosition), division, octaveRange [1..4] (octave range CLASSIC OR mutation level GENERATIVE), shuffleTemplate. Magic+version check at load (ARPPOT_MAGIC, ARPPOT_VERSION=1) |
 | `validateScalePadStore` | rootPads, modePads, chromaticPad (all < NUM_KEYS) |
 | `validateArpPadStore` | holdPad, octavePads (all < NUM_KEYS) |
 | `validateBankPadStore` | bankPads (all < NUM_KEYS) |
@@ -103,7 +104,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `ScalePadStore` | `illpad_spad` | `pads` | 0xBEEF | 1 | 20B | 3 separate keys (root_pads, mode_pads, chrom_pad) |
 | `ControlPadStore` | `illpad_ctrl` | `pads` | 0xBEEF | 2 | 82B | 12 sparse entries + 3 global DSP params (v2) for Tool 4 Control Pads. Globals : `smoothMs` (EMA tau, CONTINUOUS pressed), `sampleHoldMs` (ring-buffer look-back for HOLD_LAST capture), `releaseMs` (linear fade-out duration for RETURN_TO_ZERO). Each entry : padIndex, ccNumber, channel, mode, deadzone, releaseMode. Validator : `validateControlPadStore()` clamps globals + entries + enforces LATCH-requires-fixed-channel invariant. |
 | `ArpPadStore` | `illpad_apad` | `pads` | 0xBEEF | 2 | 12B | 2 separate keys (hold_pad, oct_pads) — v2 drops legacy play/stop pad |
-| `BankTypeStore` | `illpad_btype` | `config` | 0xBEEF | 2 | 28B | raw types[8] + qmode[8] (2 blobs, desync risk). v2 adds `scaleGroup[8]` (0=none, 1..4=A..D) for inter-bank scale linking |
+| `BankTypeStore` | `illpad_btype` | `config` | 0xBEEF | 3 | 44B | raw types[8] + qmode[8] (2 blobs, desync risk). v2 adds `scaleGroup[8]` (0=none, 1..4=A..D) for inter-bank scale linking. v3 adds `bonusPilex10[8]` [10..20=1.0..2.0] + `marginWalk[8]` [3..12] for ARPEG_GEN per-bank walk tuning |
 | `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 23B | **PLANNED** Phase 1 — 3 controls (REC/PS/CLR) + 16 slots, strict packed, not yet in code |
 
 ### Non-Blob Namespaces (scalar values, not Store structs)
@@ -114,7 +115,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `illpad_scale` | `cfg_0`..`cfg_7` | ScaleConfig per bank (3B each) | NvsManager (runtime) |
 | `illpad_bvel` | `vel_0`..`vel_7`, `var_0`..`var_7` | velocity params per bank | NvsManager (runtime) |
 | `illpad_pbnd` | `pb_0`..`pb_7` | pitch bend offset per bank | NvsManager (runtime) |
-| `illpad_apot` | `arp_0`..`arp_7` | ArpPotStore per bank (8B each) | NvsManager (runtime) |
+| `illpad_apot` | `arp_0`..`arp_7` | ArpPotStore per bank (12B each, v1 = magic+ver+reserved + 8B payload). `pattern` field dual-semantic : ArpPattern enum OR _genPosition (0..14) selon BankType. `octaveRange` dual-semantic : octave range OR mutation level. | NvsManager (runtime) |
 | `illpad_lpot` | `loop_0`..`loop_7` | LoopPotStore per bank (8B each): shuffle, chaos, vel pattern | **PLANNED** — not yet in code |
 | `illpad_tempo` | `bpm` | uint16_t tempo BPM | NvsManager (runtime) |
 | `illpad_led` | `brightness` | uint8_t LED brightness | NvsManager (runtime) |
