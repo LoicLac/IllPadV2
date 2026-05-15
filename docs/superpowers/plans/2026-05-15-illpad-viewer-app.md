@@ -1205,7 +1205,10 @@ static std::optional<std::string> findKey(const std::string& s, const std::strin
 }
 
 // in parseRuntimeLine:
-if (s.rfind("[BANK] ", 0) == 0 && s.rfind("[BANKS]", 0) != 0) {
+// Strict prefix: [BANK] idx=... is the dump format. [BANK] Bank N (ch ...) is
+// the switch event (handled below in Task 11 step 2). Disambiguation by
+// "idx=" suffix avoids ordering dependency between the two branches.
+if (s.rfind("[BANK] idx=", 0) == 0) {
     BankInfoEvent b;
     auto idx = findKey(s, "idx");
     auto type = findKey(s, "type");
@@ -1229,8 +1232,11 @@ if (s.rfind("[BANK] ", 0) == 0 && s.rfind("[BANKS]", 0) != 0) {
 
 ```cpp
 TEST_CASE("StateEvent ARPEG with octave and 8 slots", "[parser]") {
+    // Firmware uses diatonic mode names (Ionian..Locrian) — cf. ScaleManager.cpp:9-13
+    // and KeyboardData.h:338-342. The viewer aligns on this convention (decision
+    // B3 from 2026-05-15 cross-audit). Use "Aeolian" instead of "Minor".
     auto ev = parseRuntimeLine(
-        "[STATE] bank=3 mode=ARPEG ch=3 scale=D:Minor octave=2 "
+        "[STATE] bank=3 mode=ARPEG ch=3 scale=D:Aeolian octave=2 "
         "R1=Tempo:120 R1H=BaseVel:80 R2=Gate:0.50 R2H=VelVar:20 "
         "R3=Division:1/8 R3H=PitchBend:64 R4=Pattern:Up R4H=ShufDepth:0.30"
     );
@@ -1239,7 +1245,7 @@ TEST_CASE("StateEvent ARPEG with octave and 8 slots", "[parser]") {
     REQUIRE(st->bank == 3);
     REQUIRE(st->mode == "ARPEG");
     REQUIRE(st->scaleRoot == "D");
-    REQUIRE(st->scaleMode == "Minor");
+    REQUIRE(st->scaleMode == "Aeolian");
     REQUIRE_FALSE(st->chromatic);
     REQUIRE(st->octave.value() == 2);
     REQUIRE(st->slots[0].slot == "R1");
@@ -1358,26 +1364,41 @@ Impl branch:
 ```cpp
 if (s.rfind("[POT] ", 0) == 0) {
     // Format: "[POT] SLOT: TARGET=VALUE [UNIT]"
-    PotEvent p;
+    // Note: firmware also emits boot-time lines without ": " pattern (e.g.
+    // "[POT] Rebuilt 16 bindings from mapping (3 CC slots)" from PotRouter.cpp:267).
+    // Those must NOT be parsed as PotEvent — return UnknownEvent so the Model
+    // does not get a zombie event with empty slot/target/value.
     auto afterTag = s.substr(6);  // skip "[POT] "
     auto colonPos = afterTag.find(": ");
-    if (colonPos != std::string::npos) {
-        p.slot = afterTag.substr(0, colonPos);
-        auto rest = afterTag.substr(colonPos + 2);
-        auto eqPos = rest.find('=');
-        if (eqPos != std::string::npos) {
-            p.target = rest.substr(0, eqPos);
-            auto valPart = rest.substr(eqPos + 1);
-            auto spacePos = valPart.find(' ');
-            if (spacePos != std::string::npos) {
-                p.value = valPart.substr(0, spacePos);
-                p.unit = valPart.substr(spacePos + 1);
-            } else {
-                p.value = valPart;
-            }
-        }
+    if (colonPos == std::string::npos) {
+        return UnknownEvent{s};
+    }
+    PotEvent p;
+    p.slot = afterTag.substr(0, colonPos);
+    auto rest = afterTag.substr(colonPos + 2);
+    auto eqPos = rest.find('=');
+    if (eqPos == std::string::npos) {
+        return UnknownEvent{s};
+    }
+    p.target = rest.substr(0, eqPos);
+    auto valPart = rest.substr(eqPos + 1);
+    auto spacePos = valPart.find(' ');
+    if (spacePos != std::string::npos) {
+        p.value = valPart.substr(0, spacePos);
+        p.unit = valPart.substr(spacePos + 1);
+    } else {
+        p.value = valPart;
     }
     return p;
+}
+```
+
+Add a failing test for the zombie case to lock the behavior:
+```cpp
+TEST_CASE("PotEvent reject non-annotated firmware lines", "[parser]") {
+    // PotRouter.cpp:267 emits this at boot — must not parse as a slot event.
+    auto ev = parseRuntimeLine("[POT] Rebuilt 16 bindings from mapping (3 CC slots)");
+    REQUIRE(std::holds_alternative<UnknownEvent>(ev));
 }
 ```
 
@@ -1395,7 +1416,7 @@ TEST_CASE("BankSwitchEvent", "[parser]") {
 }
 ```
 
-Impl branch (place before the `[BANK] idx=` branch — different format):
+Impl branch (strict prefix `[BANK] Bank ` to disambiguate from `[BANK] idx=...` of Task 10). Branch order is no longer fragile thanks to the explicit prefixes:
 ```cpp
 if (s.rfind("[BANK] Bank ", 0) == 0) {
     BankSwitchEvent b;
@@ -1411,12 +1432,13 @@ if (s.rfind("[BANK] Bank ", 0) == 0) {
 
 Tests:
 ```cpp
+// Firmware emits diatonic mode names (Ionian..Locrian) from ScaleManager.cpp:134-156.
 TEST_CASE("ScaleEvent Root+Mode", "[parser]") {
-    auto ev = parseRuntimeLine("[SCALE] Root C (mode Major)");
+    auto ev = parseRuntimeLine("[SCALE] Root C (mode Ionian)");
     auto* s = std::get_if<ScaleEvent>(&ev);
     REQUIRE(s != nullptr);
     REQUIRE(s->root == "C");
-    REQUIRE(s->mode == "Major");
+    REQUIRE(s->mode == "Ionian");
     REQUIRE_FALSE(s->chromatic);
 }
 TEST_CASE("ScaleEvent Chromatic", "[parser]") {
@@ -1561,6 +1583,13 @@ TEST_CASE("ClockEvent USB", "[parser]") {
     REQUIRE(c != nullptr);
     REQUIRE(c->source == ClockSource::USB);
 }
+TEST_CASE("ClockEvent BLE after USB timeout (must not match USB)", "[parser]") {
+    // Regression: naive `s.find("USB")` would misclassify this line.
+    auto ev = parseRuntimeLine("[CLOCK] Source: BLE (USB timed out)");
+    auto* c = std::get_if<ClockEvent>(&ev);
+    REQUIRE(c != nullptr);
+    REQUIRE(c->source == ClockSource::BLE);
+}
 TEST_CASE("ClockEvent last known", "[parser]") {
     auto ev = parseRuntimeLine("[CLOCK] Source: last known (120 BPM)");
     auto* c = std::get_if<ClockEvent>(&ev);
@@ -1574,6 +1603,16 @@ TEST_CASE("MidiEvent BLE connected", "[parser]") {
     REQUIRE(m != nullptr);
     REQUIRE(m->which == MidiTransport::BLE);
     REQUIRE(m->connected);
+}
+TEST_CASE("MidiEvent rejects 'initialized' boot lines", "[parser]") {
+    // MidiTransport.cpp:92,103,107 emits these at boot — must NOT be parsed
+    // as a connection state change.
+    REQUIRE(std::holds_alternative<UnknownEvent>(
+        parseRuntimeLine("[MIDI] USB MIDI initialized.")));
+    REQUIRE(std::holds_alternative<UnknownEvent>(
+        parseRuntimeLine("[MIDI] BLE MIDI initialized.")));
+    REQUIRE(std::holds_alternative<UnknownEvent>(
+        parseRuntimeLine("[MIDI] BLE disabled (USB only).")));
 }
 TEST_CASE("PanicEvent", "[parser]") {
     auto ev = parseRuntimeLine("[PANIC] All notes off on all channels");
@@ -1599,20 +1638,41 @@ if (s.rfind("[GEN] seed", 0) == 0) {
 }
 if (s.rfind("[CLOCK] Source:", 0) == 0) {
     ClockEvent c;
-    if (s.find("USB") != std::string::npos)             c.source = ClockSource::USB;
-    else if (s.find("BLE") != std::string::npos)        c.source = ClockSource::BLE;
-    else if (s.find("internal") != std::string::npos)   c.source = ClockSource::Internal;
-    else if (s.find("last known") != std::string::npos) c.source = ClockSource::LastKnown;
+    // Parse the first token after "Source: " strictly. ClockManager emits e.g.
+    // "[CLOCK] Source: BLE (USB timed out)" — naive substring "USB" would
+    // misclassify this as USB. The token-based check fixes that.
+    auto afterPrefix = s.substr(std::string("[CLOCK] Source: ").size());
+    auto firstSpace = afterPrefix.find(' ');
+    std::string token = (firstSpace == std::string::npos) ? afterPrefix
+                                                          : afterPrefix.substr(0, firstSpace);
+    if      (token == "USB")       c.source = ClockSource::USB;
+    else if (token == "BLE")       c.source = ClockSource::BLE;
+    else if (token == "internal")  c.source = ClockSource::Internal;
+    else if (token == "last")      c.source = ClockSource::LastKnown;  // "last known (...)"
+    else                           c.source = ClockSource::Internal;   // fallback
     float bpm;
     if (sscanf(s.c_str(), "[CLOCK] Source: last known (%f BPM)", &bpm) == 1) c.bpm = bpm;
     return c;
 }
 if (s.rfind("[MIDI] ", 0) == 0) {
+    // Strict: only "[MIDI] BLE connected", "[MIDI] BLE disconnected",
+    // "[MIDI] USB connected", "[MIDI] USB disconnected". Other [MIDI] lines
+    // emitted at boot (e.g. "USB MIDI initialized.", "BLE disabled (USB only).")
+    // must NOT produce a MidiEvent — they would otherwise incorrectly mark
+    // the transport as disconnected (no "connected" token found).
     MidiEvent m;
-    m.which = (s.find("BLE") != std::string::npos) ? MidiTransport::BLE : MidiTransport::USB;
-    m.connected = (s.find("connected") != std::string::npos &&
-                   s.find("disconnected") == std::string::npos);
-    return m;
+    bool isBLE = s.rfind("[MIDI] BLE ", 0) == 0;
+    bool isUSB = s.rfind("[MIDI] USB ", 0) == 0;
+    if (isBLE || isUSB) {
+        // Check that suffix is exactly "connected" or "disconnected"
+        auto suffix = s.substr(11);  // after "[MIDI] BLE " or "[MIDI] USB "
+        if (suffix == "connected" || suffix == "disconnected") {
+            m.which = isBLE ? MidiTransport::BLE : MidiTransport::USB;
+            m.connected = (suffix == "connected");
+            return m;
+        }
+    }
+    return UnknownEvent{s};
 }
 if (s.rfind("[PANIC]", 0) == 0) {
     return PanicEvent{};

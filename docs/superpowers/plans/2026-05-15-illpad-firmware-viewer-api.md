@@ -99,20 +99,9 @@ A small static helper formats `slot index → slot name`. The context is derived
 **Files:**
 - Modify: `src/main.cpp` lines 846-905 (the `debugOutput` function)
 
-- [ ] **Step 1: Add slot-name helper at top of `debugOutput()` body**
+- [ ] **Step 1: Add `potSlotName` helper at file scope in `main.cpp`**
 
-Locate `static void debugOutput(bool leftHeld, bool rearHeld) {` (around line 847). Just inside the function, **before** the `#if DEBUG_SERIAL`, add:
-
-```cpp
-  static const char* slotName(uint8_t slot) {
-    static const char* NAMES[POT_MAPPING_SLOTS] = {
-      "R1", "R1H", "R2", "R2H", "R3", "R3H", "R4", "R4H"
-    };
-    return slot < POT_MAPPING_SLOTS ? NAMES[slot] : "--";
-  }
-```
-
-Actually `static const char*` can't be inside a function this way for the named-function nested style. Replace with a file-scope helper. Find an appropriate place near the top of `main.cpp` (after `static const char*` definitions) and add:
+Find a place near the top of `main.cpp` after the static globals (e.g. just after the declaration of `s_arpEngines[]` around line 70). Add:
 
 ```cpp
 static const char* potSlotName(uint8_t slot) {
@@ -123,15 +112,19 @@ static const char* potSlotName(uint8_t slot) {
 }
 ```
 
+This is file-scope (free function), not nested inside `debugOutput` — C++ does not allow nested named functions with their own `static` data.
+
 - [ ] **Step 2: Determine current context inside `debugOutput`**
 
 Inside the `#if DEBUG_SERIAL` block, just after the local static cache variables (around line 864), add:
 
 ```cpp
     // Derive current context (NORMAL mapping vs ARPEG mapping) from the
-    // foreground bank type. ARPEG_GEN and LOOP also use the arpeg map.
+    // foreground bank type. `isArpType()` from KeyboardData.h excludes
+    // BANK_LOOP (LOOP banks have no pot mapping at runtime — cf. PotRouter
+    // rebuildBindings which does not create bindings for LOOP).
     BankType curType = s_banks[s_bankManager.getCurrentBank()].type;
-    bool arpCtx = (curType == BANK_ARPEG) || (curType == BANK_ARPEG_GEN) || (curType == BANK_LOOP);
+    bool arpCtx = isArpType(curType);
 ```
 
 - [ ] **Step 3: Rewrite each `[POT]` printf to include the slot**
@@ -220,7 +213,9 @@ Insert near the other helper functions in `main.cpp` (e.g., just before `setup()
 ```cpp
 #if DEBUG_SERIAL
 static void dumpBanksGlobal() {
-  static const char* TYPE_NAMES[] = { "NORMAL", "ARPEG", "ARPEG_GEN", "LOOP" };
+  // ORDER MATCHES enum BankType in KeyboardData.h:324-329
+  // BANK_NORMAL=0, BANK_ARPEG=1, BANK_LOOP=2, BANK_ARPEG_GEN=3
+  static const char* TYPE_NAMES[] = { "NORMAL", "ARPEG", "LOOP", "ARPEG_GEN" };
   static const char* DIV_NAMES[]  = { "4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64" };
 
   Serial.printf("[BANKS] count=%d\n", NUM_BANKS);
@@ -251,13 +246,25 @@ static void dumpBanksGlobal() {
 #endif
 ```
 
-Note: requires `ArpEngine::getDivision()`, `getOctaveRange()`, `getMutationLevel()` accessors. Verify they exist; if not, add as trivial getters in the same task.
+Note: requires `ArpEngine::getDivision()`, `getOctaveRange()`, `getMutationLevel()` accessors. Existing state: `getDivision()` and `getMutationLevel()` exist in `src/arp/ArpEngine.h`. **`getOctaveRange()` does NOT exist** — must be added (cf. Step 2 below).
 
-- [ ] **Step 2: Verify required `ArpEngine` getters exist**
+- [ ] **Step 2: Add `getOctaveRange()` const accessor to `ArpEngine.h`**
 
-Run: `grep -n "getDivision\|getOctaveRange\|getMutationLevel" src/arp/ArpEngine.h`
+Open `src/arp/ArpEngine.h`. Find the block of getters around lines 127-141 (where `getDivision()` and `getMutationLevel()` are declared). Add:
 
-Expected: all three accessors are declared. If any missing, add it as a trivial const getter exposing the existing private field. Then build to verify.
+```cpp
+  uint8_t getOctaveRange() const { return _octaveRange; }
+```
+
+The private field `_octaveRange` already exists (around line 147). This is purely a read-only public accessor.
+
+Verify all three exist after the edit:
+
+```
+grep -n "getDivision\|getOctaveRange\|getMutationLevel" src/arp/ArpEngine.h
+```
+
+Expected: all three accessors listed.
 
 - [ ] **Step 3: Call `dumpBanksGlobal()` at end of `setup()`**
 
@@ -369,10 +376,16 @@ static void formatSlotValue(char* buf, size_t bufSize, PotTarget t) {
 }
 
 static void dumpRuntimeState() {
-  static const char* TYPE_NAMES[] = { "NORMAL", "ARPEG", "ARPEG_GEN", "LOOP" };
+  // ORDER MATCHES enum BankType in KeyboardData.h:324-329
+  static const char* TYPE_NAMES[] = { "NORMAL", "ARPEG", "LOOP", "ARPEG_GEN" };
   static const char* SLOT_NAMES[] = { "R1","R1H","R2","R2H","R3","R3H","R4","R4H" };
-  static const char* ROOT_NAMES[] = { "C","C#","D","D#","E","F","F#","G","G#","A","A#","B" };
-  static const char* MODE_NAMES[] = { "Major","Minor","Dorian","Phrygian","Lydian","Mixolydian","Locrian" };
+  // ROOT_NAMES and MODE_NAMES MUST mirror src/managers/ScaleManager.cpp:9-13
+  // and src/core/KeyboardData.h:338-342. Diatonic scale, 7 roots A..G,
+  // 7 modes Ionian..Locrian. Keep in sync.
+  static const char* ROOT_NAMES[] = { "A","B","C","D","E","F","G" };
+  static const char* MODE_NAMES[] = {
+    "Ionian","Dorian","Phrygian","Lydian","Mixolydian","Aeolian","Locrian"
+  };
 
   uint8_t bankIdx = s_bankManager.getCurrentBank();
   BankSlot& b = s_banks[bankIdx];
@@ -381,14 +394,14 @@ static void dumpRuntimeState() {
   Serial.printf("[STATE] bank=%d mode=%s ch=%d",
                 bankIdx + 1, typeName, bankIdx + 1);
 
-  // Scale
+  // Scale (assumes root in 0..6, mode in 0..6 — validated at NVS load)
   if (b.scale.chromatic) {
     Serial.printf(" scale=Chromatic:%s",
-                  ROOT_NAMES[b.scale.root]);
+                  b.scale.root < 7 ? ROOT_NAMES[b.scale.root] : "?");
   } else {
     Serial.printf(" scale=%s:%s",
-                  ROOT_NAMES[b.scale.root],
-                  MODE_NAMES[b.scale.mode]);
+                  b.scale.root < 7 ? ROOT_NAMES[b.scale.root] : "?",
+                  b.scale.mode < 7 ? MODE_NAMES[b.scale.mode] : "?");
   }
 
   // Octave / mutationLevel
@@ -399,7 +412,17 @@ static void dumpRuntimeState() {
   }
 
   // 8 slots
-  bool arpCtx = (b.type == BANK_ARPEG) || (b.type == BANK_ARPEG_GEN) || (b.type == BANK_LOOP);
+  // BANK_LOOP has no PotRouter binding at runtime (cf. PotRouter::rebuildBindings
+  // creates bindings only for NORMAL, ARPEG, ARPEG_GEN). Emit "---" everywhere.
+  if (b.type == BANK_LOOP) {
+    for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
+      Serial.printf(" %s=---", SLOT_NAMES[i]);
+    }
+    Serial.println();
+    return;
+  }
+
+  bool arpCtx = isArpType(b.type);  // true for ARPEG and ARPEG_GEN, false for NORMAL/LOOP
   const PotMappingStore& m = s_potRouter.getMapping();
   const PotMapping* map = arpCtx ? m.arpegMap : m.normalMap;
 
@@ -632,6 +655,15 @@ git status
 git diff
 # only commit if necessary
 ```
+
+---
+
+## Risks & notes (non-blocking)
+
+- **Boot-settle order** — `pollRuntimeCommands()` is called at the top of `loop()`, before the `BOOT_SETTLE_MS` (~300 ms) early-return. If a host sends a command during the settle window, `dumpRuntimeState()` may run before logs from final init paths have all drained. Idempotent (no state corruption), but log ordering on early boot is not strictly guaranteed.
+- **`Serial.printf` blocking on Core 1** — Project invariant 3 ("No blocking on Core 1") is technically at risk: the new `dumpRuntimeState()` at bank switch emits ~200 bytes (~17 ms worst case at 115200 baud if USB CDC backpressures). Monitor for audible jitter on arp during a switch in HW gate.
+- **`extern void dumpRuntimeState()` in BankManager.cpp** — Creates a hidden coupling that automated refactor tools (which scan headers) will not detect. If `dumpRuntimeState` is ever renamed, search for the extern manually. Acceptable for this one-shot wiring.
+- **`?STATE` and `?BANKS` not used by the JUCE viewer V1** — The viewer only sends `?BOTH`. The other two commands remain for manual debugging via `pio device monitor` (smoke-tested in Task A.5 step 4). Keep, low cost.
 
 ---
 
