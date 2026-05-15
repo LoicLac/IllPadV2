@@ -1,0 +1,56 @@
+# ILLPAD V2 — Status
+
+_Sync : 2026-04-27. Lu en début de session, gardé à jour au fil de l'eau._
+
+**Focus courant** : ARPEG_GEN — **feature complete** (plan + extension Task 22).
+
+## ARPEG_GEN — historique commits
+
+| Phase | Tasks | Commit | Description |
+|---|---|---|---|
+| 2 | 1-4 | `738b640` | BankType enum + BankTypeStore v3 + ArpPotStore v1 + ArpPattern 15→6 |
+| 3 | 5 | `f44a855` | isArpType cascade dans tous les call-sites BANK_ARPEG strict |
+| 4 | 6-7 | `1c4d7cf` | _engineMode + Tool 5 cycle 5 états + 1-ligne minimal |
+| 5-6 + WIP | 8-15 | `db0edc4` | Engine GENERATIVE core + pot routing TARGET_GEN_POSITION + Option B live mutations + setGenPosition walk-extend |
+| 8 (advanced) | 19 | `af89f72` | ScaleManager pad oct → setMutationLevel pour ARPEG_GEN |
+| 7 | 16-18 | `43f6a57` | Tool 5 4-fields field-focus + 2-line layout + INFO panel |
+| 8 | 20-21 | `c766b24` | LED finitions read-back + docs arp/nvs/patterns refs |
+| Extension | 22 | `332a75f` | proximity_factor + ecart per-bank Tool 5 (BankTypeStore v4, 6-fields cycle, 3-lignes layout, TABLE retune 8 valeurs {2,3,4,8,12,16,32,64}) |
+
+## Tool 5 ARPEG_GEN — paramètres exposés
+
+| Champ | Range | Default | Effet |
+|---|---|---|---|
+| TYPE | NORMAL / ARPEG-Imm / ARPEG-Beat / ARPEG_GEN-Imm / ARPEG_GEN-Beat | - | Type de bank |
+| GROUP | -, A, B, C, D | - | Scale group |
+| BONUS pile | 1.0..2.0 | 1.5 | Multiplicateur poids walk sur degrés de la pile (mutation) |
+| MARGIN | 3..12 | 7 | Combien la mélodie peut dériver au-dessus/dessous du range pile |
+| PROX | 0.4..2.0 | 0.4 | Pente du falloff exponentiel walk (petit = step-wise, grand = erratique) |
+| ECART | 1..12 | 5 | Saut max entre 2 steps consécutifs (override absolu de R2+hold) |
+
+R2+hold pilote uniquement la longueur de séquence (`_genPosition` 0..7 → seqLen 2..64).
+
+Pad oct 1-4 : pour ARPEG_GEN = mutation level (1=lock, 2=1/16, 3=1/8, 4=1/4). Pour ARPEG = octave range littéral (1-4 octaves).
+
+## Comportements live validés HW
+
+- Bank ARPEG_GEN joue effectivement, pile vivante, walk + bonus_pile audible
+- Option B : pile add 1→N déclenche 3 mutations forcées (feedback live, ressenti « joué »)
+- setGenPosition extension : R2+hold étend la séquence via walk continu (pas de trail monotone)
+- R2+hold balaye 8 longueurs distinctes avec hystérésis ±1.5%×4095 ADC (pas de flicker frontière)
+- Tool 5 cycle 6-fields + persistance reboot via BankTypeStore v4
+- Bank switch ARPEG ↔ ARPEG_GEN ↔ NORMAL propre, pots reseed catch
+- Scale change transpose la séquence GEN audiblement (degrés stockés, re-resolved à chaque tick)
+- ARPEG classique inchangé musicalement (non-régression confirmée)
+
+## Follow-ups ouverts
+
+- **Branche `feature/loop`** : implémentation LOOP en pause. Plan Phase 1 et cohabitation pré-câblée dans le code ARPEG_GEN (switches 4-way avec `case BANK_LOOP` stubs). Ne pas toucher tant que l'utilisateur n'y revient pas.
+
+## Sources
+
+- Plan ARPEG_GEN : [docs/superpowers/plans/2026-04-26-arpeg-gen-plan.md](docs/superpowers/plans/2026-04-26-arpeg-gen-plan.md)
+- Spec ARPEG_GEN : [docs/superpowers/specs/2026-04-25-arpeg-gen-design.md](docs/superpowers/specs/2026-04-25-arpeg-gen-design.md)
+- Arp reference (incl. §13 Generative mode) : [docs/reference/arp-reference.md](docs/reference/arp-reference.md)
+- NVS reference (BankTypeStore v4, ArpPotStore v1) : [docs/reference/nvs-reference.md](docs/reference/nvs-reference.md)
+- Project CLAUDE.md : [.claude/CLAUDE.md](.claude/CLAUDE.md) — invariants, build, conventions, VT100 policy, setup boot-only

@@ -83,9 +83,9 @@ public:
   void setProximityFactor(uint8_t x10);        // V4 : 4..20 (proximity x10 = 0.4..2.0), default 4
   void setEcart(uint8_t e);                    // V4 : 1..12 (Tool 5 override de TABLE_GEN_SEQ_LEN ecart), default 5
 
-  // --- ARPEG_GEN runtime params (Phase 5 Task 8) ---
-  // Grid position 0..14 — pot R2+hold balaye via PotRouter (Phase 6 Task 13). Lookup
-  // TABLE_GEN_POSITION[pos] = {seqLen, ecart}. Pot move at lock = §19 (Phase 7 Task 18).
+  // --- ARPEG_GEN runtime params (Phase 5 Task 8 + V4 Task 22 retune) ---
+  // Grid position 0..NUM_GEN_POSITIONS-1 (8 zones V4) — pot R2+hold balaye via PotRouter.
+  // Lookup TABLE_GEN_SEQ_LEN[pos] -> seqLen. Ecart vient désormais de _ecart (Tool 5 override).
   void setGenPosition(uint8_t pos);
   // Mutation level 1..4 — alias on _octaveRange semantic when ARPEG_GEN. Pad oct change.
   // 1 = lock, 2 = 1/16, 3 = 1/8, 4 = 1/4 mutation step rate.
@@ -203,7 +203,7 @@ private:
   uint8_t    _pileDegreeCount;                    // valid entries in _pileDegrees[]
   int8_t     _pileLo;                             // min(_pileDegrees[0..count-1])
   int8_t     _pileHi;                             // max(_pileDegrees[0..count-1])
-  uint16_t   _seqLenGen;                          // current seqLen from TABLE_GEN_POSITION[_genPosition]
+  uint16_t   _seqLenGen;                          // current seqLen from TABLE_GEN_SEQ_LEN[_genPosition]
   uint8_t    _genPosition;                        // 0..14 (grid index, R2+hold via Phase 6)
   uint8_t    _mutationLevel;                      // 1..4 (1 = lock, 2 = 1/16, 3 = 1/8, 4 = 1/4)
   int16_t    _stepIndexGen;                       // read pointer into _sequenceGen[]
@@ -242,7 +242,7 @@ private:
   // Mutation step (spec §15, §20). Called per executed step in GENERATIVE mode.
   // Lookup mutation rate from _mutationLevel : 1=lock (no-op), 2=1/16, 3=1/8, 4=1/4.
   // When triggered, picks a uniform random index in _sequenceGen[] and rewrites it via
-  // pickNextDegree(prev, E_pot, useScalePool=true). E_pot = TABLE_GEN_POSITION[_genPosition].ecart.
+  // pickNextDegree(prev, E_pot, useScalePool=true). E_pot = _ecart (Tool 5 override, V4).
   void maybeMutate(uint16_t globalStepCount);
 
   // --- Event helpers ---
