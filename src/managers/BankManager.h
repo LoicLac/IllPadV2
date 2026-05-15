@@ -37,6 +37,11 @@ public:
   // Set hold pad index (excluded from "any finger down" check in setCaptured).
   void setHoldPad(uint8_t padIdx);
 
+  // Emit the bank-select Note On for the current bank on channel 16.
+  // Called at boot, on BLE reconnect, and after a MIDI panic to resync the
+  // DAW with the live state. Bank-switch transitions emit automatically.
+  void emitBankSelectNote();
+
 private:
   MidiEngine*    _engine;
   LedController* _leds;
@@ -72,6 +77,10 @@ private:
   // Commit a bank switch: PB reset, allNotesOff on old channel, channel swap,
   // PB restore on new bank, LED update, triggerEvent(EVT_BANK_SWITCH).
   void switchToBank(uint8_t newBank);
+
+  // Send Note On/Off on canal 16 for one bank's select note.
+  // on=true → vel 127, on=false → vel 0 (= noteOff convention).
+  void sendBankSelectMidi(uint8_t bank, bool on);
 };
 
 #endif // BANK_MANAGER_H

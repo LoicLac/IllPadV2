@@ -181,6 +181,8 @@ bool BankManager::isHolding() const {
 void BankManager::switchToBank(uint8_t newBank) {
   if (newBank >= NUM_BANKS || newBank == _currentBank) return;
 
+  uint8_t oldBank = _currentBank;
+
   // Reset pitch bend to center on old bank's channel, then all notes off
   if (_engine) {
     _engine->sendPitchBend(8192);
@@ -202,6 +204,10 @@ void BankManager::switchToBank(uint8_t newBank) {
     _leds->triggerEvent(EVT_BANK_SWITCH);
   }
 
+  // Bank-select MIDI notification on canal 16 (DAW resync).
+  sendBankSelectMidi(oldBank, false);
+  sendBankSelectMidi(_currentBank, true);
+
   #if DEBUG_SERIAL
   const char* typeLabel = "?";
   switch (_banks[_currentBank].type) {
@@ -214,4 +220,18 @@ void BankManager::switchToBank(uint8_t newBank) {
   Serial.printf("[BANK] Bank %d (ch %d, %s)\n",
                 _currentBank + 1, _currentBank + 1, typeLabel);
   #endif
+}
+
+// =================================================================
+// Bank-select MIDI helpers (canal 16, notes BASE..BASE+7)
+// =================================================================
+void BankManager::sendBankSelectMidi(uint8_t bank, bool on) {
+  if (!_transport || bank >= NUM_BANKS) return;
+  _transport->sendNoteOn(BANK_SELECT_MIDI_CHANNEL,
+                          BANK_SELECT_MIDI_BASE_NOTE + bank,
+                          on ? BANK_SELECT_MIDI_VELOCITY : 0);
+}
+
+void BankManager::emitBankSelectNote() {
+  sendBankSelectMidi(_currentBank, true);
 }

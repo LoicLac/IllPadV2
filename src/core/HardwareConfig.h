@@ -259,6 +259,14 @@ enum ClockMode : uint8_t {
 const uint8_t  DEFAULT_CLOCK_MODE         = CLOCK_SLAVE;
 const uint8_t  DEFAULT_PANIC_ON_RECONNECT = 1;  // yes — CC123 on all channels when BLE reconnects
 const uint16_t DEFAULT_BAT_ADC_AT_FULL    = 0;  // 0 = uncalibrated, uses theoretical value
+
+// --- Bank Select MIDI (control telemetry, channel 16) ---
+// Notification sortante "bank active" pour resync DAW (Ableton MIDI Learn).
+// Note On velocity 127 = bank devient active, velocity 0 = bank devient inactive.
+// Banks 0..7 → notes BANK_SELECT_MIDI_BASE_NOTE + 0..7. Toujours actif, non configurable.
+const uint8_t BANK_SELECT_MIDI_CHANNEL   = 15;  // canal 16 (index 15)
+const uint8_t BANK_SELECT_MIDI_BASE_NOTE = 0;
+const uint8_t BANK_SELECT_MIDI_VELOCITY  = 127;
 // Theoretical ADC at full (4.2V): 4.2 / BAT_DIVIDER_RATIO / 3.3 * 4095 ≈ 2606
 const uint16_t BAT_ADC_FULL_THEORETICAL   = 2606;
 

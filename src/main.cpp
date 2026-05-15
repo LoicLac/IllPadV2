@@ -135,6 +135,8 @@ static void midiPanic() {
   for (uint8_t ch = 0; ch < NUM_BANKS; ch++) {
     s_transport.sendAllNotesOff(ch);
   }
+  // Phase 4: re-emit bank-select Note On on canal 16 to resync the DAW.
+  s_bankManager.emitBankSelectNote();
   #if DEBUG_SERIAL
   Serial.println("[PANIC] All notes off on all channels");
   #endif
@@ -423,6 +425,9 @@ void setup() {
   s_bankManager.setCurrentBank(currentBank);
   s_bankManager.setDoubleTapMs(s_doubleTapMs);
   s_bankManager.setHoldPad(holdPad);
+  // Boot-time bank-select notification on canal 16 (USB receivers only —
+  // BLE clients receive it on their first connect via panicOnReconnect).
+  s_bankManager.emitBankSelectNote();
   #if DEBUG_SERIAL
   Serial.println("[INIT] BankManager OK.");
   #endif
