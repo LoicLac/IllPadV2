@@ -9,6 +9,12 @@
 static const char* QUANTIZE_NAMES[] = {"Immediate", "Beat"};
 static const char  GROUP_LABELS[NUM_SCALE_GROUPS + 1] = {'-', 'A', 'B', 'C', 'D'};
 
+// Tool 5 ARPEG_GEN edit mode : cycle lineaire 4-champs MARGIN -> TYPE -> GROUP -> BONUS -> MARGIN.
+// Exception §4.4 strict (qui demande <-/-> horizontal sur la ligne, ^v change ligne) :
+// le cycle lineaire est plus court (4 keypress max) et preserve la regle universelle ^v = adjust.
+// Plan ARPEG_GEN §0 D5.
+enum SubField : uint8_t { SF_TYPE = 0, SF_GROUP = 1, SF_BONUS = 2, SF_MARGIN = 3 };
+
 ToolBankConfig::ToolBankConfig()
   : _leds(nullptr), _nvs(nullptr), _ui(nullptr), _banks(nullptr) {}
 
@@ -128,10 +134,91 @@ void ToolBankConfig::run() {
   InputParser input;
   uint8_t cursor = 0;
   bool editing = false;
+  SubField cursorSubField = SF_TYPE;  // current focused field in edit mode
   bool screenDirty = true;
   bool confirmDefaults = false;
   bool errorShown = false;
   unsigned long errorTime = 0;
+
+  // --- Sub-field cycling helpers (Phase 7 Task 16) ---
+  // ARPEG_GEN : 4 fields cycle (TYPE -> GROUP -> BONUS -> MARGIN -> TYPE).
+  // NORMAL / ARPEG : 2 fields cycle (TYPE -> GROUP -> TYPE) — BONUS/MARGIN n'existent pas.
+  auto nextSubField = [](SubField cur, BankType bt) -> SubField {
+    if (bt == BANK_ARPEG_GEN) {
+      switch (cur) {
+        case SF_TYPE:   return SF_GROUP;
+        case SF_GROUP:  return SF_BONUS;
+        case SF_BONUS:  return SF_MARGIN;
+        case SF_MARGIN: return SF_TYPE;
+      }
+    } else {
+      return (cur == SF_TYPE) ? SF_GROUP : SF_TYPE;
+    }
+    return SF_TYPE;
+  };
+  auto prevSubField = [](SubField cur, BankType bt) -> SubField {
+    if (bt == BANK_ARPEG_GEN) {
+      switch (cur) {
+        case SF_TYPE:   return SF_MARGIN;
+        case SF_GROUP:  return SF_TYPE;
+        case SF_BONUS:  return SF_GROUP;
+        case SF_MARGIN: return SF_BONUS;
+      }
+    } else {
+      return (cur == SF_TYPE) ? SF_GROUP : SF_TYPE;
+    }
+    return SF_TYPE;
+  };
+
+  // --- Type cycling helpers (Phase 4 Task 7 logic, factorise pour SF_TYPE NAV_UP/DOWN) ---
+  // 5-states forward : NORMAL -> ARPEG-Imm -> ARPEG-Beat -> ARPEG_GEN-Imm -> ARPEG_GEN-Beat -> NORMAL
+  // backward = inverse. Returns true if change applied, false if arp cap rejected.
+  auto cycleTypeForward = [&](uint8_t c) -> bool {
+    BankType cur = wkTypes[c];
+    if (cur == BANK_NORMAL) {
+      uint8_t arpCount = 0;
+      for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        if (isArpType((BankType)wkTypes[i])) arpCount++;
+      }
+      if (arpCount >= MAX_ARP_BANKS) return false;
+      wkTypes[c]    = BANK_ARPEG;
+      wkQuantize[c] = ARP_START_IMMEDIATE;
+    } else if (cur == BANK_ARPEG && wkQuantize[c] == ARP_START_IMMEDIATE) {
+      wkQuantize[c] = ARP_START_BEAT;
+    } else if (cur == BANK_ARPEG) {
+      wkTypes[c]    = BANK_ARPEG_GEN;
+      wkQuantize[c] = ARP_START_IMMEDIATE;
+    } else if (cur == BANK_ARPEG_GEN && wkQuantize[c] == ARP_START_IMMEDIATE) {
+      wkQuantize[c] = ARP_START_BEAT;
+    } else {
+      wkTypes[c]    = BANK_NORMAL;
+      wkQuantize[c] = DEFAULT_ARP_START_MODE;
+    }
+    return true;
+  };
+  auto cycleTypeBackward = [&](uint8_t c) -> bool {
+    BankType cur = wkTypes[c];
+    if (cur == BANK_NORMAL) {
+      uint8_t arpCount = 0;
+      for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        if (isArpType((BankType)wkTypes[i])) arpCount++;
+      }
+      if (arpCount >= MAX_ARP_BANKS) return false;
+      wkTypes[c]    = BANK_ARPEG_GEN;
+      wkQuantize[c] = ARP_START_BEAT;
+    } else if (cur == BANK_ARPEG_GEN && wkQuantize[c] == ARP_START_BEAT) {
+      wkQuantize[c] = ARP_START_IMMEDIATE;
+    } else if (cur == BANK_ARPEG_GEN) {
+      wkTypes[c]    = BANK_ARPEG;
+      wkQuantize[c] = ARP_START_BEAT;
+    } else if (cur == BANK_ARPEG && wkQuantize[c] == ARP_START_BEAT) {
+      wkQuantize[c] = ARP_START_IMMEDIATE;
+    } else {
+      wkTypes[c]    = BANK_NORMAL;
+      wkQuantize[c] = DEFAULT_ARP_START_MODE;
+    }
+    return true;
+  };
 
   _ui->vtClear();
 
@@ -209,86 +296,63 @@ void ToolBankConfig::run() {
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         editing = true;
+        cursorSubField = SF_TYPE;  // always start on TYPE (D5)
         screenDirty = true;
       }
     } else {
-      // Flat cycle 5-etats : NORMAL -> ARPEG-Imm -> ARPEG-Beat -> ARPEG_GEN-Imm -> ARPEG_GEN-Beat -> NORMAL
-      // arpCount cumule ARPEG + ARPEG_GEN (cap MAX_ARP_BANKS = 4) via isArpType.
+      // Edit mode field-focus (Phase 7 Task 16, plan §0 D5).
+      // <-/->: cycle cursorSubField. ^/v: adjust value of focused field.
       if (ev.type == NAV_RIGHT) {
-        BankType cur = wkTypes[cursor];
-        if (cur == BANK_NORMAL) {
-          // NORMAL -> ARPEG-Imm (check arp limit 4)
-          uint8_t arpCount = 0;
-          for (uint8_t i = 0; i < NUM_BANKS; i++) {
-            if (isArpType((BankType)wkTypes[i])) arpCount++;
-          }
-          if (arpCount >= MAX_ARP_BANKS) {
-            errorShown = true;
-            errorTime = millis();
-          } else {
-            wkTypes[cursor]    = BANK_ARPEG;
-            wkQuantize[cursor] = ARP_START_IMMEDIATE;
-            errorShown = false;
-          }
-        } else if (cur == BANK_ARPEG && wkQuantize[cursor] == ARP_START_IMMEDIATE) {
-          wkQuantize[cursor] = ARP_START_BEAT;
-          errorShown = false;
-        } else if (cur == BANK_ARPEG /* && Beat */) {
-          // ARPEG-Beat -> ARPEG_GEN-Imm (already counted, no cap check)
-          wkTypes[cursor]    = BANK_ARPEG_GEN;
-          wkQuantize[cursor] = ARP_START_IMMEDIATE;
-          errorShown = false;
-        } else if (cur == BANK_ARPEG_GEN && wkQuantize[cursor] == ARP_START_IMMEDIATE) {
-          wkQuantize[cursor] = ARP_START_BEAT;
-          errorShown = false;
-        } else {
-          // ARPEG_GEN-Beat -> NORMAL
-          wkTypes[cursor]    = BANK_NORMAL;
-          wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
-          errorShown = false;
-        }
+        cursorSubField = nextSubField(cursorSubField, wkTypes[cursor]);
         screenDirty = true;
       } else if (ev.type == NAV_LEFT) {
-        BankType cur = wkTypes[cursor];
-        if (cur == BANK_NORMAL) {
-          // NORMAL -> ARPEG_GEN-Beat (sens inverse, check arp limit 4)
-          uint8_t arpCount = 0;
-          for (uint8_t i = 0; i < NUM_BANKS; i++) {
-            if (isArpType((BankType)wkTypes[i])) arpCount++;
+        cursorSubField = prevSubField(cursorSubField, wkTypes[cursor]);
+        screenDirty = true;
+      } else if (ev.type == NAV_UP || ev.type == NAV_DOWN) {
+        bool up = (ev.type == NAV_UP);
+        switch (cursorSubField) {
+          case SF_TYPE: {
+            bool ok = up ? cycleTypeForward(cursor) : cycleTypeBackward(cursor);
+            if (!ok) {
+              errorShown = true;
+              errorTime = millis();
+            } else {
+              errorShown = false;
+              // If type leaves ARPEG_GEN while focused on BONUS/MARGIN, jump back to TYPE.
+              if (wkTypes[cursor] != BANK_ARPEG_GEN
+                  && (cursorSubField == SF_BONUS || cursorSubField == SF_MARGIN)) {
+                cursorSubField = SF_TYPE;
+              }
+            }
+            break;
           }
-          if (arpCount >= MAX_ARP_BANKS) {
-            errorShown = true;
-            errorTime = millis();
-          } else {
-            wkTypes[cursor]    = BANK_ARPEG_GEN;
-            wkQuantize[cursor] = ARP_START_BEAT;
-            errorShown = false;
+          case SF_GROUP: {
+            // Cycle group : -, A, B, C, D (5 entries via NUM_SCALE_GROUPS+1).
+            uint8_t mod = NUM_SCALE_GROUPS + 1;
+            wkGroups[cursor] = up
+              ? (uint8_t)((wkGroups[cursor] + 1) % mod)
+              : (uint8_t)((wkGroups[cursor] + mod - 1) % mod);
+            break;
           }
-        } else if (cur == BANK_ARPEG_GEN && wkQuantize[cursor] == ARP_START_BEAT) {
-          wkQuantize[cursor] = ARP_START_IMMEDIATE;
-          errorShown = false;
-        } else if (cur == BANK_ARPEG_GEN /* && Imm */) {
-          // ARPEG_GEN-Imm -> ARPEG-Beat
-          wkTypes[cursor]    = BANK_ARPEG;
-          wkQuantize[cursor] = ARP_START_BEAT;
-          errorShown = false;
-        } else if (cur == BANK_ARPEG && wkQuantize[cursor] == ARP_START_BEAT) {
-          wkQuantize[cursor] = ARP_START_IMMEDIATE;
-          errorShown = false;
-        } else {
-          // ARPEG-Imm -> NORMAL
-          wkTypes[cursor]    = BANK_NORMAL;
-          wkQuantize[cursor] = DEFAULT_ARP_START_MODE;
-          errorShown = false;
+          case SF_BONUS: {
+            // bonus_pile x10 : range 10..20 (= 1.0..2.0). +1=0.1, accelerated +5 (large jump).
+            uint8_t step = ev.accelerated ? 5 : 1;
+            int16_t v = (int16_t)wkBonusPilex10[cursor] + (up ? step : -step);
+            if (v < 10) v = 10;
+            if (v > 20) v = 20;
+            wkBonusPilex10[cursor] = (uint8_t)v;
+            break;
+          }
+          case SF_MARGIN: {
+            // margin_walk : range 3..12. +1, accelerated +3.
+            uint8_t step = ev.accelerated ? 3 : 1;
+            int16_t v = (int16_t)wkMarginWalk[cursor] + (up ? step : -step);
+            if (v < 3) v = 3;
+            if (v > 12) v = 12;
+            wkMarginWalk[cursor] = (uint8_t)v;
+            break;
+          }
         }
-        screenDirty = true;
-      } else if (ev.type == NAV_UP) {
-        // Cycle group forward : -, A, B, C, D, -
-        wkGroups[cursor] = (wkGroups[cursor] + 1) % (NUM_SCALE_GROUPS + 1);
-        screenDirty = true;
-      } else if (ev.type == NAV_DOWN) {
-        // Cycle group backward : -, D, C, B, A, -
-        wkGroups[cursor] = (wkGroups[cursor] + NUM_SCALE_GROUPS) % (NUM_SCALE_GROUPS + 1);
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
         if (saveConfig(wkTypes, wkQuantize, wkGroups, wkBonusPilex10, wkMarginWalk)) {
@@ -329,6 +393,7 @@ void ToolBankConfig::run() {
         bool selected = (cursor == i);
         bool isEditing = selected && editing;
         BankType bt = wkTypes[i];
+        bool isGen = (bt == BANK_ARPEG_GEN);
 
         char line[160];
         int pos = 0;
@@ -346,39 +411,43 @@ void ToolBankConfig::run() {
         pos += snprintf(line + pos, sizeof(line) - pos, "Bank %d    ", i + 1);
         visibleLen += 10;
 
-        // Type + quantize — editing shows [brackets] + cyan.
-        // Phase 4 : ARPEG_GEN affiche "ARPEG_GEN" sur 1 ligne (Phase 7 Task 16 ajoute la 2e ligne Bonus/Margin).
-        if (isEditing) {
-          if (bt == BANK_ARPEG_GEN) {
+        // --- Type + quantize ---
+        // Edit + cursorSubField=SF_TYPE -> [brackets] cyan-bold (highlighted).
+        // Edit autre champ -> sans brackets, normal cyan (selected).
+        // Hors edit : selected = cyan ; autres = normal.
+        bool typeFocus = isEditing && (cursorSubField == SF_TYPE);
+
+        if (typeFocus) {
+          if (isGen) {
             pos += snprintf(line + pos, sizeof(line) - pos,
                             VT_CYAN VT_BOLD "[ARPEG_GEN ─ %s]" VT_RESET, QUANTIZE_NAMES[wkQuantize[i]]);
-            visibleLen += 14 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);  // "[ARPEG_GEN ─ X]" : ─ = 1 char
+            visibleLen += 14 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);
           } else if (bt == BANK_ARPEG) {
             pos += snprintf(line + pos, sizeof(line) - pos,
                             VT_CYAN VT_BOLD "[ARPEG ─ %s]" VT_RESET, QUANTIZE_NAMES[wkQuantize[i]]);
-            visibleLen += 10 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);  // "[ARPEG ─ X]"
+            visibleLen += 10 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);
           } else {
             pos += snprintf(line + pos, sizeof(line) - pos, VT_CYAN VT_BOLD "[NORMAL]" VT_RESET);
-            visibleLen += 8;  // "[NORMAL]"
+            visibleLen += 8;
           }
         } else {
-          if (bt == BANK_ARPEG_GEN) {
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            selected ? VT_CYAN "ARPEG_GEN" VT_RESET : "ARPEG_GEN");
+          // Non-focused (edit autre champ, ou hors edit). Selected highlight via cyan dim.
+          const char* tColor = (selected ? VT_CYAN : "");
+          const char* tReset = (selected ? VT_RESET : "");
+          if (isGen) {
+            pos += snprintf(line + pos, sizeof(line) - pos, "%sARPEG_GEN%s", tColor, tReset);
             visibleLen += 9;
             pos += snprintf(line + pos, sizeof(line) - pos,
                             "   Quantize: %s", QUANTIZE_NAMES[wkQuantize[i]]);
-            visibleLen += 13 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);  // "   Quantize: X"
+            visibleLen += 13 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);
           } else if (bt == BANK_ARPEG) {
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            selected ? VT_CYAN "ARPEG" VT_RESET "   " : "ARPEG   ");
+            pos += snprintf(line + pos, sizeof(line) - pos, "%sARPEG%s   ", tColor, tReset);
             visibleLen += 8;
             pos += snprintf(line + pos, sizeof(line) - pos,
                             "    Quantize: %s", QUANTIZE_NAMES[wkQuantize[i]]);
             visibleLen += 14 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);
           } else {
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            selected ? VT_CYAN "NORMAL" VT_RESET "  " : "NORMAL  ");
+            pos += snprintf(line + pos, sizeof(line) - pos, "%sNORMAL%s  ", tColor, tReset);
             visibleLen += 8;
           }
         }
@@ -390,10 +459,11 @@ void ToolBankConfig::run() {
           visibleLen++;
         }
 
-        // Colonne Group : "Group: X" avec letter highlighted en edit mode
-        if (isEditing) {
+        // --- Colonne Group ---
+        bool groupFocus = isEditing && (cursorSubField == SF_GROUP);
+        if (groupFocus) {
           pos += snprintf(line + pos, sizeof(line) - pos,
-                          "Group: " VT_CYAN VT_BOLD "%c" VT_RESET,
+                          "Group: " VT_CYAN VT_BOLD "[%c]" VT_RESET,
                           GROUP_LABELS[wkGroups[i]]);
         } else if (selected) {
           pos += snprintf(line + pos, sizeof(line) - pos,
@@ -405,6 +475,53 @@ void ToolBankConfig::run() {
         }
 
         _ui->drawFrameLine("%s", line);
+
+        // --- Ligne 2 ARPEG_GEN : Bonus pile + Margin (indented col 14) ---
+        // Spec §22 : 2-lignes layout. Indent 14 = sous le label "ARPEG_GEN" de la ligne 1.
+        if (isGen) {
+          char line2[160];
+          int p2 = 0;
+          int v2 = 0;
+          for (int k = 0; k < 14; k++) { line2[p2++] = ' '; v2++; }
+
+          float bonusF      = (float)wkBonusPilex10[i] / 10.0f;
+          bool  bonusFocus  = isEditing && (cursorSubField == SF_BONUS);
+          bool  marginFocus = isEditing && (cursorSubField == SF_MARGIN);
+
+          if (bonusFocus) {
+            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
+                           "Bonus pile: " VT_CYAN VT_BOLD "[%.1f]" VT_RESET, bonusF);
+            v2 += 12 + 5;  // "Bonus pile: " (12) + "[1.5]" (5)
+          } else if (selected) {
+            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
+                           "Bonus pile: " VT_CYAN "%.1f" VT_RESET, bonusF);
+            v2 += 12 + 3;
+          } else {
+            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
+                           VT_DIM "Bonus pile: %.1f" VT_RESET, bonusF);
+            v2 += 12 + 3;
+          }
+
+          // Padding entre Bonus et Margin (visible col 40)
+          const int MARGIN_COL = 40;
+          while (v2 < MARGIN_COL && p2 < (int)sizeof(line2) - 32) {
+            line2[p2++] = ' ';
+            v2++;
+          }
+
+          if (marginFocus) {
+            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
+                           "Margin: " VT_CYAN VT_BOLD "[%d]" VT_RESET, wkMarginWalk[i]);
+          } else if (selected) {
+            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
+                           "Margin: " VT_CYAN "%d" VT_RESET, wkMarginWalk[i]);
+          } else {
+            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
+                           VT_DIM "Margin: %d" VT_RESET, wkMarginWalk[i]);
+          }
+
+          _ui->drawFrameLine("%s", line2);
+        }
       }
 
       _ui->drawFrameEmpty();
@@ -420,15 +537,37 @@ void ToolBankConfig::run() {
       } else {
         drawDescription(cursor, wkTypes[cursor]);
 
-        // Quantize description (when editing an ARPEG/ARPEG_GEN bank)
-        if (editing && isArpType(wkTypes[cursor])) {
+        // Sub-field description (in edit mode) — shown below bank list to clarify focused field.
+        // Spec §25 : INFO panel descriptions par sous-champ.
+        if (editing) {
           _ui->drawFrameEmpty();
-          switch (wkQuantize[cursor]) {
-            case 0:
-              _ui->drawFrameLine(VT_DIM "Immediate: arp starts on next clock division boundary. Lowest latency." VT_RESET);
+          switch (cursorSubField) {
+            case SF_TYPE: {
+              // Quantize description (only when ARPEG/ARPEG_GEN — quantize doesn't apply to NORMAL)
+              if (isArpType(wkTypes[cursor])) {
+                switch (wkQuantize[cursor]) {
+                  case 0:
+                    _ui->drawFrameLine(VT_DIM "Immediate: arp starts on next clock division boundary. Lowest latency." VT_RESET);
+                    break;
+                  case 1:
+                    _ui->drawFrameLine(VT_DIM "Beat: arp starts synced to next quarter note (24 ticks). Musical alignment." VT_RESET);
+                    break;
+                }
+              } else {
+                _ui->drawFrameLine(VT_DIM "Type: NORMAL/ARPEG/ARPEG_GEN. ^v cycles 5 states (ARPEG/ARPEG_GEN x Imm/Beat)." VT_RESET);
+              }
               break;
-            case 1:
-              _ui->drawFrameLine(VT_DIM "Beat: arp starts synced to next quarter note (24 ticks). Musical alignment." VT_RESET);
+            }
+            case SF_GROUP:
+              _ui->drawFrameLine(VT_DIM "Scale group: -, A, B, C, D. Banks in same group share scale changes." VT_RESET);
+              break;
+            case SF_BONUS:
+              _ui->drawFrameLine(VT_DIM "Bonus pile (1.0-2.0): walk weight on pile degrees during mutation." VT_RESET);
+              _ui->drawFrameLine(VT_DIM "  Higher = mutations stay anchored to pile. Lower = wider scale exploration." VT_RESET);
+              break;
+            case SF_MARGIN:
+              _ui->drawFrameLine(VT_DIM "Margin walk (3-12): how far the walk can drift above/below pile range." VT_RESET);
+              _ui->drawFrameLine(VT_DIM "  Smaller = melody hugs pile. Larger = melody drifts to neighboring degrees." VT_RESET);
               break;
           }
         }
@@ -441,11 +580,12 @@ void ToolBankConfig::run() {
 
       _ui->drawFrameEmpty();
 
-      // Control bar
+      // Control bar — uniformised per Phase 7 Task 17 (plan §0 D5 + §26).
+      // Edit : <-/-> cycle field, ^v adjust value of focused field. Universal §4.4 convention.
       if (confirmDefaults) {
         _ui->drawControlBar(CBAR_CONFIRM_ANY);
       } else if (editing) {
-        _ui->drawControlBar(VT_DIM "[</>] TYPE  [^v] GROUP" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
+        _ui->drawControlBar(VT_DIM "[</>] FIELD  [^v] VALUE" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
       } else {
         _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT  [d] DFLT" CBAR_SEP "[q] EXIT" VT_RESET);
       }
