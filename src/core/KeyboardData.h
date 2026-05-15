@@ -540,6 +540,10 @@ enum PotTarget : uint8_t {
   // MIDI output (user-assignable via Tool 6)
   TARGET_MIDI_CC,
   TARGET_MIDI_PITCHBEND,
+  // ARPEG_GEN per-bank (NEW — runtime-only, not user-mappable in Tool 7).
+  // Substitutes TARGET_PATTERN on banks of type BANK_ARPEG_GEN via two-binding strategy
+  // in PotRouter::rebuildBindings (D3, plan §0).
+  TARGET_GEN_POSITION,
   // Empty slot (explicit "no parameter here")
   TARGET_EMPTY,
   // Sentinel (used internally, not assignable)
@@ -598,6 +602,10 @@ const uint8_t MAX_ARP_BANKS    = 4;
 const uint8_t MAX_ARP_NOTES    = 48;
 const uint8_t MAX_ARP_SEQUENCE = 192;  // 48 notes × 4 octaves
 const uint8_t MAX_ARP_OCTAVES  = 4;
+
+// ARPEG_GEN — discrete grid positions (spec §13). Shared between ArpEngine (TABLE_GEN_POSITION
+// lookup) and PotRouter (TARGET_GEN_POSITION clamp/range).
+const uint8_t NUM_GEN_POSITIONS = 15;
 
 // =================================================================
 // Validation functions — shared by Tools, loadAll, WiFi handler

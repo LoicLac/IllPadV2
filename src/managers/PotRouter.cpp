@@ -52,6 +52,8 @@ PotRouter::PotRouter()
   , _shuffleDepth(0.0f)
   , _division(DIV_1_8)
   , _pattern(ARP_UP)
+  , _genPosition(5)         // ARPEG_GEN default (spec §13)
+  , _genPosLastZone(0xFF)   // hysteresis : not yet captured
   , _shuffleTemplate(0)
   , _baseVelocity(DEFAULT_BASE_VELOCITY)
   , _velocityVariation(DEFAULT_VELOCITY_VARIATION)
@@ -101,7 +103,8 @@ void PotRouter::loadStoredGlobals(float shape, uint16_t slew, uint16_t deadzone,
 
 void PotRouter::loadStoredPerBank(uint8_t baseVel, uint8_t velVar, uint16_t pitchBend,
                                    float gate, float shuffleDepth, ArpDivision div,
-                                   ArpPattern pat, uint8_t shuffleTmpl) {
+                                   ArpPattern pat, uint8_t shuffleTmpl,
+                                   uint8_t genPosition) {
   _baseVelocity      = baseVel;
   _velocityVariation = velVar;
   _pitchBend         = pitchBend;
@@ -110,6 +113,9 @@ void PotRouter::loadStoredPerBank(uint8_t baseVel, uint8_t velVar, uint16_t pitc
   _division          = div;
   _pattern           = pat;
   _shuffleTemplate   = shuffleTmpl;
+  if (genPosition >= NUM_GEN_POSITIONS) genPosition = NUM_GEN_POSITIONS - 1;
+  _genPosition       = genPosition;
+  _genPosLastZone    = 0xFF;  // bank switch -> recapture hysteresis on next pot move
 }
 
 // =================================================================
@@ -144,6 +150,7 @@ void PotRouter::getRangeForTarget(PotTarget t, uint16_t& lo, uint16_t& hi) {
     case TARGET_SHUFFLE_DEPTH:      lo = 0; hi = 4095; break;
     case TARGET_DIVISION:           lo = 0; hi = 8; break;
     case TARGET_PATTERN:            lo = 0; hi = NUM_ARP_PATTERNS - 1; break;
+    case TARGET_GEN_POSITION:       lo = 0; hi = NUM_GEN_POSITIONS - 1; break;
     case TARGET_SHUFFLE_TEMPLATE:   lo = 0; hi = NUM_SHUFFLE_TEMPLATES - 1; break;
     case TARGET_BASE_VELOCITY:      lo = 1; hi = 127; break;
     case TARGET_VELOCITY_VARIATION: lo = 0; hi = 100; break;
@@ -208,6 +215,42 @@ void PotRouter::rebuildBindings() {
     }
   }
 
+  // --- Two-binding strategy (D3, plan §0) — mirror ARPEG slots into ARPEG_GEN context ---
+  // For each non-empty slot in arpegMap, add a parallel binding tagged bankType=BANK_ARPEG_GEN.
+  // TARGET_PATTERN is substituted with TARGET_GEN_POSITION ; all other targets keep semantics.
+  // « Un seul caractere d'arp » cote musicien : si l'utilisateur mappe Tool 7 le slot R2+hold
+  // ARPEG context vers MIDI CC, plus de TARGET_PATTERN ni TARGET_GEN_POSITION (coherent).
+  for (uint8_t slot = 0; slot < POT_MAPPING_SLOTS; slot++) {
+    PotTarget target = _mapping.arpegMap[slot].target;
+    if (target == TARGET_EMPTY || target == TARGET_NONE) continue;
+    if (_numBindings >= MAX_BINDINGS) break;
+
+    uint8_t potIdx  = slot / 2;
+    uint8_t btnMask = (slot & 1) ? 0x01 : 0x00;
+    PotTarget effective = (target == TARGET_PATTERN) ? TARGET_GEN_POSITION : target;
+    uint16_t lo, hi;
+    getRangeForTarget(effective, lo, hi);
+
+    PotBinding& b = _bindings[_numBindings];
+    b.potIndex   = potIdx;
+    b.buttonMask = btnMask;
+    b.bankType   = BANK_ARPEG_GEN;
+    b.target     = effective;
+    b.rangeMin   = lo;
+    b.rangeMax   = hi;
+    b.ccNumber   = _mapping.arpegMap[slot].ccNumber;
+
+    if (effective == TARGET_MIDI_CC && _ccSlotCount < MAX_CC_SLOTS) {
+      _ccNumber[_ccSlotCount]     = _mapping.arpegMap[slot].ccNumber;
+      _ccValue[_ccSlotCount]      = 0;
+      _ccDirty[_ccSlotCount]      = false;
+      _ccBindingIdx[_ccSlotCount] = _numBindings;
+      _ccSlotCount++;
+    }
+
+    _numBindings++;
+  }
+
   // --- Fixed rear pot bindings (not user-configurable) ---
   // Rear alone → LED brightness
   if (_numBindings < MAX_BINDINGS) {
@@ -266,6 +309,9 @@ void PotRouter::seedCatchValues(bool keepGlobalCatch) {
         break;
       case TARGET_PATTERN:
         norm = (float)_pattern / (float)(NUM_ARP_PATTERNS - 1);
+        break;
+      case TARGET_GEN_POSITION:
+        norm = (float)_genPosition / (float)(NUM_GEN_POSITIONS - 1);
         break;
       case TARGET_SHUFFLE_TEMPLATE:
         norm = (float)_shuffleTemplate / (float)(NUM_SHUFFLE_TEMPLATES - 1);
@@ -454,6 +500,31 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       _pattern = (ArpPattern)pat;
       break;
     }
+    case TARGET_GEN_POSITION: {
+      // Convertir ADC -> zone candidate (0..NUM_GEN_POSITIONS-1).
+      uint8_t candidate = (uint8_t)adcToRange(adc, 0, NUM_GEN_POSITIONS - 1);
+      if (candidate >= NUM_GEN_POSITIONS) candidate = NUM_GEN_POSITIONS - 1;
+
+      // Task 14 — hysteresis : ne basculer que si l'ADC depasse la frontiere de zone
+      // courante de ±HYSTERESIS_LSB (~1.5 % × 4095). Empeche le flicker de zone aux frontieres.
+      if (_genPosLastZone == 0xFF) {
+        // Premier passage post-bank-switch ou boot : accepte direct.
+        _genPosition    = candidate;
+        _genPosLastZone = candidate;
+      } else if (candidate != _genPosLastZone) {
+        static constexpr float HYSTERESIS_LSB = 61.0f;             // ±1.5 % × 4095
+        static constexpr float ZONE_WIDTH = 4095.0f / (float)NUM_GEN_POSITIONS;
+        static constexpr float ZONE_HALF  = ZONE_WIDTH * 0.5f;
+        float zoneCenter   = ((float)_genPosLastZone + 0.5f) * ZONE_WIDTH;
+        float distFromCtr  = adc - zoneCenter;
+        if (distFromCtr < 0.0f) distFromCtr = -distFromCtr;
+        if (distFromCtr > (ZONE_HALF + HYSTERESIS_LSB)) {
+          _genPosition    = candidate;
+          _genPosLastZone = candidate;
+        }
+      }
+      break;
+    }
     case TARGET_SHUFFLE_TEMPLATE: {
       uint8_t tmpl = (uint8_t)adcToRange(adc, 0, NUM_SHUFFLE_TEMPLATES - 1);
       if (tmpl >= NUM_SHUFFLE_TEMPLATES) tmpl = NUM_SHUFFLE_TEMPLATES - 1;
@@ -591,6 +662,7 @@ bool PotRouter::isPerBankTarget(PotTarget t) const {
     case TARGET_SHUFFLE_DEPTH:
     case TARGET_DIVISION:
     case TARGET_PATTERN:
+    case TARGET_GEN_POSITION:     // ARPEG_GEN per-bank grid position
     case TARGET_SHUFFLE_TEMPLATE:
     case TARGET_BASE_VELOCITY:
     case TARGET_VELOCITY_VARIATION:
@@ -608,6 +680,7 @@ uint8_t PotRouter::getDiscreteSteps(PotTarget t) {
   switch (t) {
     case TARGET_DIVISION:
     case TARGET_PATTERN:
+    case TARGET_GEN_POSITION:
     case TARGET_SHUFFLE_TEMPLATE: {
       uint16_t lo, hi;
       getRangeForTarget(t, lo, hi);
@@ -629,6 +702,7 @@ float       PotRouter::getGateLength() const           { return _gateLength; }
 float       PotRouter::getShuffleDepth() const         { return _shuffleDepth; }
 ArpDivision PotRouter::getDivision() const             { return _division; }
 ArpPattern  PotRouter::getPattern() const              { return _pattern; }
+uint8_t     PotRouter::getGenPosition() const          { return _genPosition; }
 uint8_t     PotRouter::getShuffleTemplate() const      { return _shuffleTemplate; }
 uint8_t     PotRouter::getBaseVelocity() const         { return _baseVelocity; }
 uint8_t     PotRouter::getVelocityVariation() const    { return _velocityVariation; }

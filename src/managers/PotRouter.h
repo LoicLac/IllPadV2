@@ -42,7 +42,8 @@ public:
                          uint16_t tempo, uint8_t ledBright, uint8_t padSens);
   void loadStoredPerBank(uint8_t baseVel, uint8_t velVar, uint16_t pitchBend,
                          float gate, float shuffleDepth, ArpDivision div,
-                         ArpPattern pat, uint8_t shuffleTmpl);
+                         ArpPattern pat, uint8_t shuffleTmpl,
+                         uint8_t genPosition);  // ARPEG_GEN _genPosition (0..14)
 
   // Load user pot mapping from NVS (call BEFORE begin())
   void loadMapping(const PotMappingStore& store);
@@ -62,6 +63,7 @@ public:
   float       getShuffleDepth() const;
   ArpDivision getDivision() const;
   ArpPattern  getPattern() const;
+  uint8_t     getGenPosition() const;       // ARPEG_GEN grid position (0..14)
   uint8_t     getShuffleTemplate() const;
   uint8_t     getBaseVelocity() const;
   uint8_t     getVelocityVariation() const;
@@ -91,8 +93,10 @@ public:
   static const PotMappingStore DEFAULT_MAPPING;
 
 private:
-  // Runtime binding table (rebuilt from mapping)
-  static const uint8_t MAX_BINDINGS = 24;
+  // Runtime binding table (rebuilt from mapping).
+  // 32 = 8 NORMAL + 8 ARPEG + 8 ARPEG_GEN (two-binding mirror) + 2 rear + headroom.
+  // Phase 6 Task 13 : two-binding strategy for ARPEG_GEN context (D3, plan §0).
+  static const uint8_t MAX_BINDINGS = 32;
   PotBinding _bindings[MAX_BINDINGS];
   uint8_t    _numBindings;
 
@@ -126,6 +130,8 @@ private:
   float       _shuffleDepth;
   ArpDivision _division;
   ArpPattern  _pattern;
+  uint8_t     _genPosition;       // ARPEG_GEN 0..14 (TARGET_GEN_POSITION)
+  uint8_t     _genPosLastZone;    // hysteresis : last committed zone, 0xFF = uninitialised
   uint8_t     _shuffleTemplate;
   uint8_t     _baseVelocity;
   uint8_t     _velocityVariation;
@@ -133,8 +139,9 @@ private:
   uint8_t     _ledBrightness;
   uint8_t     _padSensitivity;
 
-  // Output values — MIDI CC/PB (Phase 2)
-  static const uint8_t MAX_CC_SLOTS = 16;  // 8 NORMAL + 8 ARPEG slots can all be CC
+  // Output values — MIDI CC/PB (Phase 2). Bumped to 24 to accommodate ARPEG_GEN
+  // mirror bindings which can also map to MIDI_CC.
+  static const uint8_t MAX_CC_SLOTS = 24;  // 8 NORMAL + 8 ARPEG + 8 ARPEG_GEN slots can all be CC
   uint8_t  _ccNumber[MAX_CC_SLOTS];
   uint8_t  _ccValue[MAX_CC_SLOTS];
   bool     _ccDirty[MAX_CC_SLOTS];

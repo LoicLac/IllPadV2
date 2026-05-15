@@ -376,13 +376,23 @@ void setup() {
       s_banks[i].arpEngine->setScaleConfig(s_banks[i].scale);
       s_banks[i].arpEngine->setPadOrder(s_padOrder);
 
-      // Apply NVS-loaded arp params to each engine
+      // Apply NVS-loaded arp params to each engine.
+      // ArpPotStore.pattern is dual-semantic (Task 3 plan note) :
+      //   - BANK_ARPEG     : ArpPattern enum (0..NUM_ARP_PATTERNS-1)
+      //   - BANK_ARPEG_GEN : _genPosition (0..NUM_GEN_POSITIONS-1)
+      // Routed via the engine's mode here (already set above by setEngineMode).
       const ArpPotStore& arp = s_nvsManager.getLoadedArpParams(i);
       s_banks[i].arpEngine->setGateLength(max(0.005f, (float)arp.gateRaw / 4095.0f));
       s_banks[i].arpEngine->setShuffleDepth((float)arp.shuffleDepthRaw / 4095.0f);
       s_banks[i].arpEngine->setDivision((ArpDivision)arp.division);
-      s_banks[i].arpEngine->setPattern((ArpPattern)arp.pattern);
-      s_banks[i].arpEngine->setOctaveRange(arp.octaveRange);
+      if (s_banks[i].type == BANK_ARPEG_GEN) {
+        s_banks[i].arpEngine->setGenPosition(arp.pattern);
+        // Mutation level (= former octaveRange semantic for ARPEG_GEN, spec §7).
+        s_banks[i].arpEngine->setMutationLevel(arp.octaveRange);
+      } else {
+        s_banks[i].arpEngine->setPattern((ArpPattern)arp.pattern);
+        s_banks[i].arpEngine->setOctaveRange(arp.octaveRange);
+      }
       s_banks[i].arpEngine->setShuffleTemplate(arp.shuffleTemplate);
       s_banks[i].arpEngine->setBaseVelocity(s_banks[i].baseVelocity);
       s_banks[i].arpEngine->setVelocityVariation(s_banks[i].velocityVariation);
@@ -606,17 +616,19 @@ static void reloadPerBankParams(BankSlot& newSlot) {
   ArpDivision div = DIV_1_8;
   ArpPattern pat = ARP_UP;
   uint8_t shufTmpl = 0;
+  uint8_t genPos = 5;  // ARPEG_GEN default (spec §13)
   if (isArpType(newSlot.type) && newSlot.arpEngine) {
     gate      = newSlot.arpEngine->getGateLength();
     shufDepth = newSlot.arpEngine->getShuffleDepth();
     div       = newSlot.arpEngine->getDivision();
     pat       = newSlot.arpEngine->getPattern();
     shufTmpl  = newSlot.arpEngine->getShuffleTemplate();
+    genPos    = newSlot.arpEngine->getGenPosition();
   }
 
   s_potRouter.loadStoredPerBank(
     newSlot.baseVelocity, newSlot.velocityVariation, newSlot.pitchBendOffset,
-    gate, shufDepth, div, pat, shufTmpl
+    gate, shufDepth, div, pat, shufTmpl, genPos
   );
   s_potRouter.seedCatchValues(true);
   s_potRouter.resetPerBankCatch();
@@ -709,17 +721,22 @@ static void handleHoldPad(const SharedKeyboardState& state) {
 }
 
 // --- Push live pot params to engine (extracted for LOOP extensibility) ---
-// Phase 3 conserve setPattern(getPattern()) pour ARPEG_GEN — Phase 6 Task 15
-// branchera ARPEG (setPattern) vs ARPEG_GEN (setGenPosition).
+// Phase 6 Task 15 : branche setPattern (ARPEG) vs setGenPosition (ARPEG_GEN) selon _engineMode.
+// Tous les autres setters restent communs (gate, shuffle, division, template, velocity).
 static void pushParamsToEngine(BankSlot& slot) {
-  if (isArpType(slot.type) && slot.arpEngine) {
-    slot.arpEngine->setGateLength(s_potRouter.getGateLength());
-    slot.arpEngine->setShuffleDepth(s_potRouter.getShuffleDepth());
-    slot.arpEngine->setDivision(s_potRouter.getDivision());
+  if (!isArpType(slot.type) || !slot.arpEngine) return;
+
+  slot.arpEngine->setGateLength(s_potRouter.getGateLength());
+  slot.arpEngine->setShuffleDepth(s_potRouter.getShuffleDepth());
+  slot.arpEngine->setDivision(s_potRouter.getDivision());
+  slot.arpEngine->setShuffleTemplate(s_potRouter.getShuffleTemplate());
+  slot.arpEngine->setBaseVelocity(s_potRouter.getBaseVelocity());
+  slot.arpEngine->setVelocityVariation(s_potRouter.getVelocityVariation());
+
+  if (slot.arpEngine->getEngineMode() == EngineMode::GENERATIVE) {
+    slot.arpEngine->setGenPosition(s_potRouter.getGenPosition());
+  } else {
     slot.arpEngine->setPattern(s_potRouter.getPattern());
-    slot.arpEngine->setShuffleTemplate(s_potRouter.getShuffleTemplate());
-    slot.arpEngine->setBaseVelocity(s_potRouter.getBaseVelocity());
-    slot.arpEngine->setVelocityVariation(s_potRouter.getVelocityVariation());
   }
 }
 

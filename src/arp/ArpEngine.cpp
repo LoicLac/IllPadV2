@@ -6,6 +6,17 @@
 // Shuffle templates now in midi/GrooveTemplates.h (shared with LoopEngine)
 
 // =================================================================
+// ARPEG_GEN — discrete grid (spec §13)
+// 15 (seqLen, ecart) entries swept by R2+hold (Phase 6 Task 13).
+// =================================================================
+struct GenPositionEntry { uint16_t seqLen; uint8_t ecart; };
+static const GenPositionEntry TABLE_GEN_POSITION[NUM_GEN_POSITIONS] = {
+  { 8,  1}, { 8,  2}, {16,  2}, {16,  3}, {24,  3},
+  {24,  4}, {32,  4}, {32,  5}, {48,  5}, {48,  6},
+  {64,  6}, {64,  7}, {96,  8}, {96, 10}, {96, 12}
+};
+
+// =================================================================
 // Constructor
 // =================================================================
 ArpEngine::ArpEngine()
@@ -21,7 +32,10 @@ ArpEngine::ArpEngine()
     _waitingForQuantize(false), _quantizeMode(ARP_START_IMMEDIATE),
     _lastDispatchedGlobalTick(0xFFFFFFFF),
     _engineMode(EngineMode::CLASSIC), _sequenceGenDirty(false),
-    _bonusPilex10(15), _marginWalk(7) {
+    _bonusPilex10(15), _marginWalk(7),
+    _pileDegreeCount(0), _pileLo(0), _pileHi(0),
+    _seqLenGen(0), _genPosition(0), _mutationLevel(1),
+    _stepIndexGen(-1), _mutationStepCounter(0) {
   // Init pile arrays
   for (uint8_t i = 0; i < MAX_ARP_NOTES; i++) {
     _positions[i] = 0xFF;
@@ -36,6 +50,9 @@ ArpEngine::ArpEngine()
   }
   // Init reference counts — no notes ringing
   memset(_noteRefCount, 0, sizeof(_noteRefCount));
+  // ARPEG_GEN buffers
+  for (uint16_t i = 0; i < MAX_ARP_GEN_SEQUENCE; i++) _sequenceGen[i] = 0;
+  for (uint8_t  i = 0; i < MAX_ARP_NOTES; i++) _pileDegrees[i] = 0;
 }
 
 // =================================================================
@@ -97,6 +114,247 @@ void ArpEngine::setMarginWalk(uint8_t margin) {
   if (margin >= 3 && margin <= 12) _marginWalk = margin;
 }
 
+// --- ARPEG_GEN runtime params (Phase 5 Task 8) ---
+// Pot R2+hold balaye 0..14 via PotRouter (Phase 6 Task 13). Pot move at lock = §19
+// (Phase 7 Task 18 wires the "preview only, apply on next non-lock") behavior.
+// Phase 5 ships the simple write : update _genPosition + _seqLenGen via lookup,
+// no regen — _sequenceGenDirty stays user-controlled (pile 0->1, scale change, etc.).
+void ArpEngine::setGenPosition(uint8_t pos) {
+  if (pos >= NUM_GEN_POSITIONS) pos = NUM_GEN_POSITIONS - 1;
+  if (pos == _genPosition) return;
+
+  uint16_t oldLen = _seqLenGen;
+  uint16_t newLen = TABLE_GEN_POSITION[pos].seqLen;
+  if (newLen > MAX_ARP_GEN_SEQUENCE) newLen = MAX_ARP_GEN_SEQUENCE;
+  uint8_t  ePot   = TABLE_GEN_POSITION[pos].ecart;
+
+  // Extension : prolonger la sequence existante via walk continu depuis le dernier step
+  // pour eviter les "trous" monotones (steps non-initialises = degree 0 = root repetee).
+  // Pool = pile only (useScalePool=false) conformement spec §19. Phase 9 ajoute un override
+  // per-bank `extendPoolMode` pour exposer le switch pile-only / pile+scale en Tool 5.
+  if (newLen > oldLen && oldLen > 0 && _pileDegreeCount > 0 && _engineMode == EngineMode::GENERATIVE) {
+    int8_t prev = _sequenceGen[oldLen - 1];
+    for (uint16_t i = oldLen; i < newLen; i++) {
+      _sequenceGen[i] = pickNextDegree(prev, ePot, false);
+      prev = _sequenceGen[i];
+    }
+  }
+
+  _genPosition = pos;
+  _seqLenGen   = newLen;
+  // _stepIndexGen clamp : if pointer beyond new length, wrap to 0 next step.
+  if (_stepIndexGen >= (int16_t)_seqLenGen) _stepIndexGen = -1;
+}
+
+void ArpEngine::setMutationLevel(uint8_t level) {
+  if (level < 1) level = 1;
+  if (level > 4) level = 4;
+  _mutationLevel = level;
+}
+
+// =================================================================
+// ARPEG_GEN walk constant — exponential proximity weight factor (spec §40 point 1).
+// w(d) = expf(-fabsf(d - prev) / (E * ARPEG_GEN_PROXIMITY_FACTOR))
+// Tunable post-implementation.
+// =================================================================
+static constexpr float ARPEG_GEN_PROXIMITY_FACTOR = 0.4f;
+
+// Recompute _pileDegrees + _pileLo + _pileHi from _positions + _padOrder + _scale.
+// Called on pile add/remove and on scale change. _padOrder may be null at boot — early return.
+void ArpEngine::recomputePileDegrees() {
+  _pileDegreeCount = 0;
+  if (!_padOrder || _positionCount == 0) {
+    _pileLo = 0;
+    _pileHi = 0;
+    return;
+  }
+  for (uint8_t i = 0; i < _positionCount && _pileDegreeCount < MAX_ARP_NOTES; i++) {
+    uint8_t padIdx = _positions[i];
+    if (padIdx >= NUM_KEYS) continue;
+    uint8_t order = _padOrder[padIdx];
+    if (order == 0xFF) continue;
+    _pileDegrees[_pileDegreeCount++] = ScaleResolver::padOrderToDegree(order, _scale);
+  }
+  if (_pileDegreeCount == 0) {
+    _pileLo = 0;
+    _pileHi = 0;
+    return;
+  }
+  _pileLo = _pileDegrees[0];
+  _pileHi = _pileDegrees[0];
+  for (uint8_t i = 1; i < _pileDegreeCount; i++) {
+    if (_pileDegrees[i] < _pileLo) _pileLo = _pileDegrees[i];
+    if (_pileDegrees[i] > _pileHi) _pileHi = _pileDegrees[i];
+  }
+}
+
+// Pick next degree via exponential-weighted walk (spec §12, §16, §37).
+// Pool composition :
+//   useScalePool=false (initial generation) : pool = pile degrees only, no bonus_pile multiplier.
+//   useScalePool=true  (mutation)           : pool = pile ∪ scale_window[prev-E..prev+E],
+//                                              with bonus_pile multiplier on pile candidates.
+// Filters : walk_min ≤ d ≤ walk_max  (walk_min = pile_lo - margin, walk_max = pile_hi + margin)
+//           |d - prev| ≤ E
+// Empty pool after filtering → returns prev (fallback : repetition).
+int8_t ArpEngine::pickNextDegree(int8_t prev, uint8_t E, bool useScalePool) {
+  if (_pileDegreeCount == 0 || E == 0) return prev;
+
+  // Walk bounds : pile span widened by _marginWalk (3..12 degres).
+  int16_t walkMin = (int16_t)_pileLo - (int16_t)_marginWalk;
+  int16_t walkMax = (int16_t)_pileHi + (int16_t)_marginWalk;
+
+  // Candidate pool : at worst pile (48) + scale_window (2*E+1, max 2*12+1=25) = ~73.
+  // MAX_ARP_NOTES (48) + 2*MARGIN_WALK_MAX+1 (25) + buffer = 96. Stack-allocated, fine.
+  static const uint8_t POOL_MAX = 96;
+  int8_t  pool[POOL_MAX];
+  bool    fromPile[POOL_MAX];   // true if candidate also in _pileDegrees[] (for bonus_pile)
+  uint8_t poolCount = 0;
+
+  auto inWindow = [&](int16_t d) -> bool {
+    if (d < walkMin || d > walkMax) return false;
+    int16_t delta = (int16_t)d - (int16_t)prev;
+    if (delta < 0) delta = -delta;
+    return delta <= (int16_t)E;
+  };
+
+  auto alreadyIn = [&](int8_t d) -> int8_t {
+    for (uint8_t i = 0; i < poolCount; i++) {
+      if (pool[i] == d) return (int8_t)i;
+    }
+    return -1;
+  };
+
+  // 1) Pile candidates always considered.
+  for (uint8_t i = 0; i < _pileDegreeCount && poolCount < POOL_MAX; i++) {
+    int8_t d = _pileDegrees[i];
+    if (!inWindow((int16_t)d)) continue;
+    if (alreadyIn(d) >= 0) continue;
+    pool[poolCount]     = d;
+    fromPile[poolCount] = true;
+    poolCount++;
+  }
+
+  // 2) Scale window candidates (mutation only). Each integer step in [prev-E..prev+E]
+  //    is a valid scale degree (chromatic = semitone, 7-notes = scale step).
+  if (useScalePool) {
+    int16_t lo = (int16_t)prev - (int16_t)E;
+    int16_t hi = (int16_t)prev + (int16_t)E;
+    if (lo < walkMin) lo = walkMin;
+    if (hi > walkMax) hi = walkMax;
+    for (int16_t d = lo; d <= hi && poolCount < POOL_MAX; d++) {
+      // int8_t range : keep pool degree fitting in signed byte (extreme walk margins still safe).
+      if (d < -128 || d > 127) continue;
+      int8_t dd = (int8_t)d;
+      if (alreadyIn(dd) >= 0) continue;  // dedup — pile candidates already in pool keep their bonus
+      pool[poolCount]     = dd;
+      fromPile[poolCount] = false;
+      poolCount++;
+    }
+  }
+
+  if (poolCount == 0) return prev;  // spec §37 fallback
+
+  // 3) Compute weights w(Δ) = expf(-|d - prev| / (E * 0.4)) ; pile candidates × bonus_pile (mutation).
+  float invDenom = 1.0f / ((float)E * ARPEG_GEN_PROXIMITY_FACTOR);
+  float bonus = (useScalePool) ? ((float)_bonusPilex10 * 0.1f) : 1.0f;  // 1.0..2.0 typical
+
+  float weights[POOL_MAX];
+  float total = 0.0f;
+  for (uint8_t i = 0; i < poolCount; i++) {
+    int16_t delta = (int16_t)pool[i] - (int16_t)prev;
+    if (delta < 0) delta = -delta;
+    float w = expf(-(float)delta * invDenom);
+    if (fromPile[i] && useScalePool) w *= bonus;
+    weights[i] = w;
+    total += w;
+  }
+
+  if (total <= 0.0f) return prev;  // numeric guard
+
+  // 4) Uniform draw + linear scan over cumulative weights.
+  float r = (float)random(0, 100000) / 100000.0f * total;
+  float acc = 0.0f;
+  for (uint8_t i = 0; i < poolCount; i++) {
+    acc += weights[i];
+    if (r <= acc) return pool[i];
+  }
+  return pool[poolCount - 1];  // fallback (rounding edge)
+}
+
+// (Re)generate _sequenceGen[] from the pile (spec §14).
+// E_init = max(E_pot, pile_span) — first generation uses a wider ecart so the walk can
+// reach all pile degrees from any starting point. Mutation later uses strict E_pot (spec §15).
+// Pile of 1 note (spec §34) : sequence is full repetition of that single degree.
+void ArpEngine::seedSequenceGen() {
+  _sequenceGenDirty = false;
+  _stepIndexGen     = -1;
+  _mutationStepCounter = 0;
+
+  if (_pileDegreeCount == 0) {
+    _seqLenGen = 0;
+    return;
+  }
+
+  uint16_t seqLen = TABLE_GEN_POSITION[_genPosition].seqLen;
+  uint8_t  ePot   = TABLE_GEN_POSITION[_genPosition].ecart;
+  if (seqLen > MAX_ARP_GEN_SEQUENCE) seqLen = MAX_ARP_GEN_SEQUENCE;
+
+  // Degenerate case : pile of 1 note -> full repetition (spec §34).
+  if (_pileDegreeCount == 1) {
+    int8_t d = _pileDegrees[0];
+    for (uint16_t i = 0; i < seqLen; i++) _sequenceGen[i] = d;
+    _seqLenGen = seqLen;
+    #if DEBUG_SERIAL
+    Serial.printf("[GEN] seed seqLen=%u (pile=1 note %d, repetition)\n", seqLen, d);
+    #endif
+    return;
+  }
+
+  // E_init widened so first generation can traverse pile span.
+  int16_t pileSpan16 = (int16_t)_pileHi - (int16_t)_pileLo;
+  if (pileSpan16 < 0) pileSpan16 = 0;
+  uint8_t eInit = (pileSpan16 > (int16_t)ePot) ? (uint8_t)pileSpan16 : ePot;
+
+  // Seed first step uniformly from pile.
+  uint8_t firstIdx = (uint8_t)random(0, _pileDegreeCount);
+  _sequenceGen[0] = _pileDegrees[firstIdx];
+
+  // Walk the rest. Initial generation : pool = pile only (useScalePool=false).
+  for (uint16_t i = 1; i < seqLen; i++) {
+    _sequenceGen[i] = pickNextDegree(_sequenceGen[i - 1], eInit, false);
+  }
+  _seqLenGen = seqLen;
+
+  #if DEBUG_SERIAL
+  Serial.printf("[GEN] seed seqLen=%u E_init=%u pile=%u lo=%d hi=%d\n",
+                seqLen, eInit, _pileDegreeCount, _pileLo, _pileHi);
+  #endif
+}
+
+// Maybe mutate _sequenceGen[] at one random index (spec §15, §20).
+// _mutationLevel : 1=lock (no-op), 2=1/16, 3=1/8, 4=1/4 (rate of step counts that mutate).
+void ArpEngine::maybeMutate(uint16_t globalStepCount) {
+  if (_mutationLevel <= 1) return;          // lock : no mutation
+  if (_seqLenGen == 0) return;
+  if (_pileDegreeCount == 0) return;
+
+  uint16_t mod;
+  switch (_mutationLevel) {
+    case 2: mod = 16; break;
+    case 3: mod =  8; break;
+    case 4: mod =  4; break;
+    default: return;
+  }
+  if ((globalStepCount % mod) != 0) return;
+
+  uint16_t idx = (uint16_t)random(0, _seqLenGen);
+  uint16_t prevIdx = (idx == 0) ? (_seqLenGen - 1) : (idx - 1);
+  int8_t  prev = _sequenceGen[prevIdx];
+  uint8_t ePot = TABLE_GEN_POSITION[_genPosition].ecart;
+
+  _sequenceGen[idx] = pickNextDegree(prev, ePot, true);  // mutation : pile + scale window, bonus_pile actif
+}
+
 // =================================================================
 // Pile management — padOrder positions, NOT MIDI notes
 // =================================================================
@@ -126,6 +384,25 @@ void ArpEngine::addPadPosition(uint8_t padOrderPos) {
   _positionOrder[_orderCount++] = padOrderPos;
 
   _sequenceDirty = true;
+
+  // ARPEG_GEN : refresh cached pile degrees on every pile change ; trigger regen on 0->1.
+  if (_engineMode == EngineMode::GENERATIVE) {
+    recomputePileDegrees();
+    if (wasEmpty) {
+      _sequenceGenDirty = true;  // spec §17 : pile 0->1 = reseed trigger
+    } else if (_seqLenGen > 0 && _pileDegreeCount > 0) {
+      // Option B (live response) : pile add 1->N, N->N+1, etc. force quelques mutations
+      // ciblees pour que la nouvelle note apparaisse audiblement dans la sequence sans
+      // attendre le mutation rate naturel. Conserve le walk + bonus_pile (identite GEN).
+      // 3 mutations fixes : ~37% sur seqLen=8 (court, audible), ~3% sur seqLen=96 (long, subtil).
+      uint8_t ePot = TABLE_GEN_POSITION[_genPosition].ecart;
+      for (uint8_t k = 0; k < 3; k++) {
+        uint16_t idx = (uint16_t)random(0, _seqLenGen);
+        uint16_t prevIdx = (idx == 0) ? (_seqLenGen - 1) : (idx - 1);
+        _sequenceGen[idx] = pickNextDegree(_sequenceGen[prevIdx], ePot, true);
+      }
+    }
+  }
 
   // Start or resume playback.
   //  - wasEmpty: fresh 0->1 transition (any mode)
@@ -170,6 +447,12 @@ void ArpEngine::removePadPosition(uint8_t padOrderPos) {
 
   if (found) _sequenceDirty = true;
 
+  // ARPEG_GEN : refresh pile degrees ; do NOT regen (spec §17 : pile shrink is not a reset trigger).
+  // The walk's pile bonus during mutation will adapt naturally to the smaller pool.
+  if (found && _engineMode == EngineMode::GENERATIVE) {
+    recomputePileDegrees();
+  }
+
   #if DEBUG_SERIAL
   if (found) {
     Serial.printf("[ARP] Bank %d: -note (%d total)\n", _channel + 1, _positionCount);
@@ -188,6 +471,12 @@ void ArpEngine::clearAllNotes(MidiTransport& transport) {
   _playing = false;
   _waitingForQuantize = false;
   _pausedPile = false;
+  // ARPEG_GEN : clear cached pile degrees + flag regen for next pile 0->1 (spec §17).
+  _pileDegreeCount = 0;
+  _pileLo = 0;
+  _pileHi = 0;
+  _stepIndexGen = -1;
+  if (_engineMode == EngineMode::GENERATIVE) _sequenceGenDirty = true;
 }
 
 // =================================================================
@@ -196,10 +485,19 @@ void ArpEngine::clearAllNotes(MidiTransport& transport) {
 
 void ArpEngine::setScaleConfig(const ScaleConfig& scale) {
   _scale = scale;
+  // ARPEG_GEN : re-resolve pile degrees against new scale. Spec §17 : scale change is NOT
+  // a regen trigger — the existing _sequenceGen[] degrees stay valid (they transpose via
+  // the new degreeToMidi mapping at next tick).
+  if (_engineMode == EngineMode::GENERATIVE) {
+    recomputePileDegrees();
+  }
 }
 
 void ArpEngine::setPadOrder(const uint8_t* padOrder) {
   _padOrder = padOrder;
+  if (_engineMode == EngineMode::GENERATIVE) {
+    recomputePileDegrees();
+  }
 }
 
 // =================================================================
@@ -425,6 +723,33 @@ void ArpEngine::tick(MidiTransport& transport, uint32_t stepDurationUs,
 // =================================================================
 
 void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
+  // ---------------------------------------------------------------
+  // GENERATIVE path (ARPEG_GEN bank) — spec §10, §11, §15
+  // ---------------------------------------------------------------
+  if (_engineMode == EngineMode::GENERATIVE) {
+    if (_sequenceGenDirty) seedSequenceGen();
+    if (_seqLenGen == 0) return;
+
+    _stepIndexGen++;
+    if (_stepIndexGen >= (int16_t)_seqLenGen) _stepIndexGen = 0;
+
+    int8_t  degree   = _sequenceGen[_stepIndexGen];
+    uint8_t midiNote = ScaleResolver::degreeToMidi(degree, _scale);
+    if (midiNote != 0xFF) {
+      executeStepNote(transport, stepDurationUs, midiNote);
+    }
+    // Out-of-range MIDI : silence ce step mais la sequence continue d'evoluer via mutation.
+
+    maybeMutate(_mutationStepCounter);
+    _mutationStepCounter++;
+    _tickFlash = true;
+    _shuffleStepCounter++;
+    return;
+  }
+
+  // ---------------------------------------------------------------
+  // CLASSIC path (ARPEG bank) — existing logic
+  // ---------------------------------------------------------------
   if (_sequenceDirty) rebuildSequence();
   if (_sequenceLen == 0) return;
 
@@ -452,6 +777,17 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
   while (finalNote > 127) finalNote -= 12;
   if (finalNote > 127) return;
 
+  executeStepNote(transport, stepDurationUs, finalNote);
+
+  _tickFlash = true;
+  _shuffleStepCounter++;
+}
+
+// =================================================================
+// executeStepNote — shared note-output helper (CLASSIC + GENERATIVE)
+// Velocity variation, shuffle offset, gate length, schedule events.
+// =================================================================
+void ArpEngine::executeStepNote(MidiTransport& transport, uint32_t stepDurationUs, uint8_t finalNote) {
   uint8_t vel = _baseVelocity;
   if (_velocityVariation > 0) {
     int16_t range = (int16_t)_velocityVariation * 127 / 200;
@@ -486,6 +822,7 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
     refCountNoteOn(transport, finalNote, vel);
   } else {
     if (!scheduleEvent(noteOnTime, finalNote, vel)) {
+      // noteOn schedule failed -> cancel paired noteOff to maintain refcount atomicity.
       for (int8_t i = MAX_PENDING_EVENTS - 1; i >= 0; i--) {
         if (_events[i].active && _events[i].note == finalNote
             && _events[i].velocity == 0 && _events[i].fireTimeUs == noteOffTime) {
@@ -495,9 +832,6 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
       }
     }
   }
-
-  _tickFlash = true;
-  _shuffleStepCounter++;
 }
 
 // =================================================================
@@ -596,6 +930,8 @@ float       ArpEngine::getShuffleDepth() const      { return _shuffleDepth; }
 uint8_t     ArpEngine::getShuffleTemplate() const   { return _shuffleTemplate; }
 uint8_t     ArpEngine::getBaseVelocity() const      { return _baseVelocity; }
 uint8_t     ArpEngine::getVelocityVariation() const { return _velocityVariation; }
+uint8_t     ArpEngine::getGenPosition() const       { return _genPosition; }
+uint8_t     ArpEngine::getMutationLevel() const     { return _mutationLevel; }
 bool ArpEngine::consumeTickFlash() {
   if (_tickFlash) { _tickFlash = false; return true; }
   return false;

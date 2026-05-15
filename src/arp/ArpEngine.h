@@ -38,6 +38,12 @@ enum class EngineMode : uint8_t {
 
 static const uint8_t MAX_PENDING_EVENTS = 64;
 
+// =================================================================
+// ARPEG_GEN — generative sequence buffer constants (spec §11, §13)
+// NUM_GEN_POSITIONS lives in KeyboardData.h (shared with PotRouter).
+// =================================================================
+static const uint16_t MAX_ARP_GEN_SEQUENCE = 96;  // longest grid position seqLen
+
 struct PendingEvent {
   uint32_t fireTimeUs;
   uint8_t  note;
@@ -74,6 +80,14 @@ public:
   // --- ARPEG_GEN per-bank params (Phase 4 stubs ; Phase 5 Tasks 9-11 consume these) ---
   void setBonusPile(uint8_t x10);              // 10..20 (bonus_pile x10), defaults 15
   void setMarginWalk(uint8_t margin);          // 3..12 degres, defaults 7
+
+  // --- ARPEG_GEN runtime params (Phase 5 Task 8) ---
+  // Grid position 0..14 — pot R2+hold balaye via PotRouter (Phase 6 Task 13). Lookup
+  // TABLE_GEN_POSITION[pos] = {seqLen, ecart}. Pot move at lock = §19 (Phase 7 Task 18).
+  void setGenPosition(uint8_t pos);
+  // Mutation level 1..4 — alias on _octaveRange semantic when ARPEG_GEN. Pad oct change.
+  // 1 = lock, 2 = 1/16, 3 = 1/8, 4 = 1/4 mutation step rate.
+  void setMutationLevel(uint8_t level);
 
   // --- Pile management ---
   // Stores padOrder positions (0-47), NOT MIDI notes.
@@ -119,6 +133,8 @@ public:
   uint8_t     getBaseVelocity() const;
   uint8_t     getVelocityVariation() const;
   bool        consumeTickFlash();
+  uint8_t     getGenPosition() const;          // ARPEG_GEN grid position 0..14
+  uint8_t     getMutationLevel() const;        // ARPEG_GEN mutation level 1..4
 
 private:
   // --- Configuration ---
@@ -175,14 +191,53 @@ private:
   uint8_t    _bonusPilex10;       // ARPEG_GEN per-bank, 10..20 (defaults 15)
   uint8_t    _marginWalk;         // ARPEG_GEN per-bank, 3..12 (defaults 7)
 
+  // --- ARPEG_GEN sequence buffers + cached pile metrics (spec §11, §14) ---
+  int8_t     _sequenceGen[MAX_ARP_GEN_SEQUENCE];  // generative sequence (signed degrees)
+  int8_t     _pileDegrees[MAX_ARP_NOTES];         // cached pile degrees, recomputed on pile/scale change
+  uint8_t    _pileDegreeCount;                    // valid entries in _pileDegrees[]
+  int8_t     _pileLo;                             // min(_pileDegrees[0..count-1])
+  int8_t     _pileHi;                             // max(_pileDegrees[0..count-1])
+  uint16_t   _seqLenGen;                          // current seqLen from TABLE_GEN_POSITION[_genPosition]
+  uint8_t    _genPosition;                        // 0..14 (grid index, R2+hold via Phase 6)
+  uint8_t    _mutationLevel;                      // 1..4 (1 = lock, 2 = 1/16, 3 = 1/8, 4 = 1/4)
+  int16_t    _stepIndexGen;                       // read pointer into _sequenceGen[]
+  uint16_t   _mutationStepCounter;                // global counter, used by maybeMutate (Task 11)
+
   // --- State classification ---
   ArpState currentState() const;
 
   // --- Step execution (core of tick) ---
   void executeStep(MidiTransport& transport, uint32_t stepDurationUs);
 
+  // Common note-output helper : velocity + gate + shuffle offset + scheduleEvent +
+  // refCountNoteOn. Shared by CLASSIC and GENERATIVE paths (DRY).
+  void executeStepNote(MidiTransport& transport, uint32_t stepDurationUs, uint8_t finalNote);
+
   // --- Sequence building ---
   void rebuildSequence();
+
+  // --- ARPEG_GEN helpers (Phase 5) ---
+  // Recompute _pileDegrees[] / _pileLo / _pileHi from _positions + _padOrder + _scale.
+  // Called on addPadPosition / removePadPosition / setScaleConfig.
+  void recomputePileDegrees();
+
+  // Pick next degree via weighted walk (spec §12, §16). Returns prev (fallback) if pool empty.
+  //   prev          = previous degree in sequence (signed).
+  //   E             = max ecart |d - prev|. Initial generation uses E_init = max(E_pot, pile_span).
+  //   useScalePool  = true  : pool = pile ∪ scale_window[prev-E..prev+E], pile bonus active (mutation path).
+  //                   false : pool = pile only, no bonus (initial generation path).
+  int8_t pickNextDegree(int8_t prev, uint8_t E, bool useScalePool);
+
+  // (Re)generate _sequenceGen[0.._seqLenGen-1] from the pile + grid position (spec §14, §17).
+  // Pre-condition : _pileDegreeCount > 0 — otherwise sets _seqLenGen=0 and returns.
+  // Triggered by _sequenceGenDirty on : pile 0->1, clearAllNotes, CLASSIC->GENERATIVE switch.
+  void seedSequenceGen();
+
+  // Mutation step (spec §15, §20). Called per executed step in GENERATIVE mode.
+  // Lookup mutation rate from _mutationLevel : 1=lock (no-op), 2=1/16, 3=1/8, 4=1/4.
+  // When triggered, picks a uniform random index in _sequenceGen[] and rewrites it via
+  // pickNextDegree(prev, E_pot, useScalePool=true). E_pot = TABLE_GEN_POSITION[_genPosition].ecart.
+  void maybeMutate(uint16_t globalStepCount);
 
   // --- Event helpers ---
   bool scheduleEvent(uint32_t fireTimeUs, uint8_t note, uint8_t velocity);

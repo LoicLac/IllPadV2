@@ -925,15 +925,21 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
                                _pendingAtDeadzone, _pendingTempo,
                                _pendingLedBright, _pendingPadSens);
 
-  // Per-bank params: load for the current bank (the one that will be foreground)
+  // Per-bank params: load for the current bank (the one that will be foreground).
+  // arp.pattern is dual-semantic — for ARPEG_GEN it carries _genPosition, for ARPEG it carries
+  // ArpPattern enum. PotRouter holds both fields so we route correctly.
   const ArpPotStore& arp = _pendingArpPot[currentBank];
+  bool isCurGen = (banks[currentBank].type == BANK_ARPEG_GEN);
+  ArpPattern  patForRouter    = isCurGen ? ARP_UP : (ArpPattern)arp.pattern;
+  uint8_t     genPosForRouter = isCurGen ? arp.pattern : 5;
+  if (genPosForRouter >= NUM_GEN_POSITIONS) genPosForRouter = NUM_GEN_POSITIONS - 1;
   potRouter.loadStoredPerBank(
     _pendingBaseVel[currentBank], _pendingVelVar[currentBank],
     _pendingPitchBend[currentBank],
     max(0.005f, (float)arp.gateRaw / 4095.0f),
     (float)arp.shuffleDepthRaw / 4095.0f,
-    (ArpDivision)arp.division, (ArpPattern)arp.pattern,
-    arp.shuffleTemplate
+    (ArpDivision)arp.division, patForRouter,
+    arp.shuffleTemplate, genPosForRouter
   );
 
   #if DEBUG_SERIAL
