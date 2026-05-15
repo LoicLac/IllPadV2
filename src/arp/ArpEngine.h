@@ -80,6 +80,8 @@ public:
   // --- ARPEG_GEN per-bank params (Phase 4 stubs ; Phase 5 Tasks 9-11 consume these) ---
   void setBonusPile(uint8_t x10);              // 10..20 (bonus_pile x10), defaults 15
   void setMarginWalk(uint8_t margin);          // 3..12 degres, defaults 7
+  void setProximityFactor(uint8_t x10);        // V4 : 4..20 (proximity x10 = 0.4..2.0), default 4
+  void setEcart(uint8_t e);                    // V4 : 1..12 (Tool 5 override de TABLE_GEN_SEQ_LEN ecart), default 5
 
   // --- ARPEG_GEN runtime params (Phase 5 Task 8) ---
   // Grid position 0..14 — pot R2+hold balaye via PotRouter (Phase 6 Task 13). Lookup
@@ -135,6 +137,8 @@ public:
   bool        consumeTickFlash();
   uint8_t     getGenPosition() const;          // ARPEG_GEN grid position 0..14
   uint8_t     getMutationLevel() const;        // ARPEG_GEN mutation level 1..4
+  uint8_t     getProximityFactor() const;      // V4 : prox_factor x10 (4..20)
+  uint8_t     getEcart() const;                // V4 : walk ecart (1..12)
 
 private:
   // --- Configuration ---
@@ -190,6 +194,8 @@ private:
   bool       _sequenceGenDirty;   // marked true on CLASSIC->GENERATIVE transition (Phase 5 Task 10 consumes)
   uint8_t    _bonusPilex10;       // ARPEG_GEN per-bank, 10..20 (defaults 15)
   uint8_t    _marginWalk;         // ARPEG_GEN per-bank, 3..12 (defaults 7)
+  uint8_t    _proximityFactorx10; // V4 : ARPEG_GEN per-bank proximity walk factor x10 (4..20), default 4
+  uint8_t    _ecart;              // V4 : ARPEG_GEN per-bank walk ecart (1..12, override TABLE), default 5
 
   // --- ARPEG_GEN sequence buffers + cached pile metrics (spec §11, §14) ---
   int8_t     _sequenceGen[MAX_ARP_GEN_SEQUENCE];  // generative sequence (signed degrees)

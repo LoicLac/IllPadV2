@@ -18,7 +18,8 @@ public:
 
 private:
   bool saveConfig(const BankType* types, const uint8_t* quantize, const uint8_t* groups,
-                  const uint8_t* bonusPilex10, const uint8_t* marginWalk);
+                  const uint8_t* bonusPilex10, const uint8_t* marginWalk,
+                  const uint8_t* proximityFactorx10, const uint8_t* ecart);
   void drawDescription(uint8_t cursor, BankType type);
 
   LedController* _leds;

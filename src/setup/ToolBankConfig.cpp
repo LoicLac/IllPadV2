@@ -9,11 +9,19 @@
 static const char* QUANTIZE_NAMES[] = {"Immediate", "Beat"};
 static const char  GROUP_LABELS[NUM_SCALE_GROUPS + 1] = {'-', 'A', 'B', 'C', 'D'};
 
-// Tool 5 ARPEG_GEN edit mode : cycle lineaire 4-champs MARGIN -> TYPE -> GROUP -> BONUS -> MARGIN.
+// Tool 5 ARPEG_GEN edit mode : cycle lineaire 6-champs TYPE -> GROUP -> BONUS -> MARGIN -> PROX -> ECART -> TYPE.
+// V4 Task 22 : ajout SF_PROX (proximity_factor 0.4..2.0) + SF_ECART (1..12 override TABLE).
 // Exception §4.4 strict (qui demande <-/-> horizontal sur la ligne, ^v change ligne) :
-// le cycle lineaire est plus court (4 keypress max) et preserve la regle universelle ^v = adjust.
+// le cycle lineaire est plus court (6 keypress max) et preserve la regle universelle ^v = adjust.
 // Plan ARPEG_GEN §0 D5.
-enum SubField : uint8_t { SF_TYPE = 0, SF_GROUP = 1, SF_BONUS = 2, SF_MARGIN = 3 };
+enum SubField : uint8_t {
+  SF_TYPE = 0,
+  SF_GROUP = 1,
+  SF_BONUS = 2,
+  SF_MARGIN = 3,
+  SF_PROX = 4,
+  SF_ECART = 5
+};
 
 ToolBankConfig::ToolBankConfig()
   : _leds(nullptr), _nvs(nullptr), _ui(nullptr), _banks(nullptr) {}
@@ -26,20 +34,23 @@ void ToolBankConfig::begin(LedController* leds, NvsManager* nvs, SetupUI* ui, Ba
 }
 
 // =================================================================
-// saveConfig — write types + quantize + scaleGroup + bonusPilex10 + marginWalk to NVS,
-// update live banks + NvsManager loaded snapshot
+// saveConfig — write types + quantize + scaleGroup + bonusPilex10 + marginWalk +
+// proximityFactorx10 + ecart (V4) to NVS, update live banks + NvsManager loaded snapshot.
 // =================================================================
 bool ToolBankConfig::saveConfig(const BankType* types, const uint8_t* quantize, const uint8_t* groups,
-                                const uint8_t* bonusPilex10, const uint8_t* marginWalk) {
+                                const uint8_t* bonusPilex10, const uint8_t* marginWalk,
+                                const uint8_t* proximityFactorx10, const uint8_t* ecart) {
   BankTypeStore bts;
   bts.magic = EEPROM_MAGIC;
   bts.version = BANKTYPE_VERSION;
   bts.reserved = 0;
   for (uint8_t i = 0; i < NUM_BANKS; i++) bts.types[i] = (uint8_t)types[i];
-  memcpy(bts.quantize,     quantize,     NUM_BANKS);
-  memcpy(bts.scaleGroup,   groups,       NUM_BANKS);
-  memcpy(bts.bonusPilex10, bonusPilex10, NUM_BANKS);
-  memcpy(bts.marginWalk,   marginWalk,   NUM_BANKS);
+  memcpy(bts.quantize,            quantize,            NUM_BANKS);
+  memcpy(bts.scaleGroup,          groups,              NUM_BANKS);
+  memcpy(bts.bonusPilex10,        bonusPilex10,        NUM_BANKS);
+  memcpy(bts.marginWalk,          marginWalk,          NUM_BANKS);
+  memcpy(bts.proximityFactorx10,  proximityFactorx10,  NUM_BANKS);
+  memcpy(bts.ecart,               ecart,               NUM_BANKS);
   validateBankTypeStore(bts);
 
   if (!NvsManager::saveBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2, &bts, sizeof(bts)))
@@ -52,6 +63,8 @@ bool ToolBankConfig::saveConfig(const BankType* types, const uint8_t* quantize, 
       _nvs->setLoadedScaleGroup(i, bts.scaleGroup[i]);
       _nvs->setLoadedBonusPile(i, bts.bonusPilex10[i]);
       _nvs->setLoadedMarginWalk(i, bts.marginWalk[i]);
+      _nvs->setLoadedProximityFactor(i, bts.proximityFactorx10[i]);
+      _nvs->setLoadedEcart(i, bts.ecart[i]);
     }
   }
   return true;
@@ -91,15 +104,19 @@ void ToolBankConfig::run() {
   uint8_t  wkGroups[NUM_BANKS];
   uint8_t  wkBonusPilex10[NUM_BANKS];
   uint8_t  wkMarginWalk[NUM_BANKS];
+  uint8_t  wkProximityx10[NUM_BANKS];
+  uint8_t  wkEcart[NUM_BANKS];
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     wkTypes[i]         = _banks[i].type;
     wkQuantize[i]      = _nvs ? _nvs->getLoadedQuantizeMode(i) : DEFAULT_ARP_START_MODE;
     wkGroups[i]        = _nvs ? _nvs->getLoadedScaleGroup(i) : 0;
     wkBonusPilex10[i]  = _nvs ? _nvs->getLoadedBonusPile(i) : 15;
     wkMarginWalk[i]    = _nvs ? _nvs->getLoadedMarginWalk(i) : 7;
+    wkProximityx10[i]  = _nvs ? _nvs->getLoadedProximityFactor(i) : 4;
+    wkEcart[i]         = _nvs ? _nvs->getLoadedEcart(i) : 5;
   }
 
-  // Override from NVS if valid v3 store exists
+  // Override from NVS if valid v4 store exists
   bool nvsSaved = false;
   {
     BankTypeStore bts;
@@ -113,6 +130,8 @@ void ToolBankConfig::run() {
         wkGroups[i]        = bts.scaleGroup[i];
         wkBonusPilex10[i]  = bts.bonusPilex10[i];
         wkMarginWalk[i]    = bts.marginWalk[i];
+        wkProximityx10[i]  = bts.proximityFactorx10[i];
+        wkEcart[i]         = bts.ecart[i];
       }
     }
   }
@@ -123,11 +142,15 @@ void ToolBankConfig::run() {
   uint8_t  savedGroups[NUM_BANKS];
   uint8_t  savedBonusPilex10[NUM_BANKS];
   uint8_t  savedMarginWalk[NUM_BANKS];
+  uint8_t  savedProximityx10[NUM_BANKS];
+  uint8_t  savedEcart[NUM_BANKS];
   memcpy(savedTypes,         wkTypes,         sizeof(savedTypes));
   memcpy(savedQuantize,      wkQuantize,      sizeof(savedQuantize));
   memcpy(savedGroups,        wkGroups,        sizeof(savedGroups));
   memcpy(savedBonusPilex10,  wkBonusPilex10,  sizeof(savedBonusPilex10));
   memcpy(savedMarginWalk,    wkMarginWalk,    sizeof(savedMarginWalk));
+  memcpy(savedProximityx10,  wkProximityx10,  sizeof(savedProximityx10));
+  memcpy(savedEcart,         wkEcart,         sizeof(savedEcart));
 
   Serial.print(ITERM_RESIZE);
 
@@ -140,16 +163,18 @@ void ToolBankConfig::run() {
   bool errorShown = false;
   unsigned long errorTime = 0;
 
-  // --- Sub-field cycling helpers (Phase 7 Task 16) ---
-  // ARPEG_GEN : 4 fields cycle (TYPE -> GROUP -> BONUS -> MARGIN -> TYPE).
-  // NORMAL / ARPEG : 2 fields cycle (TYPE -> GROUP -> TYPE) — BONUS/MARGIN n'existent pas.
+  // --- Sub-field cycling helpers (Phase 7 Task 16 + V4 Task 22) ---
+  // ARPEG_GEN : 6 fields cycle (TYPE -> GROUP -> BONUS -> MARGIN -> PROX -> ECART -> TYPE).
+  // NORMAL / ARPEG : 2 fields cycle (TYPE -> GROUP -> TYPE) — autres champs n'existent pas.
   auto nextSubField = [](SubField cur, BankType bt) -> SubField {
     if (bt == BANK_ARPEG_GEN) {
       switch (cur) {
         case SF_TYPE:   return SF_GROUP;
         case SF_GROUP:  return SF_BONUS;
         case SF_BONUS:  return SF_MARGIN;
-        case SF_MARGIN: return SF_TYPE;
+        case SF_MARGIN: return SF_PROX;
+        case SF_PROX:   return SF_ECART;
+        case SF_ECART:  return SF_TYPE;
       }
     } else {
       return (cur == SF_TYPE) ? SF_GROUP : SF_TYPE;
@@ -159,10 +184,12 @@ void ToolBankConfig::run() {
   auto prevSubField = [](SubField cur, BankType bt) -> SubField {
     if (bt == BANK_ARPEG_GEN) {
       switch (cur) {
-        case SF_TYPE:   return SF_MARGIN;
+        case SF_TYPE:   return SF_ECART;
         case SF_GROUP:  return SF_TYPE;
         case SF_BONUS:  return SF_GROUP;
         case SF_MARGIN: return SF_BONUS;
+        case SF_PROX:   return SF_MARGIN;
+        case SF_ECART:  return SF_PROX;
       }
     } else {
       return (cur == SF_TYPE) ? SF_GROUP : SF_TYPE;
@@ -241,15 +268,20 @@ void ToolBankConfig::run() {
           wkQuantize[i]      = ARP_START_IMMEDIATE;
           // Group A : 2 premieres NORMAL (0,1) + 2 premieres ARPEG (4,5). Autres = -
           wkGroups[i]        = (i == 0 || i == 1 || i == 4 || i == 5) ? 1 : 0;
-          wkBonusPilex10[i]  = 15;   // spec §23 : defaults bonus_pile = 1.5
-          wkMarginWalk[i]    = 7;    // spec §23 : defaults margin = 7
+          wkBonusPilex10[i]  = 15;   // defaults bonus_pile = 1.5
+          wkMarginWalk[i]    = 7;    // defaults margin = 7
+          wkProximityx10[i]  = 4;    // V4 defaults proximity_factor = 0.4
+          wkEcart[i]         = 5;    // V4 defaults ecart = 5
         }
-        if (saveConfig(wkTypes, wkQuantize, wkGroups, wkBonusPilex10, wkMarginWalk)) {
+        if (saveConfig(wkTypes, wkQuantize, wkGroups, wkBonusPilex10, wkMarginWalk,
+                       wkProximityx10, wkEcart)) {
           memcpy(savedTypes,         wkTypes,         sizeof(savedTypes));
           memcpy(savedQuantize,      wkQuantize,      sizeof(savedQuantize));
           memcpy(savedGroups,        wkGroups,        sizeof(savedGroups));
           memcpy(savedBonusPilex10,  wkBonusPilex10,  sizeof(savedBonusPilex10));
           memcpy(savedMarginWalk,    wkMarginWalk,    sizeof(savedMarginWalk));
+          memcpy(savedProximityx10,  wkProximityx10,  sizeof(savedProximityx10));
+          memcpy(savedEcart,         wkEcart,         sizeof(savedEcart));
           nvsSaved = true;
           _ui->flashSaved();
         }
@@ -272,6 +304,8 @@ void ToolBankConfig::run() {
         wkGroups[cursor]        = savedGroups[cursor];
         wkBonusPilex10[cursor]  = savedBonusPilex10[cursor];
         wkMarginWalk[cursor]    = savedMarginWalk[cursor];
+        wkProximityx10[cursor]  = savedProximityx10[cursor];
+        wkEcart[cursor]         = savedEcart[cursor];
         editing = false;
         screenDirty = true;
       } else {
@@ -318,9 +352,10 @@ void ToolBankConfig::run() {
               errorTime = millis();
             } else {
               errorShown = false;
-              // If type leaves ARPEG_GEN while focused on BONUS/MARGIN, jump back to TYPE.
+              // If type leaves ARPEG_GEN while focused on BONUS/MARGIN/PROX/ECART, jump back to TYPE.
               if (wkTypes[cursor] != BANK_ARPEG_GEN
-                  && (cursorSubField == SF_BONUS || cursorSubField == SF_MARGIN)) {
+                  && (cursorSubField == SF_BONUS || cursorSubField == SF_MARGIN
+                      || cursorSubField == SF_PROX  || cursorSubField == SF_ECART)) {
                 cursorSubField = SF_TYPE;
               }
             }
@@ -352,15 +387,36 @@ void ToolBankConfig::run() {
             wkMarginWalk[cursor] = (uint8_t)v;
             break;
           }
+          case SF_PROX: {
+            // V4 proximity_factor x10 : range 4..20 (= 0.4..2.0). +1=0.1, accelerated +5 (=0.5).
+            uint8_t step = ev.accelerated ? 5 : 1;
+            int16_t v = (int16_t)wkProximityx10[cursor] + (up ? step : -step);
+            if (v < 4) v = 4;
+            if (v > 20) v = 20;
+            wkProximityx10[cursor] = (uint8_t)v;
+            break;
+          }
+          case SF_ECART: {
+            // V4 ecart : range 1..12 (Tool 5 override de TABLE). +1, accelerated +3.
+            uint8_t step = ev.accelerated ? 3 : 1;
+            int16_t v = (int16_t)wkEcart[cursor] + (up ? step : -step);
+            if (v < 1) v = 1;
+            if (v > 12) v = 12;
+            wkEcart[cursor] = (uint8_t)v;
+            break;
+          }
         }
         screenDirty = true;
       } else if (ev.type == NAV_ENTER) {
-        if (saveConfig(wkTypes, wkQuantize, wkGroups, wkBonusPilex10, wkMarginWalk)) {
+        if (saveConfig(wkTypes, wkQuantize, wkGroups, wkBonusPilex10, wkMarginWalk,
+                       wkProximityx10, wkEcart)) {
           memcpy(savedTypes,         wkTypes,         sizeof(savedTypes));
           memcpy(savedQuantize,      wkQuantize,      sizeof(savedQuantize));
           memcpy(savedGroups,        wkGroups,        sizeof(savedGroups));
           memcpy(savedBonusPilex10,  wkBonusPilex10,  sizeof(savedBonusPilex10));
           memcpy(savedMarginWalk,    wkMarginWalk,    sizeof(savedMarginWalk));
+          memcpy(savedProximityx10,  wkProximityx10,  sizeof(savedProximityx10));
+          memcpy(savedEcart,         wkEcart,         sizeof(savedEcart));
           editing = false;
           nvsSaved = true;
           _ui->flashSaved();
@@ -521,6 +577,51 @@ void ToolBankConfig::run() {
           }
 
           _ui->drawFrameLine("%s", line2);
+
+          // --- Ligne 3 ARPEG_GEN (V4 Task 22) : Prox + Ecart, alignement identique a ligne 2 ---
+          char line3[160];
+          int p3 = 0;
+          int v3 = 0;
+          for (int k = 0; k < 14; k++) { line3[p3++] = ' '; v3++; }
+
+          float proxF      = (float)wkProximityx10[i] / 10.0f;
+          bool  proxFocus  = isEditing && (cursorSubField == SF_PROX);
+          bool  ecartFocus = isEditing && (cursorSubField == SF_ECART);
+
+          // Prox (label 12 chars : "Prox:       ")
+          if (proxFocus) {
+            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
+                           "Prox:       " VT_CYAN VT_BOLD "[%.1f]" VT_RESET, proxF);
+            v3 += 12 + 5;
+          } else if (selected) {
+            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
+                           "Prox:       " VT_CYAN "%.1f" VT_RESET, proxF);
+            v3 += 12 + 3;
+          } else {
+            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
+                           VT_DIM "Prox:       %.1f" VT_RESET, proxF);
+            v3 += 12 + 3;
+          }
+
+          // Padding entre Prox et Ecart (visible col 40, identique ligne 2)
+          while (v3 < 40 && p3 < (int)sizeof(line3) - 32) {
+            line3[p3++] = ' ';
+            v3++;
+          }
+
+          // Ecart
+          if (ecartFocus) {
+            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
+                           "Ecart:  " VT_CYAN VT_BOLD "[%d]" VT_RESET, wkEcart[i]);
+          } else if (selected) {
+            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
+                           "Ecart:  " VT_CYAN "%d" VT_RESET, wkEcart[i]);
+          } else {
+            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
+                           VT_DIM "Ecart:  %d" VT_RESET, wkEcart[i]);
+          }
+
+          _ui->drawFrameLine("%s", line3);
         }
       }
 
@@ -568,6 +669,14 @@ void ToolBankConfig::run() {
             case SF_MARGIN:
               _ui->drawFrameLine(VT_DIM "Margin walk (3-12): how far the walk can drift above/below pile range." VT_RESET);
               _ui->drawFrameLine(VT_DIM "  Smaller = melody hugs pile. Larger = melody drifts to neighboring degrees." VT_RESET);
+              break;
+            case SF_PROX:
+              _ui->drawFrameLine(VT_DIM "Proximity factor (0.4-2.0): exponential falloff steepness of the walk weights." VT_RESET);
+              _ui->drawFrameLine(VT_DIM "  Smaller = step-wise melodic motion. Larger = more erratic, freer leaps." VT_RESET);
+              break;
+            case SF_ECART:
+              _ui->drawFrameLine(VT_DIM "Ecart (1-12): max degree jump between consecutive steps. Overrides R2+hold ecart." VT_RESET);
+              _ui->drawFrameLine(VT_DIM "  R2+hold pilote uniquement la longueur de sequence (8-96). Ecart = ce param." VT_RESET);
               break;
           }
         }

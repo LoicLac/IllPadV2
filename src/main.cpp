@@ -400,6 +400,9 @@ void setup() {
       // ARPEG_GEN per-bank params (no-op on engines that stay CLASSIC).
       s_banks[i].arpEngine->setBonusPile(s_nvsManager.getLoadedBonusPile(i));
       s_banks[i].arpEngine->setMarginWalk(s_nvsManager.getLoadedMarginWalk(i));
+      // V4 Task 22 : per-bank walk tuning Tool 5.
+      s_banks[i].arpEngine->setProximityFactor(s_nvsManager.getLoadedProximityFactor(i));
+      s_banks[i].arpEngine->setEcart(s_nvsManager.getLoadedEcart(i));
     }
   }
   s_leds.showBootProgress(6);  // Step 6: Arp system ready
@@ -852,6 +855,7 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     static float    s_dbgShufDep  = -1.0f;
     static uint8_t  s_dbgDiv      = 0xFF;
     static uint8_t  s_dbgPat      = 0xFF;
+    static uint8_t  s_dbgGenPos   = 0xFF;
     static uint8_t  s_dbgShufTpl  = 0xFF;
 
     static const char* s_divNames[] = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64"};
@@ -872,6 +876,7 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     float    shufDep = s_potRouter.getShuffleDepth();
     uint8_t  div     = (uint8_t)s_potRouter.getDivision();
     uint8_t  pat     = (uint8_t)s_potRouter.getPattern();
+    uint8_t  genPos  = s_potRouter.getGenPosition();
     uint8_t  shufTpl = s_potRouter.getShuffleTemplate();
 
     // Global params
@@ -892,6 +897,9 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     if ((int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) { Serial.printf("[POT] ShufDepth=%.2f\n", shufDep); s_dbgShufDep = shufDep; }
     if (div != s_dbgDiv)     { Serial.printf("[POT] Division=%s\n", div < 9 ? s_divNames[div] : "?"); s_dbgDiv = div; }
     if (pat != s_dbgPat)     { Serial.printf("[POT] Pattern=%s\n", pat < NUM_ARP_PATTERNS ? s_patNames[pat] : "?"); s_dbgPat = pat; }
+    // V4 Task 22 : R2+hold sur ARPEG_GEN pilote _genPosition (TARGET_GEN_POSITION binding),
+    // distinct de _pattern. Trace pour observabilite live du sweep 0..NUM_GEN_POSITIONS-1.
+    if (genPos != s_dbgGenPos) { Serial.printf("[POT] GenPos=%u\n", genPos); s_dbgGenPos = genPos; }
     if (shufTpl != s_dbgShufTpl) { Serial.printf("[POT] ShufTpl=%u\n", shufTpl); s_dbgShufTpl = shufTpl; }
   }
   #endif

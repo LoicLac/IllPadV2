@@ -120,7 +120,7 @@ const uint8_t  ARPPOT_VERSION = 1;             // 1 = post pattern reduction (15
 
 // `pattern` field interpretation depends on owning bank type :
 //   - BANK_ARPEG     : ArpPattern enum index (0..NUM_ARP_PATTERNS-1 = 0..5)
-//   - BANK_ARPEG_GEN : _genPosition (0..14, 15 positions de grille)
+//   - BANK_ARPEG_GEN : _genPosition (0..7, 8 positions de grille — V4 Task 22 retune)
 // Same byte, different semantics. The owning BankType is the discriminator.
 struct ArpPotStore {
   uint16_t magic;             // ARPPOT_MAGIC
@@ -495,7 +495,7 @@ struct ArpPadStore {
 static_assert(sizeof(ArpPadStore) <= NVS_BLOB_MAX_SIZE, "ArpPadStore exceeds NVS blob max");
 
 #define BANKTYPE_NVS_KEY_V2  "config"
-#define BANKTYPE_VERSION     3   // 2->3 : ajout bonusPilex10[] + marginWalk[] (ARPEG_GEN per-bank)
+#define BANKTYPE_VERSION     4   // 3->4 : ajout proximityFactorx10[] + ecart[] (ARPEG_GEN walk tuning)
 
 #define NUM_SCALE_GROUPS     4   // A, B, C, D (0 = none / banque independante)
 
@@ -503,14 +503,16 @@ struct BankTypeStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  reserved;
-  uint8_t  types[NUM_BANKS];          // BankType enum cast (0..3)
-  uint8_t  quantize[NUM_BANKS];       // ArpStartMode enum
-  uint8_t  scaleGroup[NUM_BANKS];     // 0 = none, 1..NUM_SCALE_GROUPS = A..D
-  uint8_t  bonusPilex10[NUM_BANKS];   // V3 : 10..20 (bonus_pile x 10), defaults 15. Used only when type == BANK_ARPEG_GEN.
-  uint8_t  marginWalk[NUM_BANKS];     // V3 : 3..12 (degres). Defaults 7. Used only when type == BANK_ARPEG_GEN.
+  uint8_t  types[NUM_BANKS];               // BankType enum cast (0..3)
+  uint8_t  quantize[NUM_BANKS];            // ArpStartMode enum
+  uint8_t  scaleGroup[NUM_BANKS];          // 0 = none, 1..NUM_SCALE_GROUPS = A..D
+  uint8_t  bonusPilex10[NUM_BANKS];        // V3 : 10..20 (bonus_pile x 10), defaults 15. ARPEG_GEN only.
+  uint8_t  marginWalk[NUM_BANKS];          // V3 : 3..12 (degres). Defaults 7. ARPEG_GEN only.
+  uint8_t  proximityFactorx10[NUM_BANKS];  // V4 : 4..20 (prox_factor x 10 = 0.4..2.0), defaults 4 (=0.4). ARPEG_GEN only.
+  uint8_t  ecart[NUM_BANKS];               // V4 : 1..12 (walk ecart override Tool 5). Defaults 5. ARPEG_GEN only.
 };
 static_assert(sizeof(BankTypeStore) <= NVS_BLOB_MAX_SIZE, "BankTypeStore exceeds NVS blob max");
-// Total v3 : 4 (header) + 8 x 5 = 44 octets. Confortable sous le cap NVS_BLOB_MAX_SIZE = 128.
+// Total v4 : 4 (header) + 8 x 7 = 60 octets. Confortable sous le cap NVS_BLOB_MAX_SIZE = 128.
 
 #define COLOR_SLOT_VERSION  5
 
@@ -603,9 +605,11 @@ const uint8_t MAX_ARP_NOTES    = 48;
 const uint8_t MAX_ARP_SEQUENCE = 192;  // 48 notes × 4 octaves
 const uint8_t MAX_ARP_OCTAVES  = 4;
 
-// ARPEG_GEN — discrete grid positions (spec §13). Shared between ArpEngine (TABLE_GEN_POSITION
-// lookup) and PotRouter (TARGET_GEN_POSITION clamp/range).
-const uint8_t NUM_GEN_POSITIONS = 15;
+// ARPEG_GEN — discrete grid positions (spec §13, retuned V4 Task 22).
+// 8 valeurs uniques seqLen : 2, 3, 4, 8, 12, 16, 32, 64 (cf TABLE_GEN_SEQ_LEN).
+// Shared between ArpEngine (TABLE_GEN_SEQ_LEN lookup) and PotRouter
+// (TARGET_GEN_POSITION clamp/range + hysteresis zone width).
+const uint8_t NUM_GEN_POSITIONS = 8;
 
 // =================================================================
 // Validation functions — shared by Tools, loadAll, WiFi handler
@@ -632,9 +636,9 @@ inline void validateSettingsStore(SettingsStore& s) {
 inline void validateArpPotStore(ArpPotStore& s) {
   // pattern range etendu pour couvrir les 2 semantiques :
   //   - ARPEG classique : 0..NUM_ARP_PATTERNS-1 (= 0..5 apres Task 4)
-  //   - ARPEG_GEN     : 0..14 (15 positions de grille)
+  //   - ARPEG_GEN     : 0..7 (8 positions de grille — V4 Task 22 retune)
   // Le validate clampe au max des deux pour ne pas casser un pattern stocke pour une bank ARPEG_GEN.
-  if (s.pattern > 14) s.pattern = 0;
+  if (s.pattern > 7) s.pattern = 0;
   if (s.division >= NUM_ARP_DIVISIONS) s.division = DIV_1_8;
   if (s.octaveRange < 1 || s.octaveRange > 4) s.octaveRange = 1;
   if (s.shuffleTemplate >= NUM_SHUFFLE_TEMPLATES) s.shuffleTemplate = 0;
@@ -653,6 +657,9 @@ inline void validateBankTypeStore(BankTypeStore& s) {
     // V3 : nouveaux champs (clamp aux ranges declares en spec §21)
     if (s.bonusPilex10[i] < 10 || s.bonusPilex10[i] > 20) s.bonusPilex10[i] = 15;
     if (s.marginWalk[i]  < 3  || s.marginWalk[i]  > 12) s.marginWalk[i]  = 7;
+    // V4 : walk tuning (Tool 5 override de la constante compile-time et de TABLE_GEN_POSITION ecart)
+    if (s.proximityFactorx10[i] < 4 || s.proximityFactorx10[i] > 20) s.proximityFactorx10[i] = 4;
+    if (s.ecart[i] < 1 || s.ecart[i] > 12) s.ecart[i] = 5;
   }
 }
 

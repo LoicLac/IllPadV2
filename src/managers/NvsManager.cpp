@@ -29,10 +29,14 @@ NvsManager::NvsManager()
   , _potPendingSave(false)
   , _anyPadPressed(false)
 {
-  // BankTypeStore v3 : ARPEG_GEN per-bank params, defaults 15 (bonus_pile=1.5) / 7 (margin)
+  // BankTypeStore v3 + v4 : ARPEG_GEN per-bank params.
+  // v3 defaults : bonus_pile=1.5 (=15), margin=7.
+  // v4 defaults : proximity_factor=0.4 (=4), ecart=5.
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     _loadedBonusPile[i]  = 15;
     _loadedMarginWalk[i] = 7;
+    _loadedProximity[i]  = 4;
+    _loadedEcart[i]      = 5;
   }
   // Default LED settings v6 (0-100 perceptual %)
   // See docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md
@@ -603,12 +607,14 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     prefs.end();
   }
 
-  // --- Bank types + quantize modes + scale groups + ARPEG_GEN params ---
+  // --- Bank types + quantize modes + scale groups + ARPEG_GEN params (v3 + v4) ---
   memset(_loadedQuantize, DEFAULT_ARP_START_MODE, NUM_BANKS);
   memset(_loadedScaleGroup, 0, NUM_BANKS);
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     _loadedBonusPile[i]  = 15;
     _loadedMarginWalk[i] = 7;
+    _loadedProximity[i]  = 4;
+    _loadedEcart[i]      = 5;
   }
   {
     BankTypeStore bts;
@@ -621,23 +627,27 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
         _loadedScaleGroup[i] = bts.scaleGroup[i];
         _loadedBonusPile[i]  = bts.bonusPilex10[i];
         _loadedMarginWalk[i] = bts.marginWalk[i];
+        _loadedProximity[i]  = bts.proximityFactorx10[i];
+        _loadedEcart[i]      = bts.ecart[i];
       }
       #if DEBUG_SERIAL
-      Serial.println("[NVS] Bank types + quantize + scale groups + ARPEG_GEN params loaded (v3 store).");
+      Serial.println("[NVS] Bank types + quantize + scale groups + ARPEG_GEN params loaded (v4 store).");
       #endif
     } else {
-      // Premier boot / NVS vierge / v2->v3 : defaults usine = 4 NORMAL + 4 ARPEG,
+      // Premier boot / NVS vierge / v3->v4 : defaults usine = 4 NORMAL + 4 ARPEG,
       // group A sur banques 1,2 (NORMAL) et 5,6 (ARPEG). Identique au reset 'd' de Tool 4.
-      // ARPEG_GEN params : bonusPilex10=15, marginWalk=7 (defaults compile-time).
+      // ARPEG_GEN params : bonusPilex10=15, marginWalk=7, proximity=4 (=0.4), ecart=5.
       for (uint8_t i = 0; i < NUM_BANKS; i++) {
         banks[i].type        = (i < 4) ? BANK_NORMAL : BANK_ARPEG;
         _loadedQuantize[i]   = DEFAULT_ARP_START_MODE;
         _loadedScaleGroup[i] = (i == 0 || i == 1 || i == 4 || i == 5) ? 1 : 0;
         _loadedBonusPile[i]  = 15;
         _loadedMarginWalk[i] = 7;
+        _loadedProximity[i]  = 4;
+        _loadedEcart[i]      = 5;
       }
       #if DEBUG_SERIAL
-      Serial.println("[NVS] BankTypeStore absent/invalide (v2->v3 reset attendu) - defaults usine appliques.");
+      Serial.println("[NVS] BankTypeStore absent/invalide (v3->v4 reset attendu) - defaults usine appliques.");
       #endif
     }
   }
@@ -983,6 +993,24 @@ uint8_t NvsManager::getLoadedMarginWalk(uint8_t bank) const {
 
 void NvsManager::setLoadedMarginWalk(uint8_t bank, uint8_t margin) {
   if (bank < NUM_BANKS && margin >= 3 && margin <= 12) _loadedMarginWalk[bank] = margin;
+}
+
+uint8_t NvsManager::getLoadedProximityFactor(uint8_t bank) const {
+  if (bank >= NUM_BANKS) return 4;
+  return _loadedProximity[bank];
+}
+
+void NvsManager::setLoadedProximityFactor(uint8_t bank, uint8_t x10) {
+  if (bank < NUM_BANKS && x10 >= 4 && x10 <= 20) _loadedProximity[bank] = x10;
+}
+
+uint8_t NvsManager::getLoadedEcart(uint8_t bank) const {
+  if (bank >= NUM_BANKS) return 5;
+  return _loadedEcart[bank];
+}
+
+void NvsManager::setLoadedEcart(uint8_t bank, uint8_t ecart) {
+  if (bank < NUM_BANKS && ecart >= 1 && ecart <= 12) _loadedEcart[bank] = ecart;
 }
 
 const ArpPotStore& NvsManager::getLoadedArpParams(uint8_t bankIdx) const {

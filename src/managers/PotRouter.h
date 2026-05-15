@@ -43,7 +43,7 @@ public:
   void loadStoredPerBank(uint8_t baseVel, uint8_t velVar, uint16_t pitchBend,
                          float gate, float shuffleDepth, ArpDivision div,
                          ArpPattern pat, uint8_t shuffleTmpl,
-                         uint8_t genPosition);  // ARPEG_GEN _genPosition (0..14)
+                         uint8_t genPosition);  // ARPEG_GEN _genPosition (0..NUM_GEN_POSITIONS-1)
 
   // Load user pot mapping from NVS (call BEFORE begin())
   void loadMapping(const PotMappingStore& store);
@@ -63,7 +63,7 @@ public:
   float       getShuffleDepth() const;
   ArpDivision getDivision() const;
   ArpPattern  getPattern() const;
-  uint8_t     getGenPosition() const;       // ARPEG_GEN grid position (0..14)
+  uint8_t     getGenPosition() const;       // ARPEG_GEN grid position (0..NUM_GEN_POSITIONS-1)
   uint8_t     getShuffleTemplate() const;
   uint8_t     getBaseVelocity() const;
   uint8_t     getVelocityVariation() const;
@@ -130,7 +130,7 @@ private:
   float       _shuffleDepth;
   ArpDivision _division;
   ArpPattern  _pattern;
-  uint8_t     _genPosition;       // ARPEG_GEN 0..14 (TARGET_GEN_POSITION)
+  uint8_t     _genPosition;       // ARPEG_GEN 0..NUM_GEN_POSITIONS-1 (TARGET_GEN_POSITION)
   uint8_t     _genPosLastZone;    // hysteresis : last committed zone, 0xFF = uninitialised
   uint8_t     _shuffleTemplate;
   uint8_t     _baseVelocity;

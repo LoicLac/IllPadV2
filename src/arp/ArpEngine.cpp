@@ -6,14 +6,14 @@
 // Shuffle templates now in midi/GrooveTemplates.h (shared with LoopEngine)
 
 // =================================================================
-// ARPEG_GEN — discrete grid (spec §13)
-// 15 (seqLen, ecart) entries swept by R2+hold (Phase 6 Task 13).
+// ARPEG_GEN — discrete grid (spec §13, refactor Task 22)
+// R2+hold balaye 8 longueurs distinctes (2..64 monotone strict).
+// Choix des valeurs : 2/3/4 = micro-loops percussives, 8/12/16 = mesures usuelles,
+// 32/64 = phrases longues. L'ecart est sorti de la table : c'est désormais un
+// param per-bank Tool 5 (`_ecart`, BankTypeStore v4) — override total.
 // =================================================================
-struct GenPositionEntry { uint16_t seqLen; uint8_t ecart; };
-static const GenPositionEntry TABLE_GEN_POSITION[NUM_GEN_POSITIONS] = {
-  { 8,  1}, { 8,  2}, {16,  2}, {16,  3}, {24,  3},
-  {24,  4}, {32,  4}, {32,  5}, {48,  5}, {48,  6},
-  {64,  6}, {64,  7}, {96,  8}, {96, 10}, {96, 12}
+static const uint16_t TABLE_GEN_SEQ_LEN[NUM_GEN_POSITIONS] = {
+   2, 3, 4, 8, 12, 16, 32, 64
 };
 
 // =================================================================
@@ -33,6 +33,7 @@ ArpEngine::ArpEngine()
     _lastDispatchedGlobalTick(0xFFFFFFFF),
     _engineMode(EngineMode::CLASSIC), _sequenceGenDirty(false),
     _bonusPilex10(15), _marginWalk(7),
+    _proximityFactorx10(4), _ecart(5),
     _pileDegreeCount(0), _pileLo(0), _pileHi(0),
     _seqLenGen(0), _genPosition(0), _mutationLevel(1),
     _stepIndexGen(-1), _mutationStepCounter(0) {
@@ -114,6 +115,16 @@ void ArpEngine::setMarginWalk(uint8_t margin) {
   if (margin >= 3 && margin <= 12) _marginWalk = margin;
 }
 
+// V4 Task 22 — proximity factor x10 (4..20). Falloff exponentiel walk.
+void ArpEngine::setProximityFactor(uint8_t x10) {
+  if (x10 >= 4 && x10 <= 20) _proximityFactorx10 = x10;
+}
+
+// V4 Task 22 — walk ecart (1..12). Override de TABLE_GEN_POSITION.ecart (refactor).
+void ArpEngine::setEcart(uint8_t e) {
+  if (e >= 1 && e <= 12) _ecart = e;
+}
+
 // --- ARPEG_GEN runtime params (Phase 5 Task 8) ---
 // Pot R2+hold balaye 0..14 via PotRouter (Phase 6 Task 13). Pot move at lock = §19
 // (Phase 7 Task 18 wires the "preview only, apply on next non-lock") behavior.
@@ -124,9 +135,10 @@ void ArpEngine::setGenPosition(uint8_t pos) {
   if (pos == _genPosition) return;
 
   uint16_t oldLen = _seqLenGen;
-  uint16_t newLen = TABLE_GEN_POSITION[pos].seqLen;
+  uint16_t newLen = TABLE_GEN_SEQ_LEN[pos];
   if (newLen > MAX_ARP_GEN_SEQUENCE) newLen = MAX_ARP_GEN_SEQUENCE;
-  uint8_t  ePot   = TABLE_GEN_POSITION[pos].ecart;
+  // V4 Task 22 : ecart vient de _ecart (Tool 5 override), plus de TABLE_GEN_POSITION.
+  uint8_t  ePot   = _ecart;
 
   // Extension : prolonger la sequence existante via walk continu depuis le dernier step
   // pour eviter les "trous" monotones (steps non-initialises = degree 0 = root repetee).
@@ -154,10 +166,10 @@ void ArpEngine::setMutationLevel(uint8_t level) {
 
 // =================================================================
 // ARPEG_GEN walk constant — exponential proximity weight factor (spec §40 point 1).
-// w(d) = expf(-fabsf(d - prev) / (E * ARPEG_GEN_PROXIMITY_FACTOR))
-// Tunable post-implementation.
+// w(d) = expf(-fabsf(d - prev) / (E * proximity_factor))
+// V4 Task 22 : sorti de compile-time -> per-bank dynamic via _proximityFactorx10 (4..20).
+// La valeur 0.4 reste le defaults (constructor + reset Tool 5 [d]).
 // =================================================================
-static constexpr float ARPEG_GEN_PROXIMITY_FACTOR = 0.4f;
 
 // Recompute _pileDegrees + _pileLo + _pileHi from _positions + _padOrder + _scale.
 // Called on pile add/remove and on scale change. _padOrder may be null at boot — early return.
@@ -255,7 +267,10 @@ int8_t ArpEngine::pickNextDegree(int8_t prev, uint8_t E, bool useScalePool) {
   if (poolCount == 0) return prev;  // spec §37 fallback
 
   // 3) Compute weights w(Δ) = expf(-|d - prev| / (E * 0.4)) ; pile candidates × bonus_pile (mutation).
-  float invDenom = 1.0f / ((float)E * ARPEG_GEN_PROXIMITY_FACTOR);
+  // V4 Task 22 : proximity factor per-bank (`_proximityFactorx10` / 10).
+  float proximityF = (float)_proximityFactorx10 * 0.1f;
+  if (proximityF <= 0.0f) proximityF = 0.4f;  // safety guard
+  float invDenom = 1.0f / ((float)E * proximityF);
   float bonus = (useScalePool) ? ((float)_bonusPilex10 * 0.1f) : 1.0f;  // 1.0..2.0 typical
 
   float weights[POOL_MAX];
@@ -295,8 +310,8 @@ void ArpEngine::seedSequenceGen() {
     return;
   }
 
-  uint16_t seqLen = TABLE_GEN_POSITION[_genPosition].seqLen;
-  uint8_t  ePot   = TABLE_GEN_POSITION[_genPosition].ecart;
+  uint16_t seqLen = TABLE_GEN_SEQ_LEN[_genPosition];
+  uint8_t  ePot   = _ecart;  // V4 Task 22 : Tool 5 override
   if (seqLen > MAX_ARP_GEN_SEQUENCE) seqLen = MAX_ARP_GEN_SEQUENCE;
 
   // Degenerate case : pile of 1 note -> full repetition (spec §34).
@@ -350,7 +365,7 @@ void ArpEngine::maybeMutate(uint16_t globalStepCount) {
   uint16_t idx = (uint16_t)random(0, _seqLenGen);
   uint16_t prevIdx = (idx == 0) ? (_seqLenGen - 1) : (idx - 1);
   int8_t  prev = _sequenceGen[prevIdx];
-  uint8_t ePot = TABLE_GEN_POSITION[_genPosition].ecart;
+  uint8_t ePot = _ecart;  // V4 Task 22 : Tool 5 override
 
   _sequenceGen[idx] = pickNextDegree(prev, ePot, true);  // mutation : pile + scale window, bonus_pile actif
 }
@@ -395,7 +410,7 @@ void ArpEngine::addPadPosition(uint8_t padOrderPos) {
       // ciblees pour que la nouvelle note apparaisse audiblement dans la sequence sans
       // attendre le mutation rate naturel. Conserve le walk + bonus_pile (identite GEN).
       // 3 mutations fixes : ~37% sur seqLen=8 (court, audible), ~3% sur seqLen=96 (long, subtil).
-      uint8_t ePot = TABLE_GEN_POSITION[_genPosition].ecart;
+      uint8_t ePot = _ecart;  // V4 Task 22 : Tool 5 override
       for (uint8_t k = 0; k < 3; k++) {
         uint16_t idx = (uint16_t)random(0, _seqLenGen);
         uint16_t prevIdx = (idx == 0) ? (_seqLenGen - 1) : (idx - 1);
@@ -932,6 +947,8 @@ uint8_t     ArpEngine::getBaseVelocity() const      { return _baseVelocity; }
 uint8_t     ArpEngine::getVelocityVariation() const { return _velocityVariation; }
 uint8_t     ArpEngine::getGenPosition() const       { return _genPosition; }
 uint8_t     ArpEngine::getMutationLevel() const     { return _mutationLevel; }
+uint8_t     ArpEngine::getProximityFactor() const   { return _proximityFactorx10; }
+uint8_t     ArpEngine::getEcart() const             { return _ecart; }
 bool ArpEngine::consumeTickFlash() {
   if (_tickFlash) { _tickFlash = false; return true; }
   return false;
