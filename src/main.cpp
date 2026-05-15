@@ -583,16 +583,12 @@ static void handleLeftReleaseCleanup(const SharedKeyboardState& state) {
           s_midiEngine.noteOff(i);
         }
       }
-    } else if (isArpType(relSlot.type) && relSlot.arpEngine
-               && !relSlot.arpEngine->isCaptured()) {
-      for (int i = 0; i < NUM_KEYS; i++) {
-        if (i == s_holdPad) continue;
-        if (s_controlPadManager.isControlPad(i)) continue;
-        if (!state.keyIsPressed[i]) {
-          relSlot.arpEngine->removePadPosition(s_padOrder[i]);
-        }
-      }
     }
+    // ARPEG-OFF : pas de sweep au release LEFT (pile sacrée Q3, spec gesture §9).
+    // Ce sweep historique itérait les 48 pads et retirait de la pile tout pad
+    // non pressé physiquement au release LEFT — provoquant un wipe complet de
+    // la pile à chaque cycle LEFT press/release. Supprimé suite au diagnostic
+    // 2026-05-15 (bug "pile s'efface au LEFT release").
   }
   s_wasHolding = holdingNow;
 }

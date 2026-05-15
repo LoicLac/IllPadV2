@@ -728,17 +728,39 @@ void GestureDispatcher::commitPendingSwitch(uint32_t now) {
 ```cpp
 void GestureDispatcher::sweepAtRelease(const SharedKeyboardState& state) {
   if (!_lastKeys) return;
-  // Snapshot tous les pads pressés au release dans _lastKeys, sans déclencher
-  // d'action (note, pile add). Conformément à la règle Q3 / spec §9.
+  // Snapshot non-destructif. Le sweep resynchronise _lastKeys uniquement.
+  // Aucun removePadPosition, aucun noteOff sweep en ARPEG (pile sacrée Q3,
+  // spec §9). Le bug "pile s'efface au LEFT release" (diagnostiqué 2026-05-15
+  // par log timestampé montrant les -note cascadent dans la même ms que le
+  // release LEFT) venait du sweep destructif handleLeftReleaseCleanup branche
+  // ARPEG-OFF — supprimé par le fix séparé avant cette Phase 4. Le dispatcher
+  // doit NE PAS le réintroduire.
+  //
+  // Politique par FG type :
+  // - BANK_NORMAL  : snapshot + noteOff sweep (préservé, code actuel correct)
+  // - BANK_ARPEG / BANK_ARPEG_GEN : snapshot SEUL (pas de removePadPosition)
+  // - BANK_LOOP    : snapshot SEUL (LOOP P2 ajoute sa propre logique si nécessaire)
   for (uint8_t i = 0; i < NUM_KEYS; i++) {
     _lastKeys[i] = state.keyIsPressed[i];
   }
-  // Aucune addPadPosition / noteOff explicite ici — le snapshot suffit
-  // parce que processNormalMode / processArpMode utilisent _lastKeys pour
-  // détecter les rising edges. Un pad pressé au release n'est PAS un rising
-  // edge à la frame suivante.
+
+  // NoteOff sweep pour FG NORMAL uniquement (cohérent avec [main.cpp:566-588]
+  // branche `relSlot.type == BANK_NORMAL` actuelle, à migrer en Phase 4)
+  if (_bank) {
+    BankSlot& fg = _banks[_bank->getCurrentBank()];
+    if (fg.type == BANK_NORMAL) {
+      for (uint8_t i = 0; i < NUM_KEYS; i++) {
+        if (/*_isControlPad*/ false) continue;  // hook ControlPadManager check
+        if (!state.keyIsPressed[i]) {
+          if (_engine) _engine->noteOff(i);
+        }
+      }
+    }
+  }
 }
 ```
+
+**Cohabitation transitoire pendant Phase 2-3** : le fix `fix(arpeg)` du 2026-05-15 supprime déjà la branche ARPEG-OFF destructive dans `handleLeftReleaseCleanup()` du code actuel. Phase 4 du plan gesture supprime entièrement `handleLeftReleaseCleanup()`, donc à ce moment-là le dispatcher reprend la branche NORMAL noteOff sweep — qui était la seule branche utile restante.
 
 ### Modifications BankManager.cpp / .h
 
@@ -1527,6 +1549,7 @@ Liste consolidée référencée par les HW gates des Phases 2 à 6. Chaque scén
 - **P-7 — Régression complète.** B-1 à B-6, S-1 à S-6, H-1 à H-7 tous passés. Aucun bench cassé.
 - **P-8 — Macro-geste répété.** H-5 rejoué. Aucune note parasite, aucune pile perdue.
 - **P-9 — Stress test live 5 min.** Jeu libre avec multi-bank, scale changes, play/stop multiples. Aucune note bloquée. Aucune pile gone unexpectedly. Aucun glitch.
+- **P-10 — Pile ARPEG-OFF préservée au LEFT release (régression du fix 2026-05-15).** Bank FG ARPEG ou ARPEG_GEN en Stop avec pile non vide. Cycle simple : `LEFT press` → ne rien faire pendant 1-2s → `LEFT release`. Vérifier au log DEBUG_SERIAL qu'AUCUN `[ARP] -note` n'apparaît dans la frame du release. La pile reste à N notes. Refaire avec différentes tailles de pile (1, 3, 7 notes). C'est le scénario qui a révélé le bug racine — doit rester vert après refonte. |
 
 ### T-* — Tuning constants (Phase 6)
 

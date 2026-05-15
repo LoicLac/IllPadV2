@@ -181,21 +181,28 @@ Pour les catégories qui ne consomment pas le double-tap (SCALE_PAD, OCTAVE_PAD,
 
 ### §9 — Sweep universel au release LEFT (Q3)
 
-À l'edge falling LEFT, avant l'application de la garde, on sweep tous les pads selon le type de la FG bank :
+À l'edge falling LEFT, avant l'application de la garde, on sweep tous les pads selon le type de la FG bank.
 
-| FG type | Action sur pad pressé au release LEFT |
-|---|---|
-| `BANK_NORMAL` | `_lastKeys[i] = pressed` (snapshot — le pad reste comme "déjà pressé", pas de noteOn déclenché ; au prochain falling edge, noteOff normal) |
-| `BANK_ARPEG` / `BANK_ARPEG_GEN`, captured=false | snapshot `_lastKeys[i] = pressed` ; pad ignoré, pas d'addPadPosition |
-| `BANK_ARPEG` / `BANK_ARPEG_GEN`, captured=true | **idem** : snapshot, pad ignoré, pas d'addPadPosition. Ta règle Q3 — pile sacrée, pad pressé au release n'est pas une intention de jeu. |
-| `BANK_LOOP` (futur) | snapshot `_lastKeys[i] = pressed` ; les LOOP_CTRL_PAD pressés au release n'arment pas REC/PLAY-STOP/CLEAR |
+**Principe directeur** : aucun sweep ne **retire** de notes/pile en automatique. Le rôle du sweep est strictement de **resynchroniser `_lastKeys`** pour que la frame suivante ne voie pas de rising/falling edges artificiels en mode pad input. Aucun appel `removePadPosition`, aucun appel `noteOff`, aucun appel destructif.
 
-Le sweep + snapshot remplace deux mécanismes existants :
-- [`BankManager._switchedDuringHold` + memcpy `_lastKeys`](../../../src/managers/BankManager.cpp:146) (BankManager.cpp:146-150)
-- [`handleLeftReleaseCleanup()`](../../../src/main.cpp:552) (main.cpp:552-576)
-- [`ScaleManager` memcpy `_lastKeys` au release](../../../src/managers/ScaleManager.cpp:91) (ScaleManager.cpp:91-93)
+| FG type | Action sur pad pressé au release LEFT | Action sur pad NON pressé au release LEFT |
+|---|---|---|
+| `BANK_NORMAL` | `_lastKeys[i] = true` (snapshot — évite faux rising edge si pad reste pressé après LEFT release) | `_lastKeys[i] = false` (rien à faire, pas de noteOff sweep) |
+| `BANK_ARPEG` / `BANK_ARPEG_GEN`, captured=false | `_lastKeys[i] = true` snapshot — pad ignoré, pas d'addPadPosition au prochain frame | `_lastKeys[i] = false` — **AUCUN `removePadPosition`** (pile sacrée Q3) |
+| `BANK_ARPEG` / `BANK_ARPEG_GEN`, captured=true | `_lastKeys[i] = true` snapshot | `_lastKeys[i] = false`, pile inchangée |
+| `BANK_LOOP` (futur) | `_lastKeys[i] = true` snapshot | `_lastKeys[i] = false` ; les LOOP_CTRL_PAD non pressés ne déclenchent rien |
 
-Tous redondants, à supprimer.
+**Précédent destructif supprimé (commit fix `fix(arpeg)` du 2026-05-15)** : la branche `else if (isArpType && !captured)` de `handleLeftReleaseCleanup()` itérait sur les 48 pads et appelait `removePadPosition(s_padOrder[i])` pour chaque pad non pressé physiquement. Conséquence : à chaque cycle LEFT press/release **sans** que l'utilisateur tienne les pads de la pile, la pile entière était vidée. Bug diagnostiqué via log timestampé montrant les `-note` cascade dans la même milliseconde que `[BTN] LEFT release`. Fix : suppression du `else if`. Le dispatcher reproduira ce comportement corrigé.
+
+Le sweep + snapshot remplace donc trois mécanismes existants après refonte gesture :
+- [`BankManager._switchedDuringHold` + memcpy `_lastKeys`](../../../src/managers/BankManager.cpp:146) (BankManager.cpp:146-150) — préservé comme snapshot non-destructif
+- [`handleLeftReleaseCleanup()` branche NORMAL](../../../src/main.cpp:566) (main.cpp:566-588 actuel) — préservé comme noteOff sweep pour NORMAL uniquement
+- ~~`handleLeftReleaseCleanup()` branche ARPEG-OFF~~ — **supprimé** dans le fix `2026-05-15`, ne pas réintroduire
+- [`ScaleManager` memcpy `_lastKeys` au release](../../../src/managers/ScaleManager.cpp:91) (ScaleManager.cpp:91-93) — préservé comme snapshot non-destructif
+
+Tous fusionnés dans `sweepAtRelease()` du dispatcher.
+
+**Garantie** : peu importe le geste précédent, après un release LEFT propre, la pile ARPEG est exactement dans l'état où elle était au press LEFT. Cohérent invariant 8 "pile sacrée".
 
 ### §10 — Hold pad ARPEG (Q5)
 
