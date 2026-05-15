@@ -713,24 +713,69 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
   return bankSwitched;
 }
 
-// --- Hold pad edge detection (ARPEG OFF/ON switch, always exposed) ---
-static void handleHoldPad(const SharedKeyboardState& state) {
-  static bool s_lastHoldPadState = false;
-  BankSlot& slot = s_bankManager.getCurrentSlot();
-  if (s_holdPad >= NUM_KEYS || !isArpType(slot.type) || !slot.arpEngine) {
-    s_lastHoldPadState = (s_holdPad < NUM_KEYS) ? state.keyIsPressed[s_holdPad] : false;
-    return;
-  }
-  bool pressed = state.keyIsPressed[s_holdPad];
-  if (pressed && !s_lastHoldPadState) {
-    bool wasCaptured = slot.arpEngine->isCaptured();
-    slot.arpEngine->setCaptured(!wasCaptured, s_transport, state.keyIsPressed, s_holdPad);
-    s_leds.triggerEvent(slot.arpEngine->isCaptured() ? EVT_PLAY : EVT_STOP);
-    if (slot.arpEngine->isCaptured()) {
-      memset(s_lastPressTime, 0, sizeof(s_lastPressTime));
+// --- Toggle play/stop globalement sur toutes les banks ARPEG/ARPEG_GEN ---
+// Geste LEFT held + hold pad simple tap (spec gesture §10 amendée 2026-05-15).
+// Comportement symétrique :
+// - Au moins une bank en Play → Stop sur toutes les Play (pile préservée
+//   via nullptr, branche "no fingers" de setCaptured).
+// - Toutes en Stop avec paused pile non vide → Play sur toutes (relaunch).
+// - Sinon (toutes vides ou Stop sans paused) → no-op silencieux.
+// LED : EVT_PLAY ou EVT_STOP avec mask multi-bank (1 trigger pour toutes).
+// Futur LOOP : étendre la boucle pour inclure isLoopType + LoopEngine.
+static void toggleAllArps() {
+  bool anyPlaying = false;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (isArpType(s_banks[i].type) && s_banks[i].arpEngine
+        && s_banks[i].arpEngine->isCaptured()) {
+      anyPlaying = true;
+      break;
     }
   }
+  uint8_t mask = 0;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (!isArpType(s_banks[i].type) || !s_banks[i].arpEngine) continue;
+    if (anyPlaying && s_banks[i].arpEngine->isCaptured()) {
+      // Stop : nullptr → branche "no fingers" → pile préservée (Q3)
+      s_banks[i].arpEngine->setCaptured(false, s_transport, nullptr, s_holdPad);
+      mask |= (uint8_t)(1 << i);
+    } else if (!anyPlaying && s_banks[i].arpEngine->isPaused()
+                              && s_banks[i].arpEngine->hasNotes()) {
+      // Play : relaunch chaque paused pile non vide
+      s_banks[i].arpEngine->setCaptured(true, s_transport, nullptr, s_holdPad);
+      mask |= (uint8_t)(1 << i);
+    }
+  }
+  if (mask != 0) s_leds.triggerEvent(anyPlaying ? EVT_STOP : EVT_PLAY, mask);
+}
+
+// --- Hold pad edge detection (ARPEG OFF/ON switch, always exposed) ---
+// Sans LEFT : toggle FG bank (comportement classique).
+// Avec LEFT : toggle global toutes banks (cf toggleAllArps).
+static void handleHoldPad(const SharedKeyboardState& state, bool leftHeld) {
+  static bool s_lastHoldPadState = false;
+  if (s_holdPad >= NUM_KEYS) { s_lastHoldPadState = false; return; }
+
+  bool pressed = state.keyIsPressed[s_holdPad];
+  bool risingEdge = pressed && !s_lastHoldPadState;
   s_lastHoldPadState = pressed;
+  if (!risingEdge) return;
+
+  if (leftHeld) {
+    // LEFT + hold pad = scope étendu (toutes banks)
+    toggleAllArps();
+    return;
+  }
+
+  // Hors LEFT : toggle FG uniquement, requiert FG ARPEG/ARPEG_GEN
+  BankSlot& slot = s_bankManager.getCurrentSlot();
+  if (!isArpType(slot.type) || !slot.arpEngine) return;
+
+  bool wasCaptured = slot.arpEngine->isCaptured();
+  slot.arpEngine->setCaptured(!wasCaptured, s_transport, state.keyIsPressed, s_holdPad);
+  s_leds.triggerEvent(slot.arpEngine->isCaptured() ? EVT_PLAY : EVT_STOP);
+  if (slot.arpEngine->isCaptured()) {
+    memset(s_lastPressTime, 0, sizeof(s_lastPressTime));
+  }
 }
 
 // --- Push live pot params to engine (extracted for LOOP extensibility) ---
@@ -1006,7 +1051,7 @@ void loop() {
   // --- CRITICAL PATH ---
   handleManagerUpdates(state, leftHeld);
 
-  handleHoldPad(state);
+  handleHoldPad(state, leftHeld);
 
   // --- Control pads (step 7b): after bank switch resolution + hold pad,
   //     before music block. Emits CC and handles LEFT/bank edges.

@@ -204,16 +204,72 @@ Tous fusionnés dans `sweepAtRelease()` du dispatcher.
 
 **Garantie** : peu importe le geste précédent, après un release LEFT propre, la pile ARPEG est exactement dans l'état où elle était au press LEFT. Cohérent invariant 8 "pile sacrée".
 
-### §10 — Hold pad ARPEG (Q5)
+### §10 — Hold pad ARPEG (Q5) + scope modifier LEFT
 
-Le hold pad reste actif **indépendamment** du LEFT, conformément à ta décision Q5 ("le hold pad est toujours un hold pad, quelque soit l'état du bouton left"). Conséquences architecturales :
+Le hold pad reste actif **indépendamment** du LEFT, conformément à ta décision Q5 ("le hold pad est toujours un hold pad, quelque soit l'état du bouton left"). Le `leftHeld` agit comme **modifier de scope** sur le geste :
 
-- Le hold pad rising edge **n'est pas filtré** par la garde LEFT (§7). Il déclenche toujours un toggle play/stop sur la FG ARPEG.
+| Geste | Scope | Effet |
+|---|---|---|
+| Hold pad rising edge, `!leftHeld` | FG seule | Toggle Play/Stop de la bank FG (comportement de référence) |
+| Hold pad rising edge, `leftHeld` | Toutes banks ARPEG (futur LOOP) | Toggle global symétrique — cf §10.1 ci-dessous |
+
+Conséquences architecturales :
+- Le hold pad rising edge **n'est pas filtré** par la garde LEFT (§7). Il déclenche toujours, sans délai, peu importe le scope.
 - Pendant la garde LEFT, les autres rising edges sont swallow, mais pas le hold pad.
 
-**Note** : si le user presse hold pad pile dans la fenêtre `LEFT_EDGE_GUARD_MS` du press LEFT, l'action s'applique. C'est cohérent avec ta règle "hold pad always-on".
+**Note** : si le user presse hold pad pile dans la fenêtre `LEFT_EDGE_GUARD_MS` du press LEFT, l'action s'applique avec le scope correspondant au `leftHeld` du moment. Aucune ambiguïté.
 
 **Pile sacrée** (Q3) : le toggle setCaptured() depuis le hold pad ne wipe **jamais** la pile, **même si des fingers sont down**. C'est un changement par rapport au code actuel ([ArpEngine.cpp:540-545](../../../src/arp/ArpEngine.cpp:540)) qui appelle `clearAllNotes()` dans la branche `anyFingerDown`. Cette branche **disparaît** de `setCaptured()`. Voir §13.
+
+#### §10.1 — Toggle global (LEFT + hold pad simple tap, amendement 2026-05-15)
+
+**Sémantique** : toggle symétrique sur **toutes les banks ARPEG / ARPEG_GEN** (et futur LOOP) selon leur état collectif.
+
+| État collectif | Effet |
+|---|---|
+| Au moins une bank en Play (`isCaptured()==true`) | Stop sur **toutes** les banks en Play. Pile préservée (paused) sur chacune. LED `EVT_STOP` une fois avec mask multi-bank. |
+| Toutes en Stop, au moins une avec `_pausedPile && hasNotes()` | Play sur **toutes** les banks éligibles (relaunch). LED `EVT_PLAY` une fois avec mask multi-bank. |
+| Toutes en Stop, aucune paused pile non vide | No-op silencieux (rien à reprendre). |
+
+**Implémentation actuelle** (signature `setCaptured` 4 args, pré-refonte) :
+
+```cpp
+static void toggleAllArps() {
+  bool anyPlaying = false;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (isArpType(s_banks[i].type) && s_banks[i].arpEngine
+        && s_banks[i].arpEngine->isCaptured()) { anyPlaying = true; break; }
+  }
+  uint8_t mask = 0;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (!isArpType(s_banks[i].type) || !s_banks[i].arpEngine) continue;
+    if (anyPlaying && s_banks[i].arpEngine->isCaptured()) {
+      s_banks[i].arpEngine->setCaptured(false, s_transport, nullptr, s_holdPad);
+      mask |= (uint8_t)(1 << i);
+    } else if (!anyPlaying && s_banks[i].arpEngine->isPaused()
+                              && s_banks[i].arpEngine->hasNotes()) {
+      s_banks[i].arpEngine->setCaptured(true, s_transport, nullptr, s_holdPad);
+      mask |= (uint8_t)(1 << i);
+    }
+  }
+  if (mask != 0) s_leds.triggerEvent(anyPlaying ? EVT_STOP : EVT_PLAY, mask);
+}
+```
+
+**Après refonte gesture Phase 4** (signature `setCaptured` 2 args + dispatcher catégorisé) :
+- Le geste devient une primitive dispatcher : `(HOLD_PAD, TAP_SINGLE, leftHeld=true)` → handler `toggleAllArps()`.
+- `setCaptured(false, transport)` (sans keyIsPressed) puisque pile sacrée stricte.
+- Reste du code identique.
+
+**Workflow musicien** :
+- Setup live : 3 banks ARPEG remplies, en Play. Transition vers un break-down.
+- Geste : LEFT + tap hold pad → silence net sur les 3 banks, piles préservées.
+- Plus tard pour reprendre tout en simultané : LEFT + tap hold pad → relaunch des 3 piles simultané.
+- Si user veut reprendre seulement la bank FG : tap hold pad sans LEFT → toggle FG uniquement, les BG restent en Stop.
+
+**Cohérence avec Q3** : aucune pile n'est wipée par ce geste. La règle "pile sacrée" est respectée intégralement. Pour vider une bank, le user repasse en FG et utilise le geste musical §13.2 (press musical en Stop) ou les double-taps remove individuels.
+
+**Extension LOOP futur** : le helper itère sur les banks `isLoopType` aussi, appelle `LoopEngine.toggleAll()` ou équivalent. Spec figée Phase 7 du plan gesture (signature `LoopEngine`).
 
 ### §11 — Scale change pendant pendingSwitch (Q8)
 

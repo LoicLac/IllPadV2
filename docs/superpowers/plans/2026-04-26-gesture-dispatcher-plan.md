@@ -1026,8 +1026,18 @@ Le hold pad et le sweep release sont les derniers morceaux du geste à migrer. U
 ### Snippet — `GestureDispatcher::handleHoldPad`
 
 ```cpp
-void GestureDispatcher::handleHoldPad(uint32_t now) {
+// Sans LEFT : toggle FG. Avec LEFT : scope étendu via toggleAllArps (§10.1).
+void GestureDispatcher::handleHoldPad(uint32_t now, bool leftHeld) {
   if (_holdPad >= NUM_KEYS) return;
+
+  if (leftHeld) {
+    // Geste LEFT + hold pad simple tap (spec gesture §10.1, fix 2026-05-15) :
+    // toggle global symétrique sur toutes les banks ARPEG/ARPEG_GEN (+ futur LOOP).
+    toggleAllArps();
+    return;
+  }
+
+  // Hors LEFT : toggle FG uniquement
   BankSlot& slot = _banks[_bank->getCurrentBank()];
   if (!isArpType(slot.type) || !slot.arpEngine) return;
 
@@ -1042,7 +1052,35 @@ void GestureDispatcher::handleHoldPad(uint32_t now) {
   // on repart à zéro pour le double-tap remove dans processArpMode.
   memset(_musicPadLastRisingTime, 0, sizeof(_musicPadLastRisingTime));
 }
+
+// Helper privé toggleAllArps (cf spec gesture §10.1) — itère sur toutes les
+// banks isArpType (+ futur isLoopType), bascule Play↔Stop symétriquement,
+// LED multi-bank mask.
+void GestureDispatcher::toggleAllArps() {
+  bool anyPlaying = false;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (isArpType(_banks[i].type) && _banks[i].arpEngine
+        && _banks[i].arpEngine->isCaptured()) { anyPlaying = true; break; }
+  }
+  uint8_t mask = 0;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (!isArpType(_banks[i].type) || !_banks[i].arpEngine) continue;
+    if (anyPlaying && _banks[i].arpEngine->isCaptured()) {
+      _banks[i].arpEngine->setCaptured(false, *_transport);
+      mask |= (uint8_t)(1 << i);
+    } else if (!anyPlaying && _banks[i].arpEngine->isPaused()
+                              && _banks[i].arpEngine->hasNotes()) {
+      _banks[i].arpEngine->setCaptured(true, *_transport);
+      mask |= (uint8_t)(1 << i);
+    }
+  }
+  if (mask != 0 && _leds) {
+    _leds->triggerEvent(anyPlaying ? EVT_STOP : EVT_PLAY, mask);
+  }
+}
 ```
+
+L'appel depuis `update()` Phase 4 devient : `handleHoldPad(now, leftHeld)` au lieu de `handleHoldPad(now)`.
 
 ### Modifications main.cpp Phase 4
 
@@ -1551,6 +1589,7 @@ Liste consolidée référencée par les HW gates des Phases 2 à 6. Chaque scén
 - **P-9 — Stress test live 5 min.** Jeu libre avec multi-bank, scale changes, play/stop multiples. Aucune note bloquée. Aucune pile gone unexpectedly. Aucun glitch.
 - **P-10 — Pile ARPEG-OFF préservée au LEFT release (régression du fix 2026-05-15).** Bank FG ARPEG ou ARPEG_GEN en Stop avec pile non vide. Cycle simple : `LEFT press` → ne rien faire pendant 1-2s → `LEFT release`. Vérifier au log DEBUG_SERIAL qu'AUCUN `[ARP] -note` n'apparaît dans la frame du release. La pile reste à N notes. Refaire avec différentes tailles de pile (1, 3, 7 notes). C'est le scénario qui a révélé le bug racine — doit rester vert après refonte.
 - **P-11 — Auto-Play sur 1er press musical en Stop (§13.2 Option 3, fix 2026-05-15).** Bank FG ARPEG ou ARPEG_GEN en Play avec pile pleine N notes (N=3 par ex.). Toggle Stop (hold pad). Vérifier `[ARP] Stop — pile kept (3 notes)`. Sans rien d'autre, presser **un pad musical** non encore dans la pile. **Attendu** : log montre wipe (`-note` × 3 + `Play (pile 0 notes)`) puis `+note (1 total)`. L'arpège démarre avec la seule nouvelle note. Pas besoin de toggle Play manuel. Le moteur est de nouveau actif (`isCaptured()==true`). Si à la place le user toggle Play sans presser de pad musical, c'est la branche §13.1 : relaunch paused pile entière, pas de wipe. Tester les deux chemins.
+- **P-12 — Toggle global LEFT + hold pad (§10.1, fix 2026-05-15).** Configurer 3 banks ARPEG/ARPEG_GEN avec piles non vides, toutes en Play (capturées). Sans switch, geste : `LEFT press` → tap hold pad → `LEFT release`. **Attendu** : log montre `[ARP] Bank N: Stop — pile kept (X notes)` pour chaque bank en Play, LED `EVT_STOP` avec mask multi-bank (visuel : flash rouge sur les pads de toutes les banks concernées). Aucune ligne `-note`. Refaire le geste : `LEFT press` → tap hold pad → release. **Attendu** : `[ARP] Bank N: Play — relaunch paused pile (X notes)` sur chaque bank, LED `EVT_PLAY` multi-bank. Régression à valider : sans LEFT, tap hold pad → toggle FG seule (comportement de référence inchangé). Edge case : aucune bank avec paused pile non vide après stop → tap LEFT+hold = no-op silencieux (pas de relaunch sur pile vide).
 
 ### T-* — Tuning constants (Phase 6)
 
