@@ -347,9 +347,109 @@ void dumpBankState(uint8_t bankIdx) {  // non-static : referenced by BankManager
   Serial.println();
 }
 
+// =================================================================
+// Persistent settings dumps (v9, 2026-05-16) — paste-friendly snippets
+// pour mettre les valeurs runtime comme defaults en code.
+// =================================================================
+// Workflow : flash → tune via Tool 7/8 → exit setup (reboot pour que
+// NvsManager recharge depuis NVS) → ?ALL via serial monitor → coller
+// la sortie pour mise à jour des defaults en code.
+// =================================================================
+
+static void dumpLedSettings() {
+  const LedSettingsStore& s = s_nvsManager.getLoadedLedSettings();
+  Serial.printf("[LED_DUMP v=%u]\n", s.version);
+  Serial.printf("  fgIntensity = %u;\n", s.fgIntensity);
+  Serial.printf("  breathDepth = %u;\n", s.breathDepth);
+  Serial.printf("  tickFlashFg = %u;\n", s.tickFlashFg);
+  Serial.printf("  tickFlashBg = %u;\n", s.tickFlashBg);
+  Serial.printf("  bgFactor = %u;\n", s.bgFactor);
+  Serial.printf("  pulsePeriodMs = %u;\n", s.pulsePeriodMs);
+  Serial.printf("  tickBeatDurationMs = %u;\n", s.tickBeatDurationMs);
+  Serial.printf("  tickBarDurationMs = %u;\n", s.tickBarDurationMs);
+  Serial.printf("  tickWrapDurationMs = %u;\n", s.tickWrapDurationMs);
+  Serial.printf("  gammaTenths = %u;\n", s.gammaTenths);
+  Serial.printf("  sparkOnMs = %u;\n", s.sparkOnMs);
+  Serial.printf("  sparkGapMs = %u;\n", s.sparkGapMs);
+  Serial.printf("  sparkCycles = %u;\n", s.sparkCycles);
+  Serial.printf("  bankBlinks = %u;\n", s.bankBlinks);
+  Serial.printf("  bankDurationMs = %u;\n", s.bankDurationMs);
+  Serial.printf("  bankBrightnessPct = %u;\n", s.bankBrightnessPct);
+  Serial.printf("  scaleRootBlinks = %u;\n", s.scaleRootBlinks);
+  Serial.printf("  scaleRootDurationMs = %u;\n", s.scaleRootDurationMs);
+  Serial.printf("  scaleModeBlinks = %u;\n", s.scaleModeBlinks);
+  Serial.printf("  scaleModeDurationMs = %u;\n", s.scaleModeDurationMs);
+  Serial.printf("  scaleChromBlinks = %u;\n", s.scaleChromBlinks);
+  Serial.printf("  scaleChromDurationMs = %u;\n", s.scaleChromDurationMs);
+  Serial.printf("  holdOnFadeMs = %u;\n", s.holdOnFadeMs);
+  Serial.printf("  holdOffFadeMs = %u;\n", s.holdOffFadeMs);
+  Serial.printf("  octaveBlinks = %u;\n", s.octaveBlinks);
+  Serial.printf("  octaveDurationMs = %u;\n", s.octaveDurationMs);
+  uint8_t overrideCount = 0;
+  for (uint8_t i = 0; i < EVT_COUNT; i++) {
+    if (s.eventOverrides[i].patternId != PTN_NONE) overrideCount++;
+  }
+  Serial.printf("  // eventOverrides : %u non-default entries\n", overrideCount);
+  for (uint8_t i = 0; i < EVT_COUNT; i++) {
+    const EventRenderEntry& e = s.eventOverrides[i];
+    if (e.patternId != PTN_NONE) {
+      Serial.printf("  eventOverrides[%u] = { .patternId=%u, .colorSlot=%u, .fgPct=%u };\n",
+                    i, e.patternId, e.colorSlot, e.fgPct);
+    }
+  }
+  Serial.println("[/LED_DUMP]");
+}
+
+static void dumpColorSlots() {
+  const ColorSlotStore& s = s_nvsManager.getLoadedColorSlots();
+  Serial.printf("[COLORS_DUMP v=%u]\n", s.version);
+  for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
+    const ColorSlot& slot = s.slots[i];
+    const char* presetName = (slot.presetId < COLOR_PRESET_COUNT)
+                               ? COLOR_PRESET_NAMES[slot.presetId] : "?";
+    Serial.printf("  slots[%2u] = { .presetId=%2u, .hueOffset=%+4d };  // %s\n",
+                  i, slot.presetId, (int)slot.hueOffset, presetName);
+  }
+  Serial.println("[/COLORS_DUMP]");
+}
+
+static void dumpPotMapping() {
+  // Order MUST match enum PotTarget in KeyboardData.h (0..18)
+  static const char* const TARGET_NAMES[] = {
+    "RESPONSE_SHAPE", "SLEW_RATE", "AT_DEADZONE",
+    "PITCH_BEND", "GATE_LENGTH", "SHUFFLE_DEPTH",
+    "DIVISION", "PATTERN", "SHUFFLE_TEMPLATE",
+    "BASE_VELOCITY", "VELOCITY_VARIATION",
+    "TEMPO_BPM", "LED_BRIGHTNESS", "PAD_SENSITIVITY",
+    "MIDI_CC", "MIDI_PITCHBEND",
+    "GEN_POSITION",
+    "EMPTY", "NONE"
+  };
+  constexpr uint8_t TARGET_NAMES_COUNT = sizeof(TARGET_NAMES)/sizeof(TARGET_NAMES[0]);
+  static const char* const SLOT_LABELS[] = {"R1 ","R1H","R2 ","R2H","R3 ","R3H","R4 ","R4H"};
+
+  const PotMappingStore& m = s_potRouter.getMapping();
+  Serial.printf("[POTMAP_DUMP v=%u]\n", m.version);
+  Serial.println("  // NORMAL context");
+  for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
+    uint8_t t = (uint8_t)m.normalMap[i].target;
+    const char* tn = (t < TARGET_NAMES_COUNT) ? TARGET_NAMES[t] : "?";
+    Serial.printf("  normalMap[%u] = { TARGET_%-20s, %3u };  // %s\n",
+                  i, tn, m.normalMap[i].ccNumber, SLOT_LABELS[i]);
+  }
+  Serial.println("  // ARPEG context");
+  for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
+    uint8_t t = (uint8_t)m.arpegMap[i].target;
+    const char* tn = (t < TARGET_NAMES_COUNT) ? TARGET_NAMES[t] : "?";
+    Serial.printf("  arpegMap[%u]  = { TARGET_%-20s, %3u };  // %s\n",
+                  i, tn, m.arpegMap[i].ccNumber, SLOT_LABELS[i]);
+  }
+  Serial.println("[/POTMAP_DUMP]");
+}
+
 // Emit "[READY] current=N" — boot dump completion marker, also at the end
-// of each ?STATE/?BANKS/?BOTH response. N is the 1-based foreground bank
-// index — viewer uses this to set Model.current.idx after the boot's
+// of each ?STATE/?BANKS/?BOTH/?ALL response. N is the 1-based foreground
+// bank index — viewer uses this to set Model.current.idx after the boot's
 // 8× [STATE] sequence (which alone doesn't identify the foreground).
 static void emitReady() {
   Serial.printf("[READY] current=%u\n", s_bankManager.getCurrentBank() + 1);
@@ -375,6 +475,13 @@ static void pollRuntimeCommands() {
       } else if (strcmp(cmdBuf, "?BOTH") == 0) {
         dumpBanksGlobal();
         for (uint8_t i = 0; i < NUM_BANKS; i++) dumpBankState(i);
+        emitReady();
+      } else if (strcmp(cmdBuf, "?ALL") == 0) {
+        dumpBanksGlobal();
+        for (uint8_t i = 0; i < NUM_BANKS; i++) dumpBankState(i);
+        dumpLedSettings();
+        dumpColorSlots();
+        dumpPotMapping();
         emitReady();
       }
       cmdLen = 0;
