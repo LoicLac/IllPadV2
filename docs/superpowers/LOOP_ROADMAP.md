@@ -11,6 +11,44 @@ _Référence d'orchestration pour les sessions de conception (Phases 2-6) puis d
 
 ---
 
+## §0 — Vérification environnement (OBLIGATOIRE avant toute action)
+
+À exécuter **avant** lecture du reste du roadmap, **avant** toute lecture
+de code, **avant** toute autre commande. Garantit qu'on est dans le bon
+worktree (pas le viewer JUCE sibling `ILLPAD_V2-viewer/`).
+
+```bash
+# 1. Working directory = ILLPAD_V2 (pas -viewer ni autre)
+pwd
+# attendu : /Users/loic/Code/PROJECTS/ILLPAD_V2
+
+# 2. Branche = main (pas viewer-juce, pas loop, pas une autre)
+git branch --show-current
+# attendu : main
+
+# 3. Roadmap LOOP présent (preuve qu'on est dans le bon repo + bonne branche)
+ls docs/superpowers/LOOP_ROADMAP.md
+# attendu : docs/superpowers/LOOP_ROADMAP.md
+
+# 4. platformio.ini présent (firmware ESP32 — le viewer JUCE n'a pas ce fichier)
+ls platformio.ini
+# attendu : platformio.ini
+```
+
+**Si l'une des 4 vérifs dévie** :
+
+| Symptôme | Diagnostic | Action |
+|---|---|---|
+| `pwd` ≠ `/Users/loic/Code/PROJECTS/ILLPAD_V2` | Mauvais worktree (probablement `ILLPAD_V2-viewer/`) | **STOP**. Demander au user un `cd` explicite. Ne PAS faire `cd` de ta propre initiative. |
+| branche ≠ `main` (ex. `viewer-juce`, `loop`, `feature/...`) | Mauvaise branche | **STOP**. Ne PAS `git checkout` sans autorisation explicite du user. |
+| `docs/superpowers/LOOP_ROADMAP.md` absent | Mauvais repo OU mauvaise branche | **STOP**. Le roadmap est la preuve qu'on est sur main ILLPAD_V2. Son absence = mauvais endroit. |
+| `platformio.ini` absent | Mauvais repo (probablement viewer JUCE qui utilise CMake) | **STOP**. |
+
+Aucune lecture, aucune écriture, aucun grep, aucune autre commande tant
+que les 4 vérifs ne sont pas toutes vertes.
+
+---
+
 ## §1 — Stratégie globale
 
 **Approche A** : 5 sessions de rédaction successives des plans Phase 2-6,
