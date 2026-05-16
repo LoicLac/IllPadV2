@@ -25,17 +25,24 @@ When editing one of these flows, update this ref in the same commit
 Critical path first, secondary after. MIDI latency depends on this order.
 
 ```
+ 0. pollRuntimeCommands()                      ← DEBUG_SERIAL only — viewer-API
+    (?STATE / ?BANKS / ?BOTH ; non-blocking Serial.available poll)
  1. Read double buffer (instant)              ← CRITICAL PATH START
+ 1b. Boot settle window (BOOT_SETTLE_MS=300ms) ← absorb pad state silently
  2. USB MIDI transport update (clock polling)
- 3. Read buttons (left + rear)
+ 3. Read buttons (left + rear)                 ← 20ms SW debounce on top of HW RC
 ── handleManagerUpdates(state, leftHeld) ──
  4. BankManager.update()                       ← left button
  5. ScaleManager.update()                      ← left button (same as bank)
  5b. Consume scale/octave/hold flags + LED confirmations
      (ARPEG scale change: no flush needed — events store resolved MIDI notes)
  6. ClockManager.update()                      ← PLL + tick generation
-── handleHoldPad(state) ──
- 7. Hold pad (ARPEG only) — toggles Play/Stop via ArpEngine::setCaptured()
+── handleHoldPad(state, leftHeld) ──
+ 7. Hold pad — toggles Play/Stop via ArpEngine::setCaptured()
+    (FG only if !leftHeld ; scope étendu toutes banks ARPEG/GEN si leftHeld)
+── ControlPadManager.update(state, leftHeld, channel) ──
+ 7b. Control pads — edge detection + per-mode CC emission
+     (gate-vs-setter handoff on LEFT/bank edges ; CONTINUOUS DSP pipeline)
 ── handlePadInput(state, now) ──
  8. processNormalMode() or processArpMode()
  8b. Stuck-note cleanup on left-release edge
@@ -50,9 +57,11 @@ Critical path first, secondary after. MIDI latency depends on this order.
 12. BatteryMonitor.update()
 13. LedController.update()                     ← multi-bank state + overlays
 ── handlePanicChecks(now, rearHeld) ──
-14. NvsManager.notifyIfDirty()                 ← non-blocking signal to NVS task
+14. BLE reconnect detection + manual triple-click rear (600ms window)
+── NVS pot debounce + dirty signal ──
+15. NvsManager.notifyIfDirty()                 ← non-blocking signal to NVS task
 ── debugOutput(leftHeld, rearHeld) ──
-15. vTaskDelay(1)
+16. vTaskDelay(1)                              ← caps loop ~1 kHz
 ```
 
 ---
@@ -80,10 +89,10 @@ Left-button release safety (detect s_wasHolding → !holding edge):
 ```
 
 Entry points :
-- `main.cpp::handlePadInput()` [562-577] dispatches to
-  `processNormalMode` [466-499] and `processArpMode` [501-536]
-- `main.cpp::handleLeftReleaseCleanup()` [538-560]
-- `MidiEngine::noteOn/noteOff` [47-72]
+- `main.cpp::handlePadInput()` [861-880] dispatches to
+  `processNormalMode` [753-787] and `processArpMode` [789-837]
+- `main.cpp::handleLeftReleaseCleanup()` [839-859]
+- `MidiEngine::noteOn` [47] / `noteOff` [63]
 - `ScaleResolver::resolve`
 - `MidiTransport::sendNoteOn` [196-214]
 
@@ -120,10 +129,10 @@ ClockManager::update() → _currentTick++
 Entry points :
 - `ClockManager::generateTicks` [181-203]
 - `ArpScheduler::tick` [98-131] + `processEvents` [140-146]
-- `ArpEngine::currentState` [524-530]
-- `ArpEngine::tick` [536-566]
-- `ArpEngine::executeStep` [572-654]
-- `ArpEngine::processEvents` [660-673]
+- `ArpEngine::currentState` [679-685]
+- `ArpEngine::tick` [691-721]
+- `ArpEngine::executeStep` [727-786]
+- `ArpEngine::processEvents` [843-856]
 
 Details (states, shuffle, quantize, Play/Stop) :
 [`arp-reference.md`](arp-reference.md).
@@ -133,25 +142,27 @@ Details (states, shuffle, quantize, Play/Stop) :
 ## 3. Bank switch (all side effects, in order)
 
 ```
-switchToBank() calls [BankManager.cpp:181-210]:
-1. sendPitchBend(8192) on OLD channel         [BankManager.cpp:186]
-2. allNotesOff() on OLD channel               [BankManager.cpp:187]
+switchToBank() calls [BankManager.cpp:188-231]:
+1. sendPitchBend(8192) on OLD channel         [BankManager.cpp:195]
+2. allNotesOff() on OLD channel               [BankManager.cpp:196]
    — internally drains AT ring buffer + resets AT rate limiter
      [MidiEngine.cpp:98-101]
-3. Update foreground flags                    [BankManager.cpp:190-192]
-4. setChannel(newBank)                        [BankManager.cpp:195]
-5. sendPitchBend(newBank.pitchBendOffset)     [BankManager.cpp:196-197]
+3. Update foreground flags                    [BankManager.cpp:199-201]
+4. setChannel(newBank)                        [BankManager.cpp:204]
+5. sendPitchBend(newBank.pitchBendOffset)     [BankManager.cpp:205-206]
    — NORMAL banks only. ARPEG banks: no pitch bend sent (no aftertouch, spec)
-6. LED: setCurrentBank + triggerEvent(EVT_BANK_SWITCH)  [BankManager.cpp:200-203]
-— back in handleManagerUpdates() [main.cpp:602] —
-7. queueBankWrite() to NVS                    [main.cpp:609]
-8. reloadPerBankParams(newSlot)               [main.cpp:610]
-   → loadStoredPerBank() into PotRouter       [reloadPerBankParams:593-596]
-9. seedCatchValues(keepGlobalCatch=true)      [reloadPerBankParams:597]
+6. LED: setCurrentBank + triggerEvent(EVT_BANK_SWITCH)  [BankManager.cpp:210-211]
+7. Bank-select MIDI on canal 16 (DAW resync)  [BankManager.cpp:214-216]
+   — sendBankSelectMidi(oldBank, false) + sendBankSelectMidi(newBank, true)
+— back in handleManagerUpdates() [main.cpp:907] —
+8. queueBankWrite() to NVS                    [main.cpp:914]
+9. reloadPerBankParams(newSlot)               [main.cpp:915]
+   → loadStoredPerBank() into PotRouter       [reloadPerBankParams:898-901]
+10. seedCatchValues(keepGlobalCatch=true)      [reloadPerBankParams:902]
    — reseeds stored values; global targets keep catch state (tempo, shape…)
-   — per-bank targets lose catch (will be uncaught by step 10)
-10. resetPerBankCatch() — uncatch per-bank only [reloadPerBankParams:598]
-11. ControlPadManager.update() detects bank switch edge on next frame,
+   — per-bank targets lose catch (will be uncaught by step 11)
+11. resetPerBankCatch() — uncatch per-bank only [reloadPerBankParams:903]
+12. ControlPadManager.update() detects bank switch edge on next frame,
     runs per-mode handoff (gate-family : CC=0 on old channel + re-sync
     on new channel ; setter : silent preserve of old-channel value).
 ```
@@ -240,9 +251,9 @@ handleManagerUpdates() consumes flag:
 ```
 
 Entry points :
-- `ScaleManager::processScalePads` [114-201]
-- `main.cpp::handleManagerUpdates` [602-665]
-- `reloadPerBankParams` [580-599]
+- `ScaleManager::processScalePads` [114-212]
+- `main.cpp::handleManagerUpdates` [907-970]
+- `reloadPerBankParams` [883-904]
 
 Scale groups are stored in `BankTypeStore.scaleGroup[]`
 (0 = none, 1..NUM_SCALE_GROUPS = A..D), accessed via
@@ -275,9 +286,9 @@ handlePotPipeline(): read getters → write to BankSlot/ArpEngine/atomics
 Entry points :
 - `PotFilter::updateAll` (MCP3208 SPI, no EMA, no oversampling — see
   [`pot-reference.md`](pot-reference.md))
-- `PotRouter::update` [318-327] + `resolveBindings` [334-381] +
-  `applyBinding` [386-544]
-- `main.cpp::handlePotPipeline` [715-770] + `pushParamsToEngine` [702-714]
+- `PotRouter::update` [370-379] + `resolveBindings` [386-436] +
+  `applyBinding` [441-624]
+- `main.cpp::handlePotPipeline` [1058-1128] + `pushParamsToEngine` [1040-1055]
 
 Bargraph : `PotRouter::hasBargraphUpdate()` always triggers
 `LedController::showPotBargraph()` (tempo included — no pulsed variant).
