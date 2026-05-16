@@ -492,6 +492,28 @@ struct ArpPadStore {
 };
 static_assert(sizeof(ArpPadStore) <= NVS_BLOB_MAX_SIZE, "ArpPadStore exceeds NVS blob max");
 
+// =================================================================
+// LoopPadStore — LOOP control pads (REC/PLAY/CLEAR) + slot pads 0..15
+// =================================================================
+// Phase 1 : declared (struct + validator + descriptor). No runtime writer
+// yet — Tool 3 b1 contextual refactor (Phase 3) will wire UI editing.
+// Strict 23 B packed per spec LOOP §28 Q1 (pas d'alignement de remplissage).
+#define LOOPPAD_NVS_NAMESPACE  "illpad_lpad"
+#define LOOPPAD_NVS_KEY        "pads"
+#define LOOPPAD_VERSION        1
+
+struct __attribute__((packed)) LoopPadStore {
+  uint16_t magic;          // 2 B  -> EEPROM_MAGIC
+  uint8_t  version;        // 1 B  -> LOOPPAD_VERSION
+  uint8_t  reserved;       // 1 B  -> alignement, 0
+  uint8_t  recPad;         // 1 B  -> control pad REC,         0xFF si non assigné
+  uint8_t  playStopPad;    // 1 B  -> control pad PLAY/STOP,   0xFF si non assigné
+  uint8_t  clearPad;       // 1 B  -> control pad CLEAR,       0xFF si non assigné
+  uint8_t  slotPads[16];   // 16 B -> slot pads 0..15,         0xFF si non assigné
+};
+static_assert(sizeof(LoopPadStore) == 23, "LoopPadStore must be exactly 23 B (Q1 §28 spec LOOP)");
+static_assert(sizeof(LoopPadStore) <= NVS_BLOB_MAX_SIZE, "LoopPadStore exceeds NVS blob max");
+
 #define BANKTYPE_NVS_KEY_V2  "config"
 #define BANKTYPE_VERSION     4   // 3->4 : ajout proximityFactorx10[] + ecart[] (ARPEG_GEN walk tuning)
 
@@ -678,6 +700,18 @@ inline void validateArpPadStore(ArpPadStore& s) {
   }
 }
 
+inline void validateLoopPadStore(LoopPadStore& s) {
+  // Clamp out-of-range pad indices à 0xFF (sentinel "non assigné").
+  // Collision validation (rec != playStop != clear != slots != banks/scale/arp)
+  // est de la responsabilité de Tool 3 b1 (Phase 3), pas de ce validator.
+  if (s.recPad      != 0xFF && s.recPad      >= NUM_KEYS) s.recPad      = 0xFF;
+  if (s.playStopPad != 0xFF && s.playStopPad >= NUM_KEYS) s.playStopPad = 0xFF;
+  if (s.clearPad    != 0xFF && s.clearPad    >= NUM_KEYS) s.clearPad    = 0xFF;
+  for (uint8_t i = 0; i < 16; i++) {
+    if (s.slotPads[i] != 0xFF && s.slotPads[i] >= NUM_KEYS) s.slotPads[i] = 0xFF;
+  }
+}
+
 inline void validateBankPadStore(BankPadStore& s) {
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     if (s.bankPads[i] >= NUM_KEYS) s.bankPads[i] = i;
@@ -822,6 +856,7 @@ static constexpr NvsDescriptor NVS_DESCRIPTORS[] = {
   { POTFILTER_NVS_NAMESPACE,   POTFILTER_NVS_KEY,      EEPROM_MAGIC,    POT_FILTER_VERSION,   (uint16_t)sizeof(PotFilterStore)    },  // 9: T7b (Monitor in T7)
   { LED_SETTINGS_NVS_NAMESPACE,LED_SETTINGS_NVS_KEY,   EEPROM_MAGIC,    LED_SETTINGS_VERSION, (uint16_t)sizeof(LedSettingsStore)  },  // 10: T8a
   { LED_SETTINGS_NVS_NAMESPACE,COLOR_SLOT_NVS_KEY,     COLOR_SLOT_MAGIC,COLOR_SLOT_VERSION,   (uint16_t)sizeof(ColorSlotStore)    },  // 11: T8b
+  { LOOPPAD_NVS_NAMESPACE,     LOOPPAD_NVS_KEY,        EEPROM_MAGIC,    LOOPPAD_VERSION,      (uint16_t)sizeof(LoopPadStore)      },  // 12: T3 LOOP (Phase 1 declared, T3 b1 wires Phase 3)
 };
 static constexpr uint8_t NVS_DESCRIPTOR_COUNT = sizeof(NVS_DESCRIPTORS) / sizeof(NVS_DESCRIPTORS[0]);
 
