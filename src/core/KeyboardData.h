@@ -136,6 +136,29 @@ struct ArpPotStore {
 // Total : 4 (header) + 8 = 12 octets.
 
 // =================================================================
+// LoopPotStore — LOOP pot params per-bank (5 effets)
+// =================================================================
+// Phase 1 : declared (struct + validator). No writer Phase 1 — Phase 5 wires
+// the pot router targets pour shuffle/chaos/velocity pattern.
+// Per-bank pattern : 8 keys "loop_0".."loop_7" sous le namespace
+// LOOP_POT_NVS_NAMESPACE (défini plus bas, ligne ~786). Pas de descriptor
+// entry dans NVS_DESCRIPTORS[] (idem ArpPotStore : multi-key non descripteurisé).
+const uint16_t LOOPPOT_MAGIC   = EEPROM_MAGIC;
+const uint8_t  LOOPPOT_VERSION = 1;
+
+struct __attribute__((packed)) LoopPotStore {
+  uint16_t magic;              // LOOPPOT_MAGIC
+  uint8_t  version;            // LOOPPOT_VERSION
+  uint8_t  reserved;
+  uint16_t shuffleDepthRaw;    // 0-4095 (maps 0.0-1.0)
+  uint8_t  shuffleTemplate;    // 0..NUM_SHUFFLE_TEMPLATES-1 (shared with ArpEngine via GrooveTemplates.h)
+  uint16_t chaosRaw;           // 0-4095 (maps 0.0-1.0)
+  uint8_t  velPattern;         // 0..3 (4 LUTs : accent, downbeat, backbeat, swing)
+  uint16_t velPatternDepthRaw; // 0-4095 (maps 0.0-1.0)
+};
+// Total packed : 4 (header) + 2+1+2+1+2 = 12 octets. static_assert groupé plus bas.
+
+// =================================================================
 // Color Preset Palette (const, in flash — not NVS)
 // =================================================================
 static constexpr uint8_t COLOR_PRESET_COUNT = 14;
@@ -610,6 +633,7 @@ static_assert(sizeof(ControlPadStore) <= NVS_BLOB_MAX_SIZE, "ControlPadStore exc
 static_assert(sizeof(SettingsStore) <= NVS_BLOB_MAX_SIZE, "SettingsStore exceeds NVS blob max");
 static_assert(sizeof(PotParamsStore) <= NVS_BLOB_MAX_SIZE, "PotParamsStore exceeds NVS blob max");  // F-CODE-4
 static_assert(sizeof(ArpPotStore) <= NVS_BLOB_MAX_SIZE, "ArpPotStore exceeds NVS blob max");        // F-CODE-4
+static_assert(sizeof(LoopPotStore) <= NVS_BLOB_MAX_SIZE, "LoopPotStore exceeds NVS blob max");
 static_assert(sizeof(PotMappingStore) <= NVS_BLOB_MAX_SIZE, "PotMappingStore exceeds NVS blob max");
 static_assert(sizeof(LedSettingsStore) <= NVS_BLOB_MAX_SIZE, "LedSettingsStore exceeds NVS blob max");
 static_assert(sizeof(ColorSlotStore) <= NVS_BLOB_MAX_SIZE, "ColorSlotStore exceeds NVS blob max");
@@ -665,6 +689,14 @@ inline void validateArpPotStore(ArpPotStore& s) {
   if (s.octaveRange < 1 || s.octaveRange > 4) s.octaveRange = 1;
   if (s.shuffleTemplate >= NUM_SHUFFLE_TEMPLATES) s.shuffleTemplate = 0;
   // gateRaw / shuffleDepthRaw : pas de clamp strict (uint16 native), clampe a load par les getters float.
+}
+
+inline void validateLoopPotStore(LoopPotStore& s) {
+  if (s.shuffleDepthRaw    > 4095) s.shuffleDepthRaw    = 0;
+  if (s.shuffleTemplate    >= NUM_SHUFFLE_TEMPLATES) s.shuffleTemplate = 0;
+  if (s.chaosRaw           > 4095) s.chaosRaw           = 0;
+  if (s.velPattern         >= 4)   s.velPattern         = 0;
+  if (s.velPatternDepthRaw > 4095) s.velPatternDepthRaw = 0;
 }
 
 inline void validateBankTypeStore(BankTypeStore& s) {
@@ -784,6 +816,8 @@ inline void validateLedSettingsStore(LedSettingsStore& s) {
 #define SENSITIVITY_NVS_KEY     "sensitivity"
 #define ARP_POT_NVS_NAMESPACE   "illpad_apot"   // Arp pot params per bank (gate, shuffle, div, pattern, oct)
 // Keys: "arp_0" through "arp_7" (per bank)
+#define LOOP_POT_NVS_NAMESPACE  "illpad_lpot"   // Loop pot params per bank (shuffleDepth, shuffleTpl, chaos, velPattern, velPatternDepth)
+// Keys: "loop_0" through "loop_7" (per bank)
 
 #define TEMPO_NVS_NAMESPACE     "illpad_tempo"  // Tempo BPM (global)
 #define TEMPO_NVS_KEY           "bpm"
