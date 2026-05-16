@@ -542,32 +542,19 @@ void ArpEngine::setCaptured(bool captured, MidiTransport& transport,
     }
     _pausedPile = false;
   } else {
-    // Play → Stop: check fingers down on FG bank only.
-    // keyIsPressed == nullptr → BG bank, no fingers possible.
-    bool anyFingerDown = false;
-    if (keyIsPressed) {
-      for (uint8_t i = 0; i < NUM_KEYS; i++) {
-        if (i == holdPadIdx) continue;
-        if (keyIsPressed[i]) { anyFingerDown = true; break; }
-      }
-    }
-
-    if (anyFingerDown) {
-      // Fingers down: wipe pile, live mode takes over.
-      clearAllNotes(transport);
-      #if DEBUG_SERIAL
-      Serial.printf("[ARP] Bank %d: Stop — fingers down, pile cleared\n", _channel + 1);
-      #endif
-    } else {
-      // No fingers: keep pile, arm pause for next Play.
-      flushPendingNoteOffs(transport);
-      _playing = false;
-      _waitingForQuantize = false;
-      _pausedPile = true;
-      #if DEBUG_SERIAL
-      Serial.printf("[ARP] Bank %d: Stop — pile kept (%d notes)\n", _channel + 1, _positionCount);
-      #endif
-    }
+    // Play → Stop : pile toujours préservée, paused armée (pile sacrée Q3
+    // spec gesture §13, fix F1 du 2026-05-15). Les paramètres keyIsPressed
+    // et holdPadIdx ne sont plus utilisés — gardés pour compat API jusqu'à
+    // la refonte gesture Phase 5 qui simplifiera la signature.
+    (void)keyIsPressed;
+    (void)holdPadIdx;
+    flushPendingNoteOffs(transport);
+    _playing = false;
+    _waitingForQuantize = false;
+    _pausedPile = true;
+    #if DEBUG_SERIAL
+    Serial.printf("[ARP] Bank %d: Stop — pile kept (%d notes)\n", _channel + 1, _positionCount);
+    #endif
   }
 }
 

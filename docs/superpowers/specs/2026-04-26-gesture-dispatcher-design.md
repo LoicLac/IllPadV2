@@ -302,16 +302,15 @@ Au plus **1 action par catégorie** émise par le dispatcher dans une frame :
 
 #### §13.1 — Modification de `ArpEngine::setCaptured()`
 
-Le contrat de `ArpEngine::setCaptured()` est révisé :
+Le contrat de `ArpEngine::setCaptured()` est révisé. **Fix appliqué hors refonte le 2026-05-15** (commit dédié `fix(arpeg): F1`), la spec ici décrit l'état actuel du code et le reste à faire en Phase 5 de la refonte.
 
-**AVANT** ([ArpEngine.cpp:507-557](../../../src/arp/ArpEngine.cpp:507)) :
+**AVANT** (ancien code, supprimé) :
 ```
-captured=true:  if (_pausedPile && positionCount > 0) relaunch ; _pausedPile = false
-captured=false: if (anyFingerDown) clearAllNotes()  ← chemin destructif
+captured=false: if (anyFingerDown) clearAllNotes()  ← chemin destructif (F1)
                 else { flush noteOffs ; _playing = false ; _pausedPile = true }
 ```
 
-**APRÈS** :
+**APRÈS (état actuel du code, fix 2026-05-15)** ([ArpEngine.cpp:544-558](../../../src/arp/ArpEngine.cpp:544)) :
 ```
 captured=true:  if (_pausedPile && positionCount > 0) relaunch ; _pausedPile = false
 captured=false: flush noteOffs ; _playing = false ; _pausedPile = true
@@ -319,13 +318,13 @@ captured=false: flush noteOffs ; _playing = false ; _pausedPile = true
 ```
 
 Conséquences :
-- F1 disparaît : le bank pad pressé pour le 2e tap ne peut plus déclencher un wipe.
-- Hold pad sur FG ARPEG en mode capturé, avec d'autres pads pressés → pile préservée. Différent du comportement actuel, conforme à ta règle Q3.
-- La signature de `setCaptured()` n'a plus besoin de `keyIsPressed` ni `holdPadIdx` :
+- F1 résolu : le bank pad pressé pour le 2e tap ne peut plus déclencher un wipe.
+- Hold pad sur FG ARPEG en mode capturé, avec d'autres pads pressés → pile préservée. Conforme à la règle Q3.
+- F7 (asymétrie BG/FG dans setCaptured) résolue : les paramètres `keyIsPressed` et `holdPadIdx` deviennent inutiles, marqués `(void)` pour silencer warnings. La refonte Phase 5 simplifiera la signature à :
   ```cpp
   void setCaptured(bool captured, MidiTransport& transport);
   ```
-- Le sweep release universel (§9) prend le relais pour assurer qu'aucun pad pressé pendant un release LEFT n'ajoute de note à la pile ni ne déclenche de wipe.
+- Le sweep release universel (§9) prend le relais pour assurer qu'aucun pad pressé pendant un release LEFT n'ajoute de note à la pile ni ne déclenche de wipe (déjà appliqué hors refonte le 2026-05-15).
 
 #### §13.2 — Auto-Play sur 1er press musical en Stop (Option 3, amendée 2026-05-15)
 
