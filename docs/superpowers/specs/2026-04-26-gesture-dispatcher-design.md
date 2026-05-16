@@ -377,6 +377,7 @@ slot.arpEngine->setCaptured(true, s_transport, nullptr, s_holdPad);
 | Pads pressés au press/release LEFT (zone de garde §7, §9) | transport | **préservée** (sweep snapshot, pas d'addPadPosition) |
 | Bank switch (commit pendingSwitch) | transport | **préservée** (`switchToBank` ne touche pas la pile) |
 | Panic global (BLE reconnect, triple-click rear) | système | **préservée** (`flushPendingNoteOffs` ne touche pas `_positionCount`) |
+| Release pad musical en Stop (anciennement "live remove") | transport | **préservée** (fix F8 du 2026-05-15) — la branche destructive `else if (!pressed && wasPressed && !isCaptured) removePadPosition` dans `processArpMode` est supprimée |
 | 1er press pad musical en Stop avec paused pile | musical (re-engagement Play) | **wipée** + nouvelle note ajoutée + auto-Play (§13.2 Option 3) |
 | 1er press pad musical en Stop sans paused pile | musical (re-engagement Play) | pile vide + nouvelle note ajoutée + auto-Play (§13.2 Option 3) |
 | Double-tap remove sur pad musical en Play (FG ARPEG capturé) | musical (édition pile) | une position retirée (pas de wipe global) |

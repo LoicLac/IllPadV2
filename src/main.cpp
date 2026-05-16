@@ -571,11 +571,14 @@ static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uin
       }
 
     } else if (!pressed && wasPressed) {
-      if (!slot.arpEngine->isCaptured()) {
-        // Stop: live remove
-        slot.arpEngine->removePadPosition(pos);
-      }
-      // Play: release ignored (pile persistent)
+      // Stop comme Play : release ignoré, pile persistante (fix F8 du
+      // 2026-05-15). Le "live remove" en Stop est caduque depuis le fix
+      // §13.2 auto-Play (4799918) : un press musical en Stop transite
+      // immédiatement vers Play, donc on ne reste plus jamais "en Stop
+      // avec doigts sur les pads en live mode". La branche destructive
+      // était activée seulement à la transition Play→Stop avec pads
+      // tenus, scenario qui n'a aucune sémantique musicale légitime.
+      (void)pos;
     }
   }
 }
