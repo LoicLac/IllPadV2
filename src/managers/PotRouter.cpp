@@ -752,10 +752,49 @@ bool      PotRouter::isBargraphCaught() const    { return _bargraphCaught; }
 bool PotRouter::isDirty() const   { return _dirty; }
 void PotRouter::clearDirty()      { _dirty = false; }
 
-uint8_t PotRouter::getSlotForTarget(PotTarget t, bool isArpContext) const {
-  const PotMapping* map = isArpContext ? _mapping.arpegMap : _mapping.normalMap;
-  for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
-    if (map[i].target == t) return i;
+uint8_t PotRouter::getSlotForTarget(PotTarget t, BankType bankType) const {
+  // Iterate runtime bindings — they hold the effective (post-substitution)
+  // routing for each bank context (e.g. TARGET_GEN_POSITION mirror on
+  // BANK_ARPEG_GEN). Reverse-compute the slot index from (potIndex, btnMask)
+  // — inverse of the rebuildBindings:228 formula:
+  //   slot = potIdx * 2 + (buttonMask & 0x01)  for potIdx in 0..3
+  // potIndex == 4 (rear pot) and BANK_ANY-tagged fixed bindings have no
+  // user-visible slot — return 0xFF.
+  for (uint8_t i = 0; i < _numBindings; i++) {
+    const PotBinding& b = _bindings[i];
+    if (b.bankType != bankType) continue;
+    if (b.target != t) continue;
+    if (b.potIndex >= 4) return 0xFF;
+    return b.potIndex * 2 + (b.buttonMask & 0x01);
   }
-  return 0xFF;  // not found
+  return 0xFF;
+}
+
+uint8_t PotRouter::getSlotForCcNumber(uint8_t cc, BankType bankType) const {
+  for (uint8_t i = 0; i < _numBindings; i++) {
+    const PotBinding& b = _bindings[i];
+    if (b.bankType != bankType) continue;
+    if (b.target != TARGET_MIDI_CC) continue;
+    if (b.ccNumber != cc) continue;
+    if (b.potIndex >= 4) return 0xFF;
+    return b.potIndex * 2 + (b.buttonMask & 0x01);
+  }
+  return 0xFF;
+}
+
+PotTarget PotRouter::getEffectiveTargetForSlot(uint8_t slot, BankType bankType,
+                                                uint8_t* outCcNumber) const {
+  if (outCcNumber) *outCcNumber = 0;
+  if (slot >= POT_MAPPING_SLOTS) return TARGET_EMPTY;
+  uint8_t potIdx  = slot / 2;
+  uint8_t btnMask = (slot & 1) ? 0x01 : 0x00;
+  for (uint8_t i = 0; i < _numBindings; i++) {
+    const PotBinding& b = _bindings[i];
+    if (b.bankType != bankType) continue;
+    if (b.potIndex != potIdx) continue;
+    if ((b.buttonMask & 0x01) != btnMask) continue;
+    if (outCcNumber) *outCcNumber = b.ccNumber;
+    return b.target;
+  }
+  return TARGET_EMPTY;
 }

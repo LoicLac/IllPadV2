@@ -88,6 +88,16 @@ static bool    s_panicOnReconnect = DEFAULT_PANIC_ON_RECONNECT;
 static const uint32_t BOOT_SETTLE_MS = 300;
 static uint32_t s_bootTimestamp = 0;
 
+// Slot-name lookup for viewer-API [POT] log annotation.
+// Used by debugOutput() to prefix each [POT] line with the slot of origin
+// (R1/R1H/R2/.../R4H) derived from the user's current pot mapping.
+static const char* potSlotName(uint8_t slot) {
+  static const char* NAMES[POT_MAPPING_SLOTS] = {
+    "R1", "R1H", "R2", "R2H", "R3", "R3H", "R4", "R4H"
+  };
+  return slot < POT_MAPPING_SLOTS ? NAMES[slot] : "--";
+}
+
 // =================================================================
 // Core 0 — Sensing Task
 // =================================================================
@@ -141,6 +151,243 @@ static void midiPanic() {
   Serial.println("[PANIC] All notes off on all channels");
   #endif
 }
+
+// =================================================================
+// Viewer API helpers — boot dump, per-bank state dump, ?STATE/?BANKS/?BOTH
+// runtime command handler, [READY] marker. All gated by DEBUG_SERIAL.
+// Plan: docs/superpowers/plans/2026-05-15-illpad-firmware-viewer-api.md
+// =================================================================
+#if DEBUG_SERIAL
+
+// Emit [BANKS] count=8 + 8× [BANK] idx=N ... headers at boot.
+// Per-bank metadata (type, channel, group, division+playing+octave for ARPEG,
+// division+playing+mutationLevel for ARPEG_GEN). NORMAL/LOOP have only the
+// minimal fields. Plan task A.3.
+static void dumpBanksGlobal() {
+  // ORDER MATCHES enum BankType in KeyboardData.h:324-329
+  // BANK_NORMAL=0, BANK_ARPEG=1, BANK_LOOP=2, BANK_ARPEG_GEN=3
+  static const char* TYPE_NAMES[] = { "NORMAL", "ARPEG", "LOOP", "ARPEG_GEN" };
+  static const char* DIV_NAMES[]  = { "4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64" };
+
+  Serial.printf("[BANKS] count=%d\n", NUM_BANKS);
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    BankSlot& b = s_banks[i];
+    uint8_t group = s_nvsManager.getLoadedScaleGroup(i);
+    char groupChar = (group == 0) ? '0' : (char)('A' + group - 1);
+    uint8_t typeIdx = (uint8_t)b.type;
+    const char* typeName = (typeIdx < 4) ? TYPE_NAMES[typeIdx] : "?";
+
+    Serial.printf("[BANK] idx=%d type=%s ch=%d group=%c",
+                  i + 1, typeName, i + 1, groupChar);
+
+    bool isArp = (b.type == BANK_ARPEG) || (b.type == BANK_ARPEG_GEN);
+    if (isArp && b.arpEngine) {
+      ArpDivision d = b.arpEngine->getDivision();
+      uint8_t dIdx = (uint8_t)d;
+      Serial.printf(" division=%s playing=%s",
+                    dIdx < 9 ? DIV_NAMES[dIdx] : "?",
+                    b.arpEngine->isPlaying() ? "true" : "false");
+      if (b.type == BANK_ARPEG) {
+        Serial.printf(" octave=%d", b.arpEngine->getOctaveRange());
+      } else { // ARPEG_GEN
+        Serial.printf(" mutationLevel=%d", b.arpEngine->getMutationLevel());
+      }
+    }
+    Serial.println();
+  }
+}
+
+// Format the "target:value" string for a given target, reading from the
+// per-bank storage (s_banks[bankIdx] / arpEngine) for per-bank values, or
+// from PotRouter for global values. Plan task A.4.
+static void formatTargetValueForBank(char* buf, size_t bufSize,
+                                     PotTarget t, uint8_t bankIdx,
+                                     uint8_t mappingCcNumber,
+                                     bool isForeground) {
+  (void)isForeground;  // V1: same emit for foreground or not (CC live value
+                       // delivered via [POT] events). Param kept for V2.
+  static const char* DIV_NAMES[] = { "4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64" };
+  static const char* PAT_NAMES[] = { "Up","Down","UpDown","Order","PedalUp","Converge" };
+
+  BankSlot& b = s_banks[bankIdx];
+  ArpEngine* eng = b.arpEngine;
+
+  switch (t) {
+    // --- Global params (PotRouter is the single source of truth) ---
+    case TARGET_RESPONSE_SHAPE:
+      snprintf(buf, bufSize, "Shape:%.2f", s_potRouter.getResponseShape()); break;
+    case TARGET_SLEW_RATE:
+      snprintf(buf, bufSize, "Slew:%u", s_potRouter.getSlewRate()); break;
+    case TARGET_AT_DEADZONE:
+      snprintf(buf, bufSize, "AT_Deadzone:%u", s_potRouter.getAtDeadzone()); break;
+    case TARGET_TEMPO_BPM:
+      snprintf(buf, bufSize, "Tempo:%u", s_potRouter.getTempoBPM()); break;
+    case TARGET_LED_BRIGHTNESS:
+      snprintf(buf, bufSize, "LED_Bright:%u", s_potRouter.getLedBrightness()); break;
+    case TARGET_PAD_SENSITIVITY:
+      snprintf(buf, bufSize, "PadSens:%u", s_potRouter.getPadSensitivity()); break;
+
+    // --- Per-bank static params (stored in BankSlot directly) ---
+    case TARGET_BASE_VELOCITY:
+      snprintf(buf, bufSize, "BaseVel:%u", b.baseVelocity); break;
+    case TARGET_VELOCITY_VARIATION:
+      snprintf(buf, bufSize, "VelVar:%u", b.velocityVariation); break;
+    case TARGET_PITCH_BEND:
+      snprintf(buf, bufSize, "PitchBend:%u", b.pitchBendOffset); break;
+
+    // --- Per-bank arp params (stored in ArpEngine) ---
+    case TARGET_GATE_LENGTH:
+      if (eng) snprintf(buf, bufSize, "Gate:%.2f", eng->getGateLength());
+      else     snprintf(buf, bufSize, "Gate:-");
+      break;
+    case TARGET_SHUFFLE_DEPTH:
+      if (eng) snprintf(buf, bufSize, "ShufDepth:%.2f", eng->getShuffleDepth());
+      else     snprintf(buf, bufSize, "ShufDepth:-");
+      break;
+    case TARGET_DIVISION: {
+      if (eng) {
+        uint8_t d = (uint8_t)eng->getDivision();
+        snprintf(buf, bufSize, "Division:%s", d < 9 ? DIV_NAMES[d] : "?");
+      } else {
+        snprintf(buf, bufSize, "Division:-");
+      }
+      break;
+    }
+    case TARGET_PATTERN: {
+      if (eng) {
+        uint8_t p = (uint8_t)eng->getPattern();
+        snprintf(buf, bufSize, "Pattern:%s", p < 6 ? PAT_NAMES[p] : "?");
+      } else {
+        snprintf(buf, bufSize, "Pattern:-");
+      }
+      break;
+    }
+    case TARGET_GEN_POSITION:
+      if (eng) snprintf(buf, bufSize, "GenPos:%u", eng->getGenPosition());
+      else     snprintf(buf, bufSize, "GenPos:-");
+      break;
+    case TARGET_SHUFFLE_TEMPLATE:
+      if (eng) snprintf(buf, bufSize, "ShufTpl:%u", eng->getShuffleTemplate());
+      else     snprintf(buf, bufSize, "ShufTpl:-");
+      break;
+
+    // --- MIDI CC/PB (mapping-driven). V1 emits ':?' ; live value comes via
+    //     [POT] CCnn= / PB= events in the loop. ---
+    case TARGET_MIDI_CC:
+      snprintf(buf, bufSize, "CC%u:?", mappingCcNumber); break;
+    case TARGET_MIDI_PITCHBEND:
+      snprintf(buf, bufSize, "PB:?"); break;
+
+    case TARGET_EMPTY:
+    case TARGET_NONE:
+    default:
+      snprintf(buf, bufSize, "---"); break;
+  }
+}
+
+// Dump the [STATE] line for a specific bank (any bank, not just foreground).
+// At boot, called 8× ; after bank switch, called 1× for the new foreground.
+// Plan task A.4.
+void dumpBankState(uint8_t bankIdx) {  // non-static : referenced by BankManager via extern
+  static const char* TYPE_NAMES[] = { "NORMAL", "ARPEG", "LOOP", "ARPEG_GEN" };
+  static const char* SLOT_NAMES[] = { "R1","R1H","R2","R2H","R3","R3H","R4","R4H" };
+  static const char* ROOT_NAMES[] = { "A","B","C","D","E","F","G" };
+  static const char* MODE_NAMES[] = {
+    "Ionian","Dorian","Phrygian","Lydian","Mixolydian","Aeolian","Locrian"
+  };
+
+  if (bankIdx >= NUM_BANKS) return;
+  BankSlot& b = s_banks[bankIdx];
+  uint8_t typeIdx = (uint8_t)b.type;
+  const char* typeName = (typeIdx < 4) ? TYPE_NAMES[typeIdx] : "?";
+  bool isForeground = (bankIdx == s_bankManager.getCurrentBank());
+
+  Serial.printf("[STATE] bank=%d mode=%s ch=%d",
+                bankIdx + 1, typeName, bankIdx + 1);
+
+  // Scale
+  if (b.scale.chromatic) {
+    Serial.printf(" scale=Chromatic:%s",
+                  b.scale.root < 7 ? ROOT_NAMES[b.scale.root] : "?");
+  } else {
+    Serial.printf(" scale=%s:%s",
+                  b.scale.root < 7 ? ROOT_NAMES[b.scale.root] : "?",
+                  b.scale.mode < 7 ? MODE_NAMES[b.scale.mode] : "?");
+  }
+
+  // Octave (ARPEG) / mutationLevel (ARPEG_GEN)
+  if (b.type == BANK_ARPEG && b.arpEngine) {
+    Serial.printf(" octave=%d", b.arpEngine->getOctaveRange());
+  } else if (b.type == BANK_ARPEG_GEN && b.arpEngine) {
+    Serial.printf(" mutationLevel=%d", b.arpEngine->getMutationLevel());
+  }
+
+  // 8 slots — LOOP has no PotRouter binding at runtime, emit "---" everywhere.
+  if (b.type == BANK_LOOP) {
+    for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
+      Serial.printf(" %s=---", SLOT_NAMES[i]);
+    }
+    Serial.println();
+    return;
+  }
+
+  // Iterate the 8 user-visible slots and ask PotRouter for the effective
+  // target wired to (slot, b.type) in the runtime bindings. Consulting
+  // bindings (not the mapping store) ensures that ARPEG_GEN slots driven by
+  // the PATTERN→GEN_POSITION mirror are correctly reported as `GenPos:N`
+  // (not `Pattern:Up`). Future LOOP / other context-substitution bindings
+  // will be picked up here without any change to dumpBankState.
+  char valBuf[32];
+  for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
+    uint8_t cc = 0;
+    PotTarget t = s_potRouter.getEffectiveTargetForSlot(i, b.type, &cc);
+    formatTargetValueForBank(valBuf, sizeof(valBuf), t, bankIdx, cc, isForeground);
+    Serial.printf(" %s=%s", SLOT_NAMES[i], valBuf);
+  }
+  Serial.println();
+}
+
+// Emit "[READY] current=N" — boot dump completion marker, also at the end
+// of each ?STATE/?BANKS/?BOTH response. N is the 1-based foreground bank
+// index — viewer uses this to set Model.current.idx after the boot's
+// 8× [STATE] sequence (which alone doesn't identify the foreground).
+static void emitReady() {
+  Serial.printf("[READY] current=%u\n", s_bankManager.getCurrentBank() + 1);
+}
+
+// Non-blocking Serial poll for viewer-API runtime commands. Recognizes
+// ?STATE / ?BANKS / ?BOTH ; each emits the corresponding dump then [READY].
+// Plan task A.5.
+static void pollRuntimeCommands() {
+  static char  cmdBuf[16];
+  static uint8_t cmdLen = 0;
+
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      cmdBuf[cmdLen] = '\0';
+      if (strcmp(cmdBuf, "?STATE") == 0) {
+        dumpBankState(s_bankManager.getCurrentBank());
+        emitReady();
+      } else if (strcmp(cmdBuf, "?BANKS") == 0) {
+        dumpBanksGlobal();
+        emitReady();
+      } else if (strcmp(cmdBuf, "?BOTH") == 0) {
+        dumpBanksGlobal();
+        for (uint8_t i = 0; i < NUM_BANKS; i++) dumpBankState(i);
+        emitReady();
+      }
+      cmdLen = 0;
+    } else if (cmdLen < sizeof(cmdBuf) - 1) {
+      cmdBuf[cmdLen++] = c;
+    } else {
+      // overflow — discard buffer
+      cmdLen = 0;
+    }
+  }
+}
+
+#endif  // DEBUG_SERIAL
 
 // =================================================================
 // Arduino setup() — runs on Core 1
@@ -487,6 +734,12 @@ void setup() {
 
   #if DEBUG_SERIAL
   Serial.println("[INIT] Ready.");
+  // Viewer-API boot dump : 1× [BANKS] + 8× [BANK] + 8× [STATE] + 1× [READY].
+  // Allows the JUCE viewer to populate its UI from a single boot dump.
+  // Plan tasks A.3 + A.4 + A.5 step 3.
+  dumpBanksGlobal();
+  for (uint8_t i = 0; i < NUM_BANKS; i++) dumpBankState(i);
+  emitReady();
   #endif
 }
 
@@ -831,15 +1084,30 @@ static void handlePotPipeline(bool leftHeld, bool rearHeld) {
   // Non-musical params
   s_leds.setBrightness(s_potRouter.getLedBrightness());
 
-  // MIDI CC/PB from user-assigned pot mappings
+  // MIDI CC/PB from user-assigned pot mappings.
+  // Viewer-API Task A.2.b : emit a [POT] log on each CC/PB tweak so the
+  // viewer learns the live value (previously silent — the viewer was blind
+  // to pots mapped to MIDI CC/PB).
   {
+    BankType ccCurType = s_banks[s_bankManager.getCurrentBank()].type;
+
     uint8_t ccNum, ccVal;
     while (s_potRouter.consumeCC(ccNum, ccVal)) {
       s_transport.sendCC(potSlot.channel, ccNum, ccVal);
+      #if DEBUG_SERIAL
+      Serial.printf("[POT] %s: CC%u=%u\n",
+                    potSlotName(s_potRouter.getSlotForCcNumber(ccNum, ccCurType)),
+                    ccNum, ccVal);
+      #endif
     }
     uint16_t pbVal;
     if (s_potRouter.consumePitchBend(pbVal)) {
       s_transport.sendPitchBend(potSlot.channel, pbVal);
+      #if DEBUG_SERIAL
+      Serial.printf("[POT] %s: PB=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_MIDI_PITCHBEND, ccCurType)),
+                    pbVal);
+      #endif
     }
   }
 
@@ -921,6 +1189,11 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
       "Up","Down","UpDown","Order","PedalUp","Converge"
     };
 
+    // Foreground bank type — passed directly to PotRouter slot lookups.
+    // The runtime bindings carry per-BankType resolution (incl. ARPEG_GEN
+    // two-binding mirror), so we don't collapse to a bool isArpContext.
+    BankType curType = s_banks[s_bankManager.getCurrentBank()].type;
+
     float    shape   = s_potRouter.getResponseShape();
     uint16_t slew    = s_potRouter.getSlewRate();
     uint16_t atDz    = s_potRouter.getAtDeadzone();
@@ -937,28 +1210,91 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     uint8_t  genPos  = s_potRouter.getGenPosition();
     uint8_t  shufTpl = s_potRouter.getShuffleTemplate();
 
-    // Global params
-    if ((int)(shape * 100) != (int)(s_dbgShape * 100)) { Serial.printf("[POT] Shape=%.2f\n", shape); s_dbgShape = shape; }
-    if (slew != s_dbgSlew)       { Serial.printf("[POT] Slew=%u\n", slew); s_dbgSlew = slew; }
-    if (atDz != s_dbgAtDz)       { Serial.printf("[POT] AT_Deadzone=%u\n", atDz); s_dbgAtDz = atDz; }
-    if (tempo != s_dbgTempo)     { Serial.printf("[POT] Tempo=%u BPM\n", tempo); s_dbgTempo = tempo; }
-    if (ledBr != s_dbgLedBr)     { Serial.printf("[POT] LED_Bright=%u\n", ledBr); s_dbgLedBr = ledBr; }
-    if (padSens != s_dbgPadSens) { Serial.printf("[POT] PadSens=%u\n", padSens); s_dbgPadSens = padSens; }
+    // Global params — slot prefix derived from current mapping & context.
+    // Format: "[POT] <SLOT>: <param>=<value> [unit]" (viewer-API §A.2).
+    if ((int)(shape * 100) != (int)(s_dbgShape * 100)) {
+      Serial.printf("[POT] %s: Shape=%.2f\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_RESPONSE_SHAPE, curType)), shape);
+      s_dbgShape = shape;
+    }
+    if (slew != s_dbgSlew) {
+      Serial.printf("[POT] %s: Slew=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_SLEW_RATE, curType)), slew);
+      s_dbgSlew = slew;
+    }
+    if (atDz != s_dbgAtDz) {
+      Serial.printf("[POT] %s: AT_Deadzone=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_AT_DEADZONE, curType)), atDz);
+      s_dbgAtDz = atDz;
+    }
+    if (tempo != s_dbgTempo) {
+      Serial.printf("[POT] %s: Tempo=%u BPM\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_TEMPO_BPM, curType)), tempo);
+      s_dbgTempo = tempo;
+    }
+    if (ledBr != s_dbgLedBr) {
+      Serial.printf("[POT] %s: LED_Bright=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_LED_BRIGHTNESS, curType)), ledBr);
+      s_dbgLedBr = ledBr;
+    }
+    if (padSens != s_dbgPadSens) {
+      Serial.printf("[POT] %s: PadSens=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_PAD_SENSITIVITY, curType)), padSens);
+      s_dbgPadSens = padSens;
+    }
 
     // Per-bank params (always tracked, foreground bank)
-    if (baseVel != s_dbgBaseVel) { Serial.printf("[POT] BaseVel=%u\n", baseVel); s_dbgBaseVel = baseVel; }
-    if (velVar != s_dbgVelVar)   { Serial.printf("[POT] VelVar=%u\n", velVar); s_dbgVelVar = velVar; }
-    if (pb != s_dbgPB)           { Serial.printf("[POT] PitchBend=%u\n", pb); s_dbgPB = pb; }
+    if (baseVel != s_dbgBaseVel) {
+      Serial.printf("[POT] %s: BaseVel=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_BASE_VELOCITY, curType)), baseVel);
+      s_dbgBaseVel = baseVel;
+    }
+    if (velVar != s_dbgVelVar) {
+      Serial.printf("[POT] %s: VelVar=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_VELOCITY_VARIATION, curType)), velVar);
+      s_dbgVelVar = velVar;
+    }
+    if (pb != s_dbgPB) {
+      Serial.printf("[POT] %s: PitchBend=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_PITCH_BEND, curType)), pb);
+      s_dbgPB = pb;
+    }
 
     // Arp params
-    if ((int)(gate * 100) != (int)(s_dbgGate * 100))       { Serial.printf("[POT] Gate=%.2f\n", gate); s_dbgGate = gate; }
-    if ((int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) { Serial.printf("[POT] ShufDepth=%.2f\n", shufDep); s_dbgShufDep = shufDep; }
-    if (div != s_dbgDiv)     { Serial.printf("[POT] Division=%s\n", div < 9 ? s_divNames[div] : "?"); s_dbgDiv = div; }
-    if (pat != s_dbgPat)     { Serial.printf("[POT] Pattern=%s\n", pat < NUM_ARP_PATTERNS ? s_patNames[pat] : "?"); s_dbgPat = pat; }
+    if ((int)(gate * 100) != (int)(s_dbgGate * 100)) {
+      Serial.printf("[POT] %s: Gate=%.2f\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_GATE_LENGTH, curType)), gate);
+      s_dbgGate = gate;
+    }
+    if ((int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) {
+      Serial.printf("[POT] %s: ShufDepth=%.2f\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_DEPTH, curType)), shufDep);
+      s_dbgShufDep = shufDep;
+    }
+    if (div != s_dbgDiv) {
+      Serial.printf("[POT] %s: Division=%s\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_DIVISION, curType)),
+                    div < 9 ? s_divNames[div] : "?");
+      s_dbgDiv = div;
+    }
+    if (pat != s_dbgPat) {
+      Serial.printf("[POT] %s: Pattern=%s\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_PATTERN, curType)),
+                    pat < NUM_ARP_PATTERNS ? s_patNames[pat] : "?");
+      s_dbgPat = pat;
+    }
     // V4 Task 22 : R2+hold sur ARPEG_GEN pilote _genPosition (TARGET_GEN_POSITION binding),
     // distinct de _pattern. Trace pour observabilite live du sweep 0..NUM_GEN_POSITIONS-1.
-    if (genPos != s_dbgGenPos) { Serial.printf("[POT] GenPos=%u\n", genPos); s_dbgGenPos = genPos; }
-    if (shufTpl != s_dbgShufTpl) { Serial.printf("[POT] ShufTpl=%u\n", shufTpl); s_dbgShufTpl = shufTpl; }
+    if (genPos != s_dbgGenPos) {
+      Serial.printf("[POT] %s: GenPos=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_GEN_POSITION, curType)), genPos);
+      s_dbgGenPos = genPos;
+    }
+    if (shufTpl != s_dbgShufTpl) {
+      Serial.printf("[POT] %s: ShufTpl=%u\n",
+                    potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_TEMPLATE, curType)), shufTpl);
+      s_dbgShufTpl = shufTpl;
+    }
   }
   #endif
 
@@ -1015,6 +1351,12 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
 // Arduino loop() — Core 1
 // =================================================================
 void loop() {
+  #if DEBUG_SERIAL
+  // Viewer-API runtime command poll (?STATE/?BANKS/?BOTH). Non-blocking,
+  // cheap (Serial.available() == 0 path is just a register read).
+  pollRuntimeCommands();
+  #endif
+
   const SharedKeyboardState& state = s_buffers[s_active.load(std::memory_order_acquire)];
   uint32_t now = millis();
 

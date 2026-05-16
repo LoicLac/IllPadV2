@@ -54,9 +54,31 @@ public:
   // Apply a new mapping and rebuild binding table (called by Tool 6 on save)
   void applyMapping(const PotMappingStore& store);
 
-  // Reverse lookup : returns the slot index (0..7) in the given context
-  // that routes to `t`, or 0xFF if not found. Caller passes the context.
-  uint8_t getSlotForTarget(PotTarget t, bool isArpContext) const;
+  // Reverse lookup : returns the slot index (0..7) in the runtime bindings
+  // for the given BankType that routes to `t`, or 0xFF if not found.
+  //
+  // Consults `_bindings[]` (runtime resolution), NOT `_mapping` (user store).
+  // This is the authoritative source because rebuildBindings() applies
+  // substitutions (e.g. TARGET_PATTERN → TARGET_GEN_POSITION for
+  // BANK_ARPEG_GEN via the two-binding strategy, cf. rebuildBindings:230).
+  // Future LOOP bindings (or any new context substitution) will be picked
+  // up automatically — no per-target hack needed in the caller.
+  uint8_t getSlotForTarget(PotTarget t, BankType bankType) const;
+
+  // Reverse lookup for MIDI CC slots : same runtime-bindings approach,
+  // disambiguated by ccNumber. Plan task A.2.b.
+  uint8_t getSlotForCcNumber(uint8_t cc, BankType bankType) const;
+
+  // Forward lookup (slot → effective target) for the [STATE] dump.
+  // Returns the target wired to (slot, bankType) in the runtime bindings,
+  // or TARGET_EMPTY if no binding. `outCcNumber` (if non-null) receives the
+  // CC number associated with TARGET_MIDI_CC bindings (0 otherwise).
+  //
+  // Same rationale as getSlotForTarget : consults `_bindings[]`, so the
+  // [STATE] dump emits the effectively-driven target (e.g. R2H=GenPos:N
+  // on ARPEG_GEN, not R2H=Pattern:Up).
+  PotTarget getEffectiveTargetForSlot(uint8_t slot, BankType bankType,
+                                       uint8_t* outCcNumber = nullptr) const;
 
   // Getters — internal params
   float       getResponseShape() const;

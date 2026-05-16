@@ -6,6 +6,13 @@
 #include <Arduino.h>
 #include <string.h>
 
+#if DEBUG_SERIAL
+// Forward declaration of the viewer-API per-bank state dump (defined in
+// main.cpp). Called right after the [BANK] log so the viewer receives the
+// new foreground bank's full slot state. Plan task A.4 step 4.
+extern void dumpBankState(uint8_t bankIdx);
+#endif
+
 BankManager::BankManager()
   : _engine(nullptr)
   , _leds(nullptr)
@@ -219,6 +226,7 @@ void BankManager::switchToBank(uint8_t newBank) {
   }
   Serial.printf("[BANK] Bank %d (ch %d, %s)\n",
                 _currentBank + 1, _currentBank + 1, typeLabel);
+  dumpBankState(_currentBank);
   #endif
 }
 

@@ -139,6 +139,7 @@ public:
   bool        consumeTickFlash();
   uint8_t     getGenPosition() const;          // ARPEG_GEN grid position 0..14
   uint8_t     getMutationLevel() const;        // ARPEG_GEN mutation level 1..4
+  uint8_t     getOctaveRange() const { return _octaveRange; }  // ARPEG octave 1..4 (viewer-API §A.3)
   uint8_t     getProximityFactor() const;      // V4 : prox_factor x10 (4..20)
   uint8_t     getEcart() const;                // V4 : walk ecart (1..12)
 
