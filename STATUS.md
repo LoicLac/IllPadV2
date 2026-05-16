@@ -1,8 +1,8 @@
 # ILLPAD V2 — Status
 
-_Sync : 2026-04-27. Lu en début de session, gardé à jour au fil de l'eau._
+_Sync : 2026-05-16. Lu en début de session, gardé à jour au fil de l'eau._
 
-**Focus courant** : ARPEG_GEN — **feature complete** (plan + extension Task 22).
+**Focus courant** : redémarrage LOOP sur main. ARPEG_GEN feature complete. Décision pendante avant LOOP P1 : ordre vs v9 LED brightness unification.
 
 ## ARPEG_GEN — historique commits
 
@@ -45,7 +45,11 @@ Pad oct 1-4 : pour ARPEG_GEN = mutation level (1=lock, 2=1/16, 3=1/8, 4=1/4). Po
 
 ## Follow-ups ouverts
 
-- **Branche `feature/loop`** : implémentation LOOP en pause. Plan Phase 1 et cohabitation pré-câblée dans le code ARPEG_GEN (switches 4-way avec `case BANK_LOOP` stubs). Ne pas toucher tant que l'utilisateur n'y revient pas.
+- **LOOP redémarrage sur main** : la branche `loop` (Phase 1 complète + Phase 2 ~90 %) a été figée au tag `loop-archive-2026-05-16` (commit `b79d03b`) au profit d'un redémarrage sur main, où spec/plan/audit sont à jour. Sources :
+  - Spec : [docs/superpowers/specs/2026-04-19-loop-mode-design.md](docs/superpowers/specs/2026-04-19-loop-mode-design.md) (VALIDÉE, MAJ 2026-05-16 LED v9)
+  - Plan Phase 1 : [docs/superpowers/plans/2026-04-21-loop-phase-1-plan.md](docs/superpowers/plans/2026-04-21-loop-phase-1-plan.md)
+  - Audit + 8 tranchages : [docs/superpowers/reports/rapport_audit_loop_spec.md](docs/superpowers/reports/rapport_audit_loop_spec.md)
+- **Plan v9 LED brightness unification** : créé 2026-05-16, supersede Tasks 5-6 du plan LOOP Phase 1. Statut "à valider avant LOOP P1". Ordre vs LOOP P1 à décider. Plan : [docs/superpowers/plans/2026-05-16-led-brightness-unification-plan.md](docs/superpowers/plans/2026-05-16-led-brightness-unification-plan.md)
 
 ## Sources
 
