@@ -126,8 +126,8 @@ git show loop-archive-2026-05-16:src/loop/LoopEngine.cpp
 
 | # | Type | Output | Statut |
 |---|---|---|---|
-| 1 | Rédaction | `docs/superpowers/plans/YYYY-MM-DD-loop-phase-2-plan.md` | PENDING |
-| 2 | Rédaction | `docs/superpowers/plans/YYYY-MM-DD-loop-phase-3-plan.md` | PENDING |
+| 1 | Rédaction | [`docs/superpowers/plans/2026-05-16-loop-phase-2-plan.md`](plans/2026-05-16-loop-phase-2-plan.md) | **DONE 2026-05-16** (2750 lignes, 11 Tasks, 3 HW Checkpoints) |
+| 2 | Rédaction | `docs/superpowers/plans/YYYY-MM-DD-loop-phase-3-plan.md` | PENDING (priorité : trancher P5 en début de session) |
 | 3 | Rédaction | `docs/superpowers/plans/YYYY-MM-DD-loop-phase-4-plan.md` | PENDING |
 | 4 | Rédaction | `docs/superpowers/plans/YYYY-MM-DD-loop-phase-5-plan.md` | PENDING |
 | 5 | Rédaction | `docs/superpowers/plans/YYYY-MM-DD-loop-phase-6-plan.md` | PENDING |
@@ -184,6 +184,32 @@ Commits : `a84c955`, `1b0ac8c`, `68855e3`, `48b96fb`, `8c0d68b`, `c3d04ac`.
 - Plans Phases 3-6 loop branch restent en archive (consultables via `git show`), **pas portés sur main**
 - 24 AUDIT FIXES capturés sur loop branch (B1/B2/B7/D-PLAN-1/A1/B-PLAN-1/D1/V1 + 16 autres) à incorporer aux plans main au fil des rédactions
 
+### Découvertes session 1 audit post-rédaction Phase 2 plan (2026-05-16)
+
+- **Agent audit non-complaisant a trouvé 3 bloquants + 4 majeurs + 5 mineurs** sur le plan rédigé en session 1 — biais de défense du LLM rédacteur confirmé :
+  - **B1** : nom de fonction `handlePlayStopPad` inventé (n'existe pas dans `main.cpp` actuel). Corrigé : placement réel `handleLoopControls` entre `s_controlPadManager.update` et `handlePadInput`.
+  - **B2** : WAITING_* state machine spec §17 jamais implémentée — `PendingAction` enum interne mais pas exposé comme état visible. Corrigé via hybride WAITING_PENDING (1 état générique au lieu de 5+).
+  - **B3** : `_loadedLoopQuantize` init désigné dans le ctor alors que pattern projet est dans `loadAll()` (ligne 612-613). Corrigé.
+  - **M3** : footprint SRAM sous-estimé (plan disait 37.6 KB, recalcul agent : ~41 KB avec PendingNote padding réel 16 B). Corrigé + `static_assert(sizeof(LoopEngine) <= 11000)` ajouté.
+  - **N5** : `abortOverdub` → STOPPED dans plan, mais spec §8 explicite "engine reste en PLAYING". Aligné spec.
+- **Confirmation valeur de l'audit indépendant** : le plan rédigé en flow d'une session a 12 vrais findings — l'audit cross-référencé spec/code/archive a sauvé ces erreurs avant exécution. Pattern à reproduire pour Phases 3-6 plans.
+- **WAITING_PENDING hybride** est une décision design importante : préserve P4 "interface stable Phases 3-6" qui était techniquement fausse avant fix B2. Le State enum ne bumpera plus.
+
+### Découvertes session 1 rédaction Phase 2 plan (2026-05-16)
+
+- **Code main pré-Phase-2 déjà bien avancé côté infrastructure** :
+  - Enum `BankType { BANK_NORMAL=0, BANK_ARPEG=1, BANK_LOOP=2, BANK_ARPEG_GEN=3, BANK_ANY=0xFF }` complet (commit ARPEG_GEN + Phase 1 LOOP combiné). Validator KeyboardData.h:706 clamp `> BANK_ARPEG_GEN` couvre déjà BANK_LOOP.
+  - `BankManager._transport` member + `MidiTransport*` arg dans `begin()` déjà câblés (utilisés par toggleAllArps ARPEG + sendBankSelectMidi).
+  - main.cpp:981 commentaire `// BANK_LOOP : Phase 1 LOOP wires processLoopMode here` → exactement la cible Task 8 plan Phase 2.
+  - main.cpp:326 `if (b.type == BANK_LOOP)` déjà dans `dumpBankState` (emit "---" pour les 8 slots PotRouter).
+  - BankManager.cpp:224 label "LOOP" déjà ajouté dans le debug print 4-way (Phase 1 LOOP P1).
+- **`src/loop/` n'existe PAS sur main** — Phase 2 Task 2 crée le dossier ; Task 3 crée `LoopEngine.cpp`.
+- **Pas de `loopQuantize` dans BankTypeStore actuel** (confirme P5 différé Phase 3 conception). Plan Phase 2 utilise `NvsManager::getLoadedLoopQuantizeMode()` stub retournant toujours `LOOP_QUANT_FREE` jusqu'à P5 tranchage.
+- **D-PLAN-1 fix précis** : `_pendingKeyIsPressed` est `const uint8_t*` (pas `bool*` comme certains snippets archive le suggèrent) pour matcher `SharedKeyboardState.keyIsPressed`. Cohérent avec ce qui est dans le `.cpp` archive — pas un drift.
+- **Bar-snap deadzone divergence spec↔implémentation** : spec LOOP §7 demande deadzone 25%, mais la formule "nearest" (round simple) implémentée dans archive et plan Phase 2 produit deadzone 50% effective. Raffinement musical à mesurer HW Phase 2+, ajuster Phase 4+ si tap REC ressentis comme over-snap (P8 nouvelle décision pendante).
+- **Compile/link gates au milieu de LoopEngine.cpp** : Tasks 3-4-5-6 découpent l'implémentation .cpp en 4 chunks ; chunks intermédiaires (3, 4, 5) peuvent avoir des undefined references (sortEvents, mergeOverdub, flushActiveNotes). Plan : accepter compile-passe-mais-link-échoue temporaire, link gate à Task 6. Documenté dans chaque commit message intermédiaire.
+- **HW Checkpoint A (post Task 0) skippé** : Task 4 LOOP P1 est purement défensif (BankManager double-tap consume + ScaleManager early-return). Aucun observable LOOP runtime avant Task 7 (LoopTestConfig override). Donc 3 checkpoints B/C/D suffisent (P3 acté).
+
 ### Décisions actées (questions tranchées roadmap conception)
 
 | # | Question | Décision |
@@ -201,14 +227,33 @@ Commits : `a84c955`, `1b0ac8c`, `68855e3`, `48b96fb`, `8c0d68b`, `c3d04ac`.
 
 ## §5 — Décisions pendantes / questions ouvertes
 
+### Décisions résolues session 1 (2026-05-16 rédaction Phase 2 plan + audit post-rédaction)
+
+| # | Question | Décision | Justification |
+|---|---|---|---|
+| **P1** | Découpage commits Phase 2 | **10-11 commits** groupés par responsabilité. Fusion possible Tasks 5+6 LoopEngine.cpp pour 10. | Cohérence avec roadmap 8-12 cible. Bisect raisonnable. |
+| **P2** | Task 4 LOOP P1 placement | **Commit (0) séparé** propre `feat(loop): wire Task 4 LOOP P1 (caduc gesture-dispatcher)` | Isolable, bisectable, message clair sur l'intention "porter Task 4 caduc gesture-dispatcher". Pur défensif, 2 fichiers, pas de NVS. |
+| **P3** | HW Checkpoints | **3 checkpoints B / C / D**. Skip A (Task 0 défensif sans observable LOOP runtime). | HW-B = boot + LoopEngine allocué + stub renderBankLoop visible. HW-C = premier son MIDI complet (13 sub-tests). HW-D = recording lock + flushLiveNotes outgoing. |
+| **P4** | Interface LoopEngine | **Interface complète archive + WAITING_PENDING state hybride** (audit B2 fix). Stubs Phase 5 (Shuffle/Chaos/VelPattern/BaseVel/VelVariation) + per-pad live tracking B1 + tick flash flags. PreBankSwitch hook DIFFÉRÉ Phase 6/7. | API stabilisée dès Phase 2 — Phases 3-6 ne bougent plus le header. Coût marginal ~30 LOC stubs triviaux. Audit B2 a ajouté WAITING_PENDING au State enum pour préserver la stabilité de l'enum face à spec §17. |
+| **P6 #1** | auto-Play §13.2 vs LOOP tapPlayStop | **Layer musical LOOP indépendant** (option A spec). Aucun code Phase 2 — orthogonalité par construction (handleLoopControls early-return + processArpMode jamais sur BANK_LOOP). | Documenté dans le plan Phase 2 §0.2. |
+| **B2 audit** | WAITING_* state machine spec §17 | **Hybride WAITING_PENDING** : 1 état générique ajouté au State enum, `getState()` retourne WAITING_PENDING si `_pendingAction != PENDING_NONE`. `handleLoopControls` gère 3 cas concurrents §17 (Phase 2 unreachable FREE mode mais correct par review). | Préserve P4 "interface stable Phases 3-6" — alternative "étendre State avec 5+ WAITING_*" est trop lourde, alternative "différer Phase 3" invalide P4. |
+| **M1 audit** | CLEAR=cancelOverdub pendant OVERDUBBING | **Acté** — divergence vs spec §9 strict, documentée. CLEAR sinon = clear() vers EMPTY. | Cas musical important "j'ai foiré overdub mais je veux garder boucle". Archive l'implémente. TODO amender spec §9 future revision. |
+| **N5 audit** | abortOverdub state cible | **PLAYING** (pas STOPPED) — alignement spec §8. Pas de flushActiveNotes, loop continue audible. | Sémantique "abort overdub" est distincte de "stop loop" — 2 gestes séparés. Spec §8 explicite. |
+
+### Décisions différées (à trancher futures sessions)
+
 | # | Question | À trancher en session |
 |---|---|---|
-| P1 | Découpage commits Phase 2 (objectif 8-12 commits) | Session 1 conception |
-| P2 | Inclure Task 4 LOOP P1 en Step 0 du plan Phase 2 | Session 1 conception |
-| P3 | Définition exacte des HW Checkpoints A/B/C/D Phase 2 (post-réduction scope vs loop branch) | Session 1 conception |
-| P4 | Interface publique LoopEngine — quels getters/setters pour satisfaire Phases 3-6 (LED state, Setup Tools, PotRouter, slot drive) | Session 1 conception |
-| P5 | `loopQuantize` storage : ajout `BankTypeStore` v4→v5 OU Store dédié `LoopBankConfigStore` | Session 2 (Phase 3 conception) |
-| P6 | 4 décisions §31 spec gesture (auto-Play interaction, slot save annulation, combo CLEAR+slot, preBankSwitch signature) | Session 1 (Phase 2) ou session 5 (Phase 6) selon scope |
+| **P5** | `loopQuantize` storage : ajout `BankTypeStore` v4→v5 OU Store dédié `LoopBankConfigStore` | **Session 2 (Phase 3 conception) — PRIORITÉ HAUTE début de session.** Bloque Tool 5 cycle 7-way + `NvsManager::getLoadedLoopQuantizeMode()` vraie lecture. |
+| **P6 #2** | Slot save annulable par release prématuré | Session 5 (Phase 6 conception) — pertinent au moment du slot drive (spec §11 dit déjà oui). |
+| **P6 #3** | Combo CLEAR+slot tenu sans presser de slot (D9 spec gesture §15) | Session 5 (Phase 6 conception). Option A "fire wipe au release si timer dépassé" pré-recommandée mais à confirmer. |
+| **P6 #4** | Signature exacte `LoopEngine::preBankSwitch()` hook | Session 5 (Phase 6) ou session ultérieure si refonte gesture jamais relancée. Pas critique Phase 4 LED (renderBankLoop n'a pas besoin de hook). |
+| **P7** | Tool 5 cycle 7-way layout précis (NORMAL / ARPEG-Imm / ARPEG-Beat / ARPEG_GEN-Imm / ARPEG_GEN-Beat / LOOP-Free / LOOP-Beat / LOOP-Bar) — intégration UX existant Tool 5 (3-fields → 4-fields avec quantize ?) | Session 2 (Phase 3 conception), dépend de P5. |
+| **P8** | Bar-snap deadzone 25% (vs 50% effective Phase 2 round simple) — implémenter le raffinement ? | Session 4 (Phase 5 conception) ou plus tard, **après mesure ressenti HW Phase 2+**. Si tap REC ressentis comme over-snap, implémenter ; sinon laisser round simple. |
+| **P9** | `toggleAllArpsAndLoops()` extension §30 spec gesture (LEFT+hold pad multi-bank inclus LOOP) | Session 3 (Phase 4 conception) — concomitant LED multi-bank feedback. |
+| **P10** | `LoopEngine::commitPendingAction()` API + commit-then-switch dans BankManager (spec §17 "Bank switch pendant WAITING_* = commit immédiat") | **Session 2 (Phase 3) — déclenché par P5**. Quand BEAT/BAR seront câblés en Phase 3, WAITING_PENDING devient atteignable en runtime → bank switch pendant WAITING_PENDING doit commit la pending action puis switch (au lieu du silent-deny Phase 2 isRecording-only). Phase 2 documente cette limite dans Task 10 commentaire. |
+| **P11** | Amender spec LOOP §9 pour expliciter CLEAR=cancelOverdub pendant OVERDUBBING (M1 décision) | Session 5 (Phase 6 conception) ou plus tôt si l'occasion se présente. Pas bloquant — plan Phase 2 §0.3 documente la divergence comme acceptée. |
+| **P12** | Bar-snap deadzone 25% (vs 50% effective Phase 2 round simple) — implémenter ? | Session 4 (Phase 5 conception) ou plus tard, **après mesure ressenti HW Phase 2+**. (Doublon P8 — fusionner si confirmé non-impactant musicalement.) |
 
 ---
 
