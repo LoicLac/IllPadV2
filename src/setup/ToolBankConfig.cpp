@@ -71,7 +71,7 @@ bool ToolBankConfig::saveConfig(const BankType* types, const uint8_t* quantize, 
 }
 
 // =================================================================
-// drawDescription — expanded info panel (3 cas : NORMAL / ARPEG / ARPEG_GEN)
+// drawDescription — expanded info panel (4 cas : NORMAL / ARPEG / LOOP / ARPEG_GEN)
 // Phase 4 ship le cas ARPEG_GEN en placeholder ; Phase 7 Task 17 finalise le INFO panel §25.
 // =================================================================
 void ToolBankConfig::drawDescription(uint8_t cursor, BankType type) {
@@ -80,6 +80,11 @@ void ToolBankConfig::drawDescription(uint8_t cursor, BankType type) {
     _ui->drawFrameLine(VT_DIM "Generative arpeggiator. Pile vivante + walk pondere + mutation par pad oct." VT_RESET);
     _ui->drawFrameLine(VT_DIM "R2+hold balaye 15 positions de grille. Pad oct 1 = lock. Bonus/Margin per-bank." VT_RESET);
     _ui->drawFrameLine(VT_DIM "Gate, shuffle, division, template, velocity : pot mapping comme ARPEG classique." VT_RESET);
+  } else if (type == BANK_LOOP) {
+    _ui->drawFrameLine(VT_BRIGHT_WHITE "Bank %d" VT_RESET VT_DIM "  --  LOOP  --  MIDI channel %d" VT_RESET, cursor + 1, cursor + 1);
+    _ui->drawFrameLine(VT_DIM "Real-time looper. Percussive: each pad triggers a fixed MIDI note (GM kick C2 base)." VT_RESET);
+    _ui->drawFrameLine(VT_DIM "REC/PLAY-STOP/CLEAR control pads. Loop runs in background across bank switches." VT_RESET);
+    _ui->drawFrameLine(VT_DIM "Phase 1 : declared (no runtime engine yet). Tool 5 cycle 3-way support : Phase 3." VT_RESET);
   } else if (type == BANK_ARPEG) {
     _ui->drawFrameLine(VT_BRIGHT_WHITE "Bank %d" VT_RESET VT_DIM "  --  ARPEG  --  MIDI channel %d" VT_RESET, cursor + 1, cursor + 1);
     _ui->drawFrameLine(VT_DIM "Arpeggiator on this channel. No aftertouch. Pile-based note input:" VT_RESET);

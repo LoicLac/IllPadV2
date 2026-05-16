@@ -106,6 +106,7 @@ private:
   void renderNormalDisplay(unsigned long now);
   void renderBankNormal(uint8_t led, bool isFg);
   void renderBankArpeg(uint8_t led, bool isFg, unsigned long now);
+  void renderBankLoop(uint8_t led, bool isFg, unsigned long now);
 
 public:
   // Pattern engine (Phase 0 step 0.4).

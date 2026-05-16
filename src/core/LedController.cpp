@@ -505,6 +505,15 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
   }
 }
 
+void LedController::renderBankLoop(uint8_t led, bool isFg, unsigned long now) {
+  (void)now;  // Phase 1 stub : solid color, no time-based logic yet (Phase 2+ LoopEngine state machine)
+  // v9 : unified _fgIntensity (NORMAL/ARPEG/LOOP all share). BG = FG × bgFactor.
+  uint8_t intensity = isFg
+                      ? _fgIntensity
+                      : (uint8_t)((uint16_t)_fgIntensity * _bgFactor / 100);
+  setPixel(led, _colors[CSLOT_MODE_LOOP], intensity);
+}
+
 void LedController::renderNormalDisplay(unsigned long now) {
   clearPixels();
 
@@ -515,7 +524,7 @@ void LedController::renderNormalDisplay(unsigned long now) {
         case BANK_NORMAL:    renderBankNormal(i, isFg);     break;
         case BANK_ARPEG:
         case BANK_ARPEG_GEN: renderBankArpeg(i, isFg, now); break;
-        case BANK_LOOP:      /* Phase 1 LOOP wires renderBankLoop(i, isFg, now) */ break;
+        case BANK_LOOP:      renderBankLoop(i, isFg, now);     break;
         default: break;
       }
 
