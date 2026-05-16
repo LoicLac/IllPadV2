@@ -1080,9 +1080,13 @@ struct StateEvent {
 
 struct PotEvent {
     std::string slot;
-    std::string target;
+    std::string target;   // "Tempo", "Gate", "CC74", "PB", "Shape", ...
     std::string value;
-    std::string unit;   // optional "BPM", empty otherwise
+    std::string unit;     // optional "BPM", empty otherwise
+    // For MIDI CC tweaks (target starts with "CC"), this carries the CC number
+    // parsed from the target. -1 = not a CC event. Cross-audit refonte
+    // 2026-05-15 (firmware Task A.2.b emits [POT] R1: CC74=42 / R1: PB=8192).
+    int ccNumber = -1;
 };
 
 struct BankSwitchEvent {
@@ -1126,6 +1130,21 @@ struct MidiEvent { MidiTransport which; bool connected; };
 
 struct PanicEvent {};
 
+// Emitted by the firmware after the boot dump completes (8× [STATE] + [READY]),
+// and at the end of each ?STATE/?BANKS/?BOTH dump. The viewer uses this as
+// a "dump complete" signal — drops loading state on first [READY]. If no
+// [READY] is seen within ~2-3s after ModeDetector decides Runtime, the viewer
+// pushes ?BOTH as a fallback (cf. ModeSwitcher Task 30).
+//
+// `currentBank` carries the 1-based foreground bank index (firmware format:
+// "[READY] current=N"). The viewer uses it to set Model.current.idx — the
+// 8 [STATE] lines that precede ReadyEvent in a boot/?BOTH dump arrive in
+// sequence 1..8 and don't individually identify which one is the foreground,
+// so [READY] is the authoritative source for current.idx.
+//
+// Cross-audit refonte 2026-05-15 (firmware Task A.5).
+struct ReadyEvent { int currentBank = 0; };  // 1..8, 0 = unknown
+
 struct UnknownEvent { std::string raw; };
 
 using ParsedEvent = std::variant<
@@ -1133,6 +1152,7 @@ using ParsedEvent = std::variant<
     PotEvent, BankSwitchEvent, ScaleEvent,
     ArpEvent, ArpGenEvent, GenEvent,
     ClockEvent, MidiEvent, PanicEvent,
+    ReadyEvent,
     UnknownEvent
 >;
 
@@ -1455,6 +1475,12 @@ Impl branch:
 ```cpp
 if (s.rfind("[POT] ", 0) == 0) {
     // Format: "[POT] SLOT: TARGET=VALUE [UNIT]"
+    // SLOT is one of R1/R1H/R2/R2H/R3/R3H/R4/R4H, or "--" for global/hors-slot.
+    // TARGET examples : "Tempo", "Gate", "AT_Deadzone", "CC74" (MIDI CC), "PB"
+    // (MIDI PitchBend). The CC variant carries the CC number embedded in the
+    // target string (firmware refonte 2026-05-15 Task A.2.b). The viewer's
+    // PotEvent.ccNumber is populated when the target starts with "CC" followed
+    // by digits.
     // Note: firmware also emits boot-time lines without ": " pattern (e.g.
     // "[POT] Rebuilt 16 bindings from mapping (3 CC slots)" from PotRouter.cpp:267).
     // Those must NOT be parsed as PotEvent — return UnknownEvent so the Model
@@ -1480,16 +1506,64 @@ if (s.rfind("[POT] ", 0) == 0) {
     } else {
         p.value = valPart;
     }
+    // MIDI CC : extract the CC number embedded in the target ("CC74" → 74).
+    if (p.target.size() > 2 && p.target.compare(0, 2, "CC") == 0) {
+        try { p.ccNumber = std::stoi(p.target.substr(2)); } catch (...) {}
+    }
     return p;
+}
+if (s.rfind("[READY]", 0) == 0) {
+    // Boot dump completion marker, or end of an on-demand dump (?STATE/?BANKS
+    // /?BOTH response). Format: "[READY] current=N" — `current=N` carries the
+    // foreground bank (1..8). The Model uses it to set current.idx ; the
+    // ModeSwitcher cancels the fallback ?BOTH timer when it arrives.
+    // Cross-audit refonte 2026-05-15 (firmware Task A.5).
+    ReadyEvent ev;
+    int n = 0;
+    if (sscanf(s.c_str(), "[READY] current=%d", &n) == 1 && n >= 1 && n <= 8) {
+        ev.currentBank = n;
+    }
+    return ev;
 }
 ```
 
-Add a failing test for the zombie case to lock the behavior:
+Add tests covering the CC, PB, and READY variants in addition to the zombie reject:
 ```cpp
+TEST_CASE("PotEvent MIDI CC carries ccNumber", "[parser]") {
+    auto ev = parseRuntimeLine("[POT] R1: CC74=42");
+    auto* p = std::get_if<PotEvent>(&ev);
+    REQUIRE(p != nullptr);
+    REQUIRE(p->slot == "R1");
+    REQUIRE(p->target == "CC74");
+    REQUIRE(p->value == "42");
+    REQUIRE(p->ccNumber == 74);
+}
+TEST_CASE("PotEvent MIDI PB has no ccNumber", "[parser]") {
+    auto ev = parseRuntimeLine("[POT] R2: PB=8192");
+    auto* p = std::get_if<PotEvent>(&ev);
+    REQUIRE(p != nullptr);
+    REQUIRE(p->target == "PB");
+    REQUIRE(p->value == "8192");
+    REQUIRE(p->ccNumber == -1);
+}
 TEST_CASE("PotEvent reject non-annotated firmware lines", "[parser]") {
     // PotRouter.cpp:267 emits this at boot — must not parse as a slot event.
     auto ev = parseRuntimeLine("[POT] Rebuilt 16 bindings from mapping (3 CC slots)");
     REQUIRE(std::holds_alternative<UnknownEvent>(ev));
+}
+TEST_CASE("ReadyEvent parses [READY] current=N", "[parser]") {
+    auto ev = parseRuntimeLine("[READY] current=3");
+    auto* r = std::get_if<ReadyEvent>(&ev);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->currentBank == 3);
+}
+TEST_CASE("ReadyEvent tolerates bare [READY]", "[parser]") {
+    // Defensive : if firmware ever emits a bare [READY] without current=N,
+    // we still recognize it (currentBank stays 0 = unknown).
+    auto ev = parseRuntimeLine("[READY]");
+    auto* r = std::get_if<ReadyEvent>(&ev);
+    REQUIRE(r != nullptr);
+    REQUIRE(r->currentBank == 0);
 }
 ```
 
@@ -1873,6 +1947,7 @@ struct PotSlot {
 ```cpp
 #pragma once
 #include "enums/BankType.h"
+#include "PotSlot.h"
 #include <optional>
 #include <string>
 
@@ -1890,6 +1965,10 @@ struct BankInfo {
     std::string scaleRoot;
     std::string scaleMode;
     bool chromatic = false;
+    // Per-bank slot state (hydrated by the 8× [STATE] boot dump or by ?BOTH).
+    // Stays in sync with current.slots[] only while this bank is foreground.
+    // Cross-audit refonte 2026-05-15.
+    PotSlot slots[8];
 };
 ```
 
@@ -2001,6 +2080,11 @@ private:
     void applyClock(const ClockEvent&);
     void applyMidi(const MidiEvent&);
     void applyPanic(const PanicEvent&);
+    void applyReady(const ReadyEvent&);
+
+    // Helper : copy banks[idx-1].* into current.* (used by applyBankSwitch
+    // and applyReady when the foreground bank changes or is first known).
+    void promoteBankToCurrent(int idx1);
 };
 ```
 
@@ -2029,6 +2113,7 @@ void Model::apply(const ParsedEvent& event) {
         else if constexpr (std::is_same_v<T, ClockEvent>) applyClock(e);
         else if constexpr (std::is_same_v<T, MidiEvent>) applyMidi(e);
         else if constexpr (std::is_same_v<T, PanicEvent>) applyPanic(e);
+        else if constexpr (std::is_same_v<T, ReadyEvent>) applyReady(e);
         // UnknownEvent: ignore
     }, event);
     sendChangeMessage();
@@ -2059,40 +2144,75 @@ void Model::applyBankInfo(const BankInfoEvent& e) {
 }
 
 void Model::applyState(const StateEvent& e) {
-    current.idx = e.bank;
-    current.type = bankTypeFromString(e.mode);
-    current.channel = e.channel;
-    current.scaleRoot = e.scaleRoot;
-    current.scaleMode = e.scaleMode;
-    current.chromatic = e.chromatic;
-    current.octave = e.octave;
-    current.mutationLevel = e.mutationLevel;
-    for (int i = 0; i < 8; i++) {
-        current.slots[i].slotName = e.slots[i].slot;
-        current.slots[i].target = e.slots[i].target;
-        current.slots[i].displayValue = e.slots[i].value;
-        current.slots[i].unit = "";
-        current.slots[i].isEmpty = e.slots[i].isEmpty;
+    // Refonte 2026-05-15 : applyState hydrates banks[e.bank-1] (per-bank
+    // cache) but does NOT change current.idx. The 8× boot dump iterates
+    // banks 1..8 in sequence ; if applyState were to overwrite current.idx
+    // each time, current would end pointing at bank 8 instead of the real
+    // foreground bank. current.idx is authoritative only via applyBankSwitch
+    // (live bank switch) and applyReady (boot/?BOTH completion with
+    // current=N suffix).
+    if (e.bank < 1 || e.bank > 8) return;
+    auto& b = banks[e.bank - 1];
 
-        // Hydrate device-global Tempo from slots: target "Tempo" is a global
-        // parameter, not per-bank. Without this, device.tempoBpm stays at 120
-        // until the user physically turns the Tempo pot, even though the
-        // firmware reports the real value in the [STATE] line.
-        // Cross-audit 2026-05-15 finding R2.
+    // Bank metadata (idempotent — also set by applyBankInfo, but [STATE] is
+    // the more authoritative source for scale + octave/mutationLevel).
+    b.type        = bankTypeFromString(e.mode);
+    b.channel     = e.channel;
+    b.scaleRoot   = e.scaleRoot;
+    b.scaleMode   = e.scaleMode;
+    b.chromatic   = e.chromatic;
+    b.octave      = e.octave;
+    b.mutationLevel = e.mutationLevel;
+
+    // Per-bank slot snapshot.
+    for (int i = 0; i < 8; i++) {
+        b.slots[i].slotName = e.slots[i].slot;
+        b.slots[i].target = e.slots[i].target;
+        b.slots[i].displayValue = e.slots[i].value;
+        b.slots[i].unit = "";
+        b.slots[i].isEmpty = e.slots[i].isEmpty;
+        // Hydrate device-global Tempo (single global, identical across banks)
+        // from any [STATE] that exposes it. Cross-audit 2026-05-15 finding R2.
         if (!e.slots[i].isEmpty && e.slots[i].target == "Tempo") {
             try { device.tempoBpm = std::stoi(e.slots[i].value); } catch (...) {}
         }
     }
-    // also fill the current bank's BankInfo scale fields
-    if (e.bank >= 1 && e.bank <= 8) {
-        banks[e.bank - 1].scaleRoot = e.scaleRoot;
-        banks[e.bank - 1].scaleMode = e.scaleMode;
-        banks[e.bank - 1].chromatic = e.chromatic;
-        banks[e.bank - 1].octave = e.octave;
-        banks[e.bank - 1].mutationLevel = e.mutationLevel;
+
+    // If this [STATE] refers to the currently foreground bank, propagate to
+    // `current` so the active UI panel reflects the latest dump.
+    if (current.idx == e.bank) {
+        promoteBankToCurrent(e.bank);
     }
+
     events.push({std::chrono::steady_clock::now(), "STATE",
                  "Bank " + std::to_string(e.bank) + " " + e.mode});
+}
+
+void Model::promoteBankToCurrent(int idx1) {
+    if (idx1 < 1 || idx1 > 8) return;
+    const auto& b = banks[idx1 - 1];
+    current.idx          = idx1;
+    current.type         = b.type;
+    current.channel      = b.channel;
+    current.scaleRoot    = b.scaleRoot;
+    current.scaleMode    = b.scaleMode;
+    current.chromatic    = b.chromatic;
+    current.octave       = b.octave;
+    current.mutationLevel = b.mutationLevel;
+    for (int i = 0; i < 8; i++) current.slots[i] = b.slots[i];
+}
+
+void Model::applyReady(const ReadyEvent& e) {
+    // The firmware emits [READY] current=N at the end of every dump
+    // (boot, ?STATE, ?BANKS, ?BOTH). N tells us which of the 8 banks
+    // is foreground — authoritative source for current.idx after the
+    // 8× boot [STATE] dump. If currentBank==0 (unknown), keep current.idx
+    // unchanged.
+    if (e.currentBank >= 1 && e.currentBank <= 8) {
+        promoteBankToCurrent(e.currentBank);
+    }
+    events.push({std::chrono::steady_clock::now(), "READY",
+                 "current=" + std::to_string(e.currentBank)});
 }
 
 void Model::applyPot(const PotEvent& e) {
@@ -2116,8 +2236,14 @@ void Model::applyPot(const PotEvent& e) {
 }
 
 void Model::applyBankSwitch(const BankSwitchEvent& e) {
-    // The [STATE] that immediately follows will fully populate CurrentBankState.
-    // Here we just log the switch.
+    // Refonte 2026-05-15 : the firmware emits a single [STATE] right after
+    // this [BANK] switch event with the new bank's full state (will be
+    // applied by applyState, which calls promoteBankToCurrent since
+    // current.idx now matches e.newBank). We set current.idx here so the
+    // subsequent applyState recognizes the foreground.
+    if (e.newBank >= 1 && e.newBank <= 8) {
+        promoteBankToCurrent(e.newBank);
+    }
     events.push({std::chrono::steady_clock::now(), "BANK",
                  "-> B" + std::to_string(e.newBank) + " " + e.mode});
 }
@@ -3955,10 +4081,24 @@ void ModeSwitcher::setMode(AppMode m) {
 
     // On any transition INTO Runtime (initial boot detection OR reconnect
     // after disconnect/setup), push ?BOTH to re-hydrate the Model with a
-    // full atomic snapshot. Without this, the viewer would keep stale data
-    // after a replug, or miss the initial dump if the ILLPAD booted before
-    // the viewer connected (USB CDC buffer not guaranteed to retain history).
-    // Gated on (prev != Runtime) to avoid spurious double-pushes; gated on
+    // full atomic snapshot.
+    //
+    // V1 simplification : pushes immediately. Always doubles up with the
+    // firmware's spontaneous boot dump when the viewer connects *before*
+    // the firmware finishes booting (the boot dump and the ?BOTH response
+    // both produce the same content, applyState/applyReady are idempotent).
+    //
+    // V2 refinement (cross-audit refonte 2026-05-15) — replace this with a
+    // 2.5s timer + Model::hasSeenReady() check :
+    //   1. On transition to Runtime, start a 2.5s Timer.
+    //   2. timerCallback() : if Model::hasSeenReady() is true, the firmware's
+    //      own boot dump arrived first — do nothing. Else push ?BOTH.
+    //   3. Reset model.readyReceived on transition to Unknown / Setup so a
+    //      subsequent reconnect arms a fresh wait window.
+    // This avoids the redundant ?BOTH at boot. V1 leaves it as immediate
+    // push for simplicity ; the wasted bandwidth is ~1.7 KB at boot, one-shot.
+    //
+    // Gated on (prev != Runtime) to avoid spurious double-pushes ; gated on
     // (m == Runtime) so we never inject ?BOTH bytes into the firmware setup
     // mode InputParser (which claims the serial during setup).
     // Cross-audit 2026-05-15 findings R3/R4/I1.
