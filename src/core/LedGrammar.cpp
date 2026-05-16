@@ -27,7 +27,7 @@ const EventRenderEntry EVENT_RENDER_DEFAULT[EVT_COUNT] = {
   /* EVT_OCTAVE            */ { PTN_BLINK_FAST,      CSLOT_OCTAVE,            100 },
   /* EVT_PLAY              */ { PTN_FADE,            CSLOT_VERB_PLAY,         100 },
   /* EVT_STOP              */ { PTN_FADE,            CSLOT_VERB_STOP,         100 }, // Phase 0.1 : dedicated STOP slot (Coral), FADE 100 -> 0 (direction inverts PLAY 0 -> 100)
-  /* EVT_WAITING           */ { PTN_CROSSFADE_COLOR, CSLOT_MODE_ARPEG,        100 }, // placeholder colorA ; colorB supplied by LOOP callsite
+  /* EVT_WAITING           */ { PTN_CROSSFADE_COLOR, CSLOT_VERB_PLAY,         100 }, // Q3 §28 spec LOOP : colorA = green (editable Tool 8 TRANSPORT_WAITING_COLOR) ; colorB = white hardcoded in triggerEvent ; brightness override = _fgIntensity
   /* EVT_REFUSE            */ { PTN_BLINK_FAST,      CSLOT_VERB_REC,          100 },
   /* EVT_CONFIRM_OK        */ { PTN_SPARK,           CSLOT_CONFIRM_OK,        100 },
   // LOOP reserved — not wired in Phase 0

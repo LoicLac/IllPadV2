@@ -680,10 +680,13 @@ void LedController::triggerEvent(EventId evt, uint8_t ledMask) {
       break;
     }
     case PTN_CROSSFADE_COLOR: {
-      // Used by WAITING_* events (LOOP phase). Period default 800 ms.
+      // WAITING_* events (LOOP Phase 1+). Mode-invariant per Q3 §28 spec LOOP :
+      // colorA = green (editable Tool 8 TRANSPORT_WAITING_COLOR via entry.colorSlot).
+      // colorB = white hardcoded. Brightness override = _fgIntensity (v9 unified,
+      // amende le plan original qui référençait _fgArpStopMax fusionné par v9).
       _eventOverlay.params.crossfadeColor.periodMs = 800;
-      // colorB = VERB_PLAY — not yet a dedicated slot in Phase 0, fallback to colorA
-      _eventOverlay.colorB = _eventOverlay.colorA;
+      _eventOverlay.colorB = _colors[CSLOT_CONFIRM_OK];
+      _eventOverlay.fgPct  = _fgIntensity;
       break;
     }
     case PTN_RAMP_HOLD:
@@ -833,8 +836,15 @@ void LedController::renderPattern(const PatternInstance& inst, unsigned long now
       mixed.g = lerpChan(inst.colorA.g, inst.colorB.g);
       mixed.b = lerpChan(inst.colorA.b, inst.colorB.b);
       mixed.w = lerpChan(inst.colorA.w, inst.colorB.w);
+      // BG-aware scaling (Q3 §28 spec LOOP) : FG bank uses inst.fgPct tel quel,
+      // BG banks scalent par _bgFactor — WAITING respecte l'hiérarchie FG/BG
+      // même pendant la transition crossfade. Local à PTN_CROSSFADE_COLOR.
       for (uint8_t led = 0; led < NUM_LEDS; led++) {
-        if (mask & (1 << led)) setPixel(led, mixed, inst.fgPct);
+        if (!(mask & (1 << led))) continue;
+        uint8_t effectivePct = (led == _currentBank)
+                                ? inst.fgPct
+                                : (uint8_t)((uint16_t)inst.fgPct * _bgFactor / 100);
+        setPixel(led, mixed, effectivePct);
       }
       break;
     }
