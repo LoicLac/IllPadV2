@@ -585,6 +585,177 @@ LOOP Phase 1 (slot pads, combo CLEAR+slot) bénéficie du dispatcher mais n'est 
 
 ---
 
+## Partie 8 — Fixes appliqués hors refonte (mai 2026)
+
+Pendant la préparation de la refonte, plusieurs bugs réels ont été découverts et corrigés directement dans le code actuel **sans attendre la refonte**. Cette partie est le journal de bord consolidé : ce qui a été fait, le statut des findings F1-F8, et les invariants qui en découlent.
+
+### §22 — Chronologie des fixes
+
+| Commit | Date | Titre | Effet sur findings |
+|---|---|---|---|
+| `2dc80d9` | 2026-05-15 | `fix(arpeg): pile préservée au LEFT release (sweep destructif supprimé)` | élimine la branche `handleLeftReleaseCleanup` ARPEG-OFF qui itérait les 48 pads et appelait `removePadPosition` pour chaque non-pressé → pile entièrement vidée à chaque release LEFT |
+| `4799918` | 2026-05-15 | `feat(arpeg): auto-Play sur 1er press musical en Stop + LED feedback` | implémente §13.2 Option 3 : Stop devient une commande momentanée, le 1er press musical post-Stop wipe la paused pile + auto-Play + add nouvelle note + EVT_PLAY |
+| `5aa15fc` | 2026-05-15 | `feat(arpeg): LEFT + hold pad = toggle Play/Stop global multi-bank` | ajoute `toggleAllArps()` : LEFT modifier de scope sur le hold pad, toggle symétrique multi-bank avec mask LED |
+| `7432047` | 2026-05-15 | `fix(arpeg): F1 — pile préservée sur Stop avec fingers down` | élimine la branche `anyFingerDown → clearAllNotes` dans `ArpEngine::setCaptured(false)` → pile préservée peu importe les pads tenus au moment du Stop. F1 et F7 résolus. |
+| `00f88e4` | 2026-05-15 | `fix(arpeg): F8 — pile préservée au release pads tenus sur Stop` | élimine la branche `else if (!pressed && wasPressed && !isCaptured) removePadPosition` dans `processArpMode` → release pad en Stop devient no-op silencieux (cohérent avec auto-Play §13.2). |
+
+### §23 — Statut des findings F1-F8 (post-fixes)
+
+Classification par nature :
+
+| Finding | Statut | Catégorie | Probabilité de manifestation live |
+|---|---|---|---|
+| **F1** — pile vidée sur Stop avec fingers down (`anyFingerDown` branche) | ✅ **Résolu** | bug logique software | était fréquent (chaque double-tap stop FG) |
+| **F2** — boundary 200ms ré-arme pendingSwitch | latent | dexterité (timing limite) | rare en pratique, demande tap exactement à `_doubleTapMs` |
+| **F3** — 2e tap doux pas vu comme rising edge | latent | hardware-dependent (calibration capacitif) | dépend de la dexterité et du toucher du musicien ; mitigé par "frapper net" |
+| **F4** — race Core 0/1 double-buffer | latent | théorique (timing inter-cores) | jamais observée empiriquement, demande loop iteration > 2ms |
+| **F5** — `_lastBankPadPressTime[]` non reset au LEFT release | latent | impossible à reproduire naturellement | demande cycle LEFT release/re-press en <200ms, geste artificiel |
+| **F6** — `_pendingSwitchBank` écrasé par brossage adjacent | latent | dexterité (écartement physique des bank pads) | dépend de la précision du toucher et de la config physique |
+| **F7** — asymétrie API BG/FG dans `setCaptured` | ✅ **Résolu** | variante API de F1 | inclus dans le fix F1 |
+| **F8** — pile vidée au release des pads tenus lors du switch Play→Stop | ✅ **Résolu** | bug logique software | découvert au bench post-F1 ; activait au scénario "Play+pads tenus → Stop → release pads" |
+
+**Frontière conceptuelle** : F1, F7, F8 et le bug LEFT release étaient des **bugs logiques software** qui se manifestent en workflow live normal sans effort de reproduction. F2, F4, F5, F6 sont des **trous de spec** dans le sens "le code peut les déclencher mais le workflow naturel ne les atteint pas". F3 est un **trade-off matériel** (calibration capacitif vs strictness du tap).
+
+### §24 — Sémantique ARPEG consolidée (état actuel du code post-fixes)
+
+Machine d'états `_captured` / `_playing` / `_pausedPile` après les 5 fixes :
+
+```
+                                                       ┌─────────────────┐
+       press pad musical (sans LEFT) en Stop          │                 │
+        →  wipe paused pile + add note                │  Play (capturé) │
+        →  auto-setCaptured(true) + EVT_PLAY  ────────►  _captured=true │
+                                                       │  _playing=true  │◄──┐
+       toggle hold pad sans LEFT, OU                   │ _pausedPile=false│   │
+       LEFT + double-tap bank pad FG, OU               │                 │   │ toggle
+       LEFT + hold pad (et au moins 1 bank Play)       └────────┬────────┘   │ hold pad
+            ▲                                                    │            │ OU LEFT+
+            │                                                    │            │ double-tap
+            │                                                    │            │ bank FG
+            │                                                    │            │ OU LEFT+
+            │                                                    ▼            │ hold pad
+            │                                          ┌─────────────────┐    │ (relaunch
+            │                                          │                 │    │ if paused)
+            │ Stop : pile toujours préservée,          │  Stop (paused)  │    │
+            │ peu importe les pads tenus ou pas        │  _captured=false│    │
+            │ (fix F1 + F8 du 2026-05-15)             │  _playing=false │    │
+            │                                          │_pausedPile=true │────┘
+            │                                          │ pile≥0          │
+            │                                          └─────────────────┘
+            │                                                    │
+            │                                                    │
+            └────────────────────────────────────────────────────┘
+                       (cycles libres entre les 2 états)
+```
+
+**Aucune autre transition automatique** ne modifie la pile. Les modifications de pile possibles :
+- `addPadPosition()` : rising edge en Play (mode captured) ajoute à la pile.
+- `addPadPosition()` : rising edge musical en Stop déclenche auto-Play §13.2 + add.
+- `removePadPosition()` : **uniquement** sur double-tap pad musical en Play (édition explicite par le musicien).
+- `clearAllNotes()` : **uniquement** sur §13.2 (1er press musical en Stop avec paused pile non vide).
+
+### §25 — Invariants opérationnels post-fixes
+
+À préserver dans toute évolution future du code :
+
+1. **Pile sacrée par transition de transport** : aucun toggle Play/Stop (hold pad, double-tap bank pad, toggle global multi-bank, futur LOOP play/stop) ne modifie la pile. Les seuls accès en écriture sont les actions de jeu explicites (press/release musical, double-tap remove).
+2. **Pas de sweep destructif au release LEFT** : `handleLeftReleaseCleanup` ne fait plus de `removePadPosition` en ARPEG-OFF. Le dispatcher Phase 4 doit reproduire cette politique (§9 spec gesture).
+3. **Stop est momentané, pas un mode de jeu persistant** : un press musical en Stop re-engage Play automatiquement (§13.2 Option 3). Pour rester en Stop, ne pas toucher aux pads de jeu (silence volontaire).
+4. **LEFT comme modifier de scope** : sans LEFT, le hold pad toggle la FG seule. Avec LEFT, le hold pad toggle toutes les banks (extension §10.1). Pas de double-tap nécessaire.
+5. **Signature `setCaptured` simplifiable** : les paramètres `keyIsPressed` et `holdPadIdx` ne sont plus utilisés (marqués `(void)`). Refonte Phase 5 simplifiera à `setCaptured(bool, MidiTransport&)`. Aucun appelant ne doit en dépendre.
+
+### §26 — Anti-patterns à ne PAS réintroduire
+
+Tout chemin qui répond OUI à l'une de ces questions est un bug par construction :
+
+- Une transition de transport (Play↔Stop, bank switch, hold pad, double-tap bank pad) appelle-t-elle `clearAllNotes()` ou `removePadPosition()` ?
+- Un release de pad musical en mode Stop déclenche-t-il une modification de la pile ?
+- Un release LEFT déclenche-t-il un `removePadPosition` ou `noteOff` autre que pour des notes Play NORMAL en cours ?
+- Un sweep "synchronise la pile avec l'état physique des pads" est-il exécuté en dehors d'une intention musicale explicite ?
+
+Tous ces patterns existaient dans le code pré-fixes 2026-05-15. Tous ont été identifiés et supprimés. **Aucun ne doit revenir.**
+
+---
+
+## Partie 9 — Garde-fous pour l'implémentation LOOP
+
+Les fixes ARPEG de mai 2026 révèlent une **classe d'anti-patterns** que LOOP P2 (LoopEngine runtime) doit explicitement éviter pour ne pas reproduire les mêmes bugs sur le buffer LOOP. Cette partie liste les pièges identifiés et les invariants à préserver.
+
+### §27 — Invariant "buffer LOOP sacré"
+
+Symétrique de "pile sacrée" Q3 / invariant 8 pour ARPEG, étendu au buffer d'events LOOP :
+
+> Aucune transition de transport (play/stop, bank switch, hold pad, toggle global multi-bank, sweep release LEFT, etc.) ne modifie le buffer d'events du LoopEngine. Le buffer est uniquement modifié par des actions utilisateur explicites : REC (overdub ou enregistrement initial), CLEAR long-press (wipe), load slot (replace), delete slot (drive uniquement, pas le buffer runtime).
+
+### §28 — Mapping ARPEG → LOOP des chemins à NE PAS reproduire
+
+| Anti-pattern ARPEG (corrigé) | Équivalent LOOP à éviter |
+|---|---|
+| Branche `anyFingerDown → clearAllNotes()` dans `ArpEngine::setCaptured(false)` (F1, fix `7432047`) | `LoopEngine::stop()` ou `tapPlayStop()` qui wiperait le buffer si des pads sont tenus. **Le stop LOOP doit toujours préserver le buffer**, peu importe le contexte pad. |
+| Branche `live remove` sur falling edge en Stop dans `processArpMode` (F8, fix `00f88e4`) | `processLoopMode` (futur) qui retirerait des events du buffer sur falling edge de LOOP_CTRL_PAD ou autre. **Le release de pad ne modifie jamais le buffer**. |
+| `handleLeftReleaseCleanup` ARPEG-OFF sweep destructif (fix `2dc80d9`) | sweep release LEFT qui appellerait `LoopEngine.cleanup()` ou équivalent sur la bank LOOP FG. **Le release LEFT ne déclenche aucune modification du buffer**. Le snapshot `_lastKeys` reste non-destructif. |
+| Stop est un mode persistant qui nécessite un toggle manuel pour repartir (§13.2 ancienne version) | LoopEngine en STOPPED qui resterait STOPPED jusqu'à un PLAY manuel. **Cohérence à décider** : LOOP §17 prévoit déjà des transitions tap PLAY/STOP explicites avec quantize. À ne pas confondre avec un auto-Play §13.2 ARPEG. |
+
+### §29 — Liste exhaustive des actions LOOP qui modifient le buffer
+
+D'après LOOP spec §3, §11, §12, §13 et §17, **et uniquement ces actions** :
+
+1. **REC press** → enregistre les events suivants dans le buffer (overdub si déjà PLAYING, sinon enregistrement initial).
+2. **REC tap en OVERDUBBING + PLAY/STOP tap** → annule l'overdub (revert au buffer pré-overdub) — pas un wipe, un revert.
+3. **CLEAR long-press** (durée `clearLoopTimerMs`) → wipe buffer entier, état → EMPTY.
+4. **Load slot short-press** (300-1000ms sous LEFT) → replace buffer par le slot chargé.
+5. **PLAY/STOP double-tap bypass quantize** → flush MIDI notes en cours, **mais préserve le buffer** (spec LOOP §17).
+6. **WAITING_LOAD + bank switch** → commit load avant switch, donc replace buffer (action explicite par le load déjà déclenché).
+
+**Toute autre interaction** (LEFT press/release, hold pad, bank switch, scale change, pot move, pad release, etc.) doit laisser le buffer **strictement intact**.
+
+### §30 — Convergence multi-bank (toggle global)
+
+`toggleAllArps()` (§10.1) doit être **étendu** pour inclure les banks LOOP en LOOP P2. Pattern d'extension :
+
+```cpp
+static void toggleAllArpsAndLoops() {
+  // 1. État collectif : au moins une bank en Play (ARPEG capturé OU LOOP PLAYING) ?
+  bool anyPlaying = false;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (isArpType(s_banks[i].type) && s_banks[i].arpEngine
+        && s_banks[i].arpEngine->isCaptured()) { anyPlaying = true; break; }
+    if (isLoopType(s_banks[i].type) && s_banks[i].loopEngine
+        && s_banks[i].loopEngine->isPlaying()) { anyPlaying = true; break; }
+  }
+  // 2. Toggle symétrique
+  // ... (étendu sur les 2 types)
+}
+```
+
+LED multi-bank mask `EVT_PLAY` / `EVT_STOP` couvre les deux types indifféremment.
+
+### §31 — Décisions à valider avant LOOP P2
+
+À trancher au moment de l'implémentation, pas maintenant :
+
+| Question | Options |
+|---|---|
+| `LoopEngine::tapPlayStop()` (layer musical, sans LEFT) doit-il interagir avec auto-Play §13.2 ? | A. Layer musical LOOP indépendant (REC/PLAY-STOP/CLEAR ne sont jamais considérés "press musical en Stop" du dispatcher gesture). B. Hybride : décider scenario par scenario. **A recommandé** (sépare cleanly les 2 systèmes). |
+| Slot save sous LEFT (LONG_PRESS) doit-il être annulable par un release prématuré ? | LOOP spec §11 dit oui, à confirmer dans LoopEngine. |
+| Combo CLEAR + slot delete : que se passe-t-il si le user tient CLEAR très longtemps puis relâche sans avoir pressé de slot ? | Cf. D9 ouverte dans §15 (option A "fire wipe au release si timer dépassé" recommandée). |
+| Bank switch pendant WAITING_LOAD : commit load **avant** switch (LOOP §17) — quelle est la signature exacte du hook `LoopEngine::preBankSwitch()` ? | Cf. §15 Phase E hook gelé Phase 7 gesture. |
+
+### §32 — Checklist pré-implémentation LOOP P2
+
+Avant d'écrire la première ligne de `LoopEngine.cpp`, le reviewer doit confirmer point par point :
+
+- [ ] Le plan LOOP P2 ne contient aucun chemin qui appelle un équivalent de `clearAllNotes()` sur le buffer hors des 6 actions §29.
+- [ ] Le plan LOOP P2 ne contient aucun chemin "live remove" ou "sweep des events non pressés" sur falling edge de quelque catégorie de pad que ce soit.
+- [ ] La fonction `LoopEngine::stop()` (ou équivalent) est **idempotente sur le buffer** : appeler `stop()` puis `play()` sans rien d'autre redonne exactement le même état audible.
+- [ ] Toute interaction LEFT (press/release/held) ne touche pas le buffer LOOP.
+- [ ] Le toggle global `(HOLD_PAD, leftHeld=true)` est étendu pour les banks LOOP dans `toggleAllArps()` ou son successeur.
+- [ ] Les invariants §25 (1-5) sont préservés ou explicitement remplacés.
+
+Si une checkbox ne peut pas être cochée avant l'implémentation, c'est qu'il manque une décision de spec — trancher d'abord, coder ensuite.
+
+---
+
 ## Annexe A — Code à supprimer après refonte
 
 Liste des chemins de code rendus obsolètes par le dispatcher (à confirmer dans le plan d'implémentation) :

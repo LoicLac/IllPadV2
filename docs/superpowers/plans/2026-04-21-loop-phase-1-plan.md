@@ -1,5 +1,13 @@
 # LOOP Phase 1 — Skeleton + Guards + LED Preparation — Plan d'implémentation
 
+> **🛑 PRE-LECTURE OBLIGATOIRE — Garde-fous post-fixes ARPEG mai 2026** : avant de démarrer LOOP P2 (LoopEngine runtime), lire **impérativement** la spec gesture [`2026-04-26-gesture-dispatcher-design.md`](../specs/2026-04-26-gesture-dispatcher-design.md) **Parties 8 et 9**. Ces sections documentent :
+> - 5 fixes ARPEG appliqués hors refonte (commits `2dc80d9`, `4799918`, `5aa15fc`, `7432047`, `00f88e4`) qui ont supprimé une classe d'anti-patterns destructifs.
+> - Le statut des findings F1-F8 (résolus vs latents).
+> - L'invariant **"pile/buffer sacré"** : aucune transition de transport ne modifie la pile ARPEG ni le buffer LOOP.
+> - La **checklist §32** à valider avant la première ligne de `LoopEngine.cpp`.
+>
+> LOOP Phase 1 (ce plan) est **squelette uniquement** : aucun comportement musicien-visible, aucune logique sur le buffer LOOP. La checklist §32 est destinée au reviewer du plan LOOP P2, pas à celui de la Phase 1. Mais le présent plan **doit déjà respecter** les invariants §27-§31 — notamment Task 4.2 (BankManager double-tap LOOP consume) qui doit consommer le 2ème tap **silencieusement** sans toucher au buffer, et Task 4.3 (ScaleManager early-return) qui doit préserver l'invariant 6 (pas de scale sur LOOP).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 > **⚠️ PRE-LECTURE OBLIGATOIRE — ARPEG_GEN merged first** : ce plan a été rédigé le 2026-04-21, **avant** le plan ARPEG_GEN ([`2026-04-26-arpeg-gen-plan.md`](2026-04-26-arpeg-gen-plan.md)). Hypothèse mise à jour le 2026-04-26 : ARPEG_GEN s'implémente **avant** LOOP Phase 1. Plusieurs Steps deviennent partiellement redondants car ARPEG_GEN traite déjà les sites de cohabitation (BankType enum, validator, switches 4-way, LED dispatch, debug labels) avec des stubs `case BANK_LOOP: break;` ou commentaires `// LOOP : Phase 1`. Avant d'exécuter ce plan, **lire l'annexe « §Annexe — Patches recommandés pour le plan LOOP Phase 1 »** en fin de [`2026-04-26-arpeg-gen-plan.md`](2026-04-26-arpeg-gen-plan.md) pour la liste exhaustive des Steps à skip / amender / garder. Liste résumée :
