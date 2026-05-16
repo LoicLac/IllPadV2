@@ -44,18 +44,19 @@ NvsManager::NvsManager()
   _ledSettings.version = LED_SETTINGS_VERSION;
   _ledSettings.reserved = 0;
   // Intensities v9 : unified FG (any bank type/state) + breathing depth
-  _ledSettings.fgIntensity = 80;
+  // Defaults tuned on hardware 2026-05-16 (post-flash dump session).
+  _ledSettings.fgIntensity = 100;
   _ledSettings.breathDepth = 50;
   _ledSettings.tickFlashFg = 100;
-  _ledSettings.tickFlashBg = 25;
+  _ledSettings.tickFlashBg = 40;
   // Global background factor — BG = FG × bgFactor / 100
-  _ledSettings.bgFactor = 25;
+  _ledSettings.bgFactor = 18;
   // Timing
   _ledSettings.pulsePeriodMs = 1472;
-  _ledSettings.tickBeatDurationMs = 30;
-  _ledSettings.tickBarDurationMs  = 60;
-  _ledSettings.tickWrapDurationMs = 100;
-  _ledSettings.gammaTenths = 20;  // gamma 2.0 default
+  _ledSettings.tickBeatDurationMs = 50;
+  _ledSettings.tickBarDurationMs  = 80;
+  _ledSettings.tickWrapDurationMs = 120;
+  _ledSettings.gammaTenths = 17;  // gamma 1.7 (tuned HW)
   // SPARK params (Phase 0.1 tuning : shorter + more cycles)
   _ledSettings.sparkOnMs = 20;
   _ledSettings.sparkGapMs = 40;
@@ -90,13 +91,15 @@ NvsManager::NvsManager()
   //   0 Pure White, 1 Warm White, 2 Cool White, 3 Ice Blue, 4 Deep Blue,
   //   5 Cyan, 6 Amber, 7 Gold, 8 Coral, 9 Violet, 10 Magenta, 11 Green,
   //   12 Soft Peach, 13 Mint.
+  // Tuned defaults 2026-05-16 (HW dump): MODE_ARPEG=Deep Blue (no W),
+  // VERB_OVERDUB=Magenta (distinct from REC), BANK_SWITCH hue -6, OCTAVE=Magenta.
   static const uint8_t defaultPresets[COLOR_SLOT_COUNT] = {
     /* CSLOT_MODE_NORMAL      */ 1,   // Warm White
-    /* CSLOT_MODE_ARPEG       */ 3,   // Ice Blue
+    /* CSLOT_MODE_ARPEG       */ 4,   // Deep Blue (was Ice Blue — tuned HW)
     /* CSLOT_MODE_LOOP        */ 7,   // Gold
     /* CSLOT_VERB_PLAY        */ 11,  // Green
     /* CSLOT_VERB_REC         */ 8,   // Coral
-    /* CSLOT_VERB_OVERDUB     */ 6,   // Amber
+    /* CSLOT_VERB_OVERDUB     */ 10,  // Magenta (was Amber — tuned HW)
     /* CSLOT_VERB_CLEAR_LOOP  */ 5,   // Cyan
     /* CSLOT_VERB_SLOT_CLEAR  */ 6,   // Amber (with hue offset, see below)
     /* CSLOT_VERB_SAVE        */ 10,  // Magenta
@@ -104,7 +107,7 @@ NvsManager::NvsManager()
     /* CSLOT_SCALE_ROOT       */ 6,   // Amber
     /* CSLOT_SCALE_MODE       */ 7,   // Gold
     /* CSLOT_SCALE_CHROM      */ 8,   // Coral
-    /* CSLOT_OCTAVE           */ 9,   // Violet
+    /* CSLOT_OCTAVE           */ 10,  // Magenta (was Violet — tuned HW)
     /* CSLOT_CONFIRM_OK       */ 0,   // Pure White (SPARK universal)
     /* CSLOT_VERB_STOP        */ 8,   // Coral (Phase 0.1 — Stop fade-out)
   };
@@ -118,7 +121,7 @@ NvsManager::NvsManager()
     /* VERB_CLEAR_LOOP  */ 0,
     /* VERB_SLOT_CLEAR  */ 20,  // hue-shifted orange, distinct from VERB_OVERDUB (LED spec §11)
     /* VERB_SAVE        */ 0,
-    /* BANK_SWITCH      */ 0,
+    /* BANK_SWITCH      */ -6,  // subtle warming tweak (tuned HW)
     /* SCALE_ROOT       */ 0,
     /* SCALE_MODE       */ 0,
     /* SCALE_CHROM      */ 0,

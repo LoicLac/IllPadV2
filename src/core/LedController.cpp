@@ -15,19 +15,20 @@ LedController::LedController()
     _currentBank(0),
     _batteryLow(false),
     _slots(nullptr),
-    _fgIntensity(80),
+    // Defaults aligned with NvsManager (tuned HW dump 2026-05-16 + Q6 I4 fix)
+    _fgIntensity(100),
     _breathDepth(50),
-    _tickFlashFg(100), _tickFlashBg(25),
-    _pulsePeriodMs(1472), _tickBeatDurationMs(30),
-    _tickBarDurationMs(60), _tickWrapDurationMs(100),
-    _bankBlinks(3), _bankDurationMs(300), _bankBrightnessPct(80),
-    _scaleRootBlinks(2), _scaleRootDurationMs(200),
-    _scaleModeBlinks(2), _scaleModeDurationMs(200),
-    _scaleChromBlinks(2), _scaleChromDurationMs(200),
+    _tickFlashFg(100), _tickFlashBg(40),
+    _pulsePeriodMs(1472), _tickBeatDurationMs(50),
+    _tickBarDurationMs(80), _tickWrapDurationMs(120),
+    _bankBlinks(3), _bankDurationMs(150), _bankBrightnessPct(80),
+    _scaleRootBlinks(2), _scaleRootDurationMs(130),
+    _scaleModeBlinks(2), _scaleModeDurationMs(130),
+    _scaleChromBlinks(2), _scaleChromDurationMs(130),
     _holdOnFadeMs(500), _holdOffFadeMs(500),
-    _octaveBlinks(3), _octaveDurationMs(300),
-    _sparkOnMs(50), _sparkGapMs(70), _sparkCycles(2),
-    _bgFactor(25),
+    _octaveBlinks(3), _octaveDurationMs(130),
+    _sparkOnMs(20), _sparkGapMs(40), _sparkCycles(4),
+    _bgFactor(18),
     _potBarDurationMs(LED_BARGRAPH_DURATION_DEFAULT),
     _showingPotBar(false),
     _potBarRealLevel(0),
@@ -95,7 +96,7 @@ LedController::LedController()
 // =================================================================
 
 void LedController::begin() {
-  rebuildGammaLut(20);  // default gamma 2.0 until NVS loads
+  rebuildGammaLut(17);  // default gamma 1.7 until NVS loads (aligned with NvsManager)
   // SK6812 reset: data LOW >=50us avant premiere trame (cold boot clean latch)
   pinMode(LED_DATA_PIN, OUTPUT);
   digitalWrite(LED_DATA_PIN, LOW);

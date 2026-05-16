@@ -63,7 +63,7 @@ static constexpr RGBW COL_BATTERY[NUM_LEDS] = {
 // white) against RGB-only colors (battery LEDs, ice blue arpeg). Lower = W
 // more attenuated relative to RGB. Note : with W_WEIGHT < 100, the gamma
 // floor=1 protection is lost for the W channel (acceptable design choice).
-static constexpr uint8_t W_WEIGHT = 70;
+static constexpr uint8_t W_WEIGHT = 65;
 
 // --- Brightness Pot Response Curve ---
 #define POT_CURVE_LOW_BIASED  0

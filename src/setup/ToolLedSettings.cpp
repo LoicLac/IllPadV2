@@ -172,16 +172,17 @@ void ToolLedSettings::loadAll() {
     memset(&_lwk, 0, sizeof(_lwk));
     _lwk.magic   = EEPROM_MAGIC;
     _lwk.version = LED_SETTINGS_VERSION;
-    // v9 : unified FG intensity + breathing depth (match NvsManager defaults)
-    _lwk.fgIntensity = 80;
+    // v9 : unified FG intensity + breathing depth (match NvsManager defaults,
+    // tuned HW dump 2026-05-16).
+    _lwk.fgIntensity = 100;
     _lwk.breathDepth = 50;
-    _lwk.tickFlashFg = 100; _lwk.tickFlashBg = 25;
-    _lwk.bgFactor = 25;
+    _lwk.tickFlashFg = 100; _lwk.tickFlashBg = 40;
+    _lwk.bgFactor = 18;
     _lwk.pulsePeriodMs = 1472;
-    _lwk.tickBeatDurationMs = 30;
-    _lwk.tickBarDurationMs  = 60;
-    _lwk.tickWrapDurationMs = 100;
-    _lwk.gammaTenths = 20;
+    _lwk.tickBeatDurationMs = 50;
+    _lwk.tickBarDurationMs  = 80;
+    _lwk.tickWrapDurationMs = 120;
+    _lwk.gammaTenths = 17;
     _lwk.sparkOnMs = 20; _lwk.sparkGapMs = 40; _lwk.sparkCycles = 4;
     _lwk.bankBlinks = 3; _lwk.bankDurationMs = 150; _lwk.bankBrightnessPct = 80;
     _lwk.scaleRootBlinks = 2; _lwk.scaleRootDurationMs = 130;
@@ -206,12 +207,12 @@ void ToolLedSettings::loadAll() {
     memset(&_cwk, 0, sizeof(_cwk));
     _cwk.magic   = COLOR_SLOT_MAGIC;
     _cwk.version = COLOR_SLOT_VERSION;
-    // Compile-time defaults mirror NvsManager.cpp (Phase 0.1 respec).
+    // Compile-time defaults mirror NvsManager.cpp (tuned HW dump 2026-05-16).
     static const uint8_t dp[COLOR_SLOT_COUNT] = {
-      1, 3, 7, 11, 8, 6, 5, 6, 10, 0, 6, 7, 8, 9, 0, 8,
+      1, 4, 7, 11, 8, 10, 5, 6, 10, 0, 6, 7, 8, 10, 0, 8,
     };
     static const int8_t  dh[COLOR_SLOT_COUNT] = {
-      0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 20, 0, -6, 0, 0, 0, 0, 0, 0,
     };
     for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
       _cwk.slots[i].presetId  = dp[i];
@@ -721,12 +722,12 @@ void ToolLedSettings::cancelEdit() {
 // =================================================================
 
 void ToolLedSettings::resetDefaultForLine(LineId line) {
-  // Colors : restore preset + hue per Phase 0.1 defaults.
+  // Colors : restore preset + hue (tuned HW dump 2026-05-16, mirrors NvsManager).
   static const uint8_t dp[COLOR_SLOT_COUNT] = {
-    1, 3, 7, 11, 8, 6, 5, 6, 10, 0, 6, 7, 8, 9, 0, 8,
+    1, 4, 7, 11, 8, 10, 5, 6, 10, 0, 6, 7, 8, 10, 0, 8,
   };
   static const int8_t  dh[COLOR_SLOT_COUNT] = {
-    0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 20, 0, -6, 0, 0, 0, 0, 0, 0,
   };
   ColorSlot* s = colorSlotForLine(line);
   if (s) {
@@ -761,11 +762,11 @@ void ToolLedSettings::resetDefaultForLine(LineId line) {
       break;
     case LINE_TRANSPORT_TICK_COMMON:
       _lwk.tickFlashFg = 100;
-      _lwk.tickFlashBg = 25;
+      _lwk.tickFlashBg = 40;
       break;
-    case LINE_TRANSPORT_TICK_BEAT_DUR:    _lwk.tickBeatDurationMs = 30; break;
-    case LINE_TRANSPORT_TICK_BAR_DUR:     _lwk.tickBarDurationMs  = 60; break;
-    case LINE_TRANSPORT_TICK_WRAP_DUR:    _lwk.tickWrapDurationMs = 100; break;
+    case LINE_TRANSPORT_TICK_BEAT_DUR:    _lwk.tickBeatDurationMs = 50; break;
+    case LINE_TRANSPORT_TICK_BAR_DUR:     _lwk.tickBarDurationMs  = 80; break;
+    case LINE_TRANSPORT_TICK_WRAP_DUR:    _lwk.tickWrapDurationMs = 120; break;
     case LINE_CONFIRM_BANK_TIMING:
       _lwk.bankBrightnessPct = 80;
       _lwk.bankDurationMs = 150;
@@ -791,9 +792,9 @@ void ToolLedSettings::resetDefaultForLine(LineId line) {
       _lwk.sparkGapMs = 40;
       _lwk.sparkCycles = 4;
       break;
-    case LINE_GLOBAL_FG_INTENSITY:        _lwk.fgIntensity = 80; break;
-    case LINE_GLOBAL_BG_FACTOR:           _lwk.bgFactor = 25; break;
-    case LINE_GLOBAL_GAMMA:               _lwk.gammaTenths = 20; break;
+    case LINE_GLOBAL_FG_INTENSITY:        _lwk.fgIntensity = 100; break;
+    case LINE_GLOBAL_BG_FACTOR:           _lwk.bgFactor = 18; break;
+    case LINE_GLOBAL_GAMMA:               _lwk.gammaTenths = 17; break;
     default: break;
   }
 }
