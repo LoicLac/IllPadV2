@@ -54,13 +54,10 @@ public:
   // order (spec §4.1). Section resolution via sectionOf() helper.
   enum LineId : uint8_t {
     LINE_NORMAL_BASE_COLOR = 0,
-    LINE_NORMAL_FG_PCT,
 
     LINE_ARPEG_BASE_COLOR,
-    LINE_ARPEG_FG_PCT,
 
     LINE_LOOP_BASE_COLOR,
-    LINE_LOOP_FG_PCT,
     LINE_LOOP_SAVE_COLOR,
     LINE_LOOP_SAVE_DURATION,
     LINE_LOOP_CLEAR_COLOR,
@@ -73,7 +70,7 @@ public:
     LINE_TRANSPORT_STOP_COLOR,
     LINE_TRANSPORT_STOP_TIMING,        // multi : brightness + duration
     LINE_TRANSPORT_WAITING_COLOR,
-    LINE_TRANSPORT_BREATHING,          // multi : min + max + period
+    LINE_TRANSPORT_BREATHING,          // v9 multi : depth + period
     LINE_TRANSPORT_TICK_COMMON,        // multi : FG + BG %
     LINE_TRANSPORT_TICK_PLAY_COLOR,
     LINE_TRANSPORT_TICK_REC_COLOR,
@@ -95,6 +92,7 @@ public:
     LINE_CONFIRM_OK_COLOR,
     LINE_CONFIRM_OK_SPARK,             // multi : on + gap + cycles
 
+    LINE_GLOBAL_FG_INTENSITY,          // v9 NEW : single FG slider for all bank types/states
     LINE_GLOBAL_BG_FACTOR,
     LINE_GLOBAL_GAMMA,
 

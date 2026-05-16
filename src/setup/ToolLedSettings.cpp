@@ -33,13 +33,10 @@ static const char* const SECTION_LABELS[ToolLedSettings::SEC_COUNT] = {
 static const char* const LINE_LABELS[ToolLedSettings::LINE_COUNT] = {
   // NORMAL
   "Base color",
-  "FG brightness",
   // ARPEG
   "Base color",
-  "FG brightness",
   // LOOP
   "Base color",
-  "FG brightness",
   "Save slot",
   "  duration",
   "Clear loop (hold)",
@@ -73,7 +70,8 @@ static const char* const LINE_LABELS[ToolLedSettings::LINE_COUNT] = {
   "  timing",
   "Confirm OK (SPARK)",
   "  timing",
-  // GLOBAL
+  // GLOBAL v9
+  "FG intensity",
   "BG factor",
   "Master gamma",
 };
@@ -81,12 +79,9 @@ static const char* const LINE_LABELS[ToolLedSettings::LINE_COUNT] = {
 // Description panel (spec §5.3) — one line per LineId, optionally multi-line
 // separated by '\n' (caller wraps). Flash-resident.
 static const char* const LINE_DESCRIPTIONS[ToolLedSettings::LINE_COUNT] = {
-  "NORMAL base color - identifies NORMAL banks. FG shown at FG brightness, BG via BG factor.",
-  "Foreground brightness for NORMAL banks (10-100%). BG derives as FG x BG factor.",
+  "NORMAL base color - identifies NORMAL banks. FG/BG intensity set in GLOBAL section.",
   "ARPEG base color - identifies ARPEG banks. Breathing when stopped-loaded.",
-  "Foreground brightness for ARPEG banks (10-100%). Applied when playing (solid).",
   "LOOP base color - identifies LOOP banks. Consumed Phase 1+ (runtime dormant).",
-  "Foreground brightness for LOOP banks (10-100%). Consumed Phase 1+.",
   "Save slot color - shown during the long-press ramp on slot pad (LOOP Phase 1+).",
   "Hold duration to trigger slot save (500-2000 ms). Shared with Tool 6.",
   "Clear loop color - shown during the long-press ramp on clear pad (LOOP Phase 1+).",
@@ -98,7 +93,7 @@ static const char* const LINE_DESCRIPTIONS[ToolLedSettings::LINE_COUNT] = {
   "Stop fade-out color - flashes on Hold off or double-tap Stop.",
   "Left/right focus: brightness (0-100) or duration (0-1000 ms). Up/down adjusts.",
   "Waiting quantise color - crossfades with mode color while waiting for beat/bar.",
-  "Breathing min%, max%, period. Applies to FG ARPEG / LOOP stopped-loaded.",
+  "Breathing depth (0-80%) and period. FG dips from FG intensity down by depth%.",
   "Tick FG% and BG% - shared flash intensity across PLAY/REC/OVERDUB ticks.",
   "Tick PLAY color - ARPEG step flash and LOOP playing wrap tick.",
   "Tick REC color - LOOP recording bar and wrap ticks (Phase 1+).",
@@ -118,6 +113,7 @@ static const char* const LINE_DESCRIPTIONS[ToolLedSettings::LINE_COUNT] = {
   "Left/right focus: brightness or duration (100-500 ms). Up/down adjusts.",
   "Confirm OK color - universal SPARK suffix (e.g. after a Tool save).",
   "Left/right focus: on (20-200 ms), gap (20-300 ms), cycles (1-4). Up/down adjusts.",
+  "FG intensity (10-100%) for all bank FG (NORMAL/ARPEG/LOOP, any state). BG = FG x BG factor.",
   "BG factor (10-50%). All BG banks render as FG color x this ratio.",
   "Master gamma (1.0-3.0). Affects perceptual LED intensity curve. Hot-reloaded.",
 };
@@ -176,9 +172,9 @@ void ToolLedSettings::loadAll() {
     memset(&_lwk, 0, sizeof(_lwk));
     _lwk.magic   = EEPROM_MAGIC;
     _lwk.version = LED_SETTINGS_VERSION;
-    _lwk.normalFgIntensity = 85;
-    _lwk.fgArpStopMin = 30; _lwk.fgArpStopMax = 100;
-    _lwk.fgArpPlayMax = 80;
+    // v9 : unified FG intensity + breathing depth (match NvsManager defaults)
+    _lwk.fgIntensity = 80;
+    _lwk.breathDepth = 50;
     _lwk.tickFlashFg = 100; _lwk.tickFlashBg = 25;
     _lwk.bgFactor = 25;
     _lwk.pulsePeriodMs = 1472;
@@ -300,11 +296,11 @@ void ToolLedSettings::refreshBadge() {
 // =================================================================
 
 ToolLedSettings::Section ToolLedSettings::sectionOf(LineId line) const {
-  if (line <= LINE_NORMAL_FG_PCT)          return SEC_NORMAL;
-  if (line <= LINE_ARPEG_FG_PCT)           return SEC_ARPEG;
-  if (line <= LINE_LOOP_SLOT_DURATION)     return SEC_LOOP;
+  if (line <= LINE_NORMAL_BASE_COLOR)       return SEC_NORMAL;
+  if (line <= LINE_ARPEG_BASE_COLOR)        return SEC_ARPEG;
+  if (line <= LINE_LOOP_SLOT_DURATION)      return SEC_LOOP;
   if (line <= LINE_TRANSPORT_TICK_WRAP_DUR) return SEC_TRANSPORT;
-  if (line <= LINE_CONFIRM_OK_SPARK)       return SEC_CONFIRMATIONS;
+  if (line <= LINE_CONFIRM_OK_SPARK)        return SEC_CONFIRMATIONS;
   return SEC_GLOBAL;
 }
 
@@ -322,13 +318,13 @@ ToolLedSettings::LineId ToolLedSettings::firstLineOfSection(Section s) const {
 
 ToolLedSettings::LineId ToolLedSettings::lastLineOfSection(Section s) const {
   switch (s) {
-    case SEC_NORMAL:        return LINE_NORMAL_FG_PCT;
-    case SEC_ARPEG:         return LINE_ARPEG_FG_PCT;
+    case SEC_NORMAL:        return LINE_NORMAL_BASE_COLOR;
+    case SEC_ARPEG:         return LINE_ARPEG_BASE_COLOR;
     case SEC_LOOP:          return LINE_LOOP_SLOT_DURATION;
     case SEC_TRANSPORT:     return LINE_TRANSPORT_TICK_WRAP_DUR;
     case SEC_CONFIRMATIONS: return LINE_CONFIRM_OK_SPARK;
     case SEC_GLOBAL:        return LINE_GLOBAL_GAMMA;
-    default:                return LINE_NORMAL_FG_PCT;
+    default:                return LINE_NORMAL_BASE_COLOR;
   }
 }
 
@@ -446,9 +442,10 @@ uint8_t ToolLedSettings::numericFieldCountForLine(LineId line) const {
     case LINE_CONFIRM_OCTAVE_TIMING:
       return 2;
     // Multi : 3 fields
-    case LINE_TRANSPORT_BREATHING:
     case LINE_CONFIRM_OK_SPARK:
       return 3;
+    case LINE_TRANSPORT_BREATHING:
+      return 2;  // v9 : depth + period (was 3 : min/max/period)
     // Single : 1 field
     default:
       return 1;
@@ -475,9 +472,6 @@ void ToolLedSettings::setEventOverrideFgPct(uint8_t evt, uint8_t newFgPct) {
 
 int32_t ToolLedSettings::readNumericField(LineId line, uint8_t f) const {
   switch (line) {
-    case LINE_NORMAL_FG_PCT:              return _lwk.normalFgIntensity;
-    case LINE_ARPEG_FG_PCT:               return _lwk.fgArpPlayMax;
-    case LINE_LOOP_FG_PCT:                return _lwk.fgArpPlayMax; // LOOP reuses ARPEG FG pct (no separate field yet)
     case LINE_LOOP_SAVE_DURATION:         return _ses.slotSaveTimerMs;
     case LINE_LOOP_CLEAR_DURATION:        return _ses.clearLoopTimerMs;
     case LINE_LOOP_SLOT_DURATION:         return _ses.slotClearTimerMs;
@@ -485,9 +479,8 @@ int32_t ToolLedSettings::readNumericField(LineId line, uint8_t f) const {
                                                           : (int32_t)_lwk.holdOnFadeMs;
     case LINE_TRANSPORT_STOP_TIMING:      return (f == 0) ? (int32_t)effectiveEventFgPct(EVT_STOP)
                                                           : (int32_t)_lwk.holdOffFadeMs;
-    case LINE_TRANSPORT_BREATHING:        return (f == 0) ? (int32_t)_lwk.fgArpStopMin
-                                                          : (f == 1) ? (int32_t)_lwk.fgArpStopMax
-                                                                     : (int32_t)_lwk.pulsePeriodMs;
+    case LINE_TRANSPORT_BREATHING:        return (f == 0) ? (int32_t)_lwk.breathDepth
+                                                          : (int32_t)_lwk.pulsePeriodMs;
     case LINE_TRANSPORT_TICK_COMMON:      return (f == 0) ? (int32_t)_lwk.tickFlashFg
                                                           : (int32_t)_lwk.tickFlashBg;
     case LINE_TRANSPORT_TICK_BEAT_DUR:    return _lwk.tickBeatDurationMs;
@@ -506,6 +499,7 @@ int32_t ToolLedSettings::readNumericField(LineId line, uint8_t f) const {
     case LINE_CONFIRM_OK_SPARK:           return (f == 0) ? (int32_t)_lwk.sparkOnMs
                                                           : (f == 1) ? (int32_t)_lwk.sparkGapMs
                                                                      : (int32_t)_lwk.sparkCycles;
+    case LINE_GLOBAL_FG_INTENSITY:        return _lwk.fgIntensity;
     case LINE_GLOBAL_BG_FACTOR:           return _lwk.bgFactor;
     case LINE_GLOBAL_GAMMA:               return _lwk.gammaTenths;
     default: return 0;
@@ -514,9 +508,6 @@ int32_t ToolLedSettings::readNumericField(LineId line, uint8_t f) const {
 
 void ToolLedSettings::writeNumericField(LineId line, uint8_t f, int32_t v) {
   switch (line) {
-    case LINE_NORMAL_FG_PCT:              _lwk.normalFgIntensity = (uint8_t)v; break;
-    case LINE_ARPEG_FG_PCT:               _lwk.fgArpPlayMax = (uint8_t)v; break;
-    case LINE_LOOP_FG_PCT:                _lwk.fgArpPlayMax = (uint8_t)v; break; // shared w/ ARPEG
     case LINE_LOOP_SAVE_DURATION:         _ses.slotSaveTimerMs = (uint16_t)v; break;
     case LINE_LOOP_CLEAR_DURATION:        _ses.clearLoopTimerMs = (uint16_t)v; break;
     case LINE_LOOP_SLOT_DURATION:         _ses.slotClearTimerMs = (uint16_t)v; break;
@@ -529,8 +520,7 @@ void ToolLedSettings::writeNumericField(LineId line, uint8_t f, int32_t v) {
       else        _lwk.holdOffFadeMs = (uint16_t)v;
       break;
     case LINE_TRANSPORT_BREATHING:
-      if (f == 0) _lwk.fgArpStopMin = (uint8_t)v;
-      else if (f == 1) _lwk.fgArpStopMax = (uint8_t)v;
+      if (f == 0) _lwk.breathDepth = (uint8_t)v;
       else        _lwk.pulsePeriodMs = (uint16_t)v;
       break;
     case LINE_TRANSPORT_TICK_COMMON:
@@ -565,6 +555,7 @@ void ToolLedSettings::writeNumericField(LineId line, uint8_t f, int32_t v) {
       else if (f == 1) _lwk.sparkGapMs = (uint16_t)v;
       else        _lwk.sparkCycles = (uint8_t)v;
       break;
+    case LINE_GLOBAL_FG_INTENSITY:        _lwk.fgIntensity = (uint8_t)v; break;
     case LINE_GLOBAL_BG_FACTOR:           _lwk.bgFactor = (uint8_t)v; break;
     case LINE_GLOBAL_GAMMA:               _lwk.gammaTenths = (uint8_t)v; break;
     default: break;
@@ -577,9 +568,6 @@ void ToolLedSettings::getNumericFieldBounds(LineId line, uint8_t f,
   // Defaults (most common).
   mn = 0; mx = 100; coarse = 10; fine = 1;
   switch (line) {
-    case LINE_NORMAL_FG_PCT:
-    case LINE_ARPEG_FG_PCT:
-    case LINE_LOOP_FG_PCT:                mn = 10; mx = 100; break;
     case LINE_LOOP_SAVE_DURATION:         mn = 500; mx = 2000; coarse = 100; fine = 10; break;
     case LINE_LOOP_CLEAR_DURATION:        mn = 200; mx = 1500; coarse = 100; fine = 10; break;
     case LINE_LOOP_SLOT_DURATION:         mn = 400; mx = 1500; coarse = 100; fine = 10; break;
@@ -589,8 +577,9 @@ void ToolLedSettings::getNumericFieldBounds(LineId line, uint8_t f,
       else        { mn = 0; mx = 1000; coarse = 100; fine = 10; }
       break;
     case LINE_TRANSPORT_BREATHING:
-      if (f == 2) { mn = 500; mx = 4000; coarse = 100; fine = 50; }
-      else        { mn = 0; mx = 100; coarse = 10; fine = 1; }
+      // v9 : f0 = depth %, f1 = period ms
+      if (f == 0) { mn = 0; mx = 80; coarse = 10; fine = 1; }
+      else        { mn = 500; mx = 4000; coarse = 100; fine = 50; }
       break;
     case LINE_TRANSPORT_TICK_COMMON:      mn = 0; mx = 100; coarse = 10; fine = 1; break;
     case LINE_TRANSPORT_TICK_BEAT_DUR:
@@ -609,6 +598,7 @@ void ToolLedSettings::getNumericFieldBounds(LineId line, uint8_t f,
       else if (f == 1) { mn = 20; mx = 300; coarse = 10; fine = 1; }   // gap
       else             { mn = 1; mx = 4; coarse = 1; fine = 1; }        // cycles
       break;
+    case LINE_GLOBAL_FG_INTENSITY:        mn = 10; mx = 100; coarse = 10; fine = 1; break;
     case LINE_GLOBAL_BG_FACTOR:           mn = 10; mx = 50; coarse = 5; fine = 1; break;
     case LINE_GLOBAL_GAMMA:               mn = 10; mx = 30; coarse = 2; fine = 1; break;
     default: break;
@@ -753,9 +743,6 @@ void ToolLedSettings::resetDefaultForLine(LineId line) {
   }
   // Numerics
   switch (line) {
-    case LINE_NORMAL_FG_PCT:              _lwk.normalFgIntensity = 85; break;
-    case LINE_ARPEG_FG_PCT:               _lwk.fgArpPlayMax = 80; break;
-    case LINE_LOOP_FG_PCT:                _lwk.fgArpPlayMax = 80; break;
     case LINE_LOOP_SAVE_DURATION:         _ses.slotSaveTimerMs = 1000; break;
     case LINE_LOOP_CLEAR_DURATION:        _ses.clearLoopTimerMs = 500; break;
     case LINE_LOOP_SLOT_DURATION:         _ses.slotClearTimerMs = 800; break;
@@ -768,9 +755,9 @@ void ToolLedSettings::resetDefaultForLine(LineId line) {
       _lwk.holdOffFadeMs = 500;
       break;
     case LINE_TRANSPORT_BREATHING:
-      _lwk.fgArpStopMin = 60;
-      _lwk.fgArpStopMax = 90;
-      _lwk.pulsePeriodMs = 2500;
+      // v9 : depth + period, aligned with NvsManager boot defaults (Q7)
+      _lwk.breathDepth   = 50;
+      _lwk.pulsePeriodMs = 1472;
       break;
     case LINE_TRANSPORT_TICK_COMMON:
       _lwk.tickFlashFg = 100;
@@ -804,6 +791,7 @@ void ToolLedSettings::resetDefaultForLine(LineId line) {
       _lwk.sparkGapMs = 40;
       _lwk.sparkCycles = 4;
       break;
+    case LINE_GLOBAL_FG_INTENSITY:        _lwk.fgIntensity = 80; break;
     case LINE_GLOBAL_BG_FACTOR:           _lwk.bgFactor = 25; break;
     case LINE_GLOBAL_GAMMA:               _lwk.gammaTenths = 20; break;
     default: break;
@@ -851,22 +839,19 @@ void ToolLedSettings::updatePreviewContext() {
   switch (_cursor) {
     // --- Base color / FG brightness : mono-FG mockup ---
     case LINE_NORMAL_BASE_COLOR:
-    case LINE_NORMAL_FG_PCT:
       ctx = ToolLedPreview::PV_BASE_COLOR;
       p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_NORMAL]);
-      p.fgPct   = _lwk.normalFgIntensity;
+      p.fgPct   = _lwk.fgIntensity;
       break;
     case LINE_ARPEG_BASE_COLOR:
-    case LINE_ARPEG_FG_PCT:
       ctx = ToolLedPreview::PV_BASE_COLOR;
       p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_ARPEG]);
-      p.fgPct   = _lwk.fgArpPlayMax;
+      p.fgPct   = _lwk.fgIntensity;
       break;
     case LINE_LOOP_BASE_COLOR:
-    case LINE_LOOP_FG_PCT:
       ctx = ToolLedPreview::PV_BASE_COLOR;
       p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_LOOP]);
-      p.fgPct   = _lwk.fgArpPlayMax;
+      p.fgPct   = _lwk.fgIntensity;
       break;
 
     // --- LOOP gestures : event replay (RAMP_HOLD-ish, preview as FADE) ---
@@ -951,8 +936,15 @@ void ToolLedSettings::updatePreviewContext() {
     case LINE_TRANSPORT_BREATHING:
       ctx = ToolLedPreview::PV_BREATHING;
       p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_ARPEG]);
-      p.breathMinPct   = _lwk.fgArpStopMin;
-      p.breathMaxPct   = _lwk.fgArpStopMax;
+      // v9 : derive min/max from unified fgIntensity + breathDepth.
+      // Min clamped against BG so preview matches runtime invariant FG > BG.
+      {
+        uint8_t bgIntensity = (uint8_t)((uint16_t)_lwk.fgIntensity * _lwk.bgFactor / 100);
+        uint8_t breathMin   = (uint8_t)((uint16_t)_lwk.fgIntensity * (100 - _lwk.breathDepth) / 100);
+        if (breathMin <= bgIntensity) breathMin = (uint8_t)(bgIntensity + 1);
+        p.breathMinPct   = breathMin;
+        p.breathMaxPct   = _lwk.fgIntensity;
+      }
       p.breathPeriodMs = _lwk.pulsePeriodMs;
       break;
 
@@ -1077,6 +1069,13 @@ void ToolLedSettings::updatePreviewContext() {
       p.effectDurationMs = (_lwk.sparkOnMs + _lwk.sparkGapMs) * _lwk.sparkCycles;
       break;
 
+    // --- GLOBAL FG intensity (v9) : mono-FG mockup with NORMAL color ---
+    case LINE_GLOBAL_FG_INTENSITY:
+      ctx = ToolLedPreview::PV_BASE_COLOR;
+      p.fgColor = resolveColorSlot(_cwk.slots[CSLOT_MODE_NORMAL]);
+      p.fgPct   = _lwk.fgIntensity;
+      break;
+
     // --- GLOBAL : BG factor / gamma — reuse TICKS_MOCKUP ---
     case LINE_GLOBAL_BG_FACTOR:
     case LINE_GLOBAL_GAMMA:
@@ -1141,9 +1140,7 @@ void ToolLedSettings::drawLine(LineId line, bool isCursor, bool inEdit) {
     // Unit hint by line (simple switch).
     const char* unit = "";
     switch (line) {
-      case LINE_NORMAL_FG_PCT:
-      case LINE_ARPEG_FG_PCT:
-      case LINE_LOOP_FG_PCT:
+      case LINE_GLOBAL_FG_INTENSITY:
       case LINE_GLOBAL_BG_FACTOR:          unit = "%"; break;
       case LINE_GLOBAL_GAMMA:
         snprintf(val, sizeof(val), "%d.%d", (int)(v/10), (int)(v%10));
@@ -1184,7 +1181,8 @@ void ToolLedSettings::drawLine(LineId line, bool isCursor, bool inEdit) {
     case LINE_TRANSPORT_STOP_TIMING:
       n0 = "brightness"; u0 = "%"; n1 = "duration"; u1 = "ms"; break;
     case LINE_TRANSPORT_BREATHING:
-      n0 = "min"; u0 = "%"; n1 = "max"; u1 = "%"; n2 = "period"; u2 = "ms"; break;
+      // v9 : 2 fields (depth, period)
+      n0 = "depth"; u0 = "%"; n1 = "period"; u1 = "ms"; break;
     case LINE_TRANSPORT_TICK_COMMON:
       n0 = "FG"; u0 = "%"; n1 = "BG"; u1 = "%"; break;
     case LINE_CONFIRM_BANK_TIMING:

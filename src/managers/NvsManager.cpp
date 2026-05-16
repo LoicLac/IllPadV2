@@ -43,15 +43,13 @@ NvsManager::NvsManager()
   _ledSettings.magic = EEPROM_MAGIC;
   _ledSettings.version = LED_SETTINGS_VERSION;
   _ledSettings.reserved = 0;
-  // Intensities (BG derived from FG via bgFactor)
-  _ledSettings.normalFgIntensity = 85;
-  _ledSettings.fgArpStopMin = 30;
-  _ledSettings.fgArpStopMax = 100;
-  _ledSettings.fgArpPlayMax = 80;
+  // Intensities v9 : unified FG (any bank type/state) + breathing depth
+  _ledSettings.fgIntensity = 80;
+  _ledSettings.breathDepth = 50;
   _ledSettings.tickFlashFg = 100;
   _ledSettings.tickFlashBg = 25;
-  // Global background factor (v6 new — step 0.6 activates in BG rendering)
-  _ledSettings.bgFactor = 25;  // provisional, tune on hardware in 0.9
+  // Global background factor — BG = FG × bgFactor / 100
+  _ledSettings.bgFactor = 25;
   // Timing
   _ledSettings.pulsePeriodMs = 1472;
   _ledSettings.tickBeatDurationMs = 30;

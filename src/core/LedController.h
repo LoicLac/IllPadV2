@@ -162,9 +162,8 @@ private:
   RGBW _colors[COLOR_SLOT_COUNT];
 
   // LED settings (0-100 perceptual %)
-  uint8_t  _normalFgIntensity;
-  uint8_t  _fgArpStopMin, _fgArpStopMax;
-  uint8_t  _fgArpPlayMax;         // FG ARPEG playing solid. BG intensities derived from FG via _bgFactor.
+  uint8_t  _fgIntensity;          // v9 : SOLID intensity FG for any bank/state (NORMAL/ARPEG/LOOP)
+  uint8_t  _breathDepth;          // v9 : breathing dip depth % (renderBankArpeg stopped-loaded branch)
   uint8_t  _tickFlashFg, _tickFlashBg;
   uint16_t _pulsePeriodMs;
   uint16_t _tickBeatDurationMs;   // Phase 0.1 : ARPEG step FLASH duration (renamed + widened from uint8 _tickFlashDurationMs).

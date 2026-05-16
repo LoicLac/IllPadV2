@@ -15,9 +15,8 @@ LedController::LedController()
     _currentBank(0),
     _batteryLow(false),
     _slots(nullptr),
-    _normalFgIntensity(85),
-    _fgArpStopMin(30), _fgArpStopMax(100),
-    _fgArpPlayMax(80),
+    _fgIntensity(80),
+    _breathDepth(50),
     _tickFlashFg(100), _tickFlashBg(25),
     _pulsePeriodMs(1472), _tickBeatDurationMs(30),
     _tickBarDurationMs(60), _tickWrapDurationMs(100),
@@ -116,12 +115,15 @@ void LedController::setPixel(uint8_t i, const RGBW& c, uint8_t intensityPct) {
   // Multiply before dividing to preserve resolution at low values:
   // e.g. 8% × 10% × 255 / 10000 = 2 instead of (8×10/100)×255/100 = 0
   uint8_t scaled = (uint8_t)((uint32_t)intensityPct * _brightnessPct * 255 / 10000);
-  // Scale each channel by intensity, then apply gamma for LED
+  // W_WEIGHT (HardwareConfig.h) : balance W channel perceptual brightness
+  // against RGB. Applied AFTER gamma, only on W byte. RGB pass through.
+  uint8_t w_gamma = _gammaLut[(uint16_t)c.w * scaled / 255];
+  uint8_t w_final = (uint8_t)((uint16_t)w_gamma * W_WEIGHT / 100);
   _strip.setPixelColor(i,
     _gammaLut[(uint16_t)c.r * scaled / 255],
     _gammaLut[(uint16_t)c.g * scaled / 255],
     _gammaLut[(uint16_t)c.b * scaled / 255],
-    _gammaLut[(uint16_t)c.w * scaled / 255]
+    w_final
   );
 }
 
@@ -434,11 +436,10 @@ void LedController::renderCalibration(unsigned long now) {
 // --- Per-type bank render (extracted for LOOP extensibility) ---
 
 void LedController::renderBankNormal(uint8_t led, bool isFg) {
-  // FG uses MODE_NORMAL. BG uses same color at reduced intensity
-  // derived from FG via global _bgFactor.
+  // v9 : unified _fgIntensity (NORMAL/ARPEG/LOOP all share). BG = FG × bgFactor.
   uint8_t intensity = isFg
-                      ? _normalFgIntensity
-                      : (uint8_t)((uint16_t)_normalFgIntensity * _bgFactor / 100);
+                      ? _fgIntensity
+                      : (uint8_t)((uint16_t)_fgIntensity * _bgFactor / 100);
   setPixel(led, _colors[CSLOT_MODE_NORMAL], intensity);
 }
 
@@ -459,14 +460,13 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
   const RGBW& col = _colors[CSLOT_MODE_ARPEG];
 
   if (playing) {
-    // Base state : solid bright (FG) or solid dim (BG) — no pulse.
-    // BG intensity derived from FG via _bgFactor.
+    // v9 : FG playing solid at unified _fgIntensity. BG = FG × bgFactor.
     uint8_t intensity = isFg
-                        ? _fgArpPlayMax
-                        : (uint8_t)((uint16_t)_fgArpPlayMax * _bgFactor / 100);
+                        ? _fgIntensity
+                        : (uint8_t)((uint16_t)_fgIntensity * _bgFactor / 100);
     setPixel(led, col, intensity);
-    // Tick flash overlay : uses VERB_PLAY color (green, v4 grammar).
-    // Replaces the base during the tickBeatDurationMs window (Phase 0.1 : BEAT kind only, ARPEG step).
+    // Tick flash overlay : uses VERB_PLAY color, absolute spike (tickFlashFg/Bg
+    // independent of fgIntensity by design — slider exprime un absolu).
     if (_flashStartTime[led] != 0) {
       if ((now - _flashStartTime[led]) < _tickBeatDurationMs) {
         renderFlashOverlay(led, _colors[CSLOT_VERB_PLAY], _tickFlashFg, _tickFlashBg,
@@ -475,24 +475,31 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
         _flashStartTime[led] = 0;
       }
     }
-  } else if (isFg && hasNotes) {
-    // FG stopped with notes loaded : slow sine pulse (PULSE_SLOW semantic,
-    // not yet driven by the pattern engine — step 0.6/0.8 will wire).
+  } else if (hasNotes) {
+    // v9 : stopped-loaded — sine breathing pour FG ET BG (BG scalé par bgFactor
+    // en sortie). Grammaire : "notes prêtes" = breathing, indépendamment de FG/BG.
+    // Invariant FG > BG préservé à chaque instant car BG = FG × bgFactor / 100
+    // avec bgFactor < 100.
     uint16_t period = _pulsePeriodMs > 0 ? _pulsePeriodMs : 1;
     uint16_t phase = (uint16_t)((now * 65536UL / period) % 65536);
     uint8_t  idx   = phase >> 8;
     uint8_t  frac  = phase & 0xFF;
     uint16_t sine16 = (uint16_t)LED_SINE_LUT[idx] * (256 - frac)
                     + (uint16_t)LED_SINE_LUT[(idx + 1) & 0xFF] * frac;
-    uint8_t intensity = _fgArpStopMin
-                      + (uint8_t)((uint32_t)sine16 * (_fgArpStopMax - _fgArpStopMin) / 65280);
+    uint8_t breathMin   = (uint8_t)((uint16_t)_fgIntensity * (100 - _breathDepth) / 100);
+    uint8_t bgIntensity = (uint8_t)((uint16_t)_fgIntensity * _bgFactor / 100);
+    if (breathMin <= bgIntensity) breathMin = (uint8_t)(bgIntensity + 1);
+    uint8_t fgValue = breathMin
+                    + (uint8_t)((uint32_t)sine16 * (_fgIntensity - breathMin) / 65280);
+    uint8_t intensity = isFg
+                        ? fgValue
+                        : (uint8_t)((uint16_t)fgValue * _bgFactor / 100);
     setPixel(led, col, intensity);
   } else {
-    // BG (all states) or FG idle (no notes) : solid dim.
-    // BG intensity derived from FG via _bgFactor.
+    // FG idle no-notes ou BG no-notes : solid.
     uint8_t intensity = isFg
-                        ? _fgArpStopMin
-                        : (uint8_t)((uint16_t)_fgArpStopMin * _bgFactor / 100);
+                        ? _fgIntensity
+                        : (uint8_t)((uint16_t)_fgIntensity * _bgFactor / 100);
     setPixel(led, col, intensity);
   }
 }
@@ -529,7 +536,7 @@ void LedController::renderNormalDisplay(unsigned long now) {
     }
   } else {
     // Fallback: no slots pointer (pre-init)
-    setPixel(_currentBank, _colors[CSLOT_MODE_NORMAL], _normalFgIntensity);
+    setPixel(_currentBank, _colors[CSLOT_MODE_NORMAL], _fgIntensity);
   }
 
   // --- Event overlay (unified pattern engine — step 0.4) ---
@@ -885,11 +892,8 @@ void LedController::setPotBarDuration(uint16_t ms) {
 }
 
 void LedController::loadLedSettings(const LedSettingsStore& s) {
-  _normalFgIntensity = s.normalFgIntensity;
-  // Guard against inverted min/max from corrupted NVS
-  _fgArpStopMin = s.fgArpStopMin;
-  _fgArpStopMax = (s.fgArpStopMax >= s.fgArpStopMin) ? s.fgArpStopMax : s.fgArpStopMin;
-  _fgArpPlayMax = s.fgArpPlayMax;
+  _fgIntensity = s.fgIntensity;
+  _breathDepth = s.breathDepth;
   _tickFlashFg = s.tickFlashFg;
   _tickFlashBg = s.tickFlashBg;
   _pulsePeriodMs = s.pulsePeriodMs;

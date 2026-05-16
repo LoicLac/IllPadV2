@@ -55,6 +55,16 @@ static constexpr RGBW COL_BATTERY[NUM_LEDS] = {
 // Configurable via gammaTenths in LedSettingsStore (Tool 7).
 // Default gamma 2.0. Range 1.0-3.0 (stored as 10-30).
 
+// --- W channel perceptual weight (v9) ---
+// SK6812 RGBW : the W channel is perceptually ~1.5-2x brighter than R/G/B
+// individuals at the same drive value. Hardcoded weight applied in setPixel
+// after gamma, only on the W output byte. 0-100 (100 = no weight, raw output).
+// Default 70 (0.7) : tune on hardware to balance W-heavy bank colors (warm
+// white) against RGB-only colors (battery LEDs, ice blue arpeg). Lower = W
+// more attenuated relative to RGB. Note : with W_WEIGHT < 100, the gamma
+// floor=1 protection is lost for the W channel (acceptable design choice).
+static constexpr uint8_t W_WEIGHT = 70;
+
 // --- Brightness Pot Response Curve ---
 #define POT_CURVE_LOW_BIASED  0
 #define POT_CURVE_LINEAR      1

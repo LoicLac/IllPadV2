@@ -272,21 +272,19 @@ inline RGBW resolveColorSlot(const ColorSlot& slot) {
 // =================================================================
 #define LED_SETTINGS_NVS_NAMESPACE "illpad_lset"
 #define LED_SETTINGS_NVS_KEY       "ledsettings"
-#define LED_SETTINGS_VERSION       8   // v7 -> v8 : remove zombie fields normalBgIntensity, bgArpStopMin, bgArpPlayMin (superseded by bgFactor derivation, post-Phase-0 audit R1 cleanup)
+#define LED_SETTINGS_VERSION       9   // v8 -> v9 : unify FG intensity (single fgIntensity for all bank types/states), add breathDepth, remove fgArpStopMin/Max/PlayMax + normalFgIntensity. NVS reset on update (zero-migration policy).
 
 struct LedSettingsStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  reserved;
-  // --- Intensities (0-100, perceptual %) ---
-  uint8_t  normalFgIntensity;     // default 85  — SOLID intensity FG NORMAL
-  uint8_t  fgArpStopMin;          // default 30  — PULSE_SLOW min intensity FG ARPEG stopped-loaded
-  uint8_t  fgArpStopMax;          // default 100 — PULSE_SLOW max intensity idem
-  uint8_t  fgArpPlayMax;          // default 80  — SOLID intensity FG ARPEG playing (between FLASH ticks)
-  uint8_t  tickFlashFg;           // default 100 — FLASH pattern fgPct
-  uint8_t  tickFlashBg;           // default 25  — FLASH pattern bgPct
-  // --- Global background factor (v6 new — applied in step 0.6 when BG slots retire) ---
-  uint8_t  bgFactor;              // default 25  — BG = FG color x bgFactor%. Range [10, 50]. Provisional, tune on hardware in 0.9.
+  // --- Intensity (v9 : unified, 0-100 perceptual %) ---
+  uint8_t  fgIntensity;           // default 80  — SOLID intensity FG for any bank type/state (NORMAL/ARPEG/LOOP, idle/playing). Range [10,100].
+  uint8_t  breathDepth;           // default 50  — breathing dip depth % (FG oscillates fgIntensity*(1-depth/100) → fgIntensity). Range [0,80] (clamped runtime by bgFactor to keep FG > BG).
+  uint8_t  tickFlashFg;           // default 100 — FLASH pattern fgPct (absolute, independent of fgIntensity)
+  uint8_t  tickFlashBg;           // default 25  — FLASH pattern bgPct (absolute, independent of fgIntensity)
+  // --- Global background factor ---
+  uint8_t  bgFactor;              // default 25  — BG = FG × bgFactor%. Range [10, 50].
   // --- Timing ---
   uint16_t pulsePeriodMs;         // default 1472 — PULSE_SLOW period FG ARPEG stopped-loaded
   uint16_t tickBeatDurationMs;    // default 30  — FLASH pattern durationMs for ARPEG step / LOOP beat ticks (v7 rename + widen)
@@ -691,8 +689,12 @@ inline void validateNoteMapStore(NoteMapStore& s) {
 }
 
 inline void validateLedSettingsStore(LedSettingsStore& s) {
-  // Intensity cross-validation (min <= max for pulse ranges)
-  if (s.fgArpStopMin > s.fgArpStopMax) s.fgArpStopMax = s.fgArpStopMin;
+  // v9 : unified intensity + breathing depth.
+  if (s.fgIntensity < 10)  s.fgIntensity = 10;
+  if (s.fgIntensity > 100) s.fgIntensity = 100;
+  if (s.breathDepth > 80)  s.breathDepth = 80;
+  // Note : breathDepth final floor is runtime-dependent (clamped against
+  // bgFactor in renderBankArpeg to keep invariant FG > BG strict).
   // bgFactor range [10, 50]
   if (s.bgFactor < 10) s.bgFactor = 10;
   if (s.bgFactor > 50) s.bgFactor = 50;
