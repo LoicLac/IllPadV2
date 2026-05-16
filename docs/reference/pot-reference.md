@@ -230,11 +230,14 @@ Held buttons change the active binding layer :
 
 | Button | Modifies | Scope |
 |---|---|---|
-| LEFT | 4 right pots (R1–R4) | adds "2nd slot" binding |
+| LEFT | 4 right pots (R1–R4) **and rear pot** | R1-R4 add "2nd slot" binding ; rear pot swaps brightness → tempo |
 | REAR | rear pot only | swaps brightness → pad sensitivity |
 
-They **never cross** — LEFT modifiers do not affect the rear pot, REAR
-modifier does not affect the right pots. `resolveBindings()` enforces
+LEFT and REAR are **mutually exclusive on R1-R4** (holding REAR locks the
+right pots out). On the **rear pot** the three layers are exact-matched on
+the full buttonMask : `0b00` = brightness, `0b01` (LEFT) = tempo,
+`0b10` (REAR) = pad sensitivity. The combination `0b11` (LEFT + REAR) has
+no binding — rear pot is silent in that state. `resolveBindings()` enforces
 this via the `buttonMask` field.
 
 ---
@@ -245,16 +248,17 @@ Shipped defaults, overwritten by user via Tool 7.
 
 | Pot | NORMAL alone | NORMAL + hold left | ARPEG alone | ARPEG + hold left |
 |---|---|---|---|---|
-| R1 | Tempo (10–260 BPM) | *— empty —* | Tempo | Division (9 binary) |
+| R1 | *— empty —* | *— empty —* | *— empty —* | Division (9 binary) |
 | R2 | Response shape | AT deadzone | Gate length | Pattern (5 discrete) |
 | R3 | Slew rate | Pitch bend (per-bank) | Shuffle depth (0.0–1.0) | Shuffle template (10) |
 | R4 | Base velocity | Velocity variation | Base velocity | Velocity variation |
 
-| Rear pot | Alone | + hold rear |
-|---|---|---|
-| Rear | LED brightness | Pad sensitivity |
+| Rear pot | Alone | + hold left | + hold rear |
+|---|---|---|---|
+| Rear | LED brightness | **Tempo (10–260 BPM)** | Pad sensitivity |
 
-The empty slot (R1, NORMAL + hold left) is reserved for future use.
+Tempo is a fixed (non-user-configurable) binding on LEFT + rear pot since
+POTMAP v2. The three R1 alone slots are reserved for future use.
 
 ---
 
@@ -262,6 +266,8 @@ The empty slot (R1, NORMAL + hold left) is reserved for future use.
 
 4 right pots × 2 button layers = **8 slots per context**. Context =
 NORMAL or ARPEG, independent. The rear pot is fixed (not user-configurable).
+Tempo is excluded from the pool — it lives on LEFT + rear pot as a fixed
+binding (POTMAP v2).
 
 Each slot can be assigned :
 - any parameter from the context's pool (type-dependent),

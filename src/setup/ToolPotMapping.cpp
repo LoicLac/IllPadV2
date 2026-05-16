@@ -48,15 +48,17 @@ const char* ToolPotMapping::slotName(uint8_t slot) {
 // Pools
 // =================================================================
 
+// TARGET_TEMPO_BPM exclu des pools : binding fixe sur LEFT + rear pot
+// (cf. PotRouter::rebuildBindings, doc pot-reference.md §6-7).
 static const PotTarget NORMAL_PARAMS[] = {
-  TARGET_TEMPO_BPM, TARGET_RESPONSE_SHAPE, TARGET_SLEW_RATE,
+  TARGET_RESPONSE_SHAPE, TARGET_SLEW_RATE,
   TARGET_AT_DEADZONE, TARGET_PITCH_BEND,
   TARGET_BASE_VELOCITY, TARGET_VELOCITY_VARIATION
 };
 static const uint8_t NORMAL_PARAM_COUNT = sizeof(NORMAL_PARAMS) / sizeof(NORMAL_PARAMS[0]);
 
 static const PotTarget ARPEG_PARAMS[] = {
-  TARGET_TEMPO_BPM, TARGET_GATE_LENGTH, TARGET_SHUFFLE_DEPTH,
+  TARGET_GATE_LENGTH, TARGET_SHUFFLE_DEPTH,
   TARGET_SHUFFLE_TEMPLATE, TARGET_DIVISION, TARGET_PATTERN,
   TARGET_BASE_VELOCITY, TARGET_VELOCITY_VARIATION
 };

@@ -16,8 +16,9 @@ const PotMappingStore PotRouter::DEFAULT_MAPPING = {
   POTMAP_VERSION,  // version
   0,               // reserved
   // NORMAL context
+  // R1 alone : libre (Tempo déplacé sur LEFT + rear pot binding fixe, POTMAP v2).
   {
-    {TARGET_TEMPO_BPM,          0},  // R1 alone
+    {TARGET_EMPTY,              0},  // R1 alone
     {TARGET_EMPTY,              0},  // R1+hold (reserved for future)
     {TARGET_RESPONSE_SHAPE,     0},  // R2 alone
     {TARGET_AT_DEADZONE,        0},  // R2+hold
@@ -27,8 +28,9 @@ const PotMappingStore PotRouter::DEFAULT_MAPPING = {
     {TARGET_VELOCITY_VARIATION, 0},  // R4+hold
   },
   // ARPEG context
+  // R1 alone : libre (Tempo déplacé sur LEFT + rear pot binding fixe, POTMAP v2).
   {
-    {TARGET_TEMPO_BPM,          0},  // R1 alone
+    {TARGET_EMPTY,              0},  // R1 alone
     {TARGET_DIVISION,           0},  // R1+hold
     {TARGET_GATE_LENGTH,        0},  // R2 alone
     {TARGET_PATTERN,            0},  // R2+hold
@@ -257,7 +259,12 @@ void PotRouter::rebuildBindings() {
     PotBinding& b = _bindings[_numBindings++];
     b = {4, 0b00, BANK_ANY, TARGET_LED_BRIGHTNESS, 0, 255, 0};
   }
-  // Rear + hold rear → Pad sensitivity
+  // Rear + hold LEFT → Tempo (global, POTMAP v2)
+  if (_numBindings < MAX_BINDINGS) {
+    PotBinding& b = _bindings[_numBindings++];
+    b = {4, 0b01, BANK_ANY, TARGET_TEMPO_BPM, TEMPO_BPM_MIN, TEMPO_BPM_MAX, 0};
+  }
+  // Rear + hold REAR → Pad sensitivity
   if (_numBindings < MAX_BINDINGS) {
     PotBinding& b = _bindings[_numBindings++];
     b = {4, 0b10, BANK_ANY, TARGET_PAD_SENSITIVITY, PAD_SENSITIVITY_MIN, PAD_SENSITIVITY_MAX, 0};
@@ -389,9 +396,12 @@ void PotRouter::resolveBindings(bool btnLeft, bool btnRear, BankType type) {
       const PotBinding& bind = _bindings[b];
       if (bind.potIndex != p) continue;
 
-      // Rear modifier only applies to rear pot; right pots ignore rear button
+      // Rear pot (p=4) : exact match on full buttonMask, since rear pot now has
+      // 3 distinct fixed bindings : 0b00=brightness, 0b01=tempo (LEFT held),
+      // 0b10=pad sensitivity (REAR held). 0b11 has no binding (silent).
+      // Right pots (R1-R4) : LEFT only, REAR is mutually exclusive.
       if (p == 4) {
-        if ((bind.buttonMask & 0x02) != (currentMask & 0x02)) continue;
+        if (bind.buttonMask != currentMask) continue;
       } else {
         if (currentMask & 0x02) continue;
         if ((bind.buttonMask & 0x01) != (currentMask & 0x01)) continue;

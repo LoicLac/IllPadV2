@@ -568,7 +568,9 @@ static const uint8_t POT_MAPPING_SLOTS = 8;
 // =================================================================
 // PotMappingStore — NVS-serializable pot mapping (both contexts)
 // =================================================================
-#define POTMAP_VERSION 1
+// v2 : Tempo retiré des pools Tool 7 (déplacé sur LEFT + rear pot, binding fixe).
+//      Reset des user mappings au reload (politique zero-NVS-migration).
+#define POTMAP_VERSION 2
 
 struct PotMappingStore {
   uint16_t   magic;    // Must match EEPROM_MAGIC
