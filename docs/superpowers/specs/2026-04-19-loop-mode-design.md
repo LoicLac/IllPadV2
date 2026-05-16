@@ -1,5 +1,20 @@
 # ILLPAD48 V2 — Mode LOOP : design haut niveau
 
+> **MAJ 2026-05-16 (LED v9 brightness unification)** — Les décisions Q3/Q4
+> du tableau §28 sont superseded par le refactor v9 :
+> - `fgArpPlayMax` / `fgArpStopMin` / `fgArpStopMax` / `normalFgIntensity`
+>   ont été fusionnés en un seul champ `fgIntensity` (`LedSettingsStore` v9).
+> - WAITING brightness baseline (Phase 1+) doit utiliser `_fgIntensity` à la
+>   place de `_fgArpStopMax`. La sémantique "breathing max" est préservée :
+>   dans le nouveau modèle, l'amplitude max du breathing == `_fgIntensity`.
+> - Le rename `fgArpPlayMax → fgPlayMax` envisagé en Q4 devient sans objet
+>   (champ supprimé, fusionné).
+> Cf. plan d'implémentation : [`2026-05-16-led-brightness-unification-plan.md`](../plans/2026-05-16-led-brightness-unification-plan.md).
+> Les Tasks 5 et 6 du plan LOOP Phase 1 deviennent partiellement obsolètes
+> (rename / déplacement Tool 8 : déjà effectués par le refactor v9 avec une
+> sémantique différente, single FG slider en GLOBAL au lieu de "playing FG
+> brightness shared" en TRANSPORT).
+
 **Date** : 2026-04-19 (créé) — **révisé 2026-04-20** post Phase 0.1
 **Statut** : **VALIDÉ** pour plan d'implémentation LOOP Phase 1→6. Pré-requis Phase 0 LED + Phase 0.1 Tool 8 respec **DONE** (commits `cad7530`, `39d2deb`, `290839d`, `cc379f5`, `6ac9ff3` sur `main`).
 **Scope** : LOOP core + Slot Drive + refactor Tool 3 b1. Haut niveau, sans code. Les plans d'implémentation par phase viennent dans des documents séparés.

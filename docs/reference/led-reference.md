@@ -43,6 +43,12 @@ Single source of truth for LED output. Combines :
 2. Gamma correction via runtime LUT (`_gammaLut[256]`, rebuilt at boot
    from configurable `gammaTenths` in `LedSettingsStore`, default
    gamma 2.0, range 1.0–3.0).
+3. **`W_WEIGHT` (v9, `HardwareConfig.h`, default 70 = 0.7)** applied to
+   the W output byte only, after gamma. Hardcoded perceptual balance for
+   the SK6812 W channel against R/G/B (W is ~1.5-2× brighter per drive
+   value on this LED). RGB pass through untouched. Battery LEDs (W=0 in
+   all `COL_BATTERY[]` entries) are unaffected by construction. Side
+   effect : the gamma floor=1 protection is lost on W (acceptable).
 
 All call sites use this — no direct NeoPixel writes outside the controller
 (except Tool 8 preview which has its own routed entry, see `ToolLedPreview`).
@@ -145,23 +151,40 @@ Each of the 8 LEDs encodes its bank's state simultaneously :
 
 | State | Color | Pattern | Intensity | Rate |
 |---|---|---|---|---|
-| Current NORMAL | White (W channel) | Solid | `normalFgIntensity` (default 85 %) | — |
-| Current ARPEG idle (pile empty) | Blue | Solid dim | `fgArpStopMin` | — |
-| Current ARPEG stopped (notes loaded) | Blue | Sine pulse | `fgArpStopMin ↔ fgArpStopMax` | ~1.5 s period |
-| Current ARPEG playing | Blue | Solid + white tick flash | `fgArpPlayMax`, spike `tickFlashFg` on step | 30 ms flash |
-| BG NORMAL | White dim | Solid | `normalFgIntensity × bgFactor%` (derived) | — |
-| BG ARPEG (all states) | Blue dim | Solid (+ tick flash if playing) | `fgArpStopMin × bgFactor%` or `fgArpPlayMax × bgFactor%` | 30 ms flash if playing |
+| Current NORMAL | White (W channel) | Solid | `fgIntensity` (default 80 %) | — |
+| Current ARPEG idle (pile empty) | Blue | Solid | `fgIntensity` | — |
+| Current ARPEG stopped (notes loaded) | Blue | Sine pulse | `fgIntensity × (1 - breathDepth%)` ↔ `fgIntensity` | `pulsePeriodMs` (default 1472 ms) |
+| Current ARPEG playing | Blue | Solid + white tick flash | `fgIntensity`, spike `tickFlashFg` on step | `tickBeatDurationMs` (default 30 ms) |
+| BG NORMAL | White dim | Solid | `fgIntensity × bgFactor%` (derived) | — |
+| BG ARPEG idle (no notes) | Blue dim | Solid | `fgIntensity × bgFactor%` (derived) | — |
+| BG ARPEG stopped (notes loaded) | Blue dim | Sine pulse | FG sine value × bgFactor% (in-phase with FG breathing) | `pulsePeriodMs` |
+| BG ARPEG playing | Blue dim | Solid + tick flash | `fgIntensity × bgFactor%`, spike `tickFlashBg` on step | `tickBeatDurationMs` |
 
-**Background is derived from foreground via `bgFactor`** (v8 post-audit
-cleanup, 2026-04-23). The 3 zombie fields `normalBgIntensity`,
-`bgArpStopMin`, `bgArpPlayMin` were retired — BG = FG × bgFactor%.
+v9 (2026-05-16) — **single `fgIntensity` field** for any bank FG (NORMAL /
+ARPEG / LOOP), any state. Differentiation between states comes from
+animation, not from base intensity :
+- idle no-notes → solid
+- stopped-loaded → sine breathing (FG **and** BG, BG scaled by bgFactor)
+- playing → solid + tick flash overlay
 
-### Sine pulse (FG stopped-loaded only)
+Breathing min clamped at runtime to stay strictly above BG (invariant
+`FG > BG` strict, see `renderBankArpeg`). All ARPEG banks in stopped-
+loaded state breathe in phase (same `millis()` + same `_pulsePeriodMs`).
+
+**Background is derived from foreground via `bgFactor`** (v8 +). The
+zombie fields `normalBgIntensity`, `bgArpStopMin`, `bgArpPlayMin` were
+retired in v8 ; the per-state `fgArpStopMin/Max/PlayMax` +
+`normalFgIntensity` retired in v9 (single `fgIntensity`). BG = FG ×
+bgFactor%.
+
+### Sine pulse (ARPEG stopped-loaded — FG and BG, v9)
 
 - `LED_SINE_LUT[256]` in `HardwareConfig.h`, shared with Tool 8 preview.
 - 16-bit phase + linear interpolation.
-- **Only** used for FG ARPEG stopped with notes loaded ("breathing = ready
-  to play"). All other states are solid.
+- Used for FG **and** BG ARPEG stopped-loaded ("breathing = ready to
+  play", grammar is FG/BG-symmetric since v9). BG sine value = FG sine
+  value × bgFactor / 100, in-phase. Other states (idle, playing) are
+  solid (playing overlays a tick flash).
 
 ### Tick flash (ARPEG playing only)
 
@@ -226,23 +249,23 @@ Tool 8 ships a single-view layout with 6 musician-facing sections
 (Phase 0.1 respec 2026-04-20, commit cc379f5). The 3-page legacy layout
 (PATTERNS / COLORS / EVENTS) is retired.
 
-### Sections
+### Sections (v9, 2026-05-16)
 
-1. **NORMAL** — base color + foreground/background intensity.
-2. **ARPEG** — base color + FG/BG intensities + breathing (stopped-loaded pulse).
-3. **LOOP** — base color + intensities (reserved for Phase 1+).
-4. **TRANSPORT** — play/stop/waiting/breathing + tick common FG/BG +
-   tick verb colors (PLAY/REC/OVERDUB) + tick durations (BEAT / BAR / WRAP).
-5. **CONFIRMATIONS** — bank / scale / octave durations + blink counts +
-   SPARK params.
-6. **GLOBAL** — bgFactor + gamma.
+1. **NORMAL** — base color only (FG/BG intensity in GLOBAL).
+2. **ARPEG** — base color only (FG/BG intensity in GLOBAL ; breathing in TRANSPORT).
+3. **LOOP** — base color + gesture timers (Save / Clear loop / Clear slot).
+4. **TRANSPORT** — play/stop/waiting + breathing (depth + period) + tick common FG/BG + tick verb colors + tick durations.
+5. **CONFIRMATIONS** — bank / scale / octave durations + blink counts + SPARK params.
+6. **GLOBAL** — **FG intensity** (single slider for all bank types/states) + bgFactor + gamma.
 
 ### Configuration mechanics
 
-- `LedSettingsStore` v8 (NVS `illpad_lset` / `ledsettings`, magic
+- `LedSettingsStore` v9 (NVS `illpad_lset` / `ledsettings`, magic
   `0xBEEF`) holds intensities, timings, per-event overrides, gamma.
-  v8 removed `normalBgIntensity` / `bgArpStopMin` / `bgArpPlayMin`
-  (derived from FG via bgFactor).
+  v9 (2026-05-16) merged `normalFgIntensity` + `fgArpStopMin` +
+  `fgArpStopMax` + `fgArpPlayMax` into a single `fgIntensity` field, and
+  introduced `breathDepth` (replaces breathing min/max). NVS bump from v8
+  causes a user-facing reset (zero-migration policy).
 - `ColorSlotStore` v5 (NVS same namespace, key `ledcolors`, magic
   `0xC010`) holds the 16 color slots (preset + hueOffset).
 - Save applies immediately via `LedController::loadLedSettings()`.
@@ -308,3 +331,6 @@ See [`patterns-catalog.md`](patterns-catalog.md) P5.
 | Tool 8 live preview flickers | Preview rate too high | `ToolLedPreview` rate-capped at 50 Hz via `_lastUpdateMs` |
 | LEDs stay dark at low brightness | Truncation in old intensity math | Since Phase 0.5, `setPixel()` uses 32-bit multiply — low values survive. |
 | Confirmation blanks the bar | Old `clearPixels()` code path | All events are overlays now. No `clearPixels()` in confirmation render. |
+| BG bank too dim or colour collapses to white-floor | `fgIntensity × bgFactor` produces sub-16 values that the gamma LUT clamps to floor=1, killing channel ratio. | Raise `fgIntensity` (GLOBAL) or `bgFactor` (GLOBAL). Last resort : tune `W_WEIGHT` in `HardwareConfig.h` or reduce gamma floor in `rebuildGammaLut`. |
+| W-heavy colours look way brighter than RGB ones | SK6812 W channel is perceptually ~1.5-2× stronger per drive value than R/G/B. | `W_WEIGHT` constant in `HardwareConfig.h` (v9, default 70). Lower → more attenuation. Hardcoded, not user-tunable. Only W byte affected. |
+| All ARPEG banks pulse simultaneously | All stopped-loaded ARPEG banks breathe in phase (same `millis()` + `_pulsePeriodMs`). Intentional grammar (v9). | If too busy : rollback BG breathing extension by re-adding `isFg &&` guard in `renderBankArpeg` stopped-loaded branch. |
