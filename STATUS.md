@@ -66,13 +66,13 @@ Pad oct 1-4 : pour ARPEG_GEN = mutation level (1=lock, 2=1/16, 3=1/8, 4=1/4). Po
 
 ## Follow-ups ouverts
 
-- **LOOP Phase 2 à concevoir** : plan main à rédiger (la version Phase 2 sur la branche `loop` archivée sert de référence pour les snippets LoopEngine, mais à adapter à la base actuelle — refonte gesture-dispatcher en cours, BankTypeStore v4, v9 LED unifié). Pré-lecture obligatoire : gesture-dispatcher design Parties 8 + 9 (commits `bac8fd3`, `feef02c`).
-- **Tasks LOOP P1 skippées à reconsidérer en Phase 2** : Task 4 (BankManager double-tap LOOP consume, ScaleManager early-return LOOP) sera portée par la refonte gesture-dispatcher quand Phase 2 LoopEngine existera.
+- **LOOP Phases 2-6** : orchestration multi-sessions (5 rédactions + audit + exécutions) tracée dans le roadmap dédié [docs/superpowers/LOOP_ROADMAP.md](docs/superpowers/LOOP_ROADMAP.md). Insights cumulatifs, décisions actées (Q1-Q8) et pendantes (P1-P6) y sont maintenus en continu.
 
 ## Sources
 
 - Plan ARPEG_GEN : [docs/superpowers/plans/2026-04-26-arpeg-gen-plan.md](docs/superpowers/plans/2026-04-26-arpeg-gen-plan.md)
 - Spec ARPEG_GEN : [docs/superpowers/specs/2026-04-25-arpeg-gen-design.md](docs/superpowers/specs/2026-04-25-arpeg-gen-design.md)
+- Roadmap LOOP multi-sessions : [docs/superpowers/LOOP_ROADMAP.md](docs/superpowers/LOOP_ROADMAP.md)
 - Plan LOOP Phase 1 : [docs/superpowers/plans/2026-04-21-loop-phase-1-plan.md](docs/superpowers/plans/2026-04-21-loop-phase-1-plan.md)
 - Spec LOOP : [docs/superpowers/specs/2026-04-19-loop-mode-design.md](docs/superpowers/specs/2026-04-19-loop-mode-design.md) (VALIDÉE, MAJ 2026-05-16 LED v9)
 - Rapport audit LOOP spec (8 tranchages) : [docs/superpowers/reports/rapport_audit_loop_spec.md](docs/superpowers/reports/rapport_audit_loop_spec.md)
