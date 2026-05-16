@@ -66,6 +66,24 @@ anticiper les besoins Phases 3-6 via une lecture rapide des plans
 loop branch correspondants, même si elle ne les rédige pas. Cela évite
 "ah merde Phase 4 a besoin d'un getter que j'aurais dû mettre en Phase 2".
 
+**Format des plans rédigés** : suivre la convention des plans projet
+existants — `docs/superpowers/plans/2026-04-21-loop-phase-1-plan.md`,
+`2026-04-26-arpeg-gen-plan.md`, `2026-04-26-gesture-dispatcher-plan.md`.
+Structure attendue : §0 décisions pré-actées (cross-refs spec) → §1 file
+structure overview (table mapping Task↔fichiers) → §2 graphe dépendances
+inter-tasks → §3 conventions de vérification firmware → Tasks N avec
+sub-Steps numérotés en checkboxes `- [ ]` (pour
+`superpowers:subagent-driven-development` / `executing-plans`) → cross-refs
+spec/audit/briefing par Task → files modify/read-only par Task → commit
+messages HEREDOC proposés → sync requirements (briefing, refs).
+
+**Ne PAS invoquer le skill `superpowers:writing-plans`** — son template
+générique ne capture pas les conventions embedded spécifiques projet (HW
+Checkpoints, NVS Zero Migration Policy, invariants 1-7, Performance
+Budget, pipeline créatif 6 étapes). Lire son contenu sans l'invoquer si
+tu veux comparer / compléter, mais le format des plans existants reste
+la source de vérité.
+
 ---
 
 ## §2 — Sources de référence LOOP
