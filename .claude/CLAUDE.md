@@ -206,3 +206,56 @@ is **per-cycle CPU time on Core 0** (~92 % used by sensing).
 - BLE MIDI bandwidth in worst case (noteOn/Off bypass queue, aftertouch
   overflow tolerated).
 - Flash writes (NVS has wear limits — use dirty flag debouncing).
+
+---
+
+## Branche `viewer-juce` — exception au git workflow "toujours main"
+
+Le viewer JUCE desktop (`ILLPADViewer/`, app macOS qui monitore l'ILLPAD via
+USB serial) est développé sur la **branche permanente `viewer-juce`**,
+worktree dédié `../ILLPAD_V2-viewer/`. Exception explicite à la règle
+"Toujours main" du CLAUDE.md global (cf. § "Git workflow").
+
+**Pourquoi cette exception** : le viewer est un îlot architecturalement
+isolé du firmware — code C++/JUCE desktop vs C++/Arduino embedded, build
+CMake vs PlatformIO, runtime Mac vs ESP32-S3. Aucun fichier source n'est
+partagé. La séparation history permet :
+
+- Pollution réciproque nulle (firmware et viewer évoluent dans des arbres
+  git distincts).
+- Discipline JUCE-spécifique (lecture API, citations `juce_X.h:NNN`) sans
+  brouiller le contexte mental du dev firmware.
+- 2 dossiers physiques (`ILLPAD_V2/` et `ILLPAD_V2-viewer/`) ouverts
+  simultanément pour cross-référence pendant le dev.
+
+**Règles de scope**
+
+| Modification | Branche cible |
+|---|---|
+| `ILLPADViewer/**` (tout le viewer code) | `viewer-juce` uniquement |
+| `src/**`, `platformio.ini`, firmware tooling | `main` uniquement |
+| `docs/superpowers/{plans,specs,designs,ideas}/`, `STATUS.md`, ce `CLAUDE.md` | `main` puis sync vers `viewer-juce` via `git merge main` |
+| `ILLPADViewer/.claude/CLAUDE.md` (discipline JUCE viewer-spécifique) | `viewer-juce` uniquement |
+
+**Sync direction** : `main → viewer-juce` exclusivement pour les fichiers
+partagés (`docs/`, racine). Jamais `viewer-juce → main` — sauf demande
+explicite si on décide un jour de publier le viewer comme partie de main.
+
+**Setup d'origine 2026-05-16** :
+
+```bash
+git branch viewer-juce         # depuis main @ 12b878b
+git worktree add ../ILLPAD_V2-viewer viewer-juce
+```
+
+**Récupérer une modif de plan/spec/doc depuis main** (commande à lancer
+depuis le worktree `../ILLPAD_V2-viewer/`) :
+
+```bash
+git merge main
+```
+
+**Si jamais on ajoute un autre îlot** (config tool web, sketch HW
+companion, etc.) : rejouer le pattern — branche permanente nommée,
+worktree dédié, section dans ce `CLAUDE.md`. Si ça dépasse 3 îlots,
+évoluer vers sous-modules ou monorepo plus structuré.
