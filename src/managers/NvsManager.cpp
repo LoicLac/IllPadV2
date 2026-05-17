@@ -220,6 +220,24 @@ void NvsManager::tickPotDebounce(uint32_t now, bool rearDirty, bool rightDirty,
                                   const PotRouter& potRouter,
                                   uint8_t currentBank, BankType currentType) {
   // -------------------------------------------------------------------
+  // Phase 2 : Settings + BankType debounce (500ms).
+  // PLACEMENT CRITIQUE — en tête, AVANT le right-pot early return ligne 258.
+  // Sinon ces checks ne seraient exécutés que 10s après un mouvement de
+  // pot droit → NVS save settings/banktype silencieusement cassé.
+  // Cf spec §10.5.
+  // -------------------------------------------------------------------
+  if (_settingsPendingSave && (now - _settingsLastChangeMs) >= 500) {
+    _settingsDirty = true;
+    _anyDirty = true;
+    _settingsPendingSave = false;
+  }
+  if (_bankTypePendingSave && (now - _bankTypeLastChangeMs) >= 500) {
+    _bankTypeDirty = true;
+    _anyDirty = true;
+    _bankTypePendingSave = false;
+  }
+
+  // -------------------------------------------------------------------
   // Rear pot (tempo, LED brightness, pad sensitivity) — 2 s debounce.
   // These are global params adjusted by intentional gesture (LEFT held,
   // REAR held, or rear-pot tweak), not twiddled continuously. Short
