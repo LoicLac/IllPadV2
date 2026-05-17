@@ -1014,6 +1014,15 @@ void NvsManager::setLoadedScaleGroup(uint8_t bank, uint8_t group) {
   if (bank < NUM_BANKS && group <= NUM_SCALE_GROUPS) _loadedScaleGroup[bank] = group;
 }
 
+uint8_t NvsManager::getLoadedBankType(uint8_t bank) const {
+  if (bank >= NUM_BANKS) return BANK_NORMAL;
+  return _loadedBankType[bank];
+}
+
+void NvsManager::setLoadedBankType(uint8_t bank, uint8_t type) {
+  if (bank < NUM_BANKS && type <= BANK_ARPEG_GEN) _loadedBankType[bank] = type;
+}
+
 uint8_t NvsManager::getLoadedBonusPile(uint8_t bank) const {
   if (bank >= NUM_BANKS) return 15;
   return _loadedBonusPile[bank];

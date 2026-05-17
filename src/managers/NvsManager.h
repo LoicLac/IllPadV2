@@ -46,6 +46,11 @@ public:
   uint8_t getLoadedScaleGroup(uint8_t bank) const;
   void    setLoadedScaleGroup(uint8_t bank, uint8_t group);
 
+  // Phase 2 : BankType cache (parallèle à _loadedQuantize[], _loadedScaleGroup[]).
+  // Peuplé par loadAll() puis utilisé par saveBankType() pour reconstruire le blob.
+  uint8_t getLoadedBankType(uint8_t bank) const;   // returns BANK_NORMAL if bank out of range
+  void    setLoadedBankType(uint8_t bank, uint8_t type);
+
   // Access loaded ARPEG_GEN params (per-bank). Stored in BankTypeStore v3 (bonus/margin)
   // et v4 (proximityFactor/ecart).
   uint8_t getLoadedBonusPile(uint8_t bank) const;     // x10 (10..20), used only when type == BANK_ARPEG_GEN
