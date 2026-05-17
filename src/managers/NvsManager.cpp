@@ -658,6 +658,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       validateBankTypeStore(bts);
       for (uint8_t i = 0; i < NUM_BANKS; i++) {
         banks[i].type        = (BankType)bts.types[i];
+        _loadedBankType[i]   = bts.types[i];
         _loadedQuantize[i]   = bts.quantize[i];
         _loadedScaleGroup[i] = bts.scaleGroup[i];
         _loadedBonusPile[i]  = bts.bonusPilex10[i];
@@ -674,6 +675,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       // ARPEG_GEN params : bonusPilex10=15, marginWalk=7, proximity=4 (=0.4), ecart=5.
       for (uint8_t i = 0; i < NUM_BANKS; i++) {
         banks[i].type        = (i < 4) ? BANK_NORMAL : BANK_ARPEG;
+        _loadedBankType[i]   = (i < 4) ? BANK_NORMAL : BANK_ARPEG;
         _loadedQuantize[i]   = DEFAULT_ARP_START_MODE;
         _loadedScaleGroup[i] = (i == 0 || i == 1 || i == 4 || i == 5) ? 1 : 0;
         _loadedBonusPile[i]  = 15;
