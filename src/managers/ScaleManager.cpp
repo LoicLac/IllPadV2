@@ -113,6 +113,12 @@ ScaleChangeType ScaleManager::consumeScaleChange() {
 // =================================================================
 void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot) {
 
+  // Invariant 6 §23 spec LOOP : pas de scale sur une bank LOOP. Les pads
+  // scale/root/mode/chrom porteront d'autres rôles en contexte LOOP (slots
+  // sous LEFT, Phase 3 Tool 3 b1). Early-return évite mutation gratuite
+  // de slot.scale + déclenchement confirm LED + NVS write inutile.
+  if (slot.type == BANK_LOOP) return;
+
   // --- Root pads (0-6 → A,B,C,D,E,F,G) ---
   for (uint8_t r = 0; r < 7; r++) {
     uint8_t pad = _rootPads[r];

@@ -89,7 +89,6 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
       // Same event chain as hold pad on FG; BG banks pass keys=nullptr
       // (no fingers possible off-foreground → pile kept, paused).
       // Rule: double-tap NEVER changes bank. Always consume the 2nd tap.
-      // LOOP : double-tap handler à câbler par plan LOOP Phase 1 (else if BANK_LOOP).
       if (wasRecent && isArpType(_banks[b].type)) {
         if (_banks[b].arpEngine && _transport) {
           bool wasCaptured = _banks[b].arpEngine->isCaptured();
@@ -103,6 +102,17 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
         _lastBankPadPressTime[b] = 0;
         _pendingSwitchBank = -1;
         continue;  // never fall through — 2nd tap on ARPEG/ARPEG_GEN is always consumed
+      }
+
+      // --- Double-tap on LOOP bank pad : consume silently for now ---
+      // Spec LOOP §19 : LEFT+double-tap → LoopEngine.toggle() (Phase 2+).
+      // Without a LoopEngine the 2nd tap is consumed to prevent a bank-switch
+      // parasite. PLAY/STOP LOOP will also be reachable via the dedicated
+      // control pad on the musical layer (Phase 2 handleLoopControls).
+      else if (wasRecent && _banks[b].type == BANK_LOOP) {
+        _lastBankPadPressTime[b] = 0;
+        _pendingSwitchBank = -1;
+        continue;
       }
 
       // --- 2nd tap on NORMAL (wasRecent, but no play/stop semantics) ---
