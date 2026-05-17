@@ -1360,8 +1360,8 @@ void loop() {
   // --- NVS: pot debounce (rear=2s, right=10s) + signal task ---
   bool rearDirty  = s_potRouter.isRearDirty();
   bool rightDirty = s_potRouter.isRightDirty();
-  s_nvsManager.tickPotDebounce(now, rearDirty, rightDirty, s_potRouter,
-                                s_bankManager.getCurrentBank(), s_bankManager.getCurrentSlot().type);
+  s_nvsManager.tickDebounce(now, rearDirty, rightDirty, s_potRouter,
+                             s_bankManager.getCurrentBank(), s_bankManager.getCurrentSlot().type);
   if (rearDirty)  s_potRouter.clearRearDirty();
   if (rightDirty) s_potRouter.clearRightDirty();
 

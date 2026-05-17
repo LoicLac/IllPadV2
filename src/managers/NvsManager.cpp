@@ -213,12 +213,12 @@ void NvsManager::notifyIfDirty() {
 }
 
 // =================================================================
-// tickPotDebounce — split debounce: 2s for rear pot (tempo/LED/PadSens),
-// 10s for right pots (per-bank params live-twiddled in performance).
+// tickDebounce — 3-group debounce (pot rear 2s / pot right 10s / Phase 2 500ms).
+// Phase 2 checks placed in head — see spec §10.5 for the early-return rationale.
 // =================================================================
-void NvsManager::tickPotDebounce(uint32_t now, bool rearDirty, bool rightDirty,
-                                  const PotRouter& potRouter,
-                                  uint8_t currentBank, BankType currentType) {
+void NvsManager::tickDebounce(uint32_t now, bool rearDirty, bool rightDirty,
+                               const PotRouter& potRouter,
+                               uint8_t currentBank, BankType currentType) {
   // -------------------------------------------------------------------
   // Phase 2 : Settings + BankType debounce (500ms).
   // PLACEMENT CRITIQUE — en tête, AVANT le right-pot early return ligne 258.

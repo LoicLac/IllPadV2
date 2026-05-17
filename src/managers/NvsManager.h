@@ -98,13 +98,15 @@ public:
   // Call at end of loop — signals NVS task if anything is dirty
   void notifyIfDirty();
 
-  // Debounce: call with current millis, pot dirty states (rear + right tracked
-  // separately so the rear pot saves faster — tempo/LED/PadSens are global
-  // params adjusted via intentional gestures, not live-twiddled), pot router
-  // for value snapshot, and current bank context for per-bank params.
-  void tickPotDebounce(uint32_t now, bool rearDirty, bool rightDirty,
-                        const PotRouter& potRouter,
-                        uint8_t currentBank, BankType currentType);
+  // Debounce tick : called from loop() every iter.
+  // Handles 3 debounce groups (independent timers) :
+  //  - Rear pot (2s) : tempo, LED brightness, pad sensitivity
+  //  - Right pots (10s) : shape/slew/deadzone, per-bank velocity/pitch/arp pots
+  //  - Phase 2 (500ms) : viewer-driven settings + bankType writes
+  // Args : pot dirty states, pot router snapshot, current bank context.
+  void tickDebounce(uint32_t now, bool rearDirty, bool rightDirty,
+                     const PotRouter& potRouter,
+                     uint8_t currentBank, BankType currentType);
 
 private:
   static void nvsTask(void* arg);
@@ -170,7 +172,7 @@ private:
   uint16_t    _pendingSlewRate;
   uint16_t    _pendingAtDeadzone;
 
-  // Pot debounce timers (independent for rear vs right pots — see tickPotDebounce).
+  // Pot debounce timers (independent for rear vs right pots — see tickDebounce).
   uint32_t    _potRightLastChangeMs;
   uint32_t    _potRearLastChangeMs;
   bool        _potRightPendingSave;
