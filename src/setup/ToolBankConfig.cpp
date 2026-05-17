@@ -4,706 +4,652 @@
 #include "SetupUI.h"
 #include "InputParser.h"
 #include <Arduino.h>
-#include <Preferences.h>
+#include <stddef.h>
+#include <string.h>
 
-static const char* QUANTIZE_NAMES[] = {"Immediate", "Beat"};
-static const char  GROUP_LABELS[NUM_SCALE_GROUPS + 1] = {'-', 'A', 'B', 'C', 'D'};
+// =================================================================
+// Static labels & ParamOptions (cf spec §11 + §6 + Task 3 Step 3.3)
+// =================================================================
+// Cell labels (table). Indice = BankType : NORMAL=0, ARPEG=1, LOOP=2, ARPEG_GEN=3.
+// 5-char labels ARP_N / ARP_G accommodes par CELL_W = 7 (cf drawTable).
+static const char* const TYPE_LABELS[]      = { "NORM",   "ARP_N",           "LOOP", "ARP_G" };
+// Long form pour INFO (cf user-facing). Indice identique a TYPE_LABELS.
+static const char* const TYPE_LABELS_LONG[] = { "Normal", "Arpeggio normal", "Loop", "Arpeggio generatif" };
 
-// Tool 5 ARPEG_GEN edit mode : cycle lineaire 6-champs TYPE -> GROUP -> BONUS -> MARGIN -> PROX -> ECART -> TYPE.
-// V4 Task 22 : ajout SF_PROX (proximity_factor 0.4..2.0) + SF_ECART (1..12 override TABLE).
-// Exception §4.4 strict (qui demande <-/-> horizontal sur la ligne, ^v change ligne) :
-// le cycle lineaire est plus court (6 keypress max) et preserve la regle universelle ^v = adjust.
-// Plan ARPEG_GEN §0 D5.
-enum SubField : uint8_t {
-  SF_TYPE = 0,
-  SF_GROUP = 1,
-  SF_BONUS = 2,
-  SF_MARGIN = 3,
-  SF_PROX = 4,
-  SF_ECART = 5
+static const char* const QUANTIZE_LABELS_ARP[]  = { "Imm",  "Beat" };
+static const char* const QUANTIZE_LABELS_LOOP[] = { "Free", "Beat", "Bar" };
+static const char* const GROUP_LABELS[]         = { "-", "A", "B", "C", "D" };
+
+// Largeur visible d'une cell du tableau. Etendue de 6 -> 7 pour accommoder
+// labels 5-char + focus brackets (ex. [ARP_N] = 7 chars visible).
+static const int CELL_W = 7;
+
+// Discrete : labels + count. Range : min/max/stepNormal/stepAccel/unit.
+static const ParamOptions TYPE_OPTIONS = {
+  /*isDiscrete*/ true,
+  /*discrete*/   { TYPE_LABELS, 4 },
+  /*range*/      { 0, 0, 0, 0, nullptr }
 };
+static const ParamOptions QUANTIZE_OPTIONS_ARP = {
+  true,  { QUANTIZE_LABELS_ARP,  2 },  { 0, 0, 0, 0, nullptr }
+};
+static const ParamOptions QUANTIZE_OPTIONS_LOOP = {
+  true,  { QUANTIZE_LABELS_LOOP, 3 },  { 0, 0, 0, 0, nullptr }
+};
+static const ParamOptions GROUP_OPTIONS = {
+  true,  { GROUP_LABELS, 5 },  { 0, 0, 0, 0, nullptr }
+};
+static const ParamOptions BONUS_OPTIONS  = { false, { nullptr, 0 }, { 10, 20, 1, 5, "" } };
+static const ParamOptions MARGIN_OPTIONS = { false, { nullptr, 0 }, {  3, 12, 1, 3, "" } };
+static const ParamOptions PROX_OPTIONS   = { false, { nullptr, 0 }, {  4, 20, 1, 5, "" } };
+static const ParamOptions ECART_OPTIONS  = { false, { nullptr, 0 }, {  1, 12, 1, 3, "" } };
 
+// =================================================================
+// isApplicable + getOptions helpers (cf spec §11)
+// =================================================================
+static bool isAlways(BankType t)        { (void)t; return true; }
+static bool isArpOrLoop(BankType t)     { return isArpType(t) || t == BANK_LOOP; }
+static bool isNotLoop(BankType t)       { return t != BANK_LOOP; }
+static bool isArpegGenOnly(BankType t)  { return t == BANK_ARPEG_GEN; }
+
+static const ParamOptions& typeOpts(BankType t)     { (void)t; return TYPE_OPTIONS; }
+static const ParamOptions& quantizeOpts(BankType t) {
+  if (t == BANK_LOOP) return QUANTIZE_OPTIONS_LOOP;
+  return QUANTIZE_OPTIONS_ARP;
+}
+static const ParamOptions& groupOpts(BankType t)    { (void)t; return GROUP_OPTIONS; }
+static const ParamOptions& bonusOpts(BankType t)    { (void)t; return BONUS_OPTIONS; }
+static const ParamOptions& marginOpts(BankType t)   { (void)t; return MARGIN_OPTIONS; }
+static const ParamOptions& proxOpts(BankType t)     { (void)t; return PROX_OPTIONS; }
+static const ParamOptions& ecartOpts(BankType t)    { (void)t; return ECART_OPTIONS; }
+
+// =================================================================
+// PARAM_TABLE (cf spec §11, plan §3.3)
+// =================================================================
+// fieldOffset : offset (en octets) du debut de l'array dans Tool5Working.
+// Acces : *(reinterpret_cast<uint8_t*>(&_wk) + fieldOffset + bankIdx).
+// Marche car BankType est `enum : uint8_t` -> 1 octet par element.
+const ParamDescriptor PARAM_TABLE[] = {
+  // --- section TYPE ---
+  { "Type",     "TYPE",  (uint8_t)offsetof(Tool5Working, type),                isAlways,       typeOpts,
+    "Bank type. Cycle 4 valeurs : NORMAL (notes pad + AT poly), ARPEG (arp pile-based), ARPEG_GEN (arp generatif + walk), LOOP (loop percussif).",
+    nullptr },
+  { "Quantize", nullptr, (uint8_t)offsetof(Tool5Working, quantize),            isArpOrLoop,    quantizeOpts,
+    "Start/stop quantize. ARPEG/ARPEG_GEN : Imm (next clock division), Beat (next 1/4 note). LOOP : Free (no quant), Beat (next 1/4), Bar (next measure).",
+    "Quantize gere le timing du start/stop. NORMAL bank n'a pas de start/stop." },
+  // --- section SCALE ---
+  { "Group",    "SCALE", (uint8_t)offsetof(Tool5Working, scaleGroup),          isNotLoop,      groupOpts,
+    "Scale group : root/mode changes propagate to all banks of same group. Cycle -, A, B, C, D.",
+    "Scale group ignore sur LOOP (invariant 6 : pas de scale sur bank LOOP)." },
+  // --- section WALK (ARPEG_GEN only) ---
+  { "Bonus",    "WALK",  (uint8_t)offsetof(Tool5Working, bonusPilex10),        isArpegGenOnly, bonusOpts,
+    "Walk weight on pile degrees during mutation. Higher = mutations stay anchored to pile. Lower = wider exploration. Range 1.0..2.0 (step 0.1, accel 0.5).",
+    "Bonus pile ARPEG_GEN-only. Change Type to ARPEG_GEN to enable." },
+  { "Margin",   nullptr, (uint8_t)offsetof(Tool5Working, marginWalk),          isArpegGenOnly, marginOpts,
+    "Margin walk : how far the walk can drift above/below pile range. Smaller = melody hugs pile. Larger = melody drifts. Range 3..12 (step 1, accel 3).",
+    "Margin walk ARPEG_GEN-only. Change Type to ARPEG_GEN to enable." },
+  { "Prox",     nullptr, (uint8_t)offsetof(Tool5Working, proximityFactorx10),  isArpegGenOnly, proxOpts,
+    "Proximity factor : exponential falloff steepness. Smaller = step-wise. Larger = erratic leaps. Range 0.4..2.0 (step 0.1, accel 0.5).",
+    "Prox ARPEG_GEN-only. Change Type to ARPEG_GEN to enable." },
+  { "Ecart",    nullptr, (uint8_t)offsetof(Tool5Working, ecart),               isArpegGenOnly, ecartOpts,
+    "Max degree jump between consecutive steps. Overrides R2+hold ecart. Range 1..12 (step 1, accel 3).",
+    "Ecart ARPEG_GEN-only. Change Type to ARPEG_GEN to enable." },
+};
+const uint8_t PARAM_TABLE_COUNT = sizeof(PARAM_TABLE) / sizeof(PARAM_TABLE[0]);
+
+// =================================================================
+// Color picking helpers — spec §6 code couleurs
+// =================================================================
+// Type column : color = couleur du type lui-meme.
+// Quantize    : suit la couleur du type de la bank (coherence verticale).
+// Group       : amber (VT_YELLOW).
+// Walk params : magenta (coherence AGEN).
+static const char* colorForType(BankType t) {
+  switch (t) {
+    case BANK_NORMAL:    return VT_BRIGHT_WHITE;
+    case BANK_ARPEG:     return VT_CYAN;
+    case BANK_LOOP:      return VT_YELLOW;
+    case BANK_ARPEG_GEN: return VT_MAGENTA;
+    default:             return VT_DIM;
+  }
+}
+static const char* pickCellColor(uint8_t paramIdx, BankType bankType) {
+  // paramIdx 0 = Type, 1 = Quantize, 2 = Group, 3..6 = Walk params.
+  if (paramIdx == 0 || paramIdx == 1) return colorForType(bankType);
+  if (paramIdx == 2) return VT_YELLOW;       // Group amber
+  return VT_MAGENTA;                          // Walk params
+}
+
+// =================================================================
+// Constructor / begin
+// =================================================================
 ToolBankConfig::ToolBankConfig()
-  : _leds(nullptr), _nvs(nullptr), _ui(nullptr), _banks(nullptr) {}
+  : _cursorParam(0), _cursorBank(0), _editing(false), _screenDirty(true),
+    _errorShown(false), _errorTime(0), _nvsSaved(false),
+    _leds(nullptr), _nvs(nullptr), _ui(nullptr), _banks(nullptr) {
+  memset(&_wk, 0, sizeof(_wk));
+  memset(&_saved, 0, sizeof(_saved));
+}
 
 void ToolBankConfig::begin(LedController* leds, NvsManager* nvs, SetupUI* ui, BankSlot* banks) {
-  _leds = leds;
-  _nvs = nvs;
-  _ui = ui;
+  _leds  = leds;
+  _nvs   = nvs;
+  _ui    = ui;
   _banks = banks;
 }
 
 // =================================================================
-// saveConfig — write types + quantize + scaleGroup + bonusPilex10 + marginWalk +
-// proximityFactorx10 + ecart (V4) to NVS, update live banks + NvsManager loaded snapshot.
+// loadWorkingCopy — NVS load + seed defaults (plan §3.4)
 // =================================================================
-bool ToolBankConfig::saveConfig(const BankType* types, const uint8_t* quantize, const uint8_t* groups,
-                                const uint8_t* bonusPilex10, const uint8_t* marginWalk,
-                                const uint8_t* proximityFactorx10, const uint8_t* ecart) {
+void ToolBankConfig::loadWorkingCopy() {
+  // 1. Seed avec valeurs courantes _banks et _nvs (cas premier boot, pas de blob NVS).
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    _wk.type[i]               = _banks ? _banks[i].type : BANK_NORMAL;
+    _wk.quantize[i]           = _nvs ? _nvs->getLoadedQuantizeMode(i)    : DEFAULT_ARP_START_MODE;
+    _wk.scaleGroup[i]         = _nvs ? _nvs->getLoadedScaleGroup(i)      : 0;
+    _wk.bonusPilex10[i]       = _nvs ? _nvs->getLoadedBonusPile(i)       : 15;
+    _wk.marginWalk[i]         = _nvs ? _nvs->getLoadedMarginWalk(i)      : 7;
+    _wk.proximityFactorx10[i] = _nvs ? _nvs->getLoadedProximityFactor(i) : 4;
+    _wk.ecart[i]              = _nvs ? _nvs->getLoadedEcart(i)           : 5;
+  }
+  // 2. Override depuis NVS si blob valide.
   BankTypeStore bts;
-  bts.magic = EEPROM_MAGIC;
-  bts.version = BANKTYPE_VERSION;
+  if (NvsManager::loadBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
+                           EEPROM_MAGIC, BANKTYPE_VERSION, &bts, sizeof(bts))) {
+    validateBankTypeStore(bts);
+    for (uint8_t i = 0; i < NUM_BANKS; i++) {
+      _wk.type[i]               = (BankType)bts.types[i];
+      _wk.quantize[i]           = bts.quantize[i];
+      _wk.scaleGroup[i]         = bts.scaleGroup[i];
+      _wk.bonusPilex10[i]       = bts.bonusPilex10[i];
+      _wk.marginWalk[i]         = bts.marginWalk[i];
+      _wk.proximityFactorx10[i] = bts.proximityFactorx10[i];
+      _wk.ecart[i]              = bts.ecart[i];
+    }
+    _nvsSaved = true;
+  } else {
+    _nvsSaved = false;
+  }
+  // 3. Snapshot pour cancel-edit.
+  _saved = _wk;
+}
+
+// =================================================================
+// saveAll — commit NVS + sync _banks + NvsManager loaded mirrors (plan §3.5)
+// =================================================================
+bool ToolBankConfig::saveAll() {
+  BankTypeStore bts;
+  bts.magic    = EEPROM_MAGIC;
+  bts.version  = BANKTYPE_VERSION;
   bts.reserved = 0;
-  for (uint8_t i = 0; i < NUM_BANKS; i++) bts.types[i] = (uint8_t)types[i];
-  memcpy(bts.quantize,            quantize,            NUM_BANKS);
-  memcpy(bts.scaleGroup,          groups,              NUM_BANKS);
-  memcpy(bts.bonusPilex10,        bonusPilex10,        NUM_BANKS);
-  memcpy(bts.marginWalk,          marginWalk,          NUM_BANKS);
-  memcpy(bts.proximityFactorx10,  proximityFactorx10,  NUM_BANKS);
-  memcpy(bts.ecart,               ecart,               NUM_BANKS);
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    bts.types[i]              = (uint8_t)_wk.type[i];
+    bts.quantize[i]           = _wk.quantize[i];
+    bts.scaleGroup[i]         = _wk.scaleGroup[i];
+    bts.bonusPilex10[i]       = _wk.bonusPilex10[i];
+    bts.marginWalk[i]         = _wk.marginWalk[i];
+    bts.proximityFactorx10[i] = _wk.proximityFactorx10[i];
+    bts.ecart[i]              = _wk.ecart[i];
+  }
   validateBankTypeStore(bts);
 
   if (!NvsManager::saveBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2, &bts, sizeof(bts)))
     return false;
 
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    _banks[i].type = (BankType)bts.types[i];
+    if (_banks) _banks[i].type = (BankType)bts.types[i];
     if (_nvs) {
-      _nvs->setLoadedQuantizeMode(i, bts.quantize[i]);
-      _nvs->setLoadedScaleGroup(i, bts.scaleGroup[i]);
-      _nvs->setLoadedBonusPile(i, bts.bonusPilex10[i]);
-      _nvs->setLoadedMarginWalk(i, bts.marginWalk[i]);
+      _nvs->setLoadedQuantizeMode(i,    bts.quantize[i]);
+      _nvs->setLoadedScaleGroup(i,      bts.scaleGroup[i]);
+      _nvs->setLoadedBonusPile(i,       bts.bonusPilex10[i]);
+      _nvs->setLoadedMarginWalk(i,      bts.marginWalk[i]);
       _nvs->setLoadedProximityFactor(i, bts.proximityFactorx10[i]);
-      _nvs->setLoadedEcart(i, bts.ecart[i]);
+      _nvs->setLoadedEcart(i,           bts.ecart[i]);
     }
   }
+  _saved    = _wk;
+  _nvsSaved = true;
   return true;
 }
 
 // =================================================================
-// drawDescription — expanded info panel (4 cas : NORMAL / ARPEG / LOOP / ARPEG_GEN)
-// Phase 4 ship le cas ARPEG_GEN en placeholder ; Phase 7 Task 17 finalise le INFO panel §25.
+// Helpers : isCellApplicable / getCellValue / setCellValue / countBanksOfType
 // =================================================================
-void ToolBankConfig::drawDescription(uint8_t cursor, BankType type) {
-  if (type == BANK_ARPEG_GEN) {
-    _ui->drawFrameLine(VT_BRIGHT_WHITE "Bank %d" VT_RESET VT_DIM "  --  ARPEG_GEN  --  MIDI channel %d" VT_RESET, cursor + 1, cursor + 1);
-    _ui->drawFrameLine(VT_DIM "Generative arpeggiator. Pile vivante + walk pondere + mutation par pad oct." VT_RESET);
-    _ui->drawFrameLine(VT_DIM "R2+hold balaye 15 positions de grille. Pad oct 1 = lock. Bonus/Margin per-bank." VT_RESET);
-    _ui->drawFrameLine(VT_DIM "Gate, shuffle, division, template, velocity : pot mapping comme ARPEG classique." VT_RESET);
-  } else if (type == BANK_LOOP) {
-    _ui->drawFrameLine(VT_BRIGHT_WHITE "Bank %d" VT_RESET VT_DIM "  --  LOOP  --  MIDI channel %d" VT_RESET, cursor + 1, cursor + 1);
-    _ui->drawFrameLine(VT_DIM "Real-time looper. Percussive: each pad triggers a fixed MIDI note (GM kick C2 base)." VT_RESET);
-    _ui->drawFrameLine(VT_DIM "REC/PLAY-STOP/CLEAR control pads. Loop runs in background across bank switches." VT_RESET);
-    _ui->drawFrameLine(VT_DIM "Phase 1 : declared (no runtime engine yet). Tool 5 cycle 3-way support : Phase 3." VT_RESET);
-  } else if (type == BANK_ARPEG) {
-    _ui->drawFrameLine(VT_BRIGHT_WHITE "Bank %d" VT_RESET VT_DIM "  --  ARPEG  --  MIDI channel %d" VT_RESET, cursor + 1, cursor + 1);
-    _ui->drawFrameLine(VT_DIM "Arpeggiator on this channel. No aftertouch. Pile-based note input:" VT_RESET);
-    _ui->drawFrameLine(VT_DIM "press=add, release=remove (HOLD OFF) or double-tap=remove (HOLD ON)." VT_RESET);
-    _ui->drawFrameLine(VT_DIM "Gate, shuffle, pattern, division, velocity are per-bank via pot mapping." VT_RESET);
-  } else {
-    _ui->drawFrameLine(VT_BRIGHT_WHITE "Bank %d" VT_RESET VT_DIM "  --  NORMAL  --  MIDI channel %d" VT_RESET, cursor + 1, cursor + 1);
-    _ui->drawFrameLine(VT_DIM "Pads play notes directly with polyphonic aftertouch." VT_RESET);
-    _ui->drawFrameLine(VT_DIM "Velocity = baseVelocity +/- variation (per-bank). Pitch bend offset per-bank." VT_RESET);
-    _ui->drawFrameLine(VT_DIM "Shape, slew, AT deadzone are global (affect all banks)." VT_RESET);
+bool ToolBankConfig::isCellApplicable(uint8_t paramIdx, uint8_t bankIdx) const {
+  if (paramIdx >= PARAM_TABLE_COUNT || bankIdx >= NUM_BANKS) return false;
+  return PARAM_TABLE[paramIdx].isApplicable(_wk.type[bankIdx]);
+}
+
+uint8_t ToolBankConfig::getCellValue(uint8_t paramIdx, uint8_t bankIdx) const {
+  const uint8_t* base = reinterpret_cast<const uint8_t*>(&_wk);
+  return *(base + PARAM_TABLE[paramIdx].fieldOffset + bankIdx);
+}
+
+void ToolBankConfig::setCellValue(uint8_t paramIdx, uint8_t bankIdx, uint8_t value) {
+  uint8_t* base = reinterpret_cast<uint8_t*>(&_wk);
+  *(base + PARAM_TABLE[paramIdx].fieldOffset + bankIdx) = value;
+}
+
+uint8_t ToolBankConfig::countBanksOfType(BankType type) const {
+  uint8_t c = 0;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) if (_wk.type[i] == type) c++;
+  return c;
+}
+
+// =================================================================
+// Cell rendering helpers (private statics)
+// =================================================================
+// Format inner string (visible) centered into a 6-char cell, with optional
+// focus brackets. Color applies only to the inner string.
+// visLen = visible char count of `inner` (UTF-8 safe — caller knows).
+static void appendCell(char* dst, size_t dstSize, int& pos,
+                       const char* inner, int visLen,
+                       const char* color, bool focus, bool focusEditable) {
+  int total = visLen + (focus ? 2 : 0);
+  if (total > CELL_W) total = CELL_W;
+  int leftPad  = (CELL_W - total) / 2;
+  int rightPad = CELL_W - total - leftPad;
+  for (int i = 0; i < leftPad; i++)  pos += snprintf(dst + pos, dstSize - pos, " ");
+  if (focus) {
+    const char* bracketStyle = focusEditable ? (VT_CYAN VT_BOLD) : VT_DIM;
+    pos += snprintf(dst + pos, dstSize - pos, "%s[" VT_RESET, bracketStyle);
+  }
+  pos += snprintf(dst + pos, dstSize - pos, "%s%s" VT_RESET, color, inner);
+  if (focus) {
+    const char* bracketStyle = focusEditable ? (VT_CYAN VT_BOLD) : VT_DIM;
+    pos += snprintf(dst + pos, dstSize - pos, "%s]" VT_RESET, bracketStyle);
+  }
+  for (int i = 0; i < rightPad; i++) pos += snprintf(dst + pos, dstSize - pos, " ");
+}
+
+// =================================================================
+// drawTable — render the matrix banks × params (plan §3.7)
+// =================================================================
+void ToolBankConfig::drawTable() {
+  const int LABEL_W = 14;
+
+  // --- Top border : 14-space indent + ┌──────┬──────...┬──────┐ ---
+  {
+    char buf[256];
+    int p = 0;
+    for (int k = 0; k < LABEL_W; k++) p += snprintf(buf + p, sizeof(buf) - p, " ");
+    p += snprintf(buf + p, sizeof(buf) - p, VT_DIM "%s", UNI_CTL);
+    for (int b = 0; b < NUM_BANKS; b++) {
+      for (int k = 0; k < CELL_W; k++) p += snprintf(buf + p, sizeof(buf) - p, "%s", UNI_CH);
+      p += snprintf(buf + p, sizeof(buf) - p, "%s",
+                    (b < NUM_BANKS - 1) ? UNI_CT : UNI_CTR);
+    }
+    p += snprintf(buf + p, sizeof(buf) - p, VT_RESET);
+    _ui->drawFrameLine("%s", buf);
+  }
+
+  // --- Bank header row : indent + │ Bk1  │ Bk2  │ ... ---
+  {
+    char buf[256];
+    int p = 0;
+    for (int k = 0; k < LABEL_W; k++) p += snprintf(buf + p, sizeof(buf) - p, " ");
+    p += snprintf(buf + p, sizeof(buf) - p, VT_DIM "%s" VT_RESET, UNI_CV);
+    for (int b = 0; b < NUM_BANKS; b++) {
+      char label[8];
+      snprintf(label, sizeof(label), "Bk%d", b + 1);
+      int vis = strlen(label);   // ASCII only
+      appendCell(buf, sizeof(buf), p, label, vis, VT_BRIGHT_BLUE, false, false);
+      p += snprintf(buf + p, sizeof(buf) - p, VT_DIM "%s" VT_RESET, UNI_CV);
+    }
+    _ui->drawFrameLine("%s", buf);
+  }
+
+  // --- Param rows + section separators ---
+  for (uint8_t pi = 0; pi < PARAM_TABLE_COUNT; pi++) {
+    const ParamDescriptor& descr = PARAM_TABLE[pi];
+
+    // Section separator (if descr.sectionLabel != null)
+    if (descr.sectionLabel) {
+      char buf[256];
+      int p = 0;
+      // Label area : "   ─ <SECTION> ────" filling LABEL_W visible chars.
+      p += snprintf(buf + p, sizeof(buf) - p, VT_DIM "   ");
+      int labelVis = 3;
+      p += snprintf(buf + p, sizeof(buf) - p, VT_CYAN "%s %s " VT_DIM,
+                    UNI_CH, descr.sectionLabel);
+      labelVis += 1 + 1 + (int)strlen(descr.sectionLabel) + 1;
+      while (labelVis < LABEL_W) {
+        p += snprintf(buf + p, sizeof(buf) - p, "%s", UNI_CH);
+        labelVis++;
+      }
+      // Table area : ┼──────┼──────...┼──────┤
+      p += snprintf(buf + p, sizeof(buf) - p, "%s", UNI_CX);
+      for (int b = 0; b < NUM_BANKS; b++) {
+        for (int k = 0; k < CELL_W; k++) p += snprintf(buf + p, sizeof(buf) - p, "%s", UNI_CH);
+        p += snprintf(buf + p, sizeof(buf) - p, "%s",
+                      (b < NUM_BANKS - 1) ? UNI_CX : UNI_CRT);
+      }
+      p += snprintf(buf + p, sizeof(buf) - p, VT_RESET);
+      _ui->drawFrameLine("%s", buf);
+    }
+
+    // Param row
+    char buf[512];
+    int p = 0;
+    // Label area : "   <label>      " filling LABEL_W visible chars.
+    p += snprintf(buf + p, sizeof(buf) - p, "   " VT_CYAN "%s" VT_RESET, descr.label);
+    int labelVis = 3 + (int)strlen(descr.label);
+    while (labelVis < LABEL_W) {
+      p += snprintf(buf + p, sizeof(buf) - p, " ");
+      labelVis++;
+    }
+    p += snprintf(buf + p, sizeof(buf) - p, VT_DIM "%s" VT_RESET, UNI_CV);
+
+    for (uint8_t b = 0; b < NUM_BANKS; b++) {
+      BankType bt = _wk.type[b];
+      bool applicable = descr.isApplicable(bt);
+      bool focus      = (pi == _cursorParam && b == _cursorBank);
+      uint8_t cellVal = getCellValue(pi, b);
+
+      if (!applicable) {
+        // Non-applicable cell : · VT_DIM. Focus = [·] dim brackets.
+        appendCell(buf, sizeof(buf), p, "\xc2\xb7", 1, VT_DIM, focus, false);
+      } else {
+        // Applicable : value formatted per options + color.
+        const ParamOptions& opts = descr.getOptions(bt);
+        const char* color = pickCellColor(pi, bt);
+        char valBuf[16];
+        int  visLen;
+        if (opts.isDiscrete) {
+          uint8_t idx = (cellVal < opts.discrete.count) ? cellVal : 0;
+          snprintf(valBuf, sizeof(valBuf), "%s", opts.discrete.labels[idx]);
+          visLen = strlen(valBuf);  // ASCII labels
+        } else {
+          // Range : Bonus, Prox display /10.0 float ; Margin, Ecart integer.
+          if (pi == 3 /*Bonus*/ || pi == 5 /*Prox*/) {
+            snprintf(valBuf, sizeof(valBuf), "%.1f", (float)cellVal / 10.0f);
+          } else {
+            snprintf(valBuf, sizeof(valBuf), "%d", cellVal);
+          }
+          visLen = strlen(valBuf);
+        }
+        appendCell(buf, sizeof(buf), p, valBuf, visLen, color, focus, true);
+      }
+      p += snprintf(buf + p, sizeof(buf) - p, VT_DIM "%s" VT_RESET, UNI_CV);
+    }
+    _ui->drawFrameLine("%s", buf);
+  }
+
+  // --- Bottom border : indent + └──────┴──────...┴──────┘ ---
+  {
+    char buf[256];
+    int p = 0;
+    for (int k = 0; k < LABEL_W; k++) p += snprintf(buf + p, sizeof(buf) - p, " ");
+    p += snprintf(buf + p, sizeof(buf) - p, VT_DIM "%s", UNI_CBL);
+    for (int b = 0; b < NUM_BANKS; b++) {
+      for (int k = 0; k < CELL_W; k++) p += snprintf(buf + p, sizeof(buf) - p, "%s", UNI_CH);
+      p += snprintf(buf + p, sizeof(buf) - p, "%s",
+                    (b < NUM_BANKS - 1) ? UNI_CB : UNI_CBR);
+    }
+    p += snprintf(buf + p, sizeof(buf) - p, VT_RESET);
+    _ui->drawFrameLine("%s", buf);
   }
 }
 
 // =================================================================
-// run() — Unified arrow navigation with cursor + editing
+// drawInfo — INFO panel 3 etats (plan §3.8)
+// =================================================================
+void ToolBankConfig::drawInfo() {
+  const ParamDescriptor& descr = PARAM_TABLE[_cursorParam];
+  BankType bankType = _wk.type[_cursorBank];
+  bool applicable = descr.isApplicable(bankType);
+
+  _ui->drawSection("INFO");
+
+  // Header line : "Bank N / ParamName [hint]"
+  char header[96];
+  if (applicable) {
+    snprintf(header, sizeof(header), "Bank %d / %s%s",
+             _cursorBank + 1, descr.label,
+             _editing ? " (editing)" : "");
+  } else {
+    snprintf(header, sizeof(header), "Bank %d / %s  \xc2\xb7  non applicable",
+             _cursorBank + 1, descr.label);
+  }
+  _ui->drawFrameLine(VT_BRIGHT_WHITE "%s" VT_RESET, header);
+
+  if (applicable) {
+    _ui->drawFrameLine(VT_YELLOW "%s" VT_RESET, descr.infoDescription);
+    // Cycle / range hint
+    const ParamOptions& opts = descr.getOptions(bankType);
+    if (opts.isDiscrete) {
+      char cycle[128];
+      int p = snprintf(cycle, sizeof(cycle), "Cycle : ");
+      for (uint8_t k = 0; k < opts.discrete.count; k++) {
+        p += snprintf(cycle + p, sizeof(cycle) - p, "%s%s",
+                      opts.discrete.labels[k],
+                      (k + 1 < opts.discrete.count) ? ", " : ".");
+      }
+      _ui->drawFrameLine(VT_DIM "%s" VT_RESET, cycle);
+    } else {
+      // Range : Bonus / Prox display /10.0 ; Margin / Ecart integer.
+      if (_cursorParam == 3 /*Bonus*/ || _cursorParam == 5 /*Prox*/) {
+        _ui->drawFrameLine(VT_DIM "Range : %.1f..%.1f, step %.1f (accel %.1f)." VT_RESET,
+                           (float)opts.range.minVal / 10.0f,
+                           (float)opts.range.maxVal / 10.0f,
+                           (float)opts.range.stepNormal / 10.0f,
+                           (float)opts.range.stepAccelerated / 10.0f);
+      } else {
+        _ui->drawFrameLine(VT_DIM "Range : %d..%d, step %d (accel %d)." VT_RESET,
+                           opts.range.minVal, opts.range.maxVal,
+                           opts.range.stepNormal, opts.range.stepAccelerated);
+      }
+    }
+    if (_editing) {
+      _ui->drawFrameLine(VT_DIM "^v adjust, RET save, q cancel." VT_RESET);
+    }
+  } else {
+    // Non-applicable : hint pourquoi + hint type.
+    _ui->drawFrameLine(VT_DIM "%s" VT_RESET, descr.infoNonApplicable);
+    _ui->drawFrameLine(VT_DIM "Bank %d type is %s." VT_RESET,
+                       _cursorBank + 1, TYPE_LABELS_LONG[bankType]);
+  }
+}
+
+// =================================================================
+// handleNavigation — hors edition (plan §3.9)
+// =================================================================
+void ToolBankConfig::handleNavigation(const NavEvent& ev) {
+  if (ev.type == NAV_UP) {
+    _cursorParam = (_cursorParam == 0) ? (PARAM_TABLE_COUNT - 1) : (_cursorParam - 1);
+    _screenDirty = true;
+  } else if (ev.type == NAV_DOWN) {
+    _cursorParam = (_cursorParam + 1) % PARAM_TABLE_COUNT;
+    _screenDirty = true;
+  } else if (ev.type == NAV_LEFT) {
+    _cursorBank = (_cursorBank == 0) ? (NUM_BANKS - 1) : (_cursorBank - 1);
+    _screenDirty = true;
+  } else if (ev.type == NAV_RIGHT) {
+    _cursorBank = (_cursorBank + 1) % NUM_BANKS;
+    _screenDirty = true;
+  } else if (ev.type == NAV_ENTER) {
+    if (isCellApplicable(_cursorParam, _cursorBank)) {
+      _editing = true;
+      _screenDirty = true;
+    }
+    // Sinon : no-op silencieux (INFO state 2 deja visible).
+  } else if (ev.type == NAV_DEFAULTS) {
+    applyDefaults();
+    _screenDirty = true;
+  }
+}
+
+// =================================================================
+// handleEdition — en edition (plan §3.10)
+// =================================================================
+void ToolBankConfig::handleEdition(const NavEvent& ev) {
+  const ParamDescriptor& descr = PARAM_TABLE[_cursorParam];
+  BankType bankType = _wk.type[_cursorBank];
+  const ParamOptions& opts = descr.getOptions(bankType);
+
+  if (ev.type == NAV_UP || ev.type == NAV_DOWN) {
+    bool up = (ev.type == NAV_UP);
+
+    if (opts.isDiscrete) {
+      uint8_t cur = getCellValue(_cursorParam, _cursorBank);
+      uint8_t next = up
+        ? (uint8_t)((cur + 1) % opts.discrete.count)
+        : (uint8_t)((cur == 0) ? (opts.discrete.count - 1) : (cur - 1));
+
+      // Cas special Type cycle : cap MAX_ARP_BANKS / MAX_LOOP_BANKS -> skip.
+      if (_cursorParam == 0 /*Type*/) {
+        uint8_t arpExcl  = 0;
+        uint8_t loopExcl = 0;
+        for (uint8_t i = 0; i < NUM_BANKS; i++) {
+          if (i == _cursorBank) continue;
+          if (isArpType(_wk.type[i])) arpExcl++;
+          if (_wk.type[i] == BANK_LOOP) loopExcl++;
+        }
+        uint8_t guard = 0;
+        bool found = false;
+        while (guard++ < opts.discrete.count) {
+          BankType candidate = (BankType)next;
+          bool capOk = true;
+          if (isArpType(candidate) && arpExcl  >= MAX_ARP_BANKS)  capOk = false;
+          if (candidate == BANK_LOOP && loopExcl >= MAX_LOOP_BANKS) capOk = false;
+          if (capOk) { found = true; break; }
+          next = up
+            ? (uint8_t)((next + 1) % opts.discrete.count)
+            : (uint8_t)((next == 0) ? (opts.discrete.count - 1) : (next - 1));
+        }
+        if (!found) {
+          next = cur;
+          _errorShown = true;
+          _errorTime = millis();
+        }
+        // Si le nouveau type rend invalide le quantize courant, le re-clamper.
+        BankType newType = (BankType)next;
+        if (isArpType(newType) && _wk.quantize[_cursorBank] >= NUM_ARP_START_MODES) {
+          _wk.quantize[_cursorBank] = DEFAULT_ARP_START_MODE;
+        } else if (newType == BANK_LOOP && _wk.quantize[_cursorBank] >= 3) {
+          _wk.quantize[_cursorBank] = 2;  // Bar default
+        }
+      }
+      setCellValue(_cursorParam, _cursorBank, next);
+    } else {
+      // Range param : ±step (accel selon ev.accelerated). Clamp aux bornes.
+      int16_t step = ev.accelerated ? opts.range.stepAccelerated : opts.range.stepNormal;
+      int16_t cur  = (int16_t)getCellValue(_cursorParam, _cursorBank);
+      int16_t v    = up ? (cur + step) : (cur - step);
+      if (v < opts.range.minVal) v = opts.range.minVal;
+      if (v > opts.range.maxVal) v = opts.range.maxVal;
+      setCellValue(_cursorParam, _cursorBank, (uint8_t)v);
+    }
+    _screenDirty = true;
+  } else if (ev.type == NAV_ENTER) {
+    if (saveAll()) {
+      _ui->flashSaved();
+      _editing = false;
+      _screenDirty = true;
+    }
+  } else if (ev.type == NAV_QUIT) {
+    // Cancel : restore cell focus from _saved.
+    const uint8_t* base = reinterpret_cast<const uint8_t*>(&_saved);
+    uint8_t savedVal = *(base + descr.fieldOffset + _cursorBank);
+    setCellValue(_cursorParam, _cursorBank, savedVal);
+    _editing = false;
+    _screenDirty = true;
+  }
+}
+
+// =================================================================
+// applyDefaults — `d` reset cell focus uniquement (plan §3.11)
+// =================================================================
+void ToolBankConfig::applyDefaults() {
+  // Default per param index, aligne sur PARAM_TABLE order.
+  static const uint8_t DEFAULTS[] = {
+    BANK_NORMAL,             // 0 Type
+    DEFAULT_ARP_START_MODE,  // 1 Quantize (Imm)
+    0,                       // 2 Group : -
+    15,                      // 3 Bonus : 1.5
+    7,                       // 4 Margin
+    4,                       // 5 Prox : 0.4
+    5,                       // 6 Ecart
+  };
+  static_assert(sizeof(DEFAULTS) / sizeof(DEFAULTS[0]) == 7,
+                "DEFAULTS size must match PARAM_TABLE row count");
+  if (_cursorParam < (sizeof(DEFAULTS) / sizeof(DEFAULTS[0]))) {
+    setCellValue(_cursorParam, _cursorBank, DEFAULTS[_cursorParam]);
+    _screenDirty = true;
+  }
+}
+
+// =================================================================
+// run — event loop (plan §3.12)
 // =================================================================
 void ToolBankConfig::run() {
   if (!_ui || !_banks) return;
 
-  BankType wkTypes[NUM_BANKS];
-  uint8_t  wkQuantize[NUM_BANKS];
-  uint8_t  wkGroups[NUM_BANKS];
-  uint8_t  wkBonusPilex10[NUM_BANKS];
-  uint8_t  wkMarginWalk[NUM_BANKS];
-  uint8_t  wkProximityx10[NUM_BANKS];
-  uint8_t  wkEcart[NUM_BANKS];
-  for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    wkTypes[i]         = _banks[i].type;
-    wkQuantize[i]      = _nvs ? _nvs->getLoadedQuantizeMode(i) : DEFAULT_ARP_START_MODE;
-    wkGroups[i]        = _nvs ? _nvs->getLoadedScaleGroup(i) : 0;
-    wkBonusPilex10[i]  = _nvs ? _nvs->getLoadedBonusPile(i) : 15;
-    wkMarginWalk[i]    = _nvs ? _nvs->getLoadedMarginWalk(i) : 7;
-    wkProximityx10[i]  = _nvs ? _nvs->getLoadedProximityFactor(i) : 4;
-    wkEcart[i]         = _nvs ? _nvs->getLoadedEcart(i) : 5;
-  }
-
-  // Override from NVS if valid v4 store exists
-  bool nvsSaved = false;
-  {
-    BankTypeStore bts;
-    if (NvsManager::loadBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
-                              EEPROM_MAGIC, BANKTYPE_VERSION, &bts, sizeof(bts))) {
-      nvsSaved = true;
-      validateBankTypeStore(bts);
-      for (uint8_t i = 0; i < NUM_BANKS; i++) {
-        wkTypes[i]         = (BankType)bts.types[i];
-        wkQuantize[i]      = bts.quantize[i];
-        wkGroups[i]        = bts.scaleGroup[i];
-        wkBonusPilex10[i]  = bts.bonusPilex10[i];
-        wkMarginWalk[i]    = bts.marginWalk[i];
-        wkProximityx10[i]  = bts.proximityFactorx10[i];
-        wkEcart[i]         = bts.ecart[i];
-      }
-    }
-  }
-
-  // Snapshot NVS-loaded values for cancel-edit restore
-  BankType savedTypes[NUM_BANKS];
-  uint8_t  savedQuantize[NUM_BANKS];
-  uint8_t  savedGroups[NUM_BANKS];
-  uint8_t  savedBonusPilex10[NUM_BANKS];
-  uint8_t  savedMarginWalk[NUM_BANKS];
-  uint8_t  savedProximityx10[NUM_BANKS];
-  uint8_t  savedEcart[NUM_BANKS];
-  memcpy(savedTypes,         wkTypes,         sizeof(savedTypes));
-  memcpy(savedQuantize,      wkQuantize,      sizeof(savedQuantize));
-  memcpy(savedGroups,        wkGroups,        sizeof(savedGroups));
-  memcpy(savedBonusPilex10,  wkBonusPilex10,  sizeof(savedBonusPilex10));
-  memcpy(savedMarginWalk,    wkMarginWalk,    sizeof(savedMarginWalk));
-  memcpy(savedProximityx10,  wkProximityx10,  sizeof(savedProximityx10));
-  memcpy(savedEcart,         wkEcart,         sizeof(savedEcart));
+  loadWorkingCopy();
+  _cursorParam = 0;
+  _cursorBank  = 0;
+  _editing     = false;
+  _screenDirty = true;
+  _errorShown  = false;
 
   Serial.print(ITERM_RESIZE);
-
-  InputParser input;
-  uint8_t cursor = 0;
-  bool editing = false;
-  SubField cursorSubField = SF_TYPE;  // current focused field in edit mode
-  bool screenDirty = true;
-  bool confirmDefaults = false;
-  bool errorShown = false;
-  unsigned long errorTime = 0;
-
-  // --- Sub-field cycling helpers (Phase 7 Task 16 + V4 Task 22) ---
-  // ARPEG_GEN : 6 fields cycle (TYPE -> GROUP -> BONUS -> MARGIN -> PROX -> ECART -> TYPE).
-  // NORMAL / ARPEG : 2 fields cycle (TYPE -> GROUP -> TYPE) — autres champs n'existent pas.
-  auto nextSubField = [](SubField cur, BankType bt) -> SubField {
-    if (bt == BANK_ARPEG_GEN) {
-      switch (cur) {
-        case SF_TYPE:   return SF_GROUP;
-        case SF_GROUP:  return SF_BONUS;
-        case SF_BONUS:  return SF_MARGIN;
-        case SF_MARGIN: return SF_PROX;
-        case SF_PROX:   return SF_ECART;
-        case SF_ECART:  return SF_TYPE;
-      }
-    } else {
-      return (cur == SF_TYPE) ? SF_GROUP : SF_TYPE;
-    }
-    return SF_TYPE;
-  };
-  auto prevSubField = [](SubField cur, BankType bt) -> SubField {
-    if (bt == BANK_ARPEG_GEN) {
-      switch (cur) {
-        case SF_TYPE:   return SF_ECART;
-        case SF_GROUP:  return SF_TYPE;
-        case SF_BONUS:  return SF_GROUP;
-        case SF_MARGIN: return SF_BONUS;
-        case SF_PROX:   return SF_MARGIN;
-        case SF_ECART:  return SF_PROX;
-      }
-    } else {
-      return (cur == SF_TYPE) ? SF_GROUP : SF_TYPE;
-    }
-    return SF_TYPE;
-  };
-
-  // --- Type cycling helpers (Phase 4 Task 7 logic, factorise pour SF_TYPE NAV_UP/DOWN) ---
-  // 5-states forward : NORMAL -> ARPEG-Imm -> ARPEG-Beat -> ARPEG_GEN-Imm -> ARPEG_GEN-Beat -> NORMAL
-  // backward = inverse. Returns true if change applied, false if arp cap rejected.
-  auto cycleTypeForward = [&](uint8_t c) -> bool {
-    BankType cur = wkTypes[c];
-    if (cur == BANK_NORMAL) {
-      uint8_t arpCount = 0;
-      for (uint8_t i = 0; i < NUM_BANKS; i++) {
-        if (isArpType((BankType)wkTypes[i])) arpCount++;
-      }
-      if (arpCount >= MAX_ARP_BANKS) return false;
-      wkTypes[c]    = BANK_ARPEG;
-      wkQuantize[c] = ARP_START_IMMEDIATE;
-    } else if (cur == BANK_ARPEG && wkQuantize[c] == ARP_START_IMMEDIATE) {
-      wkQuantize[c] = ARP_START_BEAT;
-    } else if (cur == BANK_ARPEG) {
-      wkTypes[c]    = BANK_ARPEG_GEN;
-      wkQuantize[c] = ARP_START_IMMEDIATE;
-    } else if (cur == BANK_ARPEG_GEN && wkQuantize[c] == ARP_START_IMMEDIATE) {
-      wkQuantize[c] = ARP_START_BEAT;
-    } else {
-      wkTypes[c]    = BANK_NORMAL;
-      wkQuantize[c] = DEFAULT_ARP_START_MODE;
-    }
-    return true;
-  };
-  auto cycleTypeBackward = [&](uint8_t c) -> bool {
-    BankType cur = wkTypes[c];
-    if (cur == BANK_NORMAL) {
-      uint8_t arpCount = 0;
-      for (uint8_t i = 0; i < NUM_BANKS; i++) {
-        if (isArpType((BankType)wkTypes[i])) arpCount++;
-      }
-      if (arpCount >= MAX_ARP_BANKS) return false;
-      wkTypes[c]    = BANK_ARPEG_GEN;
-      wkQuantize[c] = ARP_START_BEAT;
-    } else if (cur == BANK_ARPEG_GEN && wkQuantize[c] == ARP_START_BEAT) {
-      wkQuantize[c] = ARP_START_IMMEDIATE;
-    } else if (cur == BANK_ARPEG_GEN) {
-      wkTypes[c]    = BANK_ARPEG;
-      wkQuantize[c] = ARP_START_BEAT;
-    } else if (cur == BANK_ARPEG && wkQuantize[c] == ARP_START_BEAT) {
-      wkQuantize[c] = ARP_START_IMMEDIATE;
-    } else {
-      wkTypes[c]    = BANK_NORMAL;
-      wkQuantize[c] = DEFAULT_ARP_START_MODE;
-    }
-    return true;
-  };
-
   _ui->vtClear();
 
+  InputParser input;
   while (true) {
     if (_leds) _leds->update();
-
     NavEvent ev = input.update();
 
-    if (errorShown && (millis() - errorTime) > 2000) {
-      errorShown = false;
-      screenDirty = true;
+    if (_errorShown && (millis() - _errorTime) > 2000) {
+      _errorShown = false;
+      _screenDirty = true;
     }
 
-    // --- Defaults confirmation ---
-    if (confirmDefaults) {
-      ConfirmResult r = SetupUI::parseConfirm(ev);
-      if (r == CONFIRM_YES) {
-        for (uint8_t i = 0; i < NUM_BANKS; i++) {
-          wkTypes[i]         = (i < 4) ? BANK_NORMAL : BANK_ARPEG;
-          wkQuantize[i]      = ARP_START_IMMEDIATE;
-          // Group A : 2 premieres NORMAL (0,1) + 2 premieres ARPEG (4,5). Autres = -
-          wkGroups[i]        = (i == 0 || i == 1 || i == 4 || i == 5) ? 1 : 0;
-          wkBonusPilex10[i]  = 15;   // defaults bonus_pile = 1.5
-          wkMarginWalk[i]    = 7;    // defaults margin = 7
-          wkProximityx10[i]  = 4;    // V4 defaults proximity_factor = 0.4
-          wkEcart[i]         = 5;    // V4 defaults ecart = 5
-        }
-        if (saveConfig(wkTypes, wkQuantize, wkGroups, wkBonusPilex10, wkMarginWalk,
-                       wkProximityx10, wkEcart)) {
-          memcpy(savedTypes,         wkTypes,         sizeof(savedTypes));
-          memcpy(savedQuantize,      wkQuantize,      sizeof(savedQuantize));
-          memcpy(savedGroups,        wkGroups,        sizeof(savedGroups));
-          memcpy(savedBonusPilex10,  wkBonusPilex10,  sizeof(savedBonusPilex10));
-          memcpy(savedMarginWalk,    wkMarginWalk,    sizeof(savedMarginWalk));
-          memcpy(savedProximityx10,  wkProximityx10,  sizeof(savedProximityx10));
-          memcpy(savedEcart,         wkEcart,         sizeof(savedEcart));
-          nvsSaved = true;
-          _ui->flashSaved();
-        }
-        confirmDefaults = false;
-        editing = false;
-        screenDirty = true;
-      } else if (r == CONFIRM_NO) {
-        confirmDefaults = false;
-        screenDirty = true;
-      }
-      delay(5);
-      continue;
+    // Exit Tool : `q` hors edition.
+    if (ev.type == NAV_QUIT && !_editing) {
+      _ui->vtClear();
+      return;
     }
 
-    // --- Main navigation ---
-    if (ev.type == NAV_QUIT) {
-      if (editing) {
-        wkTypes[cursor]         = savedTypes[cursor];
-        wkQuantize[cursor]      = savedQuantize[cursor];
-        wkGroups[cursor]        = savedGroups[cursor];
-        wkBonusPilex10[cursor]  = savedBonusPilex10[cursor];
-        wkMarginWalk[cursor]    = savedMarginWalk[cursor];
-        wkProximityx10[cursor]  = savedProximityx10[cursor];
-        wkEcart[cursor]         = savedEcart[cursor];
-        editing = false;
-        screenDirty = true;
-      } else {
-        _ui->vtClear();
-        return;
-      }
-    }
-
-    if (ev.type == NAV_DEFAULTS && !editing) {
-      confirmDefaults = true;
-      screenDirty = true;
-    }
-
-    if (!editing) {
-      if (ev.type == NAV_UP) {
-        if (cursor > 0) cursor--;
-        else cursor = NUM_BANKS - 1;
-        screenDirty = true;
-      } else if (ev.type == NAV_DOWN) {
-        if (cursor < NUM_BANKS - 1) cursor++;
-        else cursor = 0;
-        screenDirty = true;
-      } else if (ev.type == NAV_ENTER) {
-        editing = true;
-        cursorSubField = SF_TYPE;  // always start on TYPE (D5)
-        screenDirty = true;
-      }
+    if (!_editing) {
+      handleNavigation(ev);
     } else {
-      // Edit mode field-focus (Phase 7 Task 16, plan §0 D5).
-      // <-/->: cycle cursorSubField. ^/v: adjust value of focused field.
-      if (ev.type == NAV_RIGHT) {
-        cursorSubField = nextSubField(cursorSubField, wkTypes[cursor]);
-        screenDirty = true;
-      } else if (ev.type == NAV_LEFT) {
-        cursorSubField = prevSubField(cursorSubField, wkTypes[cursor]);
-        screenDirty = true;
-      } else if (ev.type == NAV_UP || ev.type == NAV_DOWN) {
-        bool up = (ev.type == NAV_UP);
-        switch (cursorSubField) {
-          case SF_TYPE: {
-            bool ok = up ? cycleTypeForward(cursor) : cycleTypeBackward(cursor);
-            if (!ok) {
-              errorShown = true;
-              errorTime = millis();
-            } else {
-              errorShown = false;
-              // If type leaves ARPEG_GEN while focused on BONUS/MARGIN/PROX/ECART, jump back to TYPE.
-              if (wkTypes[cursor] != BANK_ARPEG_GEN
-                  && (cursorSubField == SF_BONUS || cursorSubField == SF_MARGIN
-                      || cursorSubField == SF_PROX  || cursorSubField == SF_ECART)) {
-                cursorSubField = SF_TYPE;
-              }
-            }
-            break;
-          }
-          case SF_GROUP: {
-            // Cycle group : -, A, B, C, D (5 entries via NUM_SCALE_GROUPS+1).
-            uint8_t mod = NUM_SCALE_GROUPS + 1;
-            wkGroups[cursor] = up
-              ? (uint8_t)((wkGroups[cursor] + 1) % mod)
-              : (uint8_t)((wkGroups[cursor] + mod - 1) % mod);
-            break;
-          }
-          case SF_BONUS: {
-            // bonus_pile x10 : range 10..20 (= 1.0..2.0). +1=0.1, accelerated +5 (large jump).
-            uint8_t step = ev.accelerated ? 5 : 1;
-            int16_t v = (int16_t)wkBonusPilex10[cursor] + (up ? step : -step);
-            if (v < 10) v = 10;
-            if (v > 20) v = 20;
-            wkBonusPilex10[cursor] = (uint8_t)v;
-            break;
-          }
-          case SF_MARGIN: {
-            // margin_walk : range 3..12. +1, accelerated +3.
-            uint8_t step = ev.accelerated ? 3 : 1;
-            int16_t v = (int16_t)wkMarginWalk[cursor] + (up ? step : -step);
-            if (v < 3) v = 3;
-            if (v > 12) v = 12;
-            wkMarginWalk[cursor] = (uint8_t)v;
-            break;
-          }
-          case SF_PROX: {
-            // V4 proximity_factor x10 : range 4..20 (= 0.4..2.0). +1=0.1, accelerated +5 (=0.5).
-            uint8_t step = ev.accelerated ? 5 : 1;
-            int16_t v = (int16_t)wkProximityx10[cursor] + (up ? step : -step);
-            if (v < 4) v = 4;
-            if (v > 20) v = 20;
-            wkProximityx10[cursor] = (uint8_t)v;
-            break;
-          }
-          case SF_ECART: {
-            // V4 ecart : range 1..12 (Tool 5 override de TABLE). +1, accelerated +3.
-            uint8_t step = ev.accelerated ? 3 : 1;
-            int16_t v = (int16_t)wkEcart[cursor] + (up ? step : -step);
-            if (v < 1) v = 1;
-            if (v > 12) v = 12;
-            wkEcart[cursor] = (uint8_t)v;
-            break;
-          }
-        }
-        screenDirty = true;
-      } else if (ev.type == NAV_ENTER) {
-        if (saveConfig(wkTypes, wkQuantize, wkGroups, wkBonusPilex10, wkMarginWalk,
-                       wkProximityx10, wkEcart)) {
-          memcpy(savedTypes,         wkTypes,         sizeof(savedTypes));
-          memcpy(savedQuantize,      wkQuantize,      sizeof(savedQuantize));
-          memcpy(savedGroups,        wkGroups,        sizeof(savedGroups));
-          memcpy(savedBonusPilex10,  wkBonusPilex10,  sizeof(savedBonusPilex10));
-          memcpy(savedMarginWalk,    wkMarginWalk,    sizeof(savedMarginWalk));
-          memcpy(savedProximityx10,  wkProximityx10,  sizeof(savedProximityx10));
-          memcpy(savedEcart,         wkEcart,         sizeof(savedEcart));
-          editing = false;
-          nvsSaved = true;
-          _ui->flashSaved();
-          screenDirty = true;
-        }
-      }
+      handleEdition(ev);
     }
 
-    // --- Render ---
-    if (screenDirty) {
-      screenDirty = false;
+    if (_screenDirty) {
+      _screenDirty = false;
 
-      uint8_t arpCount = 0;
-      for (uint8_t i = 0; i < NUM_BANKS; i++) {
-        if (isArpType((BankType)wkTypes[i])) arpCount++;
-      }
-
-      char headerRight[32];
-      snprintf(headerRight, sizeof(headerRight), "TOOL 4: BANK CONFIG  %d/4 ARP", arpCount);
+      // Header : "TOOL 5: BANK CONFIG  XA/YL/ZN"
+      char headerRight[40];
+      uint8_t arpCount  = countBanksOfType(BANK_ARPEG) + countBanksOfType(BANK_ARPEG_GEN);
+      uint8_t loopCount = countBanksOfType(BANK_LOOP);
+      uint8_t normalCount = NUM_BANKS - arpCount - loopCount;
+      snprintf(headerRight, sizeof(headerRight),
+               "TOOL 5: BANK CONFIG  %dA/%dL/%dN", arpCount, loopCount, normalCount);
 
       _ui->vtFrameStart();
-      _ui->drawConsoleHeader(headerRight, nvsSaved);
+      _ui->drawConsoleHeader(headerRight, _nvsSaved);
       _ui->drawFrameEmpty();
-
-      // Banks section
       _ui->drawSection("BANKS");
       _ui->drawFrameEmpty();
+      drawTable();
+      _ui->drawFrameEmpty();
+      drawInfo();
 
-      for (uint8_t i = 0; i < NUM_BANKS; i++) {
-        bool selected = (cursor == i);
-        bool isEditing = selected && editing;
-        BankType bt = wkTypes[i];
-        bool isGen = (bt == BANK_ARPEG_GEN);
-
-        char line[160];
-        int pos = 0;
-        int visibleLen = 0;  // caracteres visibles (hors codes VT)
-
-        // Selection indicator (2 chars visibles)
-        if (selected) {
-          pos += snprintf(line + pos, sizeof(line) - pos, VT_CYAN VT_BOLD "> " VT_RESET);
-        } else {
-          pos += snprintf(line + pos, sizeof(line) - pos, "  ");
-        }
-        visibleLen += 2;
-
-        // Bank label (10 chars visibles : "Bank N    ")
-        pos += snprintf(line + pos, sizeof(line) - pos, "Bank %d    ", i + 1);
-        visibleLen += 10;
-
-        // --- Type + quantize ---
-        // Edit + cursorSubField=SF_TYPE -> [brackets] cyan-bold (highlighted).
-        // Edit autre champ -> sans brackets, normal cyan (selected).
-        // Hors edit : selected = cyan ; autres = normal.
-        bool typeFocus = isEditing && (cursorSubField == SF_TYPE);
-
-        if (typeFocus) {
-          if (isGen) {
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            VT_CYAN VT_BOLD "[ARPEG_GEN ─ %s]" VT_RESET, QUANTIZE_NAMES[wkQuantize[i]]);
-            visibleLen += 14 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);
-          } else if (bt == BANK_ARPEG) {
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            VT_CYAN VT_BOLD "[ARPEG ─ %s]" VT_RESET, QUANTIZE_NAMES[wkQuantize[i]]);
-            visibleLen += 10 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);
-          } else {
-            pos += snprintf(line + pos, sizeof(line) - pos, VT_CYAN VT_BOLD "[NORMAL]" VT_RESET);
-            visibleLen += 8;
-          }
-        } else {
-          // Non-focused (edit autre champ, ou hors edit). Selected highlight via cyan dim.
-          const char* tColor = (selected ? VT_CYAN : "");
-          const char* tReset = (selected ? VT_RESET : "");
-          if (isGen) {
-            pos += snprintf(line + pos, sizeof(line) - pos, "%sARPEG_GEN%s", tColor, tReset);
-            visibleLen += 9;
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            "   Quantize: %s", QUANTIZE_NAMES[wkQuantize[i]]);
-            visibleLen += 13 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);
-          } else if (bt == BANK_ARPEG) {
-            pos += snprintf(line + pos, sizeof(line) - pos, "%sARPEG%s   ", tColor, tReset);
-            visibleLen += 8;
-            pos += snprintf(line + pos, sizeof(line) - pos,
-                            "    Quantize: %s", QUANTIZE_NAMES[wkQuantize[i]]);
-            visibleLen += 14 + (int)strlen(QUANTIZE_NAMES[wkQuantize[i]]);
-          } else {
-            pos += snprintf(line + pos, sizeof(line) - pos, "%sNORMAL%s  ", tColor, tReset);
-            visibleLen += 8;
-          }
-        }
-
-        // Padding jusqu'a colonne Group (position visible 50)
-        const int GROUP_COL = 50;
-        while (visibleLen < GROUP_COL && pos < (int)sizeof(line) - 32) {
-          line[pos++] = ' ';
-          visibleLen++;
-        }
-
-        // --- Colonne Group ---
-        bool groupFocus = isEditing && (cursorSubField == SF_GROUP);
-        if (groupFocus) {
-          pos += snprintf(line + pos, sizeof(line) - pos,
-                          "Group: " VT_CYAN VT_BOLD "[%c]" VT_RESET,
-                          GROUP_LABELS[wkGroups[i]]);
-        } else if (selected) {
-          pos += snprintf(line + pos, sizeof(line) - pos,
-                          "Group: " VT_CYAN "%c" VT_RESET,
-                          GROUP_LABELS[wkGroups[i]]);
-        } else {
-          pos += snprintf(line + pos, sizeof(line) - pos,
-                          "Group: %c", GROUP_LABELS[wkGroups[i]]);
-        }
-
-        _ui->drawFrameLine("%s", line);
-
-        // --- Ligne 2 ARPEG_GEN : Bonus pile + Margin (indented col 14) ---
-        // Spec §22 : 2-lignes layout. Indent 14 = sous le label "ARPEG_GEN" de la ligne 1.
-        if (isGen) {
-          char line2[160];
-          int p2 = 0;
-          int v2 = 0;
-          for (int k = 0; k < 14; k++) { line2[p2++] = ' '; v2++; }
-
-          float bonusF      = (float)wkBonusPilex10[i] / 10.0f;
-          bool  bonusFocus  = isEditing && (cursorSubField == SF_BONUS);
-          bool  marginFocus = isEditing && (cursorSubField == SF_MARGIN);
-
-          if (bonusFocus) {
-            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
-                           "Bonus pile: " VT_CYAN VT_BOLD "[%.1f]" VT_RESET, bonusF);
-            v2 += 12 + 5;  // "Bonus pile: " (12) + "[1.5]" (5)
-          } else if (selected) {
-            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
-                           "Bonus pile: " VT_CYAN "%.1f" VT_RESET, bonusF);
-            v2 += 12 + 3;
-          } else {
-            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
-                           VT_DIM "Bonus pile: %.1f" VT_RESET, bonusF);
-            v2 += 12 + 3;
-          }
-
-          // Padding entre Bonus et Margin (visible col 40)
-          const int MARGIN_COL = 40;
-          while (v2 < MARGIN_COL && p2 < (int)sizeof(line2) - 32) {
-            line2[p2++] = ' ';
-            v2++;
-          }
-
-          if (marginFocus) {
-            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
-                           "Margin: " VT_CYAN VT_BOLD "[%d]" VT_RESET, wkMarginWalk[i]);
-          } else if (selected) {
-            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
-                           "Margin: " VT_CYAN "%d" VT_RESET, wkMarginWalk[i]);
-          } else {
-            p2 += snprintf(line2 + p2, sizeof(line2) - p2,
-                           VT_DIM "Margin: %d" VT_RESET, wkMarginWalk[i]);
-          }
-
-          _ui->drawFrameLine("%s", line2);
-
-          // --- Ligne 3 ARPEG_GEN (V4 Task 22) : Prox + Ecart, alignement identique a ligne 2 ---
-          char line3[160];
-          int p3 = 0;
-          int v3 = 0;
-          for (int k = 0; k < 14; k++) { line3[p3++] = ' '; v3++; }
-
-          float proxF      = (float)wkProximityx10[i] / 10.0f;
-          bool  proxFocus  = isEditing && (cursorSubField == SF_PROX);
-          bool  ecartFocus = isEditing && (cursorSubField == SF_ECART);
-
-          // Prox (label 12 chars : "Prox:       ")
-          if (proxFocus) {
-            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
-                           "Prox:       " VT_CYAN VT_BOLD "[%.1f]" VT_RESET, proxF);
-            v3 += 12 + 5;
-          } else if (selected) {
-            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
-                           "Prox:       " VT_CYAN "%.1f" VT_RESET, proxF);
-            v3 += 12 + 3;
-          } else {
-            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
-                           VT_DIM "Prox:       %.1f" VT_RESET, proxF);
-            v3 += 12 + 3;
-          }
-
-          // Padding entre Prox et Ecart (visible col 40, identique ligne 2)
-          while (v3 < 40 && p3 < (int)sizeof(line3) - 32) {
-            line3[p3++] = ' ';
-            v3++;
-          }
-
-          // Ecart
-          if (ecartFocus) {
-            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
-                           "Ecart:  " VT_CYAN VT_BOLD "[%d]" VT_RESET, wkEcart[i]);
-          } else if (selected) {
-            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
-                           "Ecart:  " VT_CYAN "%d" VT_RESET, wkEcart[i]);
-          } else {
-            p3 += snprintf(line3 + p3, sizeof(line3) - p3,
-                           VT_DIM "Ecart:  %d" VT_RESET, wkEcart[i]);
-          }
-
-          _ui->drawFrameLine("%s", line3);
-        }
+      if (_errorShown) {
+        _ui->drawFrameEmpty();
+        _ui->drawFrameLine(VT_BRIGHT_RED "Cap atteint : tous les types sont satures (rare)." VT_RESET);
       }
 
       _ui->drawFrameEmpty();
 
-      // Info section
-      _ui->drawSection("INFO");
-
-      if (confirmDefaults) {
-        _ui->drawFrameLine(VT_YELLOW "Reset to defaults? Banks 1-4 NORMAL, 5-8 ARPEG, Immediate, group A = banks 1/2/5/6. (y/n)" VT_RESET);
-        _ui->drawFrameEmpty();
-        _ui->drawFrameEmpty();
-        _ui->drawFrameEmpty();
+      // Control bar
+      if (_editing) {
+        _ui->drawControlBar(VT_DIM "[^v] VALUE" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
       } else {
-        drawDescription(cursor, wkTypes[cursor]);
-
-        // Sub-field description (in edit mode) — shown below bank list to clarify focused field.
-        // Spec §25 : INFO panel descriptions par sous-champ.
-        if (editing) {
-          _ui->drawFrameEmpty();
-          switch (cursorSubField) {
-            case SF_TYPE: {
-              // Quantize description (only when ARPEG/ARPEG_GEN — quantize doesn't apply to NORMAL)
-              if (isArpType(wkTypes[cursor])) {
-                switch (wkQuantize[cursor]) {
-                  case 0:
-                    _ui->drawFrameLine(VT_DIM "Immediate: arp starts on next clock division boundary. Lowest latency." VT_RESET);
-                    break;
-                  case 1:
-                    _ui->drawFrameLine(VT_DIM "Beat: arp starts synced to next quarter note (24 ticks). Musical alignment." VT_RESET);
-                    break;
-                }
-              } else {
-                _ui->drawFrameLine(VT_DIM "Type: NORMAL/ARPEG/ARPEG_GEN. ^v cycles 5 states (ARPEG/ARPEG_GEN x Imm/Beat)." VT_RESET);
-              }
-              break;
-            }
-            case SF_GROUP:
-              _ui->drawFrameLine(VT_DIM "Scale group: -, A, B, C, D. Banks in same group share scale changes." VT_RESET);
-              break;
-            case SF_BONUS:
-              _ui->drawFrameLine(VT_DIM "Bonus pile (1.0-2.0): walk weight on pile degrees during mutation." VT_RESET);
-              _ui->drawFrameLine(VT_DIM "  Higher = mutations stay anchored to pile. Lower = wider scale exploration." VT_RESET);
-              break;
-            case SF_MARGIN:
-              _ui->drawFrameLine(VT_DIM "Margin walk (3-12): how far the walk can drift above/below pile range." VT_RESET);
-              _ui->drawFrameLine(VT_DIM "  Smaller = melody hugs pile. Larger = melody drifts to neighboring degrees." VT_RESET);
-              break;
-            case SF_PROX:
-              _ui->drawFrameLine(VT_DIM "Proximity factor (0.4-2.0): exponential falloff steepness of the walk weights." VT_RESET);
-              _ui->drawFrameLine(VT_DIM "  Smaller = step-wise melodic motion. Larger = more erratic, freer leaps." VT_RESET);
-              break;
-            case SF_ECART:
-              _ui->drawFrameLine(VT_DIM "Ecart (1-12): max degree jump between consecutive steps. Overrides R2+hold ecart." VT_RESET);
-              _ui->drawFrameLine(VT_DIM "  R2+hold pilote uniquement la longueur de sequence (8-96). Ecart = ce param." VT_RESET);
-              break;
-          }
-        }
+        _ui->drawControlBar(VT_DIM "[^v<>] NAV" CBAR_SEP "[RET] EDIT  [d] DFLT" CBAR_SEP "[q] EXIT" VT_RESET);
       }
-
-      if (errorShown) {
-        _ui->drawFrameEmpty();
-        _ui->drawFrameLine(VT_BRIGHT_RED "Max 4 ARP banks!" VT_RESET);
-      }
-
-      _ui->drawFrameEmpty();
-
-      // Control bar — uniformised per Phase 7 Task 17 (plan §0 D5 + §26).
-      // Edit : <-/-> cycle field, ^v adjust value of focused field. Universal §4.4 convention.
-      if (confirmDefaults) {
-        _ui->drawControlBar(CBAR_CONFIRM_ANY);
-      } else if (editing) {
-        _ui->drawControlBar(VT_DIM "[</>] FIELD  [^v] VALUE" CBAR_SEP "[RET] SAVE" CBAR_SEP "[q] CANCEL" VT_RESET);
-      } else {
-        _ui->drawControlBar(VT_DIM "[^v] NAV" CBAR_SEP "[RET] EDIT  [d] DFLT" CBAR_SEP "[q] EXIT" VT_RESET);
-      }
-
       _ui->vtFrameEnd();
     }
 
