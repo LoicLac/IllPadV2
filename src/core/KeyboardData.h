@@ -651,6 +651,10 @@ const uint8_t MAX_ARP_NOTES    = 48;
 const uint8_t MAX_ARP_SEQUENCE = 192;  // 48 notes × 4 octaves
 const uint8_t MAX_ARP_OCTAVES  = 4;
 
+// LOOP bank cap. Placeholder pre-Phase 2 LOOP, reconfirmed Phase 2 selon
+// mesure SRAM reelle de LoopEngine. Cf spec Tool 5 refacto §15.
+const uint8_t MAX_LOOP_BANKS   = 2;
+
 // ARPEG_GEN — discrete grid positions (spec §13, retuned V4 Task 22).
 // 8 valeurs uniques seqLen : 2, 3, 4, 8, 12, 16, 32, 64 (cf TABLE_GEN_SEQ_LEN).
 // Shared between ArpEngine (TABLE_GEN_SEQ_LEN lookup) and PotRouter
@@ -702,11 +706,22 @@ inline void validateLoopPotStore(LoopPotStore& s) {
 inline void validateBankTypeStore(BankTypeStore& s) {
   uint8_t arpCount = 0;
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    // Type clamp : tout > BANK_ARPEG_GEN (sauf BANK_ANY=0xFF) -> NORMAL
+    // Type clamp : tout > BANK_ARPEG_GEN (sauf BANK_ANY=0xFF) -> NORMAL.
+    // Enum order : NORMAL=0, ARPEG=1, LOOP=2, ARPEG_GEN=3 ; tous valides.
+    // Cap MAX_LOOP_BANKS / MAX_ARP_BANKS applique cote Tool 5 (cycle type),
+    // pas ici (validator clamp les valeurs, pas les compositions).
     if (s.types[i] > BANK_ARPEG_GEN && s.types[i] != BANK_ANY) s.types[i] = BANK_NORMAL;
     if (isArpType((BankType)s.types[i])) arpCount++;
     if (arpCount > MAX_ARP_BANKS) s.types[i] = BANK_NORMAL;
-    if (s.quantize[i] >= NUM_ARP_START_MODES) s.quantize[i] = DEFAULT_ARP_START_MODE;
+    // Quantize : interpretation discriminee par type (Tool 5 refacto §16).
+    //   - ARPEG / ARPEG_GEN : 0..1 (Imm/Beat), default DEFAULT_ARP_START_MODE.
+    //   - LOOP              : 0..2 (Free/Beat/Bar), default 2 (Bar).
+    //   - NORMAL            : ignore (Tool 5 affiche `·`).
+    if (isArpType((BankType)s.types[i])) {
+      if (s.quantize[i] >= NUM_ARP_START_MODES) s.quantize[i] = DEFAULT_ARP_START_MODE;
+    } else if (s.types[i] == BANK_LOOP) {
+      if (s.quantize[i] >= 3) s.quantize[i] = 2;  // Bar default
+    }
     if (s.scaleGroup[i] > NUM_SCALE_GROUPS) s.scaleGroup[i] = 0;
     // V3 : nouveaux champs (clamp aux ranges declares en spec §21)
     if (s.bonusPilex10[i] < 10 || s.bonusPilex10[i] > 20) s.bonusPilex10[i] = 15;
