@@ -370,4 +370,4 @@ Reset via `[d]` dans Tool 5 : remet tout aux defaults usine.
 - Structure NVS BankTypeStore v4 + ArpPotStore v1 :
   [nvs-reference.md](nvs-reference.md)
 - Spec de design complète : [`docs/superpowers/specs/2026-04-25-arpeg-gen-design.md`](../superpowers/specs/2026-04-25-arpeg-gen-design.md)
-- Plan d'implémentation : [`docs/superpowers/plans/2026-04-26-arpeg-gen-plan.md`](../superpowers/plans/2026-04-26-arpeg-gen-plan.md)
+- Plan d'implémentation (archivé) : [`docs/archive/2026-04-26-arpeg-gen-plan.md`](../archive/2026-04-26-arpeg-gen-plan.md)

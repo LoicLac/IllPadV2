@@ -1,8 +1,8 @@
 # ILLPAD V2 — Status
 
-_Sync : 2026-05-16. Lu en début de session, gardé à jour au fil de l'eau._
+_Sync : 2026-05-17. Lu en début de session, gardé à jour au fil de l'eau._
 
-**Focus courant** : LOOP Phase 1 sur main **CLOSE** (5 commits HW-validés). ARPEG_GEN feature complete. Prochaine étape : conception plan LOOP Phase 2 (LoopEngine + wiring).
+**Focus courant** : LOOP Phase 1 sur main **CLOSE** (5 commits HW-validés + 1 défensif Task 4). ARPEG_GEN feature complete. Prochaine étape : rédiger plan LOOP Phase 2 from scratch (P2 archive-based jeté ; spec + code main seules sources).
 
 ## ARPEG_GEN — historique commits
 
@@ -19,7 +19,7 @@ _Sync : 2026-05-16. Lu en début de session, gardé à jour au fil de l'eau._
 
 ## LOOP Phase 1 — historique commits
 
-Redo sur main après archivage de la branche `loop` (tag `loop-archive-2026-05-16` → `b79d03b`). Plan original ramené de 7 Tasks à 4 effectives (Tasks 5/6 obsolètes par v9 LED brightness, Task 4 portée par refonte gesture-dispatcher).
+Redo sur main après archivage de la branche `loop` (tag `loop-archive-2026-05-16` → `b79d03b`). Plan original ramené de 7 Tasks à 5 effectives (Tasks 5/6 obsolètes par v9 LED brightness).
 
 | Task | Commit | Description |
 |---|---|---|
@@ -28,8 +28,9 @@ Redo sur main après archivage de la branche `loop` (tag `loop-archive-2026-05-1
 | 3 | `68855e3` | LoopPotStore per-bank 12 B (5 effets : shuffleDepth/Tpl, chaos, velPattern/Depth) + namespace `illpad_lpot` |
 | 7 (amendé v9) | `48b96fb` | EVT_WAITING mode-invariant : colorA VERB_PLAY green, colorB CONFIRM_OK white hardcoded, BG-aware scaling, brightness = `_fgIntensity` |
 | doc sync | `8c0d68b` | nvs-reference : LoopPadStore + LoopPotStore PLANNED → DECLARED Phase 1 |
+| 4 défensif | `2624b12` | BankManager double-tap LOOP consume + ScaleManager early-return BANK_LOOP (refonte gesture-dispatcher abandonnée → câblé directement) |
 
-**Skippés intentionnellement** : Task 4 (gesture-dispatcher refonte porte la responsabilité), Tasks 5 + 6 (champs `fgArpPlayMax` / lignes Tool 8 `FG_PCT` supprimés par v9 LED brightness déjà sur main).
+**Skippés intentionnellement** : Tasks 5 + 6 (champs `fgArpPlayMax` / lignes Tool 8 `FG_PCT` supprimés par v9 LED brightness déjà sur main).
 
 ## Tool 5 ARPEG_GEN — paramètres exposés
 
@@ -64,18 +65,24 @@ Pad oct 1-4 : pour ARPEG_GEN = mutation level (1=lock, 2=1/16, 3=1/8, 4=1/4). Po
 - NORMAL / ARPEG / ARPEG_GEN inchangés (renderBankLoop dormant, jamais appelé — cycle Tool 5 ne propose pas LOOP)
 - EVT_WAITING refacto invisible en runtime (aucun callsite Phase 1, premier émetteur sera LoopEngine Phase 2)
 
+### LOOP Phase 1 Task 4 défensif (2026-05-17, commit `2624b12`)
+
+- Build clean inchangé (RAM 16.8 %, Flash 21.7 %)
+- Aucun observable runtime tant qu'une bank LOOP n'existe pas (impossible Phase 1, Tool 5 ne propose pas LOOP)
+- Guards défensifs prêts pour Phase 2 : double-tap LOOP n'entraînera pas de bank switch parasite, scale change no-op sur bank LOOP
+
 ## Follow-ups ouverts
 
-- **LOOP Phases 2-6** : orchestration multi-sessions (5 rédactions + audit + exécutions) tracée dans le roadmap dédié [docs/superpowers/LOOP_ROADMAP.md](docs/superpowers/LOOP_ROADMAP.md). Insights cumulatifs, décisions actées (Q1-Q8) et pendantes (P1-P6) y sont maintenus en continu.
+- **LOOP Phases 2-6** : à rédiger from scratch depuis spec + code main. Le précédent plan Phase 2 ([docs/archive/2026-05-16-loop-phase-2-plan.md](docs/archive/2026-05-16-loop-phase-2-plan.md)) et son roadmap multi-sessions ([docs/archive/LOOP_ROADMAP-2026-05-16.md](docs/archive/LOOP_ROADMAP-2026-05-16.md)) sont archivés (approche archive-based jetée). Les invariants buffer LOOP extraits restent normatifs : [docs/reference/loop-buffer-invariants.md](docs/reference/loop-buffer-invariants.md).
 
 ## Sources
 
-- Plan ARPEG_GEN : [docs/superpowers/plans/2026-04-26-arpeg-gen-plan.md](docs/superpowers/plans/2026-04-26-arpeg-gen-plan.md)
 - Spec ARPEG_GEN : [docs/superpowers/specs/2026-04-25-arpeg-gen-design.md](docs/superpowers/specs/2026-04-25-arpeg-gen-design.md)
-- Roadmap LOOP multi-sessions : [docs/superpowers/LOOP_ROADMAP.md](docs/superpowers/LOOP_ROADMAP.md)
-- Plan LOOP Phase 1 : [docs/superpowers/plans/2026-04-21-loop-phase-1-plan.md](docs/superpowers/plans/2026-04-21-loop-phase-1-plan.md)
-- Spec LOOP : [docs/superpowers/specs/2026-04-19-loop-mode-design.md](docs/superpowers/specs/2026-04-19-loop-mode-design.md) (VALIDÉE, MAJ 2026-05-16 LED v9)
-- Rapport audit LOOP spec (8 tranchages) : [docs/superpowers/reports/rapport_audit_loop_spec.md](docs/superpowers/reports/rapport_audit_loop_spec.md)
+- Spec LOOP : [docs/superpowers/specs/2026-04-19-loop-mode-design.md](docs/superpowers/specs/2026-04-19-loop-mode-design.md) (VALIDÉE, MAJ 2026-05-16 LED v9 ; §28 Q3/Q4 à actualiser)
+- Invariants buffer LOOP : [docs/reference/loop-buffer-invariants.md](docs/reference/loop-buffer-invariants.md) (extrait des Parties 8-9 du gesture-dispatcher-design archivé)
+- Plan ARPEG_GEN (archivé) : [docs/archive/2026-04-26-arpeg-gen-plan.md](docs/archive/2026-04-26-arpeg-gen-plan.md)
+- Plan LOOP Phase 1 (archivé) : [docs/archive/2026-04-21-loop-phase-1-plan.md](docs/archive/2026-04-21-loop-phase-1-plan.md)
+- Rapport audit LOOP spec 8 tranchages (archivé) : [docs/archive/rapport_audit_loop_spec.md](docs/archive/rapport_audit_loop_spec.md)
 - Branche `loop` archivée (référence Phase 1 + Phase 2 ~90 %) : tag `loop-archive-2026-05-16` → `b79d03b`
 - Arp reference (incl. §13 Generative mode) : [docs/reference/arp-reference.md](docs/reference/arp-reference.md)
 - NVS reference (BankTypeStore v4, ArpPotStore v1) : [docs/reference/nvs-reference.md](docs/reference/nvs-reference.md)

@@ -4,7 +4,7 @@
 **Auditeur** : session Claude (audit critique read-only)
 **Branche** : `main`
 **Commits audités** : 13 commits (5c3e57c → 8511b0d)
-**Plan source** : `docs/superpowers/plans/2026-04-19-phase0-led-refactor-plan.md`
+**Plan source** (archivé) : `docs/archive/2026-04-19-phase0-led-refactor-plan.md`
 **Specs sources** :
   - `docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md`
   - `docs/superpowers/specs/2026-04-19-loop-mode-design.md` (§20 timers)
