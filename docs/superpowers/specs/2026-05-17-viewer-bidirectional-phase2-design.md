@@ -86,19 +86,28 @@ bank=N`. Internement, `K-1` indexe `s_banks[]`.
 
 ### §4 — Mapping runtime + NVS pour chaque command
 
-| Command | Runtime setter | NVS update (cache + persist) |
-|---|---|---|
-| `!CLOCKMODE` | `s_clockManager.setMasterMode(value == "master")` | `s_settings.clockMode = CLOCK_MASTER/SLAVE` + `nvs.queueSettingsWrite(s_settings)` |
-| `!BONUS=N BANK=K` | `s_banks[K-1].arpEngine->setBonusPile(N)` | `nvs.setLoadedBonusPile(K-1, N)` + `nvs.queueBankTypeFromCache()` |
-| `!MARGIN=N BANK=K` | `s_banks[K-1].arpEngine->setMarginWalk(N)` | `nvs.setLoadedMarginWalk(K-1, N)` + `nvs.queueBankTypeFromCache()` |
-| `!PROX=N BANK=K` | `s_banks[K-1].arpEngine->setProximityFactor(N)` | `nvs.setLoadedProximityFactor(K-1, N)` + `nvs.queueBankTypeFromCache()` |
-| `!ECART=N BANK=K` | `s_banks[K-1].arpEngine->setEcart(N)` | `nvs.setLoadedEcart(K-1, N)` + `nvs.queueBankTypeFromCache()` |
+| Command | Runtime setter | NVS update (cache + persist) | Events émis post-write |
+|---|---|---|---|
+| `!CLOCKMODE` | `s_clockManager.setMasterMode(value == "master")` | `s_settings.clockMode = CLOCK_MASTER/SLAVE` + `nvs.queueSettingsWrite(s_settings)` | `[SETTINGS] ...` + **`[CLOCK] Source: <label>`** (cf §6.1) |
+| `!BONUS=N BANK=K` | `s_banks[K-1].arpEngine->setBonusPile(N)` | `nvs.setLoadedBonusPile(K-1, N)` + `nvs.queueBankTypeFromCache()` | `[BANK_SETTINGS] bank=K ...` |
+| `!MARGIN=N BANK=K` | `s_banks[K-1].arpEngine->setMarginWalk(N)` | `nvs.setLoadedMarginWalk(K-1, N)` + `nvs.queueBankTypeFromCache()` | `[BANK_SETTINGS] bank=K ...` |
+| `!PROX=N BANK=K` | `s_banks[K-1].arpEngine->setProximityFactor(N)` | `nvs.setLoadedProximityFactor(K-1, N)` + `nvs.queueBankTypeFromCache()` | `[BANK_SETTINGS] bank=K ...` |
+| `!ECART=N BANK=K` | `s_banks[K-1].arpEngine->setEcart(N)` | `nvs.setLoadedEcart(K-1, N)` + `nvs.queueBankTypeFromCache()` | `[BANK_SETTINGS] bank=K ...` |
 
 **Note `!CLOCKMODE` side-effects** : `setMasterMode(false)` (slave) ne
 re-établit pas de lock externe automatique — il bascule le source selection
 dans `ClockManager` ; si aucune source externe n'est présente, le BPM cible
 sera celui du pot Tempo interne. La transition est immédiate, pas de panic
 note off. Cohérent avec Tool 8 setup.
+
+**Note `!CLOCKMODE` cohérence visuelle viewer** : `setMasterMode(true)` force
+`_activeSource = SRC_INTERNAL` ([ClockManager.cpp:258](../../../src/midi/ClockManager.cpp))
+mais **n'émet pas** lui-même de `[CLOCK] Source:`. Le viewer header
+(`device.clockSource`) reflèterait l'ancienne source jusqu'au prochain
+tick externe / timeout / Resync manuel. **Fix Phase 2** : le handler
+`!CLOCKMODE` émet explicitement `viewer::emitClockSource(s_clockManager.getActiveSourceLabel(), 0.0f)`
+après `setMasterMode`, pour synchroniser le badge clock source côté
+viewer dans la même réponse. Cf §6.1 pour l'ordre exact d'émission.
 
 **Note `setLoadedX()` → `queueBankTypeFromCache()`** : les setters de
 `NvsManager` modifient l'array interne `_loadedX[NUM_BANKS]`. La méthode
@@ -142,13 +151,46 @@ Commands valides :
 
 ### §6 — Confirmation events
 
-#### §6.1 — `!CLOCKMODE` succès → re-emit `[SETTINGS]`
+#### §6.1 — `!CLOCKMODE` succès → re-emit `[SETTINGS]` + `[CLOCK] Source:`
 
-Format existant (Phase 1.D, [`ViewerSerial.cpp:675-689`](../../../src/viewer/ViewerSerial.cpp)) :
+**Deux events émis dans cet ordre strict**, séparément (PRIO_HIGH les deux) :
+
+1. **`[SETTINGS]`** — format existant (Phase 1.D, [`ViewerSerial.cpp:675-689`](../../../src/viewer/ViewerSerial.cpp:675)) :
 ```
 [SETTINGS] ClockMode=master PanicReconnect=1 DoubleTapMs=150 AftertouchRate=20 BleInterval=2 BatAdcFull=3000\n
 ```
-Pas de nouveau format à introduire. Le viewer parse déjà cette ligne.
+Pas de nouveau format. Le viewer parse déjà cette ligne via `applySettings` qui
+met à jour `device.settings.clockMode`.
+
+2. **`[CLOCK] Source:`** — format existant Phase 1 ([`ViewerSerial.cpp:629-639`](../../../src/viewer/ViewerSerial.cpp:629)) :
+```
+[CLOCK] Source: internal\n
+```
+Émis pour synchroniser `device.clockSource` côté viewer (badge clock source
+du header). Sinon le viewer afficherait l'ancienne source jusqu'au prochain
+tick externe / timeout (cas slave→master avec source USB/BLE active : badge
+reste « usb »/« ble » alors que firmware est en master internal).
+
+**Ordre d'exécution dans le handler** :
+```cpp
+// 1. Validate value (parse master|slave string)
+// 2. Apply runtime
+s_clockManager.setMasterMode(isMaster);
+// 3. Update s_settings (BEFORE emitSettings reads it)
+s_settings.clockMode = isMaster ? CLOCK_MASTER : CLOCK_SLAVE;
+// 4. Queue NVS save (debounced 500ms)
+s_nvsManager.queueSettingsWrite(s_settings);
+// 5. Emit confirmations (order : SETTINGS puis CLOCK Source)
+viewer::emitSettings();
+viewer::emitClockSource(s_clockManager.getActiveSourceLabel(), 0.0f);
+```
+
+`getActiveSourceLabel()` ([ClockManager.cpp:269-277](../../../src/midi/ClockManager.cpp:269))
+retourne `"internal"` immédiatement après `setMasterMode(true)` (force
+`_activeSource = SRC_INTERNAL`). En cas `setMasterMode(false)`, retourne la
+source courante (probablement `"internal"` aussi si pas de tick externe
+encore reçu, ou `"usb"`/`"ble"` si une source était précédemment locked et
+n'a pas timeout).
 
 #### §6.2 — `!BONUS/MARGIN/PROX/ECART BANK=K` succès → emit `[BANK_SETTINGS]`
 
