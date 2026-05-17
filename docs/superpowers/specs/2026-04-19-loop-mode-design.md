@@ -179,7 +179,7 @@ Deux contraintes à connaître :
 
 Ces trois actions pilotent la vie de la boucle une fois qu'elle existe.
 
-**PLAY/STOP** alterne entre PLAYING et STOPPED. La détection du tap est instantanée, mais l'**action musicale** (démarrage ou arrêt) suit le mode de quantization per-bank (`loopQuantize`) — voir §17. Un tap simple déclenche l'action quantisée si `loopQuantize` est Beat ou Bar, ou immédiate si No quantize. Un **double-tap** force toujours l'action immédiate, quelle que soit la valeur de `loopQuantize` (bypass du quantize). En cas de stop immédiat, un **flush de toutes les notes en cours** est émis (refcount → 0, CC123 All Notes Off en sécurité) pour éviter les notes bloquées.
+**PLAY/STOP** alterne entre PLAYING et STOPPED. La détection du tap est instantanée, mais l'**action musicale** (démarrage ou arrêt) suit **strictement** le mode de quantization per-bank (`loopQuantize`) — voir §17. Tap PLAY/STOP déclenche l'action quantisée si `loopQuantize` est Beat ou Bar, ou immédiate si No quantize. **Pas de bypass quantize** : pour un stop instantané en live, configurer la bank en No quantize. En cas de stop immédiat (No quantize ou à boundary Beat/Bar), un **flush de toutes les notes en cours** est émis (refcount → 0, CC123 All Notes Off en sécurité) pour éviter les notes bloquées.
 
 Sur un OVERDUBBING, PLAY/STOP abandonne l'overdub et laisse l'engine en PLAYING (voir §8).
 
@@ -330,21 +330,21 @@ Le mode LOOP applique un quantize **uniforme** à tous les démarrages et arrêt
 
 **Défaut : Bar** à la création d'une bank LOOP.
 
-**Modèle tap / double-tap pour PLAY/STOP** :
+**Modèle PLAY/STOP** :
 
-- **Tap simple** sur PLAY/STOP → l'action **suit** `loopQuantize`. Si Beat ou Bar, l'engine entre dans un état transitoire (WAITING_PLAY ou WAITING_STOP). Quand le boundary arrive, l'action s'exécute. Si `loopQuantize` = No quantize, le tap simple est déjà immédiat (pas d'état transitoire).
-- **Double-tap** dans une fenêtre `doubleTapMs` (~150 ms, réutilise le paramètre existant) → l'action **bypasse** le quantize et fire immédiatement.
+- **Tap PLAY/STOP** → l'action **suit strictement** `loopQuantize`. Si Beat ou Bar, l'engine entre dans un état transitoire (WAITING_PLAY ou WAITING_STOP). Quand le boundary arrive, l'action s'exécute. Si `loopQuantize` = No quantize, le tap est déjà immédiat (pas d'état transitoire).
+- **Pas de bypass** : la valeur `loopQuantize` est respectée dans tous les cas. Pour un déclenchement instantané en live, configurer la bank en No quantize.
 
-**Load slot** : suit strictement `loopQuantize`, **pas de double-tap bypass** (voir §12). Pour un hard-cut, le musicien configure la bank en No quantize.
+**Load slot** : suit strictement `loopQuantize` (cf §12). Pour un hard-cut, configurer la bank en No quantize.
 
 **Machine d'état étendue** :
 
 ```
 STOPPED ──tap──→ WAITING_PLAY (si Beat/Bar) ──boundary──→ PLAYING
-STOPPED ──double-tap / tap si No quantize──→ PLAYING (immédiat)
+STOPPED ──tap si No quantize──→ PLAYING (immédiat)
 
 PLAYING ──tap──→ WAITING_STOP (si Beat/Bar) ──boundary──→ STOPPED
-PLAYING ──double-tap / tap si No quantize──→ STOPPED (immédiat, flush notes)
+PLAYING ──tap si No quantize──→ STOPPED (immédiat, flush notes)
 
 PLAYING ──tap slot (court)──→ WAITING_LOAD (si Beat/Bar) ──boundary──→ PLAYING (new)
 PLAYING ──tap slot (court) si No quantize──→ PLAYING (new, hard-cut)
@@ -360,8 +360,7 @@ Table détaillée :
 
 | Geste pendant WAITING_* | WAITING_PLAY | WAITING_STOP | WAITING_LOAD |
 |---|---|---|---|
-| Tap PLAY/STOP **dans** doubleTapMs (double-tap bypass) | → PLAYING immédiat | → STOPPED immédiat | Double-tap = geste atomique annule load + commit STOPPED immédiat (bypass quantize). L'engine quitte WAITING_LOAD vers STOPPED en une seule transition. |
-| Tap PLAY/STOP **hors** doubleTapMs | Annule, retour STOPPED | Annule, retour PLAYING | Annule load, puis tap applique play/stop sur PLAYING → WAITING_STOP |
+| Tap PLAY/STOP | Annule, retour STOPPED | Annule, retour PLAYING | Annule load, puis tap applique play/stop sur PLAYING → WAITING_STOP |
 | Tap REC | Ignoré (REC n'a aucun sens sur STOPPED) | **Annule STOP + entre OVERDUBBING** | Annule load + entre OVERDUBBING |
 | Tap slot (court ou long) | **Interdit** | **Interdit** | **Interdit** (pas de changement de slot en plein load pending) |
 | Long-press CLEAR | **Interdit** | **Interdit** | **Interdit** |
@@ -546,7 +545,7 @@ Structure en trois groupes : **questions tranchées** (pour traçabilité), **qu
 | — | Tool 7 | **3 pages dédiées** (N/A/L), même nav pot que l'existant, pas de touche `t` (§22) |
 | — | Recording quantisé future | Abandonné (pas de WAITING_REC future) |
 | — | Save de slot | Autorisé uniquement en état STOPPED (§11) |
-| — | Stop / Play quantisé | Double-tap = bypass immédiat, tap simple = suit loopQuantize (§17) |
+| — | Stop / Play quantisé | Suit **strictement** `loopQuantize` per-bank — **pas de bypass** (No quantize / Beat / Bar décide). Pour un toggle instantané, configurer la bank en No quantize (§17). |
 | — | Load slot pendant PLAYING | Suit loopQuantize, **pas de double-tap bypass** (§12, §17) |
 | — | Persistance params per-bank + slot | **Garder les deux** : NVS per-bank pour la mémoire "bank", slot embarque les params pour le rappel cohérent (§3) |
 | — | Mode Immediate → renommé | **"No quantize"** pour clarifier l'intention (§17) |
