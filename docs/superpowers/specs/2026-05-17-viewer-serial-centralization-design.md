@@ -195,36 +195,48 @@ ré-émission de tous les `[POT]` au prochain tick de loop.
 
 ### §6 — Queue, priority, backpressure
 
-Queue = FreeRTOS StreamBuffer (ring de bytes, multi-writer thread-safe), taille
-**8 KB**.
+Queue = FreeRTOS **xQueue** (queue de messages de taille fixe), 32 slots de
+**256 bytes** = **8 KB** total. Chaque slot contient une struct `{uint8_t prio,
+uint8_t len, char line[254]}`.
 
-Format de message stocké : ligne complète déjà formatée + 1 byte de prefix
-priority. Le prefix permet à la task de scanner la queue pour drop sélectif
-sous backpressure (le StreamBuffer ne supporte pas le re-ordering, mais on peut
-drop l'event en cours de pop si LOW + backpressure).
+**Pourquoi xQueue au lieu de StreamBuffer (révoqué post-review subagent
+2026-05-17)** :
+- xQueue est multi-producer / multi-consumer thread-safe nativement. StreamBuffer
+  est single-producer single-consumer par défaut — l'usage multi-writer
+  exigerait une config additionnelle ou un wrapper.
+- Atomicité par message : 1 slot = 1 event complet. Pas de risque de
+  fragmentation si plusieurs emit() concurrent (Phase 2 pourrait emit depuis
+  callback NimBLE Core 0).
+- Drop-on-full clair : `xQueueSend` timeout 0 → `errQUEUE_FULL` → caller drop
+  l'event entier (pas de partial write au niveau queue).
+- Coût SRAM identique (8 KB).
 
 Logique de push (caller's thread) :
 ```
-emit_xxx(prio, fmt, ...):
+emit(prio, fmt, ...):
   if (!isViewerConnected()) return;
-  char buf[256];
-  int n = vsnprintf(buf, sizeof(buf), fmt, ...);
+  if (!s_queue) return;
+  QueuedEvent ev;
+  ev.prio = prio;
+  int n = vsnprintf(ev.line, sizeof(ev.line), fmt, args);
   if (n <= 0) return;
-  size_t freeSpace = xStreamBufferSpacesAvailable(queue);
-  if (prio == LOW && freeSpace < queueSize * 0.3) return;  // backpressure
-  if (freeSpace < n + 2) return;                            // queue plein hard
-  xStreamBufferSend(queue, &prio, 1, 0);
-  xStreamBufferSend(queue, buf, n, 0);
+  ev.len = min(n, sizeof(ev.line));
+  // Backpressure : si LOW et moins de 30% libre, drop
+  UBaseType_t freeSlots = uxQueueSpacesAvailable(s_queue);
+  if (prio == LOW && freeSlots < (QUEUE_DEPTH * 3 / 10)) return;
+  xQueueSend(s_queue, &ev, 0);   // timeout 0 = drop si pleine
 ```
 
 Logique de drain (task) :
 ```
 loop:
-  uint8_t prio;
-  xStreamBufferReceive(queue, &prio, 1, portMAX_DELAY);
-  char line[256];
-  int n = xStreamBufferReceive(queue, line, sizeof(line), 10ms);
-  Serial.write(line, n);
+  QueuedEvent ev;
+  if (xQueueReceive(s_queue, &ev, pdMS_TO_TICKS(10)) == pdPASS) {
+    if (Serial.availableForWrite() >= ev.len) {
+      Serial.write((uint8_t*)ev.line, ev.len);
+    }
+    // else : drop silencieux pour eviter ligne tronquee
+  }
 ```
 
 Priority levels :
@@ -286,28 +298,34 @@ void emitSettings();              // lit s_nvsManager.getLoadedSettings()
 void emitReady(uint8_t currentBank);
 
 // Runtime events
-void emitBankSwitch(uint8_t newBank);              // émet [BANK] Bank N + [STATE]
-void emitScale(ScaleChangeType kind, const ScaleConfig& scale);
-void emitArpOctave(uint8_t bank, uint8_t octave);
-void emitArpGenMutation(uint8_t bank, uint8_t level);
-void emitArpNoteAdd(uint8_t bank, uint8_t pileCount);     // alimente le coalesce 50ms
-void emitArpNoteRemove(uint8_t bank, uint8_t pileCount);  // alimente le coalesce 50ms
-void emitArpPlay(uint8_t bank, uint8_t pileCount, bool relaunch);
-void emitArpStop(uint8_t bank, uint8_t pileCount);
+void emitBankSwitch(uint8_t newBankIdx);                     // [BANK] Bank N + [STATE]
+enum ScaleEventKind : uint8_t { SCALE_ROOT, SCALE_MODE, SCALE_CHROMATIC };
+void emitScale(ScaleEventKind kind, uint8_t rootIdx, uint8_t modeIdx);
+void emitArpOctave(uint8_t octave);                          // [ARP] Octave N
+void emitArpGenMutation(uint8_t mutationLevel);              // [ARP_GEN] MutationLevel N
+void emitArpNoteAdd(uint8_t bankIdx, uint8_t pileCount);     // LOW droppable (pas de coalesce)
+void emitArpNoteRemove(uint8_t bankIdx, uint8_t pileCount);  // LOW droppable
+void emitArpPlay(uint8_t bankIdx, uint8_t pileCount, bool relaunchPaused);
+void emitArpStop(uint8_t bankIdx, uint8_t pileCount);
 void emitArpQueueFull();
 void emitGenSeed(uint16_t seqLen, uint8_t eInit, uint8_t pileCount,
                  int8_t lo, int8_t hi);
-void emitClockSource(const char* srcLabel, float bpmIfLastKnown);  // bpm = 0 si non last-known
-void emitClockBpm(float bpm, const char* srcLabel);   // [CLOCK] BPM=X src=usb (M2)
-void emitMidiTransport(const char* transport, bool connected);
+void emitGenSeedDegenerate(uint16_t seqLen, int8_t singleDegree);
+void emitClockSource(const char* srcLabel, float bpm);  // bpm > 0 → format "last known (X BPM)"
+void emitClockBpm(float bpm, const char* srcLabel);     // [CLOCK] BPM=X src=usb (R3)
+void emitMidiTransport(const char* transport, const char* state);  // "USB"|"BLE", "connected"|"disconnected"
 void emitPanic();
-void emitPot(uint8_t slot, PotTarget target, const char* valueStr,
-             const char* unit, Priority prio);
+// emitPot : slot label déjà résolu (potSlotName), target label libre.
+// Internal LOW priority (droppable). PotTarget abstraction non exposée à l'API
+// pour éviter import de KeyboardData.h dans le header viewer.
+void emitPot(const char* slot, const char* target, const char* valueStr,
+             const char* unit);   // unit nullable
 
 }  // namespace viewer
 ```
 
-`Priority` enum interne : `HIGH`, `LOW`.
+`Priority` enum interne au .cpp : `HIGH`, `LOW`. Non exposé via API publique —
+chaque emit_xxx() typed choisit sa priority en interne (cf. §6 listing).
 
 ### §9 — Input command parser
 
@@ -499,16 +517,19 @@ Emission :
 
 Format key=value :
 ```
-[SETTINGS] ClockMode=slave PanicReconnect=1 DoubleTapMs=400 AftertouchRate=10 BleInterval=2 BatAdcFull=4095
+[SETTINGS] ClockMode=slave PanicReconnect=1 DoubleTapMs=400 AftertouchRate=10 BleInterval=normal BatAdcFull=4095
 ```
 
 Fields Phase 1 (lecture seule — Phase 2 ajoutera les write commands) :
-- `ClockMode` ∈ `{slave, master}` = `s_settings.clockMode`
-- `PanicReconnect` ∈ `{0, 1}` = `s_settings.panicOnReconnect`
-- `DoubleTapMs` = `s_settings.doubleTapMs`
-- `AftertouchRate` = `s_settings.aftertouchRate`
-- `BleInterval` ∈ `{0, 1, 2, 3}` = `s_settings.bleInterval` (BLE_OFF/LOW/NORMAL/SAVER)
-- `BatAdcFull` = `s_settings.batAdcAtFull`
+- `ClockMode` ∈ `{slave, master}` = `s_settings.clockMode` mappé en label.
+- `PanicReconnect` ∈ `{0, 1}` = `s_settings.panicOnReconnect` (bool numérique).
+- `DoubleTapMs` = `s_settings.doubleTapMs` (uint16 millis).
+- `AftertouchRate` = `s_settings.aftertouchRate` (uint8 Hz).
+- `BleInterval` ∈ `{off, low, normal, saver}` = label mappé depuis
+  `s_settings.bleInterval` (0=BLE_OFF, 1=BLE_LOW_LATENCY, 2=BLE_NORMAL,
+  3=BLE_BATTERY_SAVER). **Label texte** plutôt que numérique pour lisibilité
+  viewer.
+- `BatAdcFull` = `s_settings.batAdcAtFull` (uint16 ADC raw).
 
 Emission :
 - Boot dump.

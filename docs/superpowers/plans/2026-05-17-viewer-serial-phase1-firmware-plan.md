@@ -182,7 +182,7 @@ struct QueuedEvent {
 // Queue sizing per spec §6 : 32 slots × 256 bytes = 8 KB total
 constexpr UBaseType_t QUEUE_DEPTH      = 32;
 constexpr UBaseType_t TASK_PRIORITY    = 0;     // idle priority — safe vs main loop prio 1
-constexpr uint32_t    TASK_STACK_BYTES = 4096;  // 4 KB stack (match NvsManager convention)
+constexpr uint32_t    TASK_STACK_BYTES = 4096;  // 4 KB stack — convention projet (cf. NvsManager.cpp:170, main.cpp:834)
 constexpr BaseType_t  TASK_CORE        = 1;     // Core 1 (Core 0 saturé par sensingTask)
 
 QueueHandle_t       s_queue           = nullptr;
@@ -208,7 +208,16 @@ void taskBody(void* /*arg*/) {
 
     // Drain with 10ms wait — if no event in 10ms, loop and re-check connection
     if (xQueueReceive(s_queue, &ev, pdMS_TO_TICKS(10)) == pdPASS) {
-      Serial.write(reinterpret_cast<const uint8_t*>(ev.line), ev.len);
+      // Serial.write peut retourner < ev.len si le ring buffer USB CDC est
+      // plein malgre setTxTimeoutMs(0) (viewer host slow). Drop la ligne
+      // entiere plutot qu'emettre une ligne tronquee qui confondrait le
+      // parser viewer. Le viewer perdra cet event mais restera coherent.
+      const uint8_t* buf = reinterpret_cast<const uint8_t*>(ev.line);
+      if (Serial.availableForWrite() >= ev.len) {
+        Serial.write(buf, ev.len);
+      }
+      // else : drop silencieux. La prochaine resync (auto-resync ou ?BOTH)
+      // re-emettra l'etat complet.
     }
   }
 }
@@ -218,13 +227,27 @@ void taskBody(void* /*arg*/) {
 void begin() {
   s_queue = xQueueCreate(QUEUE_DEPTH, sizeof(QueuedEvent));
   if (!s_queue) {
+    // [FATAL] always-on (parser-recognized). Le module ne pourra rien emettre
+    // ensuite (s_queue null = tous les emit() return immediatement). Le firmware
+    // reste fonctionnel cote MIDI/LED/jeu live, juste invisible au viewer.
     Serial.println("[FATAL] viewer queue create failed");
+    Serial.flush();
     return;
   }
-  xTaskCreatePinnedToCore(
+  // NOTE: xTaskCreatePinnedToCore sur Arduino ESP32 attend la stack size **en bytes**
+  // (le wrapper convertit vers words côté IDF). Cf. NvsManager.cpp:170 et main.cpp:834
+  // qui passent 4096 directement. NE PAS diviser par sizeof(StackType_t).
+  BaseType_t taskOk = xTaskCreatePinnedToCore(
     taskBody, "viewer",
-    TASK_STACK_BYTES / sizeof(StackType_t),  // stack en words
+    TASK_STACK_BYTES,                  // 4096 bytes direct
     nullptr, TASK_PRIORITY, &s_task, TASK_CORE);
+  if (taskOk != pdPASS) {
+    // Queue exists but no drain — emit() saturera la queue puis stagnera en
+    // backpressure permanent. Pas un crash mais degradation silencieuse.
+    // Cas extreme (RAM saturée au boot) — rare. Signalisation FATAL pour diag.
+    Serial.println("[FATAL] viewer task create failed");
+    Serial.flush();
+  }
 }
 
 void pollCommands() {
@@ -320,16 +343,26 @@ If build fails on `freertos/queue.h` not found, try alternative includes:
 - `#include "freertos/queue.h"` (without `<>`)
 - Verify `framework-arduinoespressif32` includes path.
 
-- [ ] **Step 7: HW gate — smoke test**
+- [ ] **Step 7: HW gate — smoke test + CPU bench (spec §3b)**
 
 1. Flash firmware : `~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1 -t upload`
 2. Open serial monitor : `~/.platformio/penv/bin/pio device monitor -b 115200`
 3. Verify boot output is unchanged (all `[INIT] *` lines + boot dump appears).
+   Pas de `[FATAL]` au boot (= queue + task créées OK).
 4. Close serial monitor, open viewer JUCE app. Verify viewer hydrates.
 5. Close viewer, re-open. Verify firmware doesn't crash.
 6. Disconnect USB cable for 5s, reconnect. Verify firmware still responsive
    (LED bargraph reacts to pot moves), viewer reconnects.
-7. **Wait for user OK before commit.**
+7. **CPU bench (spec §3b)** : avec une source MIDI clock externe à 120 BPM,
+   jouer 10 pads simultanément en ARPEG sur 30s, viewer connecté ET déconnecté.
+   Observer en parallèle dans le serial monitor (ou en ajoutant temporairement
+   un compteur `uxTaskGetSystemState`) que :
+   - Aucun MIDI jitter audible côté DAW
+   - Pas de "[ARP] WARNING: Event queue full" répétitifs
+   - LED bargraph reste fluide
+   Si différence comportementale viewer absent vs présent → reporter dans le
+   commit, ouvrir une issue, ne pas commit.
+8. **Wait for user OK before commit.**
 
 - [ ] **Step 8: Commit**
 
@@ -1365,7 +1398,19 @@ L211 (octave) :
 
 Remove the surrounding `#if DEBUG_SERIAL ... #endif` blocks. Note: the
 `#if DEBUG_SERIAL` block at the top of ScaleManager.cpp (L7-14) defining
-`ROOT_NAMES`/`MODE_NAMES` becomes unused — can be removed.
+`ROOT_NAMES`/`MODE_NAMES` devient unused **après** migration des 3 sites
+[SCALE] — supprimer ce bloc explicitement à ce moment-là :
+```cpp
+// Remove these lines from ScaleManager.cpp:
+//   #if DEBUG_SERIAL
+//   static const char* ROOT_NAMES[7] = {"A", "B", "C", "D", "E", "F", "G"};
+//   static const char* MODE_NAMES[7] = {
+//     "Ionian", "Dorian", "Phrygian", "Lydian",
+//     "Mixolydian", "Aeolian", "Locrian"
+//   };
+//   #endif
+```
+Les tables vivent désormais uniquement dans ViewerSerial.cpp `emitScale()`.
 
 - [ ] **Step 4: Compile + HW + commit**
 
@@ -1603,24 +1648,71 @@ const char* ClockManager::getActiveSourceLabel() const {
 }
 ```
 
-- [ ] **Step 2: Promote `s_settings` to file-scope global in main.cpp**
+- [ ] **Step 2: Promote globals to external linkage in main.cpp**
 
-Locate main.cpp setup() at line ~675 :
+**Problème de linkage à résoudre** : ViewerSerial.cpp doit lire 5 globals
+définis dans main.cpp (`s_banks`, `s_potRouter`, `s_nvsManager`, `s_bankManager`,
+`s_clockManager`) plus `s_settings`. Or main.cpp:50-65 les déclare tous `static`
+(internal linkage) — `extern` ne peut pas y accéder, link fail garantie.
+
+Fix : **retirer le mot-clé `static`** de ces 5 globals + ajouter `s_settings`
+au file-scope sans `static`. Les autres globals (s_keyboard, s_transport,
+s_midiEngine, s_leds, s_scaleManager, s_batteryMonitor, s_controlPadManager,
+s_setupManager, s_arpEngines) gardent leur `static` (pas référencés par
+ViewerSerial).
+
+Modifier `src/main.cpp` lignes 50-65 :
+
+AVANT :
 ```cpp
-  SettingsStore s_settings;
-  s_nvsManager.loadAll(s_banks, currentBank, s_padOrder, bankPads,
-                        rootPads, modePads, chromaticPad, holdPad,
-                        octavePads, s_potRouter, s_settings);
+static CapacitiveKeyboard s_keyboard;
+static MidiTransport      s_transport;
+static MidiEngine         s_midiEngine;
+static LedController      s_leds;
+static BankManager        s_bankManager;
+static ScaleManager       s_scaleManager;
+static PotRouter          s_potRouter;
+static BatteryMonitor     s_batteryMonitor;
+static NvsManager         s_nvsManager;
+static ControlPadManager  s_controlPadManager;
+static SetupManager       s_setupManager;
+static ClockManager       s_clockManager;
+// ...
+static BankSlot s_banks[NUM_BANKS];
 ```
 
-Move `SettingsStore s_settings;` declaration to file scope (just below the
-other `static` globals at top of main.cpp, around line 70-90). Make it static :
+APRÈS :
 ```cpp
-static SettingsStore s_settings;
+static CapacitiveKeyboard s_keyboard;
+static MidiTransport      s_transport;
+static MidiEngine         s_midiEngine;
+static LedController      s_leds;
+       BankManager        s_bankManager;       // external linkage (ViewerSerial reads)
+static ScaleManager       s_scaleManager;
+       PotRouter          s_potRouter;         // external linkage (ViewerSerial reads)
+static BatteryMonitor     s_batteryMonitor;
+       NvsManager         s_nvsManager;        // external linkage (ViewerSerial reads)
+static ControlPadManager  s_controlPadManager;
+static SetupManager       s_setupManager;
+       ClockManager       s_clockManager;      // external linkage (ViewerSerial reads)
+// ...
+       BankSlot s_banks[NUM_BANKS];             // external linkage (ViewerSerial reads)
 ```
 
-In setup() at line 675, remove the local declaration. The `loadAll` call then
-uses the file-scope global directly.
+Ajouter en plus la déclaration `s_settings` (qui était locale dans setup) au
+file-scope, sans `static` :
+```cpp
+       SettingsStore s_settings;                // external linkage (ViewerSerial reads)
+```
+
+Dans setup() à L675, supprimer la déclaration locale `SettingsStore s_settings;`.
+Le `loadAll(... s_settings)` utilise la global automatiquement.
+
+**Rationale** : C'est un override conscient de la convention `static` projet,
+documenté ici. Justification : aucun couplage circulaire (le module dépend de
+main.cpp à sens unique), pas de risque de double définition (un seul TU
+définit les symboles), et c'est le pattern accepté en C/C++ pour des globaux
+partagés sans fichier d'en-tête dédié.
 
 - [ ] **Step 3: Add `resetDbgSentinels()` function in main.cpp**
 
@@ -1628,10 +1720,19 @@ The `s_dbg*` sentinels in `debugOutput()` are function-local statics. To reset
 them externally, refactor : either move them to file scope OR add a function
 that flips an internal flag.
 
-Cleanest : add a file-scope `static bool s_forceNextEmitAll = false;` and modify
-`debugOutput()` to check it :
+Cleanest : add a file-scope `std::atomic<bool> s_forceNextEmitAll{false};` and modify
+`debugOutput()` to check it.
 
-Add near other file-scope globals in main.cpp :
+**Vérifier que `#include <atomic>` est présent en haut de main.cpp** (pour
+`std::atomic`). Si pas déjà inclus, l'ajouter avec les autres includes système
+en début de fichier :
+```cpp
+#include <atomic>
+```
+
+Add near other file-scope globals in main.cpp (PAS static — pas d'extern requis
+depuis ailleurs, mais on garde local-linkage uniquement si la fonction
+`resetDbgSentinels` reste dans main.cpp) :
 ```cpp
 static std::atomic<bool> s_forceNextEmitAll{false};
 ```
@@ -1685,13 +1786,18 @@ void emitGlobals() {
 }
 void emitSettings() {
   #if DEBUG_SERIAL
+  // BleInterval emis en label texte plutot que numerique pour lisibilite
+  // viewer. Mapping BLE_OFF=0, BLE_LOW_LATENCY=1, BLE_NORMAL=2, BLE_BATTERY_SAVER=3.
+  static const char* BLE_LABELS[] = { "off", "low", "normal", "saver" };
+  const char* bleLbl = (s_settings.bleInterval < 4) ? BLE_LABELS[s_settings.bleInterval] : "?";
+
   emit(HIGH, "[SETTINGS] ClockMode=%s PanicReconnect=%u DoubleTapMs=%u "
-             "AftertouchRate=%u BleInterval=%u BatAdcFull=%u\n",
+             "AftertouchRate=%u BleInterval=%s BatAdcFull=%u\n",
        s_settings.clockMode == CLOCK_MASTER ? "master" : "slave",
        s_settings.panicOnReconnect,
        s_settings.doubleTapMs,
        s_settings.aftertouchRate,
-       s_settings.bleInterval,
+       bleLbl,
        s_settings.batAdcAtFull);
   #endif
 }
@@ -1881,16 +1987,29 @@ void emitClockBpm(float bpm, const char* srcLabel) {
 
 - [ ] **Step 2: Add debounced emit in ClockManager.cpp**
 
+**Décision design** : `s_lastEmittedBpm` doit être **file-scope** (pas static
+locale dans updatePLL) pour pouvoir être resetté lors d'un changement de
+source. Sinon edge case : USB stabilisé à 100 BPM → switch BLE à 100 BPM → 
+`|100-100| < 1` → aucun event émis, viewer ne voit jamais la source change
+reflétée dans la BPM.
+
+In `src/midi/ClockManager.cpp`, add at file-scope (after the existing `static`
+ROOT_NAMES if any, or near top of file) :
+```cpp
+// Last BPM value emitted via viewer::emitClockBpm() — debounce reference.
+// Reset to 0 on source change (processIncomingTicks) to force re-emit
+// even si la BPM est identique entre les deux sources.
+static float s_lastEmittedBpm = 0.0f;
+```
+
 In `updatePLL` (line ~205), add at end :
 ```cpp
 void ClockManager::updatePLL(uint32_t intervalUs, uint8_t source) {
-  float prevBpm = _pllBPM;
   // ... existing logic that updates _pllBPM ...
 
-  // Debounced emit on ±1 BPM change (Phase 1.E)
+  // Debounced emit on ±1 BPM change (Phase 1.E, audit R3)
   #if DEBUG_SERIAL
   if (_activeSource == SRC_USB || _activeSource == SRC_BLE) {
-    static float s_lastEmittedBpm = 0.0f;
     if (fabsf(_pllBPM - s_lastEmittedBpm) >= 1.0f) {
       viewer::emitClockBpm(_pllBPM, _activeSource == SRC_USB ? "usb" : "ble");
       s_lastEmittedBpm = _pllBPM;
@@ -1900,8 +2019,24 @@ void ClockManager::updatePLL(uint32_t intervalUs, uint8_t source) {
 }
 ```
 
-Add `#include "../viewer/ViewerSerial.h"` at top of ClockManager.cpp if not
-already present.
+In `processIncomingTicks` (line ~66), au bloc de transition source change
+(L93-100 où `_activeSource != prevSource`), ajouter le reset :
+```cpp
+    if (_activeSource != prevSource) {
+      _prevTickUs = 0;
+      _tickIntervalCount = 0;
+      s_lastEmittedBpm = 0.0f;   // Force re-emit BPM même si valeur identique
+      #if DEBUG_SERIAL
+      viewer::emitClockSource(_activeSource == SRC_USB ? "USB" : "BLE", 0.0f);
+      #endif
+    }
+```
+
+Pareil pour les autres source transitions dans `resolveTimeouts` (L121-178) :
+ajouter `s_lastEmittedBpm = 0.0f;` à chaque transition vers une nouvelle source.
+
+Add `#include "../viewer/ViewerSerial.h"` at top of ClockManager.cpp (déjà
+fait en Task 8 Step 3, donc déjà présent à ce stade).
 
 - [ ] **Step 3: Compile + HW + commit**
 
