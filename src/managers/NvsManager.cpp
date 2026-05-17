@@ -169,7 +169,7 @@ NvsManager::NvsManager()
 void NvsManager::begin() {
   xTaskCreatePinnedToCore(nvsTask, "nvs", 4096, this, 1, (TaskHandle_t*)&_taskHandle, 1);
   #if DEBUG_SERIAL
-  Serial.println("[NVS] Task created (Core 1, priority 1).");
+  Serial.println("[BOOT NVS] Task created (Core 1, priority 1).");
   #endif
 }
 
@@ -607,7 +607,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     if (currentBank >= NUM_BANKS) currentBank = DEFAULT_BANK;
     prefs.end();
     #if DEBUG_SERIAL
-    Serial.printf("[NVS] Bank loaded: %d\n", currentBank);
+    Serial.printf("[BOOT NVS] Bank loaded: %d\n", currentBank);
     #endif
   }
 
@@ -623,7 +623,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
         if (banks[i].scale.root > 6) banks[i].scale.root = 2;  // default C
         if (banks[i].scale.mode > 6) banks[i].scale.mode = 0;  // default Ionian
         #if DEBUG_SERIAL
-        Serial.printf("[NVS] Scale bank %d: chrom=%d root=%d mode=%d\n",
+        Serial.printf("[BOOT NVS] Scale bank %d: chrom=%d root=%d mode=%d\n",
                       i, banks[i].scale.chromatic, banks[i].scale.root, banks[i].scale.mode);
         #endif
       }
@@ -655,7 +655,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
         _loadedEcart[i]      = bts.ecart[i];
       }
       #if DEBUG_SERIAL
-      Serial.println("[NVS] Bank types + quantize + scale groups + ARPEG_GEN params loaded (v4 store).");
+      Serial.println("[BOOT NVS] Bank types + quantize + scale groups + ARPEG_GEN params loaded (v4 store).");
       #endif
     } else {
       // Premier boot / NVS vierge / v3->v4 : defaults usine = 4 NORMAL + 4 ARPEG,
@@ -671,7 +671,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
         _loadedEcart[i]      = 5;
       }
       #if DEBUG_SERIAL
-      Serial.println("[NVS] BankTypeStore absent/invalide (v3->v4 reset attendu) - defaults usine appliques.");
+      Serial.println("[BOOT NVS] BankTypeStore absent/invalide (v3->v4 reset attendu) - defaults usine appliques.");
       #endif
     }
   }
@@ -689,7 +689,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       } else {
         banks[i].scale = banks[leader].scale;
         #if DEBUG_SERIAL
-        Serial.printf("[NVS] Group %c: bank %d adopte scale de bank %d\n",
+        Serial.printf("[BOOT NVS] Group %c: bank %d adopte scale de bank %d\n",
                       'A' + g - 1, i, leader);
         #endif
       }
@@ -707,7 +707,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     }
     prefs.end();
     #if DEBUG_SERIAL
-    Serial.println("[NVS] Velocity params loaded.");
+    Serial.println("[BOOT NVS] Velocity params loaded.");
     #endif
   }
 
@@ -720,7 +720,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     }
     prefs.end();
     #if DEBUG_SERIAL
-    Serial.println("[NVS] Pitch bend offsets loaded.");
+    Serial.println("[BOOT NVS] Pitch bend offsets loaded.");
     #endif
   }
 
@@ -748,10 +748,12 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     }
     prefs.end();
     if (anyReset) {
-      Serial.println("[NVS] ArpPotStore raw/v0 detecte - reset v1 applique (defaults compile-time). User doit re-regler gate/shuffle/division/oct/template.");
+      #if DEBUG_SERIAL
+      Serial.println("[BOOT NVS] ArpPotStore raw/v0 detecte - reset v1 applique (defaults compile-time). User doit re-regler gate/shuffle/division/oct/template.");
+      #endif
     }
     #if DEBUG_SERIAL
-    Serial.println("[NVS] Arp pot params loaded (v1).");
+    Serial.println("[BOOT NVS] Arp pot params loaded (v1).");
     #endif
   }
 
@@ -766,7 +768,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       _pendingTempo = TEMPO_BPM_DEFAULT;
     prefs.end();
     #if DEBUG_SERIAL
-    Serial.printf("[NVS] Tempo: %d BPM\n", _pendingTempo);
+    Serial.printf("[BOOT NVS] Tempo: %d BPM\n", _pendingTempo);
     #endif
   }
 
@@ -779,7 +781,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       _pendingSlewRate = pps.slewRate;
       _pendingAtDeadzone = pps.atDeadzone;
       #if DEBUG_SERIAL
-      Serial.printf("[NVS] Pot params: shape=%.2f slew=%d dz=%d\n",
+      Serial.printf("[BOOT NVS] Pot params: shape=%.2f slew=%d dz=%d\n",
                     _pendingResponseShape, _pendingSlewRate, _pendingAtDeadzone);
       #endif
     }
@@ -790,7 +792,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     _pendingLedBright = prefs.getUChar(LED_NVS_KEY, 128);
     prefs.end();
     #if DEBUG_SERIAL
-    Serial.printf("[NVS] LED brightness: %d\n", _pendingLedBright);
+    Serial.printf("[BOOT NVS] LED brightness: %d\n", _pendingLedBright);
     #endif
   }
 
@@ -805,7 +807,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       _pendingPadSens = PAD_SENSITIVITY_DEFAULT;
     prefs.end();
     #if DEBUG_SERIAL
-    Serial.printf("[NVS] Pad sensitivity: %d\n", _pendingPadSens);
+    Serial.printf("[BOOT NVS] Pad sensitivity: %d\n", _pendingPadSens);
     #endif
   }
 
@@ -817,7 +819,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       validateNoteMapStore(nms);
       memcpy(padOrder, nms.noteMap, NUM_KEYS);
       #if DEBUG_SERIAL
-      Serial.println("[NVS] Pad order loaded.");
+      Serial.println("[BOOT NVS] Pad order loaded.");
       #endif
     }
   }
@@ -832,7 +834,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
         if (bankPads[j] >= NUM_KEYS) bankPads[j] = j;
       }
       #if DEBUG_SERIAL
-      Serial.println("[NVS] Bank pads loaded.");
+      Serial.println("[BOOT NVS] Bank pads loaded.");
       #endif
     }
   }
@@ -847,7 +849,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       memcpy(modePads, sps.modePads, 7);
       chromaticPad = sps.chromaticPad;
       #if DEBUG_SERIAL
-      Serial.println("[NVS] Scale pads loaded (v2 store).");
+      Serial.println("[BOOT NVS] Scale pads loaded (v2 store).");
       #endif
     }
   }
@@ -861,7 +863,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       holdPad     = aps.holdPad;
       memcpy(octavePads, aps.octavePads, 4);
       #if DEBUG_SERIAL
-      Serial.printf("[NVS] Arp pads loaded (v2 store): hold=%d oct=%d,%d,%d,%d\n",
+      Serial.printf("[BOOT NVS] Arp pads loaded (v2 store): hold=%d oct=%d,%d,%d,%d\n",
                     holdPad, octavePads[0], octavePads[1],
                     octavePads[2], octavePads[3]);
       #endif
@@ -879,7 +881,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     validateSettingsStore(settings);
   }
   #if DEBUG_SERIAL
-  Serial.printf("[NVS] Settings: profile=%d, atRate=%d, bleInt=%d, clock=%d, dblTap=%d\n",
+  Serial.printf("[BOOT NVS] Settings: profile=%d, atRate=%d, bleInt=%d, clock=%d, dblTap=%d\n",
                 settings.baselineProfile, settings.aftertouchRate, settings.bleInterval,
                 settings.clockMode, settings.doubleTapMs);
   #endif
@@ -899,7 +901,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   loadBlob(LED_SETTINGS_NVS_NAMESPACE, COLOR_SLOT_NVS_KEY,
                      COLOR_SLOT_MAGIC, COLOR_SLOT_VERSION, &_colorSlots, sizeof(_colorSlots));
   #if DEBUG_SERIAL
-  Serial.println("[NVS] LED settings + color slots loaded.");
+  Serial.println("[BOOT NVS] LED settings + color slots loaded.");
   #endif
 
   // --- Control pads (Tool 4) — single blob in illpad_ctrl / pads ---
@@ -917,11 +919,11 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
                            &_ctrlStore, sizeof(_ctrlStore))) {
     validateControlPadStore(_ctrlStore);
 #if DEBUG_SERIAL
-    Serial.printf("[NVS] loaded %u control pad(s)\n", (unsigned)_ctrlStore.count);
+    Serial.printf("[BOOT NVS] loaded %u control pad(s)\n", (unsigned)_ctrlStore.count);
 #endif
   } else {
 #if DEBUG_SERIAL
-    Serial.println("[NVS] control pads: defaults (empty)");
+    Serial.println("[BOOT NVS] control pads: defaults (empty)");
 #endif
     _ctrlStore.count = 0;
   }
@@ -933,7 +935,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
                            EEPROM_MAGIC, POTMAP_VERSION, &pms, sizeof(pms))) {
       potRouter.loadMapping(pms);
       #if DEBUG_SERIAL
-      Serial.println("[NVS] Pot mapping loaded.");
+      Serial.println("[BOOT NVS] Pot mapping loaded.");
       #endif
     }
   }
@@ -946,7 +948,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
       validatePotFilterStore(pfs);
       PotFilter::setConfig(pfs);
       #if DEBUG_SERIAL
-      Serial.println("[NVS] Pot filter config loaded.");
+      Serial.println("[BOOT NVS] Pot filter config loaded.");
       #endif
     }
     // else: PotFilter uses built-in defaults (set in begin())
@@ -977,7 +979,7 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
   );
 
   #if DEBUG_SERIAL
-  Serial.printf("[NVS] PotRouter loaded: tempo=%d shape=%.2f slew=%d dz=%d bright=%d sens=%d\n",
+  Serial.printf("[BOOT NVS] PotRouter loaded: tempo=%d shape=%.2f slew=%d dz=%d bright=%d sens=%d\n",
                 _pendingTempo, _pendingResponseShape, _pendingSlewRate,
                 _pendingAtDeadzone, _pendingLedBright, _pendingPadSens);
   #endif

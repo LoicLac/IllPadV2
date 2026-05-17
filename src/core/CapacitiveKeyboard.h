@@ -39,7 +39,6 @@ public:
   void saveCalibrationData();
   void loadCalibrationData();
   void calculateAdaptiveThresholds();
-  void logFullBaselineTable();
   void getBaselineData(uint16_t* destArray);
   uint16_t getFilteredData(int key);
   void setCalibrationMaxDelta(int key, uint16_t delta);

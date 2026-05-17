@@ -511,8 +511,10 @@ void setup() {
   Serial.begin(115200);
   Serial.setTxTimeoutMs(0);       // non-blocking writes — bypass USBCDC default timeout
   delay(800);  // Laisse monter le rail d'alim (cold boot apres longue pause)
+  #if DEBUG_SERIAL
   Serial.println();
-  Serial.println("=== ILLPAD48 V2 ===");
+  Serial.println("[BOOT] === ILLPAD48 V2 ===");
+  #endif
 
   // LEDs first — needed for boot progress and error feedback
   s_leds.begin();
@@ -525,20 +527,25 @@ void setup() {
   s_leds.showBootProgress(2);  // Step 2: I2C bus ready
   s_leds.update();
   #if DEBUG_SERIAL
-  Serial.println("[INIT] I2C OK.");
+  Serial.println("[BOOT] I2C OK.");
   #endif
 
   // Keyboard (4× MPR121) — can fail if I2C bus or sensors are broken
   bool kbOk = s_keyboard.begin();
   if (!kbOk) {
-    Serial.println("[INIT] FATAL: Keyboard init failed!");
-    s_leds.showBootFailure(3);  // Step 3 blinks = keyboard failed
+    // [FATAL] event : ALWAYS-on (intentional UNGATED) for diag terrain.
+    // Parser-recognized par le viewer → overlay critique. Emis raw avant
+    // viewer::begin() (module pas encore cree). Serial.flush garantit
+    // emission complete avant la boucle infinie.
+    Serial.println("[FATAL] Keyboard init failed");
+    Serial.flush();
+    s_leds.showBootFailure(3);
     for (;;) { s_leds.update(); delay(10); }
   }
   s_leds.showBootProgress(3);  // Step 3: keyboard OK
   s_leds.update();
   #if DEBUG_SERIAL
-  Serial.println("[INIT] Keyboard OK.");
+  Serial.println("[BOOT] Keyboard OK.");
   #endif
 
   // Buttons — active LOW, internal pull-up (needed early for setup detection)
@@ -598,7 +605,7 @@ void setup() {
   // =================================================================
   {
     #if DEBUG_SERIAL
-    Serial.println("[INIT] Hold rear button to enter setup mode...");
+    Serial.println("[BOOT] Hold rear button to enter setup mode...");
     #endif
     uint32_t windowStart = millis();
     bool setupRequested = false;
@@ -660,20 +667,20 @@ void setup() {
   s_leds.update();
   s_transport.begin();
   #if DEBUG_SERIAL
-  Serial.println("[INIT] MIDI Transport OK.");
+  Serial.println("[BOOT] MIDI Transport OK.");
   #endif
 
   // Clock Manager — wire MIDI clock reception callbacks
   s_clockManager.begin(&s_transport);
   s_transport.setClockCallback([](uint8_t src) { s_clockManager.onMidiClockTick(src); });
   #if DEBUG_SERIAL
-  Serial.println("[INIT] ClockManager OK.");
+  Serial.println("[BOOT] ClockManager OK.");
   #endif
 
   // MIDI Engine
   s_midiEngine.begin(&s_transport);
   #if DEBUG_SERIAL
-  Serial.println("[INIT] MIDI Engine OK.");
+  Serial.println("[BOOT] MIDI Engine OK.");
   #endif
 
   // NVS — load all persisted data (overwrites defaults where saved)
@@ -690,7 +697,7 @@ void setup() {
   s_leds.showBootProgress(5);  // Step 5: NVS loaded
   s_leds.update();
   #if DEBUG_SERIAL
-  Serial.printf("[INIT] NVS loaded. Bank=%d\n", currentBank);
+  Serial.printf("[BOOT] NVS loaded. Bank=%d\n", currentBank);
   #endif
 
   // Apply loaded settings
@@ -720,14 +727,14 @@ void setup() {
         s_banks[i].arpEngine = &s_arpEngines[arpIdx];
         arpIdx++;
         #if DEBUG_SERIAL
-        Serial.printf("[INIT] Bank %d: %s, ArpEngine assigned\n", i + 1,
+        Serial.printf("[BOOT] Bank %d: %s, ArpEngine assigned\n", i + 1,
                       s_banks[i].type == BANK_ARPEG_GEN ? "ARPEG_GEN" : "ARPEG");
         #endif
       }
     }
     #if DEBUG_SERIAL
     if (arpIdx == 0) {
-      Serial.println("[INIT] No ARPEG banks configured.");
+      Serial.println("[BOOT] No ARPEG banks configured.");
     }
     #endif
   }
@@ -772,7 +779,7 @@ void setup() {
   s_leds.showBootProgress(6);  // Step 6: Arp system ready
   s_leds.update();
   #if DEBUG_SERIAL
-  Serial.println("[INIT] ArpScheduler OK.");
+  Serial.println("[BOOT] ArpScheduler OK.");
   #endif
 
   // Give LedController access to bank states for multi-bank display
@@ -791,7 +798,7 @@ void setup() {
   // BLE clients receive it on their first connect via panicOnReconnect).
   s_bankManager.emitBankSelectNote();
   #if DEBUG_SERIAL
-  Serial.println("[INIT] BankManager OK.");
+  Serial.println("[BOOT] BankManager OK.");
   #endif
 
   // Scale Manager
@@ -802,14 +809,14 @@ void setup() {
   s_scaleManager.setHoldPad(holdPad);
   s_scaleManager.setOctavePads(octavePads);
   #if DEBUG_SERIAL
-  Serial.println("[INIT] ScaleManager OK.");
+  Serial.println("[BOOT] ScaleManager OK.");
   #endif
 
   // Control Pad Manager (Tool 4)
   s_controlPadManager.begin(&s_transport);
   s_controlPadManager.applyStore(s_nvsManager.getLoadedControlPadStore());
   #if DEBUG_SERIAL
-  Serial.println("[INIT] ControlPadManager OK.");
+  Serial.println("[BOOT] ControlPadManager OK.");
   #endif
 
   // Battery Monitor
@@ -824,13 +831,13 @@ void setup() {
   s_leds.showBootProgress(7);  // Step 7: managers ready
   s_leds.update();
   #if DEBUG_SERIAL
-  Serial.println("[INIT] PotFilter + PotRouter OK.");
+  Serial.println("[BOOT] PotFilter + PotRouter OK.");
   #endif
 
   // NVS Manager — start task (after all loading done)
   s_nvsManager.begin();
   #if DEBUG_SERIAL
-  Serial.println("[INIT] NvsManager OK.");
+  Serial.println("[BOOT] NvsManager OK.");
   #endif
 
   // Clear state
@@ -848,7 +855,7 @@ void setup() {
   s_leds.endBoot();             // Exit boot mode, switch to normal bank display
 
   #if DEBUG_SERIAL
-  Serial.println("[INIT] Ready.");
+  Serial.println("[BOOT] Ready.");
   viewer::begin();   // Phase 1.A : create queue + task before boot dump
   // Viewer-API boot dump : 1× [BANKS] + 8× [BANK] + 8× [STATE] + 1× [READY].
   // Allows the JUCE viewer to populate its UI from a single boot dump.

@@ -201,17 +201,17 @@ CapacitiveKeyboard::CapacitiveKeyboard() {
 
 bool CapacitiveKeyboard::begin() {
   #if DEBUG_SERIAL
-  Serial.println("[KB] Starting capacitive keyboard init...");
+  Serial.println("[BOOT KB] Starting capacitive keyboard init...");
   #endif
 
   loadCalibrationData();
   #if DEBUG_SERIAL
-  Serial.println("[KB] Calibration data loaded.");
+  Serial.println("[BOOT KB] Calibration data loaded.");
   #endif
   delay(50);
 
   #if DEBUG_SERIAL
-  Serial.print("[KB] Running MPR121 autoconfig (target: ");
+  Serial.print("[BOOT KB] Running MPR121 autoconfig (target: ");
   Serial.print(currentTargetBaseline);
   Serial.println(")...");
   #endif
@@ -221,9 +221,9 @@ bool CapacitiveKeyboard::begin() {
 
   #if DEBUG_SERIAL
   if (success) {
-    Serial.println("[KB] Capacitive sensors initialized OK.");
+    Serial.println("[BOOT KB] Capacitive sensors initialized OK.");
   } else {
-    Serial.println("[KB] FATAL: Sensor init failed!");
+    Serial.println("[BOOT KB] FATAL: Sensor init failed!");
   }
   #endif
   return success;
@@ -404,7 +404,7 @@ const bool* CapacitiveKeyboard::getPressedKeysState() const {
 
 bool CapacitiveKeyboard::runAutoconfiguration(uint16_t targetBaseline) {
   #if DEBUG_SERIAL
-  Serial.println("[KB] Computing autoconfig params...");
+  Serial.println("[BOOT KB] Computing autoconfig params...");
   #endif
 
   // Derive autoconfig limits from target baseline using NXP-recommended ratios
@@ -414,7 +414,7 @@ bool CapacitiveKeyboard::runAutoconfiguration(uint16_t targetBaseline) {
   uint8_t lsl = (uint8_t)(tl * 0.65f);                                // 65% of target per NXP
 
   #if DEBUG_SERIAL
-  Serial.print("[KB] TL: "); Serial.print(tl);
+  Serial.print("[BOOT KB] TL: "); Serial.print(tl);
   Serial.print(", USL: "); Serial.print(usl);
   Serial.print(", LSL: "); Serial.println(lsl);
   #endif
@@ -426,7 +426,7 @@ bool CapacitiveKeyboard::runAutoconfiguration(uint16_t targetBaseline) {
     uint8_t addr = sensor_addrs[sensorIndex];
 
     #if DEBUG_SERIAL
-    Serial.print("[KB] Configuring MPR121 #");
+    Serial.print("[BOOT KB] Configuring MPR121 #");
     Serial.print(sensorIndex + 1);
     Serial.print(" at 0x");
     Serial.println(addr, HEX);
@@ -449,7 +449,7 @@ bool CapacitiveKeyboard::runAutoconfiguration(uint16_t targetBaseline) {
       }
       if (!deviceFound) {
         #if DEBUG_SERIAL
-        Serial.print("[KB] FATAL: MPR121 at 0x");
+        Serial.print("[BOOT KB] FATAL: MPR121 at 0x");
         Serial.print(addr, HEX);
         Serial.println(" not found!");
         #endif
@@ -536,10 +536,10 @@ bool CapacitiveKeyboard::runAutoconfiguration(uint16_t targetBaseline) {
         if (!allDone) delay(50);
       }
       #if DEBUG_SERIAL
-      Serial.print("[KB] MPR121 #"); Serial.print(sensorIndex + 1);
+      Serial.print("[BOOT KB] MPR121 #"); Serial.print(sensorIndex + 1);
       Serial.print(" autoconfig ");
       Serial.println(allDone ? "complete" : "TIMEOUT");
-      Serial.print("[KB]   Duration: "); Serial.print(millis() - acStart); Serial.println("ms");
+      Serial.print("[BOOT KB]   Duration: "); Serial.print(millis() - acStart); Serial.println("ms");
       #endif
     }
 
@@ -548,28 +548,28 @@ bool CapacitiveKeyboard::runAutoconfiguration(uint16_t targetBaseline) {
     uint8_t oor1 = readRegister(addr, MPR121_OOR_STATUS1);
     if (oor0 || (oor1 & 0x0F)) {
       #if DEBUG_SERIAL
-      Serial.print("[KB] WARNING: MPR121 #");
+      Serial.print("[BOOT KB] WARNING: MPR121 #");
       Serial.print(sensorIndex + 1);
       Serial.print(" autoconfig OOR! ELE0-7: 0x");
       Serial.print(oor0, HEX);
       Serial.print(", ELE8-11: 0x");
       Serial.println(oor1 & 0x0F, HEX);
-      if (oor1 & 0x40) Serial.println("[KB]   ACFF: initial config failed");
-      if (oor1 & 0x80) Serial.println("[KB]   ARFF: reconfig failed");
+      if (oor1 & 0x40) Serial.println("[BOOT KB]   ACFF: initial config failed");
+      if (oor1 & 0x80) Serial.println("[BOOT KB]   ARFF: reconfig failed");
       #endif
     }
 
     #if DEBUG_SERIAL
-    Serial.print("[KB] MPR121 #");
+    Serial.print("[BOOT KB] MPR121 #");
     Serial.print(sensorIndex + 1);
     Serial.println(" configured OK");
     // Per-electrode CDC/CDT readback
-    Serial.print("[KB]   CDC: ");
+    Serial.print("[BOOT KB]   CDC: ");
     for (uint8_t e = 0; e < MPR121_CHANNELS; e++) {
       Serial.print(readRegister(addr, 0x5F + e) & 0x3F);
       Serial.print(e < MPR121_CHANNELS - 1 ? "," : "\n");
     }
-    Serial.print("[KB]   CDT: ");
+    Serial.print("[BOOT KB]   CDT: ");
     for (uint8_t e = 0; e < MPR121_CHANNELS; e++) {
       // CDT registers: 0x6C-0x72, two channels per byte (bits 2:0 and 7:5)
       uint8_t reg = readRegister(addr, 0x6C + e / 2);
@@ -588,7 +588,7 @@ bool CapacitiveKeyboard::runAutoconfiguration(uint16_t targetBaseline) {
   delay(50);
 
   #if DEBUG_SERIAL
-  Serial.println("[KB] Autoconfig complete.");
+  Serial.println("[BOOT KB] Autoconfig complete.");
   #endif
   return true;
 }
@@ -671,9 +671,9 @@ void CapacitiveKeyboard::saveCalibrationData() {
 
   #if DEBUG_SERIAL
   if (written == sizeof(CalDataStore)) {
-    Serial.println("[KB] Calibration saved to NVS.");
+    Serial.println("[BOOT KB] Calibration saved to NVS.");
   } else {
-    Serial.print("[KB] ERROR: NVS write failed! Wrote ");
+    Serial.print("[BOOT KB] ERROR: NVS write failed! Wrote ");
     Serial.print(written);
     Serial.print(" of ");
     Serial.print(sizeof(CalDataStore));
@@ -695,13 +695,13 @@ void CapacitiveKeyboard::loadCalibrationData() {
     memcpy(calibrationMaxDelta, data.maxDelta, sizeof(calibrationMaxDelta));
     currentTargetBaseline = data.target_baseline;
     #if DEBUG_SERIAL
-    Serial.println("[KB] Valid calibration loaded from NVS.");
+    Serial.println("[BOOT KB] Valid calibration loaded from NVS.");
     #endif
   } else {
     #if DEBUG_SERIAL
     Serial.println("------------------------------------------------------------");
-    Serial.println("[KB] WARNING: No valid calibration found in NVS.");
-    Serial.println("[KB] Using default settings. Calibration recommended.");
+    Serial.println("[BOOT KB] WARNING: No valid calibration found in NVS.");
+    Serial.println("[BOOT KB] Using default settings. Calibration recommended.");
     Serial.println("------------------------------------------------------------");
     #endif
   }
@@ -742,21 +742,6 @@ void CapacitiveKeyboard::setAutoReconfigEnabled(bool enabled) {
     writeRegister(sensor_addrs[s], MPR121_AUTOCONFIG0, val);
     writeRegister(sensor_addrs[s], MPR121_ECR, 0x0C);
   }
-}
-
-// =================================================================
-// Debug / Calibration Helpers
-// =================================================================
-
-void CapacitiveKeyboard::logFullBaselineTable() {
-  Serial.println("\n--- Current Baselines ---");
-  for (int i = 0; i < NUM_KEYS; ++i) {
-    Serial.print(baselineData[i]);
-    if (i != NUM_KEYS - 1) {
-      Serial.print((i % 12 == 11) ? "\n" : "\t");
-    }
-  }
-  Serial.println("\n-------------------------");
 }
 
 void CapacitiveKeyboard::getBaselineData(uint16_t* destArray) {

@@ -89,7 +89,7 @@ void MidiTransport::begin() {
   USB.begin();
 
   #if DEBUG_SERIAL
-  Serial.println("[MIDI] USB MIDI initialized.");
+  Serial.println("[BOOT MIDI] USB MIDI initialized.");
   #endif
 
   // --- BLE MIDI Init (skip if BLE_OFF) ---
@@ -100,11 +100,11 @@ void MidiTransport::begin() {
     BLEMidiServer.setSystemRTCallback(onBleSystemRT);
 
     #if DEBUG_SERIAL
-    Serial.println("[MIDI] BLE MIDI initialized.");
+    Serial.println("[BOOT MIDI] BLE MIDI initialized.");
     #endif
   } else {
     #if DEBUG_SERIAL
-    Serial.println("[MIDI] BLE disabled (USB only).");
+    Serial.println("[BOOT MIDI] BLE disabled (USB only).");
     #endif
   }
 }

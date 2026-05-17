@@ -133,7 +133,7 @@ void PotFilter::begin() {
         p.sleepBaseline = initial;
 
         #if DEBUG_SERIAL
-        Serial.printf("[POT] Seed %u: median=%u (sorted=%u,%u,%u,%u,%u)\n",
+        Serial.printf("[BOOT POT] Seed %u: median=%u (sorted=%u,%u,%u,%u,%u)\n",
                       i, initial,
                       samples[0], samples[1], samples[2],
                       samples[3], samples[4]);
@@ -141,7 +141,7 @@ void PotFilter::begin() {
     }
 
     #if DEBUG_SERIAL
-    Serial.println("[POT] MCP3208 boot OK.");
+    Serial.println("[BOOT POT] MCP3208 boot OK.");
     #endif
 }
 

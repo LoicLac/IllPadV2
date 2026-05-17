@@ -272,7 +272,7 @@ void PotRouter::rebuildBindings() {
   }
 
   #if DEBUG_SERIAL
-  Serial.printf("[POT] Rebuilt %d bindings from mapping (%d CC slots)\n",
+  Serial.printf("[BOOT POT] Rebuilt %d bindings from mapping (%d CC slots)\n",
                 _numBindings, _ccSlotCount);
   #endif
 }
@@ -361,7 +361,7 @@ void PotRouter::begin() {
   seedCatchValues();
 
   #if DEBUG_SERIAL
-  Serial.printf("[POT] %d bindings, %d pots initialized\n", _numBindings, NUM_POTS);
+  Serial.printf("[BOOT POT] %d bindings, %d pots initialized\n", _numBindings, NUM_POTS);
   #endif
 }
 
