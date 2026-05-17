@@ -1,19 +1,12 @@
 # ILLPAD48 V2 — Mode LOOP : design haut niveau
 
-> **MAJ 2026-05-16 (LED v9 brightness unification)** — Les décisions Q3/Q4
-> du tableau §28 sont superseded par le refactor v9 :
-> - `fgArpPlayMax` / `fgArpStopMin` / `fgArpStopMax` / `normalFgIntensity`
->   ont été fusionnés en un seul champ `fgIntensity` (`LedSettingsStore` v9).
-> - WAITING brightness baseline (Phase 1+) doit utiliser `_fgIntensity` à la
->   place de `_fgArpStopMax`. La sémantique "breathing max" est préservée :
->   dans le nouveau modèle, l'amplitude max du breathing == `_fgIntensity`.
-> - Le rename `fgArpPlayMax → fgPlayMax` envisagé en Q4 devient sans objet
->   (champ supprimé, fusionné).
-> Cf. plan d'implémentation : [`2026-05-16-led-brightness-unification-plan.md`](../plans/2026-05-16-led-brightness-unification-plan.md).
-> Les Tasks 5 et 6 du plan LOOP Phase 1 deviennent partiellement obsolètes
-> (rename / déplacement Tool 8 : déjà effectués par le refactor v9 avec une
-> sémantique différente, single FG slider en GLOBAL au lieu de "playing FG
-> brightness shared" en TRANSPORT).
+> **MAJ 2026-05-17 (post nettoyage LOOP)** — Spec corrigée pour refléter :
+> - LED v9 brightness unification (commit `3b85011`) : 4 fields FG fusionnés
+>   en un seul `_fgIntensity`. §28 Q3 et Q4 actualisés inline. Q4 caduque.
+> - Phase 1 LOOP close (commit `2624b12` Task 4 défensif). Plan archivé.
+> - Plan Phase 2 à rédiger from scratch depuis cette spec + code main
+>   (l'ancien plan archive-based jeté, cf [STATUS.md](../../../STATUS.md)).
+> - Invariants buffer LOOP : [docs/reference/loop-buffer-invariants.md](../../reference/loop-buffer-invariants.md).
 
 **Date** : 2026-04-19 (créé) — **révisé 2026-04-20** post Phase 0.1
 **Statut** : **VALIDÉ** pour plan d'implémentation LOOP Phase 1→6. Pré-requis Phase 0 LED + Phase 0.1 Tool 8 respec **DONE** (commits `cad7530`, `39d2deb`, `290839d`, `cc379f5`, `6ac9ff3` sur `main`).
@@ -447,7 +440,7 @@ Le feedback LED du mode LOOP est défini par la **LED feedback unified design** 
 - **Phase 0 LED** ✅ **DONE** (commits Phase 0 + Phase 0.1). Les Phases 1-6 LOOP peuvent démarrer — les events LOOP arriveront dans un système unifié prêt.
 - **Couleurs principales LOOP** — toutes **présentes dans ColorSlotStore v5** (commit `cad7530`) : `CSLOT_MODE_LOOP` (jaune Gold preset 7), `CSLOT_VERB_PLAY` (Green preset 11), `CSLOT_VERB_REC` (Coral preset 8), `CSLOT_VERB_OVERDUB` (Amber preset 6), `CSLOT_VERB_CLEAR_LOOP` (Cyan preset 5), `CSLOT_VERB_SLOT_CLEAR` (Amber preset 6 + hue+20), `CSLOT_VERB_SAVE` (Magenta preset 10), `CSLOT_CONFIRM_OK` (Pure White preset 0, universel SPARK).
 - **Refus** : réutilise `CSLOT_VERB_REC` (Coral) via pattern `BLINK_FAST` cycles=3. Pas de color slot dédié. ✅ Pattern implémenté, callsites LOOP à câbler Phase 2+.
-- **WAITING_*** : pattern `CROSSFADE_COLOR` unifié mode-invariant — **colorA = `CSLOT_VERB_PLAY` (vert, éditable Tool 8), colorB = `CSLOT_CONFIRM_OK` (blanc, hardcodé dans `triggerEvent`)**, period hardcoded 800 ms (Tool 8 respec §4.3 "Éléments non exposés"), brightness = `_fgPlayMax` / breathing max ×`bgFactor` en BG (Phase 1 step dédié §27). ✅ Pattern `CROSSFADE_COLOR` moteur implémenté ; câblage colorB blanc + brightness BG-aware = Phase 2/4 (~10 LOC). Décision Q3 — voir §28.
+- **WAITING_*** : pattern `CROSSFADE_COLOR` unifié mode-invariant — **colorA = `CSLOT_VERB_PLAY` (vert, éditable Tool 8), colorB = `CSLOT_CONFIRM_OK` (blanc, hardcodé dans `triggerEvent`)**, period hardcoded 800 ms (Tool 8 respec §4.3 "Éléments non exposés"), brightness = `_fgIntensity` (LedSettingsStore v9 single FG slider) × `bgFactor` en BG. ✅ Implémenté commit `48b96fb` Phase 1 Task 7 amendée v9. Décision Q3 — voir §28.
 - **EVT_LOOP_* enum** ✅ **réservés** dans `LedGrammar.h` (EVT_LOOP_REC, OVERDUB, SLOT_LOADED, SLOT_WRITTEN, SLOT_CLEARED, SLOT_REFUSED, CLEAR) — mapping par défaut `PTN_NONE` actuellement. À wirer Phase 4 (PotRouter + LED wiring) avec le bon `{patternId, colorSlot, fgPct}` selon LED spec §12.
 - **Tick durations BAR/WRAP** ✅ **persistées** dans LedSettingsStore v7 + **cachées** dans LedController (`_tickBarDurationMs`, `_tickWrapDurationMs`). Non consommées runtime — attendent `consumeBarFlash()` / `consumeWrapFlash()` flags dans LoopEngine Phase 2+.
 
@@ -590,7 +583,7 @@ Ce document sert de **référence de haut niveau** pour les plans d'implémentat
 
 **État Phase 0 + Phase 0.1** ✅ **DONE** (prérequis LED) :
 - **Phase 0 LED** (LED spec §23) — Refactor LED isolé : grammaire unifiée, palette 9 patterns, 15 color slots (v4). Tool 8 en 3 pages PATTERNS/COLORS/EVENTS. `SettingsStore` v11 avec 3 timers LOOP. Tool 6 expose les 3 timers. Commits : `5c3e57c` → `8511b0d`. Audit post `docs/superpowers/reports/rapport_phase_0_led.md`.
-- **Phase 0.1 Tool 8 respec** — Tool 8 refondu en single-view 6 sections (NORMAL/ARPEG/LOOP/TRANSPORT/CONFIRMATIONS/GLOBAL). `ColorSlotStore` v5 (16 slots, +`CSLOT_VERB_STOP`). `LedSettingsStore` v7 (+`tickBeatDurationMs`/`tickBarDurationMs`/`tickWrapDurationMs`). `LedController::renderPreviewPattern` public wrapper + helper `ToolLedPreview`. Gamma hot-reload. Commits : `cad7530` → `6ac9ff3`. Plan : `docs/superpowers/plans/2026-04-20-tool8-ux-respec-plan.md`. Spec : `docs/superpowers/specs/2026-04-20-tool8-ux-respec-design.md`.
+- **Phase 0.1 Tool 8 respec** — Tool 8 refondu en single-view 6 sections (NORMAL/ARPEG/LOOP/TRANSPORT/CONFIRMATIONS/GLOBAL). `ColorSlotStore` v5 (16 slots, +`CSLOT_VERB_STOP`). `LedSettingsStore` v7 (+`tickBeatDurationMs`/`tickBarDurationMs`/`tickWrapDurationMs`). `LedController::renderPreviewPattern` public wrapper + helper `ToolLedPreview`. Gamma hot-reload. Commits : `cad7530` → `6ac9ff3`. Plan (archivé) : `docs/archive/2026-04-20-tool8-ux-respec-plan.md`. Spec : `docs/superpowers/specs/2026-04-20-tool8-ux-respec-design.md`.
 
 **Phases LOOP à venir** :
 
@@ -599,8 +592,8 @@ Ce document sert de **référence de haut niveau** pour les plans d'implémentat
    - Struct `LoopPadStore` **23 B strict packed** (décision Q1, §28) + validator + NVS descriptor. Pas de consommateur runtime — layout figé pour éviter 2e reset user.
    - Struct `LoopPotStore` per-bank + validator + NVS descriptor. Idem, câblage effets Phase 5.
    - Guards `BankManager::switchToBank` / `ScaleManager` / `MidiTransport` pour ignorer scale + pitch bend + AT sur bank LOOP.
-   - **Step LED prep** : rename `LedSettingsStore::fgArpPlayMax` → `fgPlayMax` (propager LedController + Tool 8), déplacer ligne "FG playing brightness" vers Tool 8 section TRANSPORT (retirer de ARPEG et LOOP), panel description "shared ARPEG + LOOP playing state" (décision Q4, §28). Pas de bump NVS (rename de symbole, layout binaire identique).
-   - **Step LED WAITING BG-aware** : dans `LedController::triggerEvent`, hardcode `colorB = _colors[CSLOT_CONFIRM_OK]` pour `PTN_CROSSFADE_COLOR`, substituer `fgPct = _fgArpStopMax`, et ajouter scaling `× bgFactor` pour les LEDs non-FG dans `renderPattern` CROSSFADE_COLOR (décision Q3, §28). ~10 LOC.
+   - ~~**Step LED prep** : rename `LedSettingsStore::fgArpPlayMax` → `fgPlayMax`...~~ **CADUQUE post-v9** : LedSettingsStore v9 (commit `3b85011`) a fusionné les 4 fields FG en `_fgIntensity` unique, Tool 8 expose 1 slider en section GLOBAL. Décision Q4 §28 sans objet.
+   - **Step LED WAITING BG-aware** : implémenté commit `48b96fb` post-v9 — hardcode `colorB = _colors[CSLOT_CONFIRM_OK]` pour `PTN_CROSSFADE_COLOR`, `fgPct = _fgIntensity` (au lieu de `_fgArpStopMax` proposé Q3 originale), scaling `× bgFactor` pour LEDs non-FG dans `renderPattern` CROSSFADE_COLOR. Décision Q3 §28 respectée modulo terminologie v9.
    - Aucune nouvelle feature visible pour le musicien.
 2. **Phase 2** — LoopEngine core + main wiring : classe `LoopEngine` (state machine EMPTY / RECORDING / PLAYING / OVERDUBBING / STOPPED + WAITING_* transitoires), recording avec timestamps µs, playback scalé proportionnellement, refcount noteOn/noteOff, `processLoopMode` dans main.cpp, `renderBankLoop` dans LedController (câble `EVT_LOOP_*` overrides dans `EVENT_RENDER_DEFAULT`, consomme `tickBeat/Bar/WrapDurationMs` via flags à définir). Test mode activable via `ENABLE_LOOP_MODE`.
    - **Précondition** : `PendingEvent` struct dupliqué entre ArpEngine et LoopEngine — pas de factorisation préparatoire (décision Q2, §28). LoopEngine définit son propre buffer + logique refcount, indépendant de ArpScheduler.
@@ -624,14 +617,14 @@ Chaque phase aura son **plan détaillé** séparé (via skill `superpowers:writi
 
 ### §28 — Tranchage des 8 questions résiduelles (2026-04-20)
 
-Suite à l'audit de cohérence `docs/superpowers/reports/rapport_audit_loop_spec.md`, 8 questions résiduelles ont été identifiées et tranchées en session brainstorming. Section de traçabilité :
+Suite à l'audit de cohérence `docs/archive/rapport_audit_loop_spec.md` (archivé), 8 questions résiduelles ont été identifiées et tranchées en session brainstorming. Section de traçabilité :
 
 | # | Question | Décision actée | Référence |
 |---|---|---|---|
 | Q1 | `LoopPadStore` size | **23 B strict packed** (3 controls + 16 slots). nvs-reference.md corrigé (8 B → 23 B). | §20 |
 | Q2 | `PendingEvent` factorisé ou dupliqué entre ArpEngine et LoopEngine | **Dupliqué**. LoopEngine définit sa propre struct + buffer + logique refcount. Raison : besoins divergents (timestamps µs vs ticks PPQN), éviter refactor ArpEngine qui marche (principe DO NOT MODIFY étendu aux pièces musicales calibrées), budget SRAM non contraint (+64-128 B négligeable). | §27 Phase 2 |
-| Q3 | `EVT_WAITING` mode-aware (ARPEG bleu vs LOOP jaune) | **1 event unique**. colorA = `CSLOT_VERB_PLAY` (vert, éditable Tool 8), colorB = `CSLOT_CONFIRM_OK` (blanc, hardcodé dans `triggerEvent`), brightness = `_fgArpStopMax` (breathing max, partagé avec "Breathing" ligne Tool 8) × `_bgFactor` en BG. Mode-invariant assumé : WAITING est une transition courte (800 ms), la couleur de fond du mode réapparaît au résultat. Alignement avec critère F1 "Action = pattern invariant" (LED spec §2). ~10 LOC, 0 bump NVS. | §21, §27 Phase 1 step |
-| Q4 | `LOOP FG brightness` : field séparé ou partagé avec ARPEG | **Partagé + refactor**. Renommer `LedSettingsStore::fgArpPlayMax` → `fgPlayMax` (layout NVS identique, pas de bump). Tool 8 : retirer "FG brightness" des sections ARPEG + LOOP, ajouter ligne unique "Playing FG brightness (ARPEG + LOOP)" en section TRANSPORT à côté de Breathing. Rationale : LED spec §16+§17 specifient 70% pour les deux modes (aucun besoin de différenciation démontré) ; section TRANSPORT est le home sémantique cohérent (tout ce qui concerne les états de transport). | §27 Phase 1 step |
+| Q3 | `EVT_WAITING` mode-aware (ARPEG bleu vs LOOP jaune) | **1 event unique**. colorA = `CSLOT_VERB_PLAY` (vert, éditable Tool 8), colorB = `CSLOT_CONFIRM_OK` (blanc, hardcodé dans `triggerEvent`), brightness = `_fgIntensity` (LedSettingsStore v9 single FG slider, post fusion `fgArpPlayMax`/`fgArpStopMin`/`fgArpStopMax`/`normalFgIntensity`) × `_bgFactor` en BG. Mode-invariant assumé : WAITING est une transition courte (800 ms), la couleur de fond du mode réapparaît au résultat. **Implémenté commit `48b96fb`** Phase 1 Task 7 amendée v9. | §21, §27 Phase 1 step |
+| Q4 | `LOOP FG brightness` : field séparé ou partagé avec ARPEG | **CADUQUE post-v9**. LedSettingsStore v9 (commit `3b85011`) a fusionné les 4 fields FG (`fgArpPlayMax`/`fgArpStopMin`/`fgArpStopMax`/`normalFgIntensity`) en un seul `_fgIntensity`. Tool 8 expose désormais 1 slider unique "FG brightness" en section GLOBAL (et non TRANSPORT comme proposait Q4 originale). Tasks 5-6 du plan Phase 1 LOOP devenues sans objet. | §27 Phase 1 step (caduque) |
 | Q5 | Comportement STOPPED-loaded + tap REC | **PLAYING + OVERDUBBING simultanés** (option a). Reprise de la lecture position 0 + armement overdub en un geste. Cohérent avec §8 (PLAYING → REC = OVERDUBBING). Le musicien n'a pas à faire PLAY explicite avant d'overdub. | §8, §27 Phase 2 |
 | Q6 | Tool 5 refactor "présentation en colonnes" | **Phase 3 minimal, refactor deferred**. Tool 5 Phase 3 conserve la présentation inline actuelle, ajoute juste 3-way type + `loopQuantize` per-bank. Refactor colonnes reportable post-Phase 6 si nécessaire — avec 3 types + 1 param par bank, l'inline reste lisible. Aligné avec CLAUDE.md principe "scope strict". | §27 Phase 3 |
 | Q7 | Tool 4 extension (refus ControlPad sur pad LOOP control) | **Phase 3 bundle** avec Tool 3 b1. Validation bi-directionnelle (Tool 3 et Tool 4 se connaissent mutuellement via helper `LoopPadStore::isLoopControlPad`). Pas de pré-wiring Phase 1/2 (pas de chemin de création du conflit avant Phase 3). | §27 Phase 3 |
@@ -642,7 +635,7 @@ Suite à l'audit de cohérence `docs/superpowers/reports/rapport_audit_loop_spec
 L'audit a flagué 4 drifts spec↔code (cf rapport §3) :
 
 - **F2.2** (`EVT_WAITING` colorA hardcodé ARPEG) → résolu par Q3 (pas de scission, hardcode colorB blanc via `triggerEvent`, brightness BG-aware). Step Phase 1 spécifié §27.
-- **F2.3** (`LINE_LOOP_FG_PCT` partage silencieusement `fgArpPlayMax`) → résolu par Q4 (rename field + déplacement Tool 8 TRANSPORT). Step Phase 1 spécifié §27.
+- **F2.3** (`LINE_LOOP_FG_PCT` partage silencieusement `fgArpPlayMax`) → CADUQUE post-v9. LedSettingsStore v9 a supprimé tous ces fields séparés ; le slider unique `_fgIntensity` rend le problème sans objet. Q4 caduque (cf §28).
 - **F2.4** (`LoopPadStore` size=8 B dans nvs-reference) → corrigé nvs-reference.md à 23 B (Q1).
 - **F2.5** (`renderPreviewPattern` signature drift) : Tool 8 respec §6.6 à mettre à jour rétroactivement (signature sans `ledMask`). Non-bloquant — à traiter en tâche séparée ou ignorer.
 
