@@ -30,6 +30,13 @@ NvsManager::NvsManager()
   , _potRightPendingSave(false)
   , _potRearPendingSave(false)
   , _anyPadPressed(false)
+  // Phase 2 init (cf spec §10.1)
+  , _settingsDirty(false)
+  , _bankTypeDirty(false)
+  , _settingsLastChangeMs(0)
+  , _bankTypeLastChangeMs(0)
+  , _settingsPendingSave(false)
+  , _bankTypePendingSave(false)
 {
   // BankTypeStore v3 + v4 : ARPEG_GEN per-bank params.
   // v3 defaults : bonus_pile=1.5 (=15), margin=7.
@@ -39,6 +46,10 @@ NvsManager::NvsManager()
     _loadedMarginWalk[i] = 7;
     _loadedProximity[i]  = 4;
     _loadedEcart[i]      = 5;
+  }
+  // Phase 2 : default BankType cache (overridden by loadAll()).
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    _loadedBankType[i] = BANK_NORMAL;
   }
   // Default LED settings v6 (0-100 perceptual %)
   // See docs/superpowers/specs/2026-04-19-led-feedback-unified-design.md

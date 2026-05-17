@@ -113,6 +113,10 @@ private:
   std::atomic<bool> _padOrderDirty;
   std::atomic<bool> _anyDirty;
 
+  // Phase 2 : Settings + BankType queue (dirty + pending + debounce)
+  std::atomic<bool> _settingsDirty;
+  std::atomic<bool> _bankTypeDirty;
+
   // Pending data (copied by queue calls, read by NVS task)
   uint8_t     _pendingBank;
   ScaleConfig _pendingScale[NUM_BANKS];
@@ -126,6 +130,16 @@ private:
   uint8_t     _loadedMarginWalk[NUM_BANKS];  // BankTypeStore v3 : 3..12, defaults 7
   uint8_t     _loadedProximity[NUM_BANKS];   // BankTypeStore v4 : x10 (4..20), defaults 4
   uint8_t     _loadedEcart[NUM_BANKS];       // BankTypeStore v4 : 1..12, defaults 5
+  // Phase 2 : cache BankType (parallèle aux _loadedQuantize[], _loadedScaleGroup[]).
+  // Peuplé par loadAll() depuis bts.types[], modifié par setLoadedBankType().
+  // Lu par saveBankType() pour reconstruire le BankTypeStore complet.
+  uint8_t       _loadedBankType[NUM_BANKS];
+  // Phase 2 : Pending struct + debounce timers (séparés du pot debounce).
+  SettingsStore _pendingSettings;
+  uint32_t      _settingsLastChangeMs;
+  uint32_t      _bankTypeLastChangeMs;
+  bool          _settingsPendingSave;
+  bool          _bankTypePendingSave;
   uint16_t    _pendingTempo;
   uint8_t     _pendingLedBright;
   uint8_t     _pendingPadSens;
