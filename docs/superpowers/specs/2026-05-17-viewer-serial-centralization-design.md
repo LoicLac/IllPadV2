@@ -517,7 +517,7 @@ Emission :
 
 Format key=value :
 ```
-[SETTINGS] ClockMode=slave PanicReconnect=1 DoubleTapMs=400 AftertouchRate=10 BleInterval=normal BatAdcFull=4095
+[SETTINGS] ClockMode=slave PanicReconnect=1 DoubleTapMs=400 AftertouchRate=10 BleInterval=2 BatAdcFull=4095
 ```
 
 Fields Phase 1 (lecture seule — Phase 2 ajoutera les write commands) :
@@ -525,10 +525,9 @@ Fields Phase 1 (lecture seule — Phase 2 ajoutera les write commands) :
 - `PanicReconnect` ∈ `{0, 1}` = `s_settings.panicOnReconnect` (bool numérique).
 - `DoubleTapMs` = `s_settings.doubleTapMs` (uint16 millis).
 - `AftertouchRate` = `s_settings.aftertouchRate` (uint8 Hz).
-- `BleInterval` ∈ `{off, low, normal, saver}` = label mappé depuis
-  `s_settings.bleInterval` (0=BLE_OFF, 1=BLE_LOW_LATENCY, 2=BLE_NORMAL,
-  3=BLE_BATTERY_SAVER). **Label texte** plutôt que numérique pour lisibilité
-  viewer.
+- `BleInterval` ∈ `{0, 1, 2, 3}` = `s_settings.bleInterval` numérique brut
+  (0=BLE_OFF, 1=BLE_LOW_LATENCY, 2=BLE_NORMAL, 3=BLE_BATTERY_SAVER). Le viewer
+  pré-codé parse via `std::stoi(*v)` — format numérique requis.
 - `BatAdcFull` = `s_settings.batAdcAtFull` (uint16 ADC raw).
 
 Emission :

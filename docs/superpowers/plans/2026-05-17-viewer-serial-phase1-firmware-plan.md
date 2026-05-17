@@ -1786,18 +1786,16 @@ void emitGlobals() {
 }
 void emitSettings() {
   #if DEBUG_SERIAL
-  // BleInterval emis en label texte plutot que numerique pour lisibilite
-  // viewer. Mapping BLE_OFF=0, BLE_LOW_LATENCY=1, BLE_NORMAL=2, BLE_BATTERY_SAVER=3.
-  static const char* BLE_LABELS[] = { "off", "low", "normal", "saver" };
-  const char* bleLbl = (s_settings.bleInterval < 4) ? BLE_LABELS[s_settings.bleInterval] : "?";
-
+  // BleInterval emis en numerique (0..3) pour matcher le viewer pre-code
+  // qui parse std::stoi(*v). Mapping interne :
+  //   0=BLE_OFF, 1=BLE_LOW_LATENCY, 2=BLE_NORMAL, 3=BLE_BATTERY_SAVER.
   emit(HIGH, "[SETTINGS] ClockMode=%s PanicReconnect=%u DoubleTapMs=%u "
-             "AftertouchRate=%u BleInterval=%s BatAdcFull=%u\n",
+             "AftertouchRate=%u BleInterval=%u BatAdcFull=%u\n",
        s_settings.clockMode == CLOCK_MASTER ? "master" : "slave",
        s_settings.panicOnReconnect,
        s_settings.doubleTapMs,
        s_settings.aftertouchRate,
-       bleLbl,
+       s_settings.bleInterval,
        s_settings.batAdcAtFull);
   #endif
 }
