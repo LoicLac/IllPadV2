@@ -554,4 +554,14 @@ void emitMidiTransport(const char* transport, const char* state) {
   #endif
 }
 
+// =================================================================
+// Phase 1.C.6 — [PANIC] event
+// =================================================================
+
+void emitPanic() {
+  #if DEBUG_SERIAL
+  emit(PRIO_HIGH, "[PANIC] All notes off on all channels\n");
+  #endif
+}
+
 }  // namespace viewer

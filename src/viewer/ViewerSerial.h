@@ -66,6 +66,9 @@ void emitClockSource(const char* srcLabel, float bpm);
 // transport : "USB" or "BLE". state : "connected" or "disconnected"
 void emitMidiTransport(const char* transport, const char* state);
 
+// --- Phase 1.C.6 : [PANIC] event ---
+void emitPanic();
+
 // Phase 1.A : pas d'emit_xxx() encore. Ajoutés au fur et à mesure des
 // sous-phases 1.C.*, 1.D, 1.E, 1.F.
 

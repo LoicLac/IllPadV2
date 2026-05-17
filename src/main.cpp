@@ -150,9 +150,7 @@ static void midiPanic() {
   }
   // Phase 4: re-emit bank-select Note On on canal 16 to resync the DAW.
   s_bankManager.emitBankSelectNote();
-  #if DEBUG_SERIAL
-  Serial.println("[PANIC] All notes off on all channels");
-  #endif
+  viewer::emitPanic();
 }
 
 // =================================================================
