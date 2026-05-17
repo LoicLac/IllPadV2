@@ -646,6 +646,8 @@ void setup() {
   viewer::emitBanksHeader(NUM_BANKS);
   for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBank(i);
   for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitState(i);
+  // Phase 2 : [BANK_SETTINGS] pour chaque bank ARPEG_GEN (no-op autre type).
+  for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBankSettings(i);
   viewer::emitGlobals();
   viewer::emitSettings();
   viewer::emitReady(s_bankManager.getCurrentBank() + 1);
