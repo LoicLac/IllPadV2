@@ -407,6 +407,24 @@ void NvsManager::queuePadOrderWrite(const uint8_t* order) {
   _anyDirty = true;
 }
 
+void NvsManager::queueSettingsWrite(const SettingsStore& settings) {
+  // Phase 2 : copy snapshot, arm debounce timer.
+  // _settingsDirty NOT set here — tickDebounce will set it after 500ms of
+  // inactivity so commitAll() doesn't fire prematurely (stream slider viewer).
+  _pendingSettings = settings;
+  _settingsLastChangeMs = millis();
+  _settingsPendingSave = true;
+}
+
+void NvsManager::queueBankTypeFromCache() {
+  // Phase 2 : arm debounce timer only. The actual blob is reconstructed
+  // from _loadedX[] arrays at save time (cf saveBankType). Caller must
+  // have updated setLoadedBonusPile / setLoadedMarginWalk / etc. before
+  // calling this.
+  _bankTypeLastChangeMs = millis();
+  _bankTypePendingSave = true;
+}
+
 
 // =================================================================
 // commitAll — called by NVS task, writes all dirty data

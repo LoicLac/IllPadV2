@@ -29,6 +29,14 @@ public:
   void queuePadSensitivityWrite(uint8_t sensitivity);
   void queuePadOrderWrite(const uint8_t* order);
 
+  // Phase 2 : viewer-driven write commands (debounced 500ms via tickDebounce).
+  // Caller (handler !CLOCKMODE) must update s_settings BEFORE calling this.
+  void queueSettingsWrite(const SettingsStore& settings);
+  // Phase 2 : viewer-driven BankTypeStore write. Caller (handler ARPEG_GEN)
+  // must have called setLoadedBonusPile/MarginWalk/etc. BEFORE this — the
+  // blob is reconstructed from internal _loadedX[] arrays at save time.
+  void queueBankTypeFromCache();
+
   // --- Blocking reads (called once at boot before loop starts) ---
   // Loads all NVS data into the provided outputs. Missing data → defaults.
   void loadAll(BankSlot* banks, uint8_t& currentBank,
