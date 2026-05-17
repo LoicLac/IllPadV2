@@ -61,11 +61,12 @@ static BatteryMonitor     s_batteryMonitor;
        NvsManager         s_nvsManager;        // external linkage (ViewerSerial reads)
 static ControlPadManager  s_controlPadManager;
 static SetupManager       s_setupManager;
-static ClockManager       s_clockManager;
+       ClockManager       s_clockManager;      // external linkage (ViewerSerial reads)
 static ArpScheduler       s_arpScheduler;
 
 // 8 banks — all NORMAL for now
        BankSlot s_banks[NUM_BANKS];             // external linkage (ViewerSerial reads)
+       SettingsStore s_settings;                // external linkage (ViewerSerial reads)
 
 // Static ArpEngine pool (max 4 ARPEG banks)
 static ArpEngine s_arpEngines[4];
@@ -86,6 +87,17 @@ static uint8_t s_holdPad = 23;  // Default, overwritten by NVS
 // Panic: BLE reconnect detection + settings
 static bool    s_lastBleConnected = false;
 static bool    s_panicOnReconnect = DEFAULT_PANIC_ON_RECONNECT;
+
+// Viewer auto-resync : forces re-emit of all [POT] params at next debugOutput()
+// call (override s_dbg* sentinels). Set by resetDbgSentinels(), consumed via
+// atomic exchange() in debugOutput().
+static std::atomic<bool> s_forceNextEmitAll{false};
+
+// Called by viewer module on ?BOTH/?ALL/?STATE + auto-resync to force re-emit
+// of all [POT] params at next debugOutput() call (override s_dbg* sentinels).
+void resetDbgSentinels() {
+  s_forceNextEmitAll.store(true, std::memory_order_release);
+}
 
 // Boot stabilization
 static const uint32_t BOOT_SETTLE_MS = 300;
@@ -170,7 +182,8 @@ static void midiPanic() {
 // la sortie pour mise à jour des defaults en code.
 // =================================================================
 
-static void dumpLedSettings() {
+// External linkage : called by viewer::pollCommands() on ?ALL command.
+void dumpLedSettings() {
   const LedSettingsStore& s = s_nvsManager.getLoadedLedSettings();
   Serial.printf("[LED_DUMP v=%u]\n", s.version);
   Serial.printf("  fgIntensity = %u;\n", s.fgIntensity);
@@ -214,7 +227,8 @@ static void dumpLedSettings() {
   Serial.println("[/LED_DUMP]");
 }
 
-static void dumpColorSlots() {
+// External linkage : called by viewer::pollCommands() on ?ALL command.
+void dumpColorSlots() {
   const ColorSlotStore& s = s_nvsManager.getLoadedColorSlots();
   Serial.printf("[COLORS_DUMP v=%u]\n", s.version);
   for (uint8_t i = 0; i < COLOR_SLOT_COUNT; i++) {
@@ -227,7 +241,8 @@ static void dumpColorSlots() {
   Serial.println("[/COLORS_DUMP]");
 }
 
-static void dumpPotMapping() {
+// External linkage : called by viewer::pollCommands() on ?ALL command.
+void dumpPotMapping() {
   // Order MUST match enum PotTarget in KeyboardData.h (0..18)
   static const char* const TARGET_NAMES[] = {
     "RESPONSE_SHAPE", "SLEW_RATE", "AT_DEADZONE",
@@ -261,47 +276,9 @@ static void dumpPotMapping() {
   Serial.println("[/POTMAP_DUMP]");
 }
 
-// Non-blocking Serial poll for viewer-API runtime commands. Recognizes
-// ?STATE / ?BANKS / ?BOTH ; each emits the corresponding dump then [READY].
-// Plan task A.5.
-static void pollRuntimeCommands() {
-  static char  cmdBuf[16];
-  static uint8_t cmdLen = 0;
-
-  while (Serial.available()) {
-    char c = (char)Serial.read();
-    if (c == '\n' || c == '\r') {
-      cmdBuf[cmdLen] = '\0';
-      if (strcmp(cmdBuf, "?STATE") == 0) {
-        viewer::emitState(s_bankManager.getCurrentBank());
-        viewer::emitReady(s_bankManager.getCurrentBank() + 1);
-      } else if (strcmp(cmdBuf, "?BANKS") == 0) {
-        viewer::emitBanksHeader(NUM_BANKS);
-        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBank(i);
-        viewer::emitReady(s_bankManager.getCurrentBank() + 1);
-      } else if (strcmp(cmdBuf, "?BOTH") == 0) {
-        viewer::emitBanksHeader(NUM_BANKS);
-        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBank(i);
-        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitState(i);
-        viewer::emitReady(s_bankManager.getCurrentBank() + 1);
-      } else if (strcmp(cmdBuf, "?ALL") == 0) {
-        viewer::emitBanksHeader(NUM_BANKS);
-        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBank(i);
-        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitState(i);
-        dumpLedSettings();
-        dumpColorSlots();
-        dumpPotMapping();
-        viewer::emitReady(s_bankManager.getCurrentBank() + 1);
-      }
-      cmdLen = 0;
-    } else if (cmdLen < sizeof(cmdBuf) - 1) {
-      cmdBuf[cmdLen++] = c;
-    } else {
-      // overflow — discard buffer
-      cmdLen = 0;
-    }
-  }
-}
+// Phase 1.D : pollRuntimeCommands migrated to viewer::pollCommands() in
+// ViewerSerial.cpp. The dump helpers above (dumpLedSettings / dumpColorSlots /
+// dumpPotMapping) are now externable so the module can call them on ?ALL.
 
 #endif  // DEBUG_SERIAL
 
@@ -493,7 +470,7 @@ void setup() {
   uint8_t currentBank = DEFAULT_BANK;
   // bankPads[], rootPads[], modePads[], chromaticPad, holdPad initialized above (before setup check)
 
-  SettingsStore s_settings;
+  // s_settings is a file-scope global (external linkage — ViewerSerial reads it).
   s_nvsManager.loadAll(s_banks, currentBank, s_padOrder, bankPads,
                         rootPads, modePads, chromaticPad, holdPad,
                         octavePads, s_potRouter, s_settings);
@@ -663,12 +640,14 @@ void setup() {
   #if DEBUG_SERIAL
   Serial.println("[BOOT] Ready.");
   viewer::begin();   // Phase 1.A : create queue + task before boot dump
-  // Viewer-API boot dump : 1× [BANKS] + 8× [BANK] + 8× [STATE] + 1× [READY].
-  // Allows the JUCE viewer to populate its UI from a single boot dump.
-  // Plan tasks A.3 + A.4 + A.5 step 3.
+  // Viewer-API boot dump : 1× [BANKS] + 8× [BANK] + 8× [STATE] +
+  // 1× [GLOBALS] + 1× [SETTINGS] + 1× [READY]. Allows the JUCE viewer
+  // to populate its UI from a single boot dump (Phase 1.D).
   viewer::emitBanksHeader(NUM_BANKS);
   for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBank(i);
   for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitState(i);
+  viewer::emitGlobals();
+  viewer::emitSettings();
   viewer::emitReady(s_bankManager.getCurrentBank() + 1);
   #endif
 }
@@ -1116,7 +1095,13 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     // against sentinel collision (e.g. LED_Bright=255 == uint8_t 0xFF init)
     // and gives the viewer a complete state dump in the [READY] window
     // without requiring the user to wiggle each pot.
+    //
+    // forceEmit also fires when resetDbgSentinels() has been called since
+    // the last debugOutput() iteration — typically by the viewer module on
+    // ?BOTH/?ALL/?STATE commands or on auto-resync. exchange() consumes
+    // the flag atomically (acq_rel) so subsequent iterations see false again.
     static bool s_firstEmit = true;
+    bool forceEmit = s_firstEmit || s_forceNextEmitAll.exchange(false, std::memory_order_acq_rel);
 
     static const char* s_divNames[] = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64"};
     static const char* s_patNames[] = {
@@ -1146,37 +1131,37 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
 
     // Global params — slot prefix derived from current mapping & context.
     // Format: "[POT] <SLOT>: <param>=<value> [unit]" (viewer-API §A.2).
-    if (s_firstEmit || (int)(shape * 100) != (int)(s_dbgShape * 100)) {
+    if (forceEmit || (int)(shape * 100) != (int)(s_dbgShape * 100)) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%.2f", shape);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_RESPONSE_SHAPE, curType)),
                       "Shape", valStr, nullptr);
       s_dbgShape = shape;
     }
-    if (s_firstEmit || slew != s_dbgSlew) {
+    if (forceEmit || slew != s_dbgSlew) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", slew);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_SLEW_RATE, curType)),
                       "Slew", valStr, nullptr);
       s_dbgSlew = slew;
     }
-    if (s_firstEmit || atDz != s_dbgAtDz) {
+    if (forceEmit || atDz != s_dbgAtDz) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", atDz);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_AT_DEADZONE, curType)),
                       "AT_Deadzone", valStr, nullptr);
       s_dbgAtDz = atDz;
     }
-    if (s_firstEmit || tempo != s_dbgTempo) {
+    if (forceEmit || tempo != s_dbgTempo) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", tempo);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_TEMPO_BPM, curType)),
                       "Tempo", valStr, "BPM");
       s_dbgTempo = tempo;
     }
-    if (s_firstEmit || ledBr != s_dbgLedBr) {
+    if (forceEmit || ledBr != s_dbgLedBr) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", ledBr);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_LED_BRIGHTNESS, curType)),
                       "LED_Bright", valStr, nullptr);
       s_dbgLedBr = ledBr;
     }
-    if (s_firstEmit || padSens != s_dbgPadSens) {
+    if (forceEmit || padSens != s_dbgPadSens) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", padSens);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_PAD_SENSITIVITY, curType)),
                       "PadSens", valStr, nullptr);
@@ -1184,19 +1169,19 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     }
 
     // Per-bank params (always tracked, foreground bank)
-    if (s_firstEmit || baseVel != s_dbgBaseVel) {
+    if (forceEmit || baseVel != s_dbgBaseVel) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", baseVel);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_BASE_VELOCITY, curType)),
                       "BaseVel", valStr, nullptr);
       s_dbgBaseVel = baseVel;
     }
-    if (s_firstEmit || velVar != s_dbgVelVar) {
+    if (forceEmit || velVar != s_dbgVelVar) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", velVar);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_VELOCITY_VARIATION, curType)),
                       "VelVar", valStr, nullptr);
       s_dbgVelVar = velVar;
     }
-    if (s_firstEmit || pb != s_dbgPB) {
+    if (forceEmit || pb != s_dbgPB) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", pb);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_PITCH_BEND, curType)),
                       "PitchBend", valStr, nullptr);
@@ -1204,25 +1189,25 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     }
 
     // Arp params
-    if (s_firstEmit || (int)(gate * 100) != (int)(s_dbgGate * 100)) {
+    if (forceEmit || (int)(gate * 100) != (int)(s_dbgGate * 100)) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%.2f", gate);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_GATE_LENGTH, curType)),
                       "Gate", valStr, nullptr);
       s_dbgGate = gate;
     }
-    if (s_firstEmit || (int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) {
+    if (forceEmit || (int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%.2f", shufDep);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_DEPTH, curType)),
                       "ShufDepth", valStr, nullptr);
       s_dbgShufDep = shufDep;
     }
-    if (s_firstEmit || div != s_dbgDiv) {
+    if (forceEmit || div != s_dbgDiv) {
       const char* divStr = (div < 9) ? s_divNames[div] : "?";
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_DIVISION, curType)),
                       "Division", divStr, nullptr);
       s_dbgDiv = div;
     }
-    if (s_firstEmit || pat != s_dbgPat) {
+    if (forceEmit || pat != s_dbgPat) {
       const char* patStr = (pat < NUM_ARP_PATTERNS) ? s_patNames[pat] : "?";
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_PATTERN, curType)),
                       "Pattern", patStr, nullptr);
@@ -1230,13 +1215,13 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     }
     // V4 Task 22 : R2+hold sur ARPEG_GEN pilote _genPosition (TARGET_GEN_POSITION binding),
     // distinct de _pattern. Trace pour observabilite live du sweep 0..NUM_GEN_POSITIONS-1.
-    if (s_firstEmit || genPos != s_dbgGenPos) {
+    if (forceEmit || genPos != s_dbgGenPos) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", genPos);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_GEN_POSITION, curType)),
                       "GenPos", valStr, nullptr);
       s_dbgGenPos = genPos;
     }
-    if (s_firstEmit || shufTpl != s_dbgShufTpl) {
+    if (forceEmit || shufTpl != s_dbgShufTpl) {
       char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", shufTpl);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_TEMPLATE, curType)),
                       "ShufTpl", valStr, nullptr);
@@ -1301,10 +1286,10 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
 // =================================================================
 void loop() {
   #if DEBUG_SERIAL
-  // Viewer-API runtime command poll (?STATE/?BANKS/?BOTH). Non-blocking,
+  // Viewer-API runtime command poll (?STATE/?BANKS/?BOTH/?ALL). Non-blocking,
   // cheap (Serial.available() == 0 path is just a register read).
-  pollRuntimeCommands();
-  viewer::pollCommands();   // Phase 1.A : stub. Will replace pollRuntimeCommands in 1.D.
+  // Phase 1.D : entirely handled by the viewer module now.
+  viewer::pollCommands();
   #endif
 
   const SharedKeyboardState& state = s_buffers[s_active.load(std::memory_order_acquire)];

@@ -1,8 +1,9 @@
 // src/viewer/ViewerSerial.cpp
 #include "ViewerSerial.h"
 #include "../core/HardwareConfig.h"  // DEBUG_SERIAL
-#include "../core/KeyboardData.h"    // BankSlot, BankType, NUM_BANKS, PotTarget enums
+#include "../core/KeyboardData.h"    // BankSlot, BankType, NUM_BANKS, PotTarget enums, SettingsStore
 #include "../arp/ArpEngine.h"
+#include "../midi/ClockManager.h"
 #include "../managers/PotRouter.h"
 #include "../managers/NvsManager.h"
 #include "../managers/BankManager.h"
@@ -11,12 +12,24 @@
 #include <freertos/task.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <string.h>
 
 // Forward declarations of firmware globals (defined in main.cpp)
-extern BankSlot     s_banks[NUM_BANKS];
-extern PotRouter    s_potRouter;
-extern NvsManager   s_nvsManager;
-extern BankManager  s_bankManager;
+extern BankSlot      s_banks[NUM_BANKS];
+extern PotRouter     s_potRouter;
+extern NvsManager    s_nvsManager;
+extern BankManager   s_bankManager;
+extern SettingsStore s_settings;
+extern ClockManager  s_clockManager;
+
+// Forward declarations of debug dump helpers (defined in main.cpp, ?ALL command).
+extern void dumpLedSettings();
+extern void dumpColorSlots();
+extern void dumpPotMapping();
+
+// Forward declaration of debugOutput sentinel reset (defined in main.cpp).
+// Forces re-emit of all [POT] params at next debugOutput() iteration.
+extern void resetDbgSentinels();
 
 namespace viewer {
 
@@ -71,13 +84,18 @@ void taskBody(void* /*arg*/) {
 
     if (!wasConnected && nowConnected) {
       // Auto-resync : viewer vient de connecter (cold open apres firmware
-      // deja boote). Re-emit le boot dump complet pour populer le viewer.
-      // Anticipe Phase 1.D (qui ajoutera emitGlobals/emitSettings ici).
+      // deja boote). Re-emit le boot dump complet + [GLOBALS]/[SETTINGS] +
+      // resetDbgSentinels pour forcer le re-emit des [POT] params au tick
+      // debugOutput() suivant. Resout les races du boot dump (LED_Bright /
+      // PadSens stuck sur sentinel 0xFF, viewer cells partial).
       // Push les events dans la queue — ils seront draines par les iters
       // suivants de cette meme task.
       emitBanksHeader(NUM_BANKS);
       for (uint8_t i = 0; i < NUM_BANKS; i++) emitBank(i);
       for (uint8_t i = 0; i < NUM_BANKS; i++) emitState(i);
+      emitGlobals();
+      emitSettings();
+      resetDbgSentinels();
       emitReady(s_bankManager.getCurrentBank() + 1);
     }
 
@@ -229,8 +247,56 @@ void begin() {
 }
 
 void pollCommands() {
-  // Phase 1.A : stub. Phase 1.D migrera pollRuntimeCommands ici.
-  // L'existant pollRuntimeCommands() reste dans main.cpp pendant Phase 1.A-1.C.
+  #if DEBUG_SERIAL
+  // Phase 1.D : migrated from main.cpp pollRuntimeCommands(). Non-blocking
+  // Serial poll for viewer-API runtime commands. ?STATE / ?BANKS / ?BOTH /
+  // ?ALL emit the corresponding dump then [READY]. ?BOTH/?ALL/?STATE also
+  // call resetDbgSentinels() so the next debugOutput() iteration re-emits
+  // every [POT] param (fixes stuck-sentinel races, e.g. LED_Bright/PadSens).
+  static char    cmdBuf[16];
+  static uint8_t cmdLen = 0;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      cmdBuf[cmdLen] = '\0';
+      if (strcmp(cmdBuf, "?STATE") == 0) {
+        emitState(s_bankManager.getCurrentBank());
+        emitReady(s_bankManager.getCurrentBank() + 1);
+      } else if (strcmp(cmdBuf, "?BANKS") == 0) {
+        emitBanksHeader(NUM_BANKS);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) emitBank(i);
+        emitReady(s_bankManager.getCurrentBank() + 1);
+      } else if (strcmp(cmdBuf, "?BOTH") == 0) {
+        emitBanksHeader(NUM_BANKS);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) emitBank(i);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) emitState(i);
+        emitGlobals();
+        emitSettings();
+        resetDbgSentinels();
+        emitReady(s_bankManager.getCurrentBank() + 1);
+      } else if (strcmp(cmdBuf, "?ALL") == 0) {
+        emitBanksHeader(NUM_BANKS);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) emitBank(i);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) emitState(i);
+        emitGlobals();
+        emitSettings();
+        resetDbgSentinels();
+        dumpLedSettings();
+        dumpColorSlots();
+        dumpPotMapping();
+        emitReady(s_bankManager.getCurrentBank() + 1);
+      } else if (cmdBuf[0] == '!') {
+        emit(PRIO_HIGH, "[ERROR] write commands not yet implemented (Phase 2)\n");
+      }
+      cmdLen = 0;
+    } else if (cmdLen < sizeof(cmdBuf) - 1) {
+      cmdBuf[cmdLen++] = c;
+    } else {
+      // overflow — discard buffer
+      cmdLen = 0;
+    }
+  }
+  #endif
 }
 
 bool isConnected() {
@@ -561,6 +627,38 @@ void emitMidiTransport(const char* transport, const char* state) {
 void emitPanic() {
   #if DEBUG_SERIAL
   emit(PRIO_HIGH, "[PANIC] All notes off on all channels\n");
+  #endif
+}
+
+// =================================================================
+// Phase 1.D — [GLOBALS]/[SETTINGS] events
+// New events introduced by Phase 1.D. Boot dump + auto-resync emit
+// these once after [STATE], and ?BOTH/?ALL also include them.
+// =================================================================
+
+void emitGlobals() {
+  #if DEBUG_SERIAL
+  emit(PRIO_HIGH, "[GLOBALS] Tempo=%u LED_Bright=%u PadSens=%u ClockSource=%s\n",
+       s_potRouter.getTempoBPM(),
+       s_potRouter.getLedBrightness(),
+       s_potRouter.getPadSensitivity(),
+       s_clockManager.getActiveSourceLabel());
+  #endif
+}
+
+void emitSettings() {
+  #if DEBUG_SERIAL
+  // BleInterval emis en numerique (0..3) pour matcher le viewer pre-code
+  // qui parse std::stoi(*v). Mapping interne :
+  //   0=BLE_OFF, 1=BLE_LOW_LATENCY, 2=BLE_NORMAL, 3=BLE_BATTERY_SAVER.
+  emit(PRIO_HIGH, "[SETTINGS] ClockMode=%s PanicReconnect=%u DoubleTapMs=%u "
+                  "AftertouchRate=%u BleInterval=%u BatAdcFull=%u\n",
+       s_settings.clockMode == CLOCK_MASTER ? "master" : "slave",
+       s_settings.panicOnReconnect,
+       s_settings.doubleTapMs,
+       s_settings.aftertouchRate,
+       s_settings.bleInterval,
+       s_settings.batAdcAtFull);
   #endif
 }
 

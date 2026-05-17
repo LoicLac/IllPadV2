@@ -227,3 +227,13 @@ uint32_t ClockManager::getCurrentTick() const  { return _currentTick; }
 uint16_t ClockManager::getSmoothedBPM() const      { return (uint16_t)_pllBPM; }
 float    ClockManager::getSmoothedBPMFloat() const { return _pllBPM; }
 bool     ClockManager::isExternalSync() const      { return _activeSource == SRC_USB || _activeSource == SRC_BLE; }
+
+const char* ClockManager::getActiveSourceLabel() const {
+  switch (_activeSource) {
+    case SRC_USB:        return "usb";
+    case SRC_BLE:        return "ble";
+    case SRC_LAST_KNOWN: return "last";
+    case SRC_INTERNAL:
+    default:             return "internal";
+  }
+}

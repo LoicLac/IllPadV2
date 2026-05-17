@@ -27,6 +27,7 @@ public:
   uint16_t getSmoothedBPM() const;
   float    getSmoothedBPMFloat() const;
   bool     isExternalSync() const;
+  const char* getActiveSourceLabel() const;
 
 private:
   enum ClockSource : uint8_t {
