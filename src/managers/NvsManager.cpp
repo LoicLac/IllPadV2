@@ -525,6 +525,9 @@ void NvsManager::commitAll() {
   if (_ledBrightDirty)   { saveLedBrightness(); _ledBrightDirty = false; }
   if (_padSensDirty)     { savePadSensitivity(); _padSensDirty = false; }
   if (_padOrderDirty)    { savePadOrder();       _padOrderDirty = false; }
+  // Phase 2 : viewer-driven NVS writes (debounced 500ms via tickDebounce).
+  if (_settingsDirty)    { saveSettings();      _settingsDirty = false; }
+  if (_bankTypeDirty)    { saveBankType();      _bankTypeDirty = false; }
 }
 
 // =================================================================
@@ -1164,3 +1167,44 @@ void NvsManager::savePadOrder() {
   }
 }
 
+// =================================================================
+// Phase 2 — Settings + BankType saves (viewer-driven, NVS task)
+// =================================================================
+// Both called from commitAll() on the NVS background task (Core 1).
+// _anyPadPressed guard (commitAll head) defers writes during live play.
+
+void NvsManager::saveSettings() {
+  // Direct saveBlob — NVS task is background, so the blocking flash write
+  // does not stall Core 1 main loop. Pattern matches existing savePotParams.
+  NvsManager::saveBlob(SETTINGS_NVS_NAMESPACE, SETTINGS_NVS_KEY,
+                       &_pendingSettings, sizeof(_pendingSettings));
+  #if DEBUG_SERIAL
+  Serial.println("[NVS] Saved settings.");
+  #endif
+}
+
+void NvsManager::saveBankType() {
+  // Rebuild BankTypeStore from internal _loadedX[] arrays at save time
+  // (single source of truth, no _pendingBankType duplicating state).
+  // _loadedBankType[i] populated by loadAll() + maintained by Phase 2 path
+  // (currently no runtime BankType change — palier rouge cf spec §17).
+  BankTypeStore bts;
+  bts.magic    = EEPROM_MAGIC;
+  bts.version  = BANKTYPE_VERSION;
+  bts.reserved = 0;
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    bts.types[i]              = _loadedBankType[i];
+    bts.quantize[i]           = _loadedQuantize[i];
+    bts.scaleGroup[i]         = _loadedScaleGroup[i];
+    bts.bonusPilex10[i]       = _loadedBonusPile[i];
+    bts.marginWalk[i]         = _loadedMarginWalk[i];
+    bts.proximityFactorx10[i] = _loadedProximity[i];
+    bts.ecart[i]              = _loadedEcart[i];
+  }
+  validateBankTypeStore(bts);
+  NvsManager::saveBlob(BANKTYPE_NVS_NAMESPACE, BANKTYPE_NVS_KEY_V2,
+                       &bts, sizeof(bts));
+  #if DEBUG_SERIAL
+  Serial.println("[NVS] Saved bank type.");
+  #endif
+}

@@ -186,6 +186,9 @@ private:
   void saveLedBrightness();
   void savePadSensitivity();
   void savePadOrder();
+  // Phase 2 : Settings + BankType saves (called from commitAll via NVS task).
+  void saveSettings();
+  void saveBankType();
 };
 
 #endif // NVS_MANAGER_H
