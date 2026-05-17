@@ -73,6 +73,9 @@ void emitPanic();
 void emitGlobals();
 void emitSettings();
 
+// --- Phase 1.E : [CLOCK] BPM= debounced (external sync BPM updates) ---
+void emitClockBpm(float bpm, const char* srcLabel);
+
 // Phase 1.A : pas d'emit_xxx() encore. Ajoutés au fur et à mesure des
 // sous-phases 1.C.*, 1.D, 1.E, 1.F.
 

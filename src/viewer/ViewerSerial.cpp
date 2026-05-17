@@ -662,4 +662,16 @@ void emitSettings() {
   #endif
 }
 
+// =================================================================
+// Phase 1.E — [CLOCK] BPM= debounced (external sync updates)
+// =================================================================
+
+void emitClockBpm(float bpm, const char* srcLabel) {
+  #if DEBUG_SERIAL
+  emit(PRIO_HIGH, "[CLOCK] BPM=%.0f src=%s\n", bpm, srcLabel);
+  #else
+  (void)bpm; (void)srcLabel;
+  #endif
+}
+
 }  // namespace viewer

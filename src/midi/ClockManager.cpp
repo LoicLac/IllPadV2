@@ -3,6 +3,12 @@
 #include "../core/MidiTransport.h"
 #include "../viewer/ViewerSerial.h"
 #include <Arduino.h>
+#include <math.h>  // fabsf
+
+// Phase 1.E : last BPM value emitted via viewer::emitClockBpm() — debounce
+// reference. Reset to 0 on source change (processIncomingTicks / resolveTimeouts)
+// to force re-emit meme si la BPM est identique entre les deux sources.
+static float s_lastEmittedBpm = 0.0f;
 
 ClockManager::ClockManager()
   : _lastUsbTickUs(0), _lastBleTickUs(0), _pendingUsbTicks(0), _pendingBleTicks(0),
@@ -95,6 +101,7 @@ void ClockManager::processIncomingTicks(uint32_t nowUs, uint8_t usbTicks, uint8_
     if (_activeSource != prevSource) {
       _prevTickUs = 0;
       _tickIntervalCount = 0;
+      s_lastEmittedBpm = 0.0f;   // Force [CLOCK] BPM= re-emit on source change
       viewer::emitClockSource(_activeSource == SRC_USB ? "USB" : "BLE", 0.0f);
     }
 
@@ -130,6 +137,7 @@ void ClockManager::resolveTimeouts(uint32_t nowUs) {
           _activeSource = SRC_BLE;
           _prevTickUs = 0;
           _tickIntervalCount = 0;
+          s_lastEmittedBpm = 0.0f;   // Force re-emit BPM (Phase 1.E)
           viewer::emitClockSource("BLE (USB timed out)", 0.0f);
           return;  // BLE fallback active — skip further timeout handling
         }
@@ -149,9 +157,11 @@ void ClockManager::resolveTimeouts(uint32_t nowUs) {
         _lastKnownEntryUs = nowUs;
         _pllBPM = _lastKnownBPM;
         _pllTickInterval = 60000000.0f / (_pllBPM * 24.0f);
+        s_lastEmittedBpm = 0.0f;   // Force re-emit BPM (Phase 1.E)
         viewer::emitClockSource("last known", _pllBPM);
       } else {
         _activeSource = SRC_INTERNAL;
+        s_lastEmittedBpm = 0.0f;   // Force re-emit BPM (Phase 1.E)
         viewer::emitClockSource("internal (no external BPM)", 0.0f);
       }
       _tickIntervalCount = 0;
@@ -164,6 +174,7 @@ void ClockManager::resolveTimeouts(uint32_t nowUs) {
       _lastKnownEntryUs > 0 && (nowUs - _lastKnownEntryUs) > LAST_KNOWN_TIMEOUT_US) {
     _activeSource = SRC_INTERNAL;
     _lastTickTimeUs = nowUs;
+    s_lastEmittedBpm = 0.0f;   // Force re-emit BPM (Phase 1.E)
     viewer::emitClockSource("internal (last known timed out)", 0.0f);
   }
 }
@@ -209,6 +220,19 @@ void ClockManager::updatePLL(uint32_t intervalUs, uint8_t source) {
 
   _pllTickInterval = 60000000.0f / (_pllBPM * 24.0f);
   _lastKnownBPM = _pllBPM;
+
+  // Phase 1.E : debounced emit BPM externe sur change ±1 BPM. Resout audit
+  // R3 (viewer reflete indefiniment la valeur du pot Tempo interne en mode
+  // external sync). Le reset s_lastEmittedBpm sur source change garantit
+  // que la BPM est ré-émise meme si identique a l'ancienne source.
+  #if DEBUG_SERIAL
+  if (_activeSource == SRC_USB || _activeSource == SRC_BLE) {
+    if (fabsf(_pllBPM - s_lastEmittedBpm) >= 1.0f) {
+      viewer::emitClockBpm(_pllBPM, _activeSource == SRC_USB ? "usb" : "ble");
+      s_lastEmittedBpm = _pllBPM;
+    }
+  }
+  #endif
 }
 
 void ClockManager::setMasterMode(bool master) {
