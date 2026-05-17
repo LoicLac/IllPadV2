@@ -35,6 +35,21 @@ namespace viewer {
 
 namespace {
 
+// Phase 2 : enum tagging the 4 ARPEG_GEN per-bank arguments. Used by
+// handleArpGenParam to dispatch range check + setter + setLoadedX without
+// 4 copies of the same code.
+enum ArpGenArg : uint8_t {
+  ARG_BONUS  = 0,   // x10 [10..20]
+  ARG_MARGIN = 1,   // [3..12]
+  ARG_PROX   = 2,   // x10 [4..20]
+  ARG_ECART  = 3,   // [1..12]
+};
+
+// Phase 2 forward declarations (definitions below).
+static void dispatchWriteCommand(const char* cmd);
+static void handleClockMode(const char* valStr, const char* origCmd);
+static void handleArpGenParam(ArpGenArg arg, const char* valStr, int bank1, const char* origCmd);
+
 // Event in queue : 1 byte prio + 1 byte len + 254 bytes payload = 256 bytes
 struct QueuedEvent {
   uint8_t prio;
@@ -242,6 +257,81 @@ void formatTargetValueForBank(char* buf, size_t bufSize,
   }
 }
 
+// =================================================================
+// Phase 2 — Write commands dispatcher
+// =================================================================
+// Format : !KEY=VALUE[ BANK=K]\n (cf spec §5).
+// Buffer reçu garanti <= 23 chars + '\0' (Task 13 path too_long).
+// Strategy : copy → strtok_r split on space → split on '=' → dispatch by key.
+// Le tampon scratch (tmp[24]) est mutable par strtok_r. cmd reste intact
+// pour les emits d'erreur.
+
+static void dispatchWriteCommand(const char* cmd) {
+  // 1. Copy to scratch buffer (strtok_r mutates).
+  char tmp[24];
+  size_t n = strlen(cmd);
+  if (n >= sizeof(tmp)) {
+    // Should not happen (Task 13 path too_long catches before we arrive here),
+    // mais defense-in-depth pour ne pas overflow strtok_r.
+    emit(PRIO_HIGH, "[ERROR] cmd=%.20s... code=too_long\n", cmd);
+    return;
+  }
+  memcpy(tmp, cmd, n + 1);
+
+  // 2. Tokenize on space : tok1 = "!KEY=VAL", tok2 = "BANK=K" or nullptr.
+  char* save = nullptr;
+  char* tok1 = strtok_r(tmp, " ", &save);
+  char* tok2 = strtok_r(nullptr, " ", &save);
+
+  // 3. Split tok1 on '=' : key (after '!'), valStr.
+  if (!tok1) return;  // empty command, drop silently
+  char* eq = strchr(tok1, '=');
+  if (!eq) {
+    emit(PRIO_HIGH, "[ERROR] cmd=%s code=parse_error\n", cmd);
+    return;
+  }
+  *eq = '\0';
+  const char* key = tok1 + 1;   // skip '!'
+  const char* valStr = eq + 1;
+
+  // 4. Parse optional BANK=K (per-bank commands).
+  int bank1 = -1;   // -1 = absent
+  if (tok2) {
+    char* eq2 = strchr(tok2, '=');
+    if (!eq2 || strncmp(tok2, "BANK", 4) != 0) {
+      emit(PRIO_HIGH, "[ERROR] cmd=%s code=parse_error\n", cmd);
+      return;
+    }
+    bank1 = atoi(eq2 + 1);
+  }
+
+  // 5. Dispatch by key.
+  if      (strcmp(key, "CLOCKMODE") == 0) handleClockMode(valStr, cmd);
+  else if (strcmp(key, "BONUS")     == 0) handleArpGenParam(ARG_BONUS,  valStr, bank1, cmd);
+  else if (strcmp(key, "MARGIN")    == 0) handleArpGenParam(ARG_MARGIN, valStr, bank1, cmd);
+  else if (strcmp(key, "PROX")      == 0) handleArpGenParam(ARG_PROX,   valStr, bank1, cmd);
+  else if (strcmp(key, "ECART")     == 0) handleArpGenParam(ARG_ECART,  valStr, bank1, cmd);
+  else {
+    emit(PRIO_HIGH, "[ERROR] cmd=%s code=unknown_command\n", cmd);
+  }
+}
+
+// =================================================================
+// Phase 2 — Handler stubs (filled by Tasks 15 + 16)
+// =================================================================
+// Stubs émettent unknown_command pour qu'on puisse compiler + tester le
+// dispatcher avant de remplir les bodies.
+
+static void handleClockMode(const char* valStr, const char* origCmd) {
+  (void)valStr;
+  emit(PRIO_HIGH, "[ERROR] cmd=%s code=unknown_command\n", origCmd);
+}
+
+static void handleArpGenParam(ArpGenArg arg, const char* valStr, int bank1, const char* origCmd) {
+  (void)arg; (void)valStr; (void)bank1;
+  emit(PRIO_HIGH, "[ERROR] cmd=%s code=unknown_command\n", origCmd);
+}
+
 }  // namespace
 
 void begin() {
@@ -331,7 +421,7 @@ void pollCommands() {
         dumpPotMapping();
         emitReady(s_bankManager.getCurrentBank() + 1);
       } else if (cmdBuf[0] == '!') {
-        emit(PRIO_HIGH, "[ERROR] write commands not yet implemented (Phase 2)\n");
+        dispatchWriteCommand(cmdBuf);
       }
       cmdLen = 0;
     } else if (cmdLen < sizeof(cmdBuf) - 1) {
