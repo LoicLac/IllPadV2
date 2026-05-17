@@ -109,19 +109,45 @@ void taskBody(void* /*arg*/) {
     // Drain with 10ms wait — if no event in 10ms, loop and re-check connection
     if (xQueueReceive(s_queue, &ev, pdMS_TO_TICKS(10)) == pdPASS) {
       const uint8_t* buf = reinterpret_cast<const uint8_t*>(ev.line);
-      // Wait jusqu'a 100ms pour que le TX ring USB CDC se vide. Le default
-      // TinyUSB ring est ~256B et un [STATE] line fait ~200B — sans wait,
-      // le boot dump (18 events ×200B = 3.6KB) sature et drop. Avec wait,
-      // le host (Mac) draine continument et le boot dump passe en ~50-200ms.
-      uint32_t deadline = millis() + 100;
-      while (Serial.availableForWrite() < ev.len &&
-             (int32_t)(deadline - millis()) > 0) {
-        vTaskDelay(pdMS_TO_TICKS(2));
+      // Chunked write : ecrit ce que le ring USB CDC accepte, attend, ecrit
+      // le reste. Resout le drop des longues lignes pendant la fenetre
+      // cold-USB-connect (~1.5s post-flash) ou le host Mac n'a pas encore
+      // demarre son read continu : availableForWrite() retourne des values
+      // trop petites pour passer un [STATE] (~200B) ou [BANK] ARPEG (~85B)
+      // en une fois → ancien drop-after-100ms loosait systematiquement.
+      //
+      // Contrainte cle : toujours passer toWrite ≤ availableForWrite() a
+      // Serial.write() pour eviter le spin lock interne USBCDC::write
+      // (boucle non-timeouted sur tud_cdc_n_write_available si DTR=1 mais
+      // host frozen — cf. USBCDC.cpp:388-411 framework).
+      //
+      // Timeout ultimate 5s par ligne : si on n'arrive pas a tout ecrire
+      // (host vraiment freeze), inject \n pour resync le stream — la
+      // ligne corrompue devient UnknownEvent cote viewer sans cascade.
+      size_t remaining = ev.len;
+      size_t offset    = 0;
+      uint32_t deadline = millis() + 5000;
+      while (remaining > 0 && (int32_t)(deadline - millis()) > 0) {
+        if (!Serial) break;   // DTR dropped mid-write → abort fast
+        size_t avail = Serial.availableForWrite();
+        if (avail == 0) {
+          vTaskDelay(pdMS_TO_TICKS(5));
+          continue;
+        }
+        size_t toWrite = (remaining < avail) ? remaining : avail;
+        size_t written = Serial.write(buf + offset, toWrite);
+        if (written == 0) {
+          vTaskDelay(pdMS_TO_TICKS(5));
+          continue;
+        }
+        offset    += written;
+        remaining -= written;
       }
-      if (Serial.availableForWrite() >= ev.len) {
-        Serial.write(buf, ev.len);
+      // Stream resync : ecriture partielle apres timeout → inject \n pour
+      // que la ligne suivante soit parsable malgre la corruption.
+      if (remaining > 0 && offset > 0) {
+        Serial.write((const uint8_t*)"\n", 1);
       }
-      // else : drop apres 100ms wait (CDC stalled severement, viewer freeze)
     }
   }
 }
