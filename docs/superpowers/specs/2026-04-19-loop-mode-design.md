@@ -21,7 +21,7 @@
 
 ### §1 — Intention musicale et place dans ILLPAD48
 
-ILLPAD48 V2 propose huit slots de performance, chacun relié à un canal MIDI fixe. Deux types de banks existent aujourd'hui sur `main` : **NORMAL** (jeu mélodique classique sur gamme/mode) et **ARPEG** (arpégiateur séquentiel quantisé à l'horloge). Le mode **LOOP** ajoute un troisième type, dédié à la construction en temps réel de boucles rythmiques.
+ILLPAD48 V2 propose huit slots de performance, chacun relié à un canal MIDI fixe. Trois types de banks existent aujourd'hui sur `main` : **NORMAL** (jeu mélodique classique sur gamme/mode), **ARPEG** (arpégiateur séquentiel quantisé à l'horloge), et **ARPEG_GEN** (arpégiateur génératif, walk pondéré sur pile). Le mode **LOOP** est le quatrième type, déclaré en Phase 1 (enum `BANK_LOOP = 2`, stores NVS prêts) mais sans runtime engine — dédié à la construction en temps réel de boucles rythmiques.
 
 L'idée directrice : offrir un boucleur intégré à l'instrument, jouable d'une seule main, sans sortir du flux de performance. Le musicien enregistre un motif avec les doigts, l'ILLPAD le cale seul sur la mesure, puis il tourne en fond pendant que le musicien change de bank, déclenche un arpège, joue une ligne mélodique par-dessus, rappelle une autre boucle, ou compose un empilement.
 
@@ -64,7 +64,7 @@ Le **LOOP core** est le moteur d'enregistrement et de playback. Il vit dans chaq
 
 Le moteur est **éphémère par défaut** : le contenu d'une boucle est perdu au reboot si elle n'a pas été sauvegardée dans un slot du drive. Les **paramètres d'effets** (shuffle, chaos, velocity pattern) sont en revanche persistants per-bank, stockés en NVS — ils survivent au reboot même sans slot save. Les slots embarquent aussi ces params dans leur fichier, ce qui crée une redondance assumée : sans slot chargé, la bank mémorise ses réglages NVS ; au load d'un slot, les params du slot écrasent le state courant.
 
-Le LOOP core est conçu pour **tourner en fond** : une boucle lancée sur une bank LOOP continue à jouer quand l'utilisateur change de bank. Comme les arpèges, il n'existe **jamais** de "mise en sommeil" d'un engine — toute bank LOOP existe en RAM et sa boucle joue ou ne joue pas selon son état. Maximum **2 banks LOOP simultanément** (contrainte SRAM).
+Le LOOP core est conçu pour **tourner en fond** : une boucle lancée sur une bank LOOP continue à jouer quand l'utilisateur change de bank. Comme les arpèges, il n'existe **jamais** de "mise en sommeil" d'un engine — toute bank LOOP existe en RAM et sa boucle joue ou ne joue pas selon son état. **Nombre max de banks LOOP simultanées** : à figer en Phase 2 selon mesure réelle SRAM de `LoopEngine` (la spec d'origine proposait 2 ; le plan Phase 2 actera la valeur définitive — constante `MAX_LOOP_BANKS` à introduire dans `HardwareConfig.h`).
 
 Trois pads de contrôle dédiés pilotent l'engine : **REC**, **PLAY/STOP**, **CLEAR**. Ces trois pads ne sont actifs que sur une bank LOOP en foreground. Sur une bank NORMAL ou ARPEG, les mêmes pads physiques jouent comme des pads musicaux ordinaires.
 
@@ -140,7 +140,7 @@ Tout commence en mode setup (boot + appui long sur le bouton arrière). Trois to
 
 2. **Tool 3 — Pad Roles, sous-page LOOP** : le musicien assigne les 3 pads de contrôle (REC, PLAY/STOP, CLEAR) et optionnellement les 16 slot pads. Les slots inutilisés restent `0xFF` (non assignés). La sous-page LOOP ne présente les slot roles que si le refactor b1 est complet — sinon, seulement les 3 controls. Rien n'oblige à assigner les 16 slots d'un coup : un musicien peut très bien commencer avec 2 ou 4 slots et étendre plus tard.
 
-3. **Tool 7 — Pot Mapping, contexte LOOP** : le musicien configure quels pots pilotent quels paramètres LOOP. Les 8 slots de mapping (4 pots × 2 couches hold/not-hold) reçoivent par défaut : tempo, base velocity, vel pattern, vel pattern depth, chaos, shuffle depth, shuffle template, velocity variation. Tous réassignables — y compris en MIDI CC ou pitch bend pour un canal MIDI arbitraire.
+3. **Tool 7 — Pot Mapping, contexte LOOP** : le musicien configure quels pots pilotent quels paramètres LOOP. Les 8 slots de mapping (4 pots × 2 couches hold/not-hold) reçoivent par défaut : base velocity, vel pattern, vel pattern depth, chaos, shuffle depth, shuffle template, velocity variation, MIDI CC/PB libre. Tous réassignables — y compris en MIDI CC ou pitch bend pour un canal MIDI arbitraire. **Note** : depuis `POTMAP_VERSION = 2`, le tempo n'est plus assignable via Tool 7 — il a un binding fixe sur LEFT + rear pot. Le mapping LOOP Phase 4 ne doit pas réintroduire tempo dans le pool.
 
 Le **Tool 8 — LED Settings** n'a pas besoin de configuration spécifique pour LOOP : les couleurs jaunes utilisées par LOOP viennent de slots de couleur configurables si le musicien veut les nuancer (intensité, hue offset), mais les valeurs par défaut sont déjà chargées.
 
@@ -270,7 +270,7 @@ L'ordre est important : **CLEAR puis slot**, pas l'inverse. Taper un slot puis a
 
 ### §14 — Jouer plusieurs loops en parallèle
 
-Jusqu'à **2 banks LOOP** peuvent exister simultanément (limite SRAM). Chacune a son propre contenu, son propre état (PLAYING / STOPPED / etc.), ses propres effets, son propre canal MIDI.
+Jusqu'à **`MAX_LOOP_BANKS` banks LOOP** peuvent exister simultanément (limite SRAM — valeur à figer Phase 2, cf §3). Chacune a son propre contenu, son propre état (PLAYING / STOPPED / etc.), ses propres effets, son propre canal MIDI.
 
 Quand une bank LOOP est en foreground, le musicien voit ses LEDs (fond jaune + flash colorés selon le state, voir LED spec §17) et peut la piloter avec les 3 pads de contrôle. Les autres banks LOOP (en background) continuent à jouer normalement — leur tick et leur playback tournent dans la pipeline chaque frame, avec un fond dimmé (bgFactor) et des flashes de plus faible intensité.
 
@@ -391,6 +391,8 @@ La validation Tool 3 doit assurer qu'aucune collision réelle n'est possible, en
 
 Sur une bank ARPEG, le geste déclenche `ArpEngine::setCaptured()` — toggle play/stop du pile arp. Sur une bank LOOP, il déclenche de manière analogue le toggle PLAY/STOP du LoopEngine. La cible peut être la bank FG ou une bank BG (keys pointer = nullptr pour BG).
 
+> **État Phase 1 (commit `2624b12`)** : la branche `else if (... type == BANK_LOOP)` dans `BankManager::update` consomme le 2ème tap silencieusement (`_lastBankPadPressTime[b] = 0; _pendingSwitchBank = -1; continue;`) pour éviter un bank-switch parasite. Le toggle réel `LoopEngine.toggle()` sera câblé en Phase 2+ quand `LoopEngine` existera (cf. [docs/reference/loop-buffer-invariants.md §3](../../reference/loop-buffer-invariants.md)).
+
 Conséquences :
 - Sur la bank LOOP FG, LEFT + double-tap est **équivalent** au tap PLAY/STOP (mais plus rapide à atteindre si on est déjà en hold-left pour autre chose)
 - Sur une bank LOOP BG, LEFT + double-tap est le **seul moyen** de piloter cette bank sans la passer en FG
@@ -404,22 +406,22 @@ Le geste ne change jamais la bank courante (comportement identique à ARPEG). Le
 
 ### §20 — NVS et persistence
 
-**État post Phase 0 + Phase 0.1** : les extensions NVS requises pour LOOP sont **partiellement faites**. Checklist mise à jour :
+**État post Phase 1 close (commit `2624b12`)** : les extensions NVS requises pour LOOP sont **toutes déclarées** ; il manque uniquement le filesystem slots (Phase 6).
 
 | Store | Rôle | Statut | Persisté |
 |---|---|---|---|
-| **LoopPadStore** | 3 control pads (REC, PLAY/STOP, CLEAR) + 16 slot pads | ❌ TODO Phase 1 (struct + validator + descriptor, pas de consommateur runtime — §27) | Namespace prévu : `illpad_lpad` / `pads`, **size 23 B strict packed** (décision Q1) |
-| **LoopPotStore** | 5 effets per-bank (shuffle depth/template, chaos, vel pattern/depth) | ❌ TODO Phase 1 (struct + validator + descriptor, layout NVS figé pour éviter 2e reset user) ; câblage effets Phase 5 | Per-bank dans `illpad_lpot` / `loop_0..7` |
+| **LoopPadStore** | 3 control pads (REC, PLAY/STOP, CLEAR) + 16 slot pads | ✅ **DECLARED Phase 1** (commit `1b0ac8c`) — struct ([KeyboardData.h:528](../../../src/core/KeyboardData.h)) + validator + descriptor index 12 dans `NVS_DESCRIPTORS[]`. Pas de consommateur runtime ; Tool 3 b1 wires Phase 3 | Namespace `illpad_lpad` / `pads`, **23 B strict packed** (décision Q1) |
+| **LoopPotStore** | 5 effets per-bank (shuffle depth/template, chaos, vel pattern/depth) | ✅ **DECLARED Phase 1** (commit `68855e3`) — struct ([KeyboardData.h:149](../../../src/core/KeyboardData.h)) 12 B packed + validator. Per-bank multi-key (pattern `ArpPotStore`), pas de descriptor entry. Câblage effets Phase 5 | Per-bank dans `illpad_lpot` / `loop_0..7` |
 | **Slot files** | 1 fichier LittleFS par slot occupé | ❌ TODO Phase 6 | `/loops/slotNN.lpb`, partition LittleFS dédiée |
 
 Extensions des Store existants :
-- **BankTypeStore v2** (déjà en place) : le champ `scaleGroup[8]` existe. Pour les banks LOOP, il est **ignoré** — les loops n'ont pas de gamme. Le Tool 5 ne doit pas exposer le scaleGroup pour les banks LOOP. Le NvsManager ne propage pas de scale change vers une bank LOOP, même si le scaleGroup est accidentellement non-zéro. `BankType` enum actuel = `{BANK_NORMAL, BANK_ARPEG}` — **ajouter `BANK_LOOP`** Phase 1 (cascade : validator, Tool 5, LedController dispatch, main.cpp process switch, reloadPerBankParams).
-- **PotMappingStore** : passe de 2 contextes (NORMAL / ARPEG) à 3 contextes (+ LOOP). 8 slots de mapping supplémentaires, total 24. ❌ TODO Phase 3 (Tool 7 + PotRouter 3 contexts). Rewrite complet vu la Zero Migration Policy — les anciennes données NVS rejetées au boot, defaults appliqués.
+- **BankTypeStore v4** : le champ `scaleGroup[8]` existe. Pour les banks LOOP, il est **ignoré** — les loops n'ont pas de gamme. Le Tool 5 ne doit pas exposer le scaleGroup pour les banks LOOP. Le NvsManager ne propage pas de scale change vers une bank LOOP, même si le scaleGroup est accidentellement non-zéro. V3 + V4 ont ajouté `bonusPilex10[]`, `marginWalk[]`, `proximityFactorx10[]`, `ecart[]` pour ARPEG_GEN — non utilisés par LOOP. `BankType` enum actuel = `{BANK_NORMAL=0, BANK_ARPEG=1, BANK_LOOP=2, BANK_ARPEG_GEN=3, BANK_ANY=0xFF}` — BANK_LOOP ajouté Phase 1 (commit `a84c955`). Cascade Phase 1 : validator clamp `> BANK_ARPEG_GEN` ✅, Tool 5 cycle ne propose pas LOOP (Phase 3 à venir), LedController dispatch ✅ (`renderBankLoop` stub), `main.cpp::handlePadInput` default no-op (commentaire "Phase 2 wires processLoopMode"), `reloadPerBankParams` filtre via `isArpType` (LOOP non concerné).
+- **PotMappingStore** : passe de 2 contextes (NORMAL / ARPEG) à 3 contextes (+ LOOP). 8 slots de mapping supplémentaires, total 24. ❌ TODO Phase 3-4 (Tool 7 + PotRouter 3 contexts). Rewrite complet vu la Zero Migration Policy — les anciennes données NVS rejetées au boot, defaults appliqués. **Note `POTMAP_VERSION = 2`** : tempo retiré du pool Tool 7 (binding fixe LEFT + rear pot). L'extension LOOP doit respecter cette politique (tempo absent du pool LOOP par défaut).
 - **SettingsStore v11** ✅ **DONE** (commit `dec9391` Phase 0 step 0.3 + `cad7530` Phase 0.1) : les **3 timers LOOP globaux** sont déjà persistés et éditables en Tool 6 + Tool 8 (shared-field) :
   - `clearLoopTimerMs` — default 500 ms, range [200, 1500] ✅
   - `slotSaveTimerMs` — default 1000 ms, range [500, 2000] ✅
   - `slotClearTimerMs` — default 800 ms, range [400, 1500] ✅
-- **LedSettingsStore v7** ✅ **DONE** (commit `cad7530`) : `tickBarDurationMs` + `tickWrapDurationMs` persistés et chargés dans `LedController` caches, non consommés runtime (attendent `consumeBarFlash` / `consumeWrapFlash` du LoopEngine Phase 1+).
+- **LedSettingsStore v9** ✅ **DONE** (chaîne `cad7530` v7 → `3b85011` v9) : `tickBarDurationMs` + `tickWrapDurationMs` persistés et cachés dans `LedController` (`_tickBarDurationMs`, `_tickWrapDurationMs`), non consommés runtime (attendent `consumeBarFlash` / `consumeWrapFlash` du LoopEngine Phase 2+). V9 a fusionné les 4 fields FG (`fgArpPlayMax`/`fgArpStopMin`/`fgArpStopMax`/`normalFgIntensity`) en un seul `_fgIntensity` — cf §28 Q3/Q4.
 - **ColorSlotStore v5** ✅ **DONE** (commit `cad7530`) : 16 slots, incluant `CSLOT_MODE_LOOP` (Gold preset), `CSLOT_VERB_PLAY/REC/OVERDUB/CLEAR_LOOP/SLOT_CLEAR/SAVE` (tous verbs transport LOOP), `CSLOT_VERB_STOP`, `CSLOT_CONFIRM_OK`. Tous éditables via Tool 8 Phase 0.1.
 
 **Partition flash** : ❌ TODO Phase 6. L'ajout de LittleFS implique un repartitionnement du flash (512 KB dédiés à LittleFS). Au premier boot après flash de ce firmware, **tous les paramètres utilisateurs seront reset aux defaults** (calibration, pad order, pad roles, etc.). Comportement assumé par la Zero Migration Policy du projet — un Serial.printf au boot signale chaque reset, le musicien reconfigure via setup mode.
@@ -442,7 +444,7 @@ Le feedback LED du mode LOOP est défini par la **LED feedback unified design** 
 - **Refus** : réutilise `CSLOT_VERB_REC` (Coral) via pattern `BLINK_FAST` cycles=3. Pas de color slot dédié. ✅ Pattern implémenté, callsites LOOP à câbler Phase 2+.
 - **WAITING_*** : pattern `CROSSFADE_COLOR` unifié mode-invariant — **colorA = `CSLOT_VERB_PLAY` (vert, éditable Tool 8), colorB = `CSLOT_CONFIRM_OK` (blanc, hardcodé dans `triggerEvent`)**, period hardcoded 800 ms (Tool 8 respec §4.3 "Éléments non exposés"), brightness = `_fgIntensity` (LedSettingsStore v9 single FG slider) × `bgFactor` en BG. ✅ Implémenté commit `48b96fb` Phase 1 Task 7 amendée v9. Décision Q3 — voir §28.
 - **EVT_LOOP_* enum** ✅ **réservés** dans `LedGrammar.h` (EVT_LOOP_REC, OVERDUB, SLOT_LOADED, SLOT_WRITTEN, SLOT_CLEARED, SLOT_REFUSED, CLEAR) — mapping par défaut `PTN_NONE` actuellement. À wirer Phase 4 (PotRouter + LED wiring) avec le bon `{patternId, colorSlot, fgPct}` selon LED spec §12.
-- **Tick durations BAR/WRAP** ✅ **persistées** dans LedSettingsStore v7 + **cachées** dans LedController (`_tickBarDurationMs`, `_tickWrapDurationMs`). Non consommées runtime — attendent `consumeBarFlash()` / `consumeWrapFlash()` flags dans LoopEngine Phase 2+.
+- **Tick durations BAR/WRAP** ✅ **persistées** dans LedSettingsStore v9 + **cachées** dans LedController (`_tickBarDurationMs`, `_tickWrapDurationMs`). Non consommées runtime — attendent `consumeBarFlash()` / `consumeWrapFlash()` flags dans LoopEngine Phase 2+.
 
 Tous les tunings (intensités, durées, couleurs) sont configurables en **Tool 8 LED Settings single-view** (sections NORMAL / ARPEG / LOOP / TRANSPORT / CONFIRMATIONS / GLOBAL). La section LOOP + les lignes TRANSPORT tick (BEAT/BAR/WRAP durations + verb colors PLAY/REC/OVERDUB) sont déjà exposées musicien-facing. Pas de hardcode.
 
@@ -455,16 +457,18 @@ Le PotRouter accueille un **3e contexte LOOP** (s'ajoutant à NORMAL et ARPEG). 
 - **Refactor du Tool 7 en 3 pages dédiées** (NORMAL / ARPEG / LOOP), chacune avec la même mécanique de navigation par pot (identique à l'existant). **Pas de touche `t` pour toggler entre contextes** — la navigation inter-pages se fait par la même logique multi-pages que les autres tools. Chaque page reste cohérente : les pots font défiler, les pages se remplacent proprement.
 - Nouveau pool de paramètres LOOP : tempo, base vel, vel pattern, vel pattern depth, chaos, shuffle depth, shuffle template, velocity variation (+ MIDI CC et pitch bend comme les autres)
 
-Mapping par défaut LOOP (8 slots = 4 pots × 2 couches) :
+Mapping par défaut LOOP **proposé** (8 slots = 4 pots × 2 couches) — à finaliser Phase 4 :
 
 | Pot | Seul | + hold-left |
 |---|---|---|
-| R1 | Tempo | Chaos |
+| R1 | Chaos | Shuffle template (10 discrets) |
 | R2 | Base velocity | Shuffle depth |
-| R3 | Vel pattern (4 discrets) | Shuffle template (10 discrets) |
-| R4 | Vel pattern depth | Velocity variation |
+| R3 | Vel pattern (4 discrets) | Velocity variation |
+| R4 | Vel pattern depth | (MIDI CC libre — assignable Tool 7) |
 
-**Catch** : comme ARPEG, les paramètres per-bank LOOP ont une politique catch per-bank (reset au bank switch). Les paramètres globaux (tempo) gardent leur catch à travers les switches. Les paramètres qui sont partagés avec ARPEG (shuffle depth, shuffle template) utilisent le même slot interne de PotRouter — le main loop route la valeur vers le bon engine selon le type de la bank FG.
+**Note** : tempo n'apparaît plus dans le pool Tool 7 (binding fixe LEFT + rear pot depuis `POTMAP_VERSION = 2`). Tempo reste néanmoins un paramètre live affectant les banks LOOP — son binding hardware est juste découplé de Tool 7.
+
+**Catch** : comme ARPEG, les paramètres per-bank LOOP ont une politique catch per-bank (reset au bank switch). Les paramètres globaux (le binding fixe tempo notamment) gardent leur catch à travers les switches. Les paramètres qui sont partagés avec ARPEG (shuffle depth, shuffle template) utilisent le même slot interne de PotRouter — le main loop route la valeur vers le bon engine selon le type de la bank FG.
 
 Au **load d'un slot**, tous les paramètres per-bank LOOP sont réécrits par le contenu du fichier. Le catch est ré-armé pour tous ces paramètres (seedCatchValues interne). Le musicien voit les pots comme "uncaught" la prochaine fois qu'il les touche.
 
@@ -587,14 +591,14 @@ Ce document sert de **référence de haut niveau** pour les plans d'implémentat
 
 **Phases LOOP à venir** :
 
-1. **Phase 1** — Skeleton + guards + LED preparation :
-   - Extension `BankType` enum (+`BANK_LOOP = 2`) ; impact cascade : validator `BankTypeStore`, Tool 5, LedController dispatch default case, main.cpp process switch.
-   - Struct `LoopPadStore` **23 B strict packed** (décision Q1, §28) + validator + NVS descriptor. Pas de consommateur runtime — layout figé pour éviter 2e reset user.
-   - Struct `LoopPotStore` per-bank + validator + NVS descriptor. Idem, câblage effets Phase 5.
-   - Guards `BankManager::switchToBank` / `ScaleManager` / `MidiTransport` pour ignorer scale + pitch bend + AT sur bank LOOP.
+1. **Phase 1 — CLOSE** (commits `a84c955` → `2624b12`) — Skeleton + guards + LED preparation :
+   - ✅ Extension `BankType` enum (+`BANK_LOOP = 2`, commit `a84c955`) ; cascade : validator `BankTypeStore` clamp `> BANK_ARPEG_GEN`, ToolBankConfig `drawDescription` accepte LOOP, LedController dispatch + `renderBankLoop` stub, `main.cpp::handlePadInput` default no-op (commentaire "Phase 2 wires processLoopMode").
+   - ✅ Struct `LoopPadStore` **23 B strict packed** (décision Q1, §28) + validator + descriptor index 12 `NVS_DESCRIPTORS[]` (commit `1b0ac8c`). Pas de consommateur runtime — layout figé.
+   - ✅ Struct `LoopPotStore` per-bank + validator (commit `68855e3`). Câblage effets Phase 5.
+   - ✅ Guards défensifs Task 4 (commit `2624b12`) : `ScaleManager::processScalePads` early-return si `slot.type == BANK_LOOP` (invariant 6 §23) ; `BankManager::update` consume silencieusement le 2ème tap LOOP (anticipe §19 toggle). **Note** : pas de guard explicite dans `BankManager::switchToBank` ni `MidiTransport` — la garde est **par construction** (le dispatch `handlePadInput` ne route jamais `BANK_LOOP` vers `processNormalMode`/`processArpMode`, donc AT et pitch bend ne sont jamais émis sur LOOP ; `sendPitchBend(8192)` reset universel safe ; `allNotesOff` safe sur LOOP sans note).
    - ~~**Step LED prep** : rename `LedSettingsStore::fgArpPlayMax` → `fgPlayMax`...~~ **CADUQUE post-v9** : LedSettingsStore v9 (commit `3b85011`) a fusionné les 4 fields FG en `_fgIntensity` unique, Tool 8 expose 1 slider en section GLOBAL. Décision Q4 §28 sans objet.
-   - **Step LED WAITING BG-aware** : implémenté commit `48b96fb` post-v9 — hardcode `colorB = _colors[CSLOT_CONFIRM_OK]` pour `PTN_CROSSFADE_COLOR`, `fgPct = _fgIntensity` (au lieu de `_fgArpStopMax` proposé Q3 originale), scaling `× bgFactor` pour LEDs non-FG dans `renderPattern` CROSSFADE_COLOR. Décision Q3 §28 respectée modulo terminologie v9.
-   - Aucune nouvelle feature visible pour le musicien.
+   - ✅ **Step LED WAITING BG-aware** : implémenté commit `48b96fb` post-v9 — hardcode `colorB = _colors[CSLOT_CONFIRM_OK]` pour `PTN_CROSSFADE_COLOR`, `fgPct = _fgIntensity` (au lieu de `_fgArpStopMax` proposé Q3 originale), scaling `× bgFactor` pour LEDs non-FG dans `renderPattern` CROSSFADE_COLOR. Décision Q3 §28 respectée modulo terminologie v9.
+   - Aucune nouvelle feature visible pour le musicien. **Phase 1 close 2026-05-17**.
 2. **Phase 2** — LoopEngine core + main wiring : classe `LoopEngine` (state machine EMPTY / RECORDING / PLAYING / OVERDUBBING / STOPPED + WAITING_* transitoires), recording avec timestamps µs, playback scalé proportionnellement, refcount noteOn/noteOff, `processLoopMode` dans main.cpp, `renderBankLoop` dans LedController (câble `EVT_LOOP_*` overrides dans `EVENT_RENDER_DEFAULT`, consomme `tickBeat/Bar/WrapDurationMs` via flags à définir). Test mode activable via `ENABLE_LOOP_MODE`.
    - **Précondition** : `PendingEvent` struct dupliqué entre ArpEngine et LoopEngine — pas de factorisation préparatoire (décision Q2, §28). LoopEngine définit son propre buffer + logique refcount, indépendant de ArpScheduler.
    - Transition **STOPPED-loaded → tap REC = PLAYING + OVERDUBBING simultanés** (décision Q5, §28) : documenter dans la state machine LoopEngine.
