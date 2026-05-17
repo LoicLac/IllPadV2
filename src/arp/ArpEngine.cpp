@@ -1,6 +1,7 @@
 #include "ArpEngine.h"
 #include "../core/MidiTransport.h"
 #include "../midi/ScaleResolver.h"
+#include "../viewer/ViewerSerial.h"
 #include <Arduino.h>
 
 // Shuffle templates now in midi/GrooveTemplates.h (shared with LoopEngine)
@@ -319,9 +320,7 @@ void ArpEngine::seedSequenceGen() {
     int8_t d = _pileDegrees[0];
     for (uint16_t i = 0; i < seqLen; i++) _sequenceGen[i] = d;
     _seqLenGen = seqLen;
-    #if DEBUG_SERIAL
-    Serial.printf("[GEN] seed seqLen=%u (pile=1 note %d, repetition)\n", seqLen, d);
-    #endif
+    viewer::emitGenSeedDegenerate(seqLen, d);
     return;
   }
 
@@ -340,10 +339,7 @@ void ArpEngine::seedSequenceGen() {
   }
   _seqLenGen = seqLen;
 
-  #if DEBUG_SERIAL
-  Serial.printf("[GEN] seed seqLen=%u E_init=%u pile=%u lo=%d hi=%d\n",
-                seqLen, eInit, _pileDegreeCount, _pileLo, _pileHi);
-  #endif
+  viewer::emitGenSeed(seqLen, eInit, _pileDegreeCount, _pileLo, _pileHi);
 }
 
 // Maybe mutate _sequenceGen[] at one random index (spec §15, §20).
@@ -432,9 +428,7 @@ void ArpEngine::addPadPosition(uint8_t padOrderPos) {
     }
   }
 
-  #if DEBUG_SERIAL
-  Serial.printf("[ARP] Bank %d: +note (%d total)\n", _channel + 1, _positionCount);
-  #endif
+  viewer::emitArpNoteAdd(_channel, _positionCount);
 }
 
 void ArpEngine::removePadPosition(uint8_t padOrderPos) {
@@ -468,11 +462,9 @@ void ArpEngine::removePadPosition(uint8_t padOrderPos) {
     recomputePileDegrees();
   }
 
-  #if DEBUG_SERIAL
   if (found) {
-    Serial.printf("[ARP] Bank %d: -note (%d total)\n", _channel + 1, _positionCount);
+    viewer::emitArpNoteRemove(_channel, _positionCount);
   }
-  #endif
 }
 
 void ArpEngine::clearAllNotes(MidiTransport& transport) {
@@ -532,13 +524,9 @@ void ArpEngine::setCaptured(bool captured, MidiTransport& transport,
       _shuffleStepCounter = 0;
       _waitingForQuantize = (_quantizeMode != ARP_START_IMMEDIATE);
       if (_waitingForQuantize) _lastDispatchedGlobalTick = 0xFFFFFFFF;
-      #if DEBUG_SERIAL
-      Serial.printf("[ARP] Bank %d: Play — relaunch paused pile (%d notes)\n", _channel + 1, _positionCount);
-      #endif
+      viewer::emitArpPlay(_channel, _positionCount, /*relaunchPaused*/ true);
     } else {
-      #if DEBUG_SERIAL
-      Serial.printf("[ARP] Bank %d: Play (pile %d notes)\n", _channel + 1, _positionCount);
-      #endif
+      viewer::emitArpPlay(_channel, _positionCount, /*relaunchPaused*/ false);
     }
     _pausedPile = false;
   } else {
@@ -552,9 +540,7 @@ void ArpEngine::setCaptured(bool captured, MidiTransport& transport,
     _playing = false;
     _waitingForQuantize = false;
     _pausedPile = true;
-    #if DEBUG_SERIAL
-    Serial.printf("[ARP] Bank %d: Stop — pile kept (%d notes)\n", _channel + 1, _positionCount);
-    #endif
+    viewer::emitArpStop(_channel, _positionCount);
   }
 }
 
@@ -892,9 +878,7 @@ bool ArpEngine::scheduleEvent(uint32_t fireTimeUs, uint8_t note, uint8_t velocit
       return true;
     }
   }
-  #if DEBUG_SERIAL
-  Serial.println("[ARP] WARNING: Event queue full — event dropped");
-  #endif
+  viewer::emitArpQueueFull();
   return false;
 }
 

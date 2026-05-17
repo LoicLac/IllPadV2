@@ -38,6 +38,19 @@ void emitState(uint8_t bankIdx);               // [STATE] bank=N ... (reads s_ba
 void emitReady(uint8_t currentBank1Based);     // [READY] current=N
 void emitBankSwitch(uint8_t newBankIdx);       // [BANK] Bank N + [STATE] bank=N
 
+// --- Phase 1.C.3 : [ARP]/[GEN] events ---
+// kind : "+note", "-note" — for pile changes. count = pile size.
+void emitArpNoteAdd(uint8_t bankIdx, uint8_t pileCount);
+void emitArpNoteRemove(uint8_t bankIdx, uint8_t pileCount);
+// Play/Stop variants
+void emitArpPlay(uint8_t bankIdx, uint8_t pileCount, bool relaunchPaused);
+void emitArpStop(uint8_t bankIdx, uint8_t pileCount);
+void emitArpQueueFull();
+// GEN seed (ARPEG_GEN). pileCount=1 triggers the degenerate form.
+void emitGenSeed(uint16_t seqLen, uint8_t eInit, uint8_t pileCount,
+                 int8_t lo, int8_t hi);
+void emitGenSeedDegenerate(uint16_t seqLen, int8_t singleDegree);
+
 // Phase 1.A : pas d'emit_xxx() encore. Ajoutés au fur et à mesure des
 // sous-phases 1.C.*, 1.D, 1.E, 1.F.
 

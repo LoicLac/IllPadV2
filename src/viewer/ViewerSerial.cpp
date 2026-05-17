@@ -411,4 +411,74 @@ void emitBankSwitch(uint8_t newBankIdx) {
   #endif
 }
 
+// =================================================================
+// Phase 1.C.3 : [ARP]/[GEN] events
+// Migrated from src/arp/ArpEngine.cpp. Format strictly identical —
+// em-dash (\xe2\x80\x94 = U+2014) preserved exactly for parser
+// recognition (spec §3.6).
+// =================================================================
+
+void emitArpNoteAdd(uint8_t bankIdx, uint8_t pileCount) {
+  #if DEBUG_SERIAL
+  emit(PRIO_LOW, "[ARP] Bank %d: +note (%d total)\n", bankIdx + 1, pileCount);
+  #else
+  (void)bankIdx; (void)pileCount;
+  #endif
+}
+
+void emitArpNoteRemove(uint8_t bankIdx, uint8_t pileCount) {
+  #if DEBUG_SERIAL
+  emit(PRIO_LOW, "[ARP] Bank %d: -note (%d total)\n", bankIdx + 1, pileCount);
+  #else
+  (void)bankIdx; (void)pileCount;
+  #endif
+}
+
+void emitArpPlay(uint8_t bankIdx, uint8_t pileCount, bool relaunchPaused) {
+  #if DEBUG_SERIAL
+  if (relaunchPaused) {
+    emit(PRIO_HIGH, "[ARP] Bank %d: Play \xe2\x80\x94 relaunch paused pile (%d notes)\n",
+         bankIdx + 1, pileCount);
+  } else {
+    emit(PRIO_HIGH, "[ARP] Bank %d: Play (pile %d notes)\n", bankIdx + 1, pileCount);
+  }
+  #else
+  (void)bankIdx; (void)pileCount; (void)relaunchPaused;
+  #endif
+}
+
+void emitArpStop(uint8_t bankIdx, uint8_t pileCount) {
+  #if DEBUG_SERIAL
+  emit(PRIO_HIGH, "[ARP] Bank %d: Stop \xe2\x80\x94 pile kept (%d notes)\n",
+       bankIdx + 1, pileCount);
+  #else
+  (void)bankIdx; (void)pileCount;
+  #endif
+}
+
+void emitArpQueueFull() {
+  #if DEBUG_SERIAL
+  emit(PRIO_LOW, "[ARP] WARNING: Event queue full \xe2\x80\x94 event dropped\n");
+  #endif
+}
+
+void emitGenSeed(uint16_t seqLen, uint8_t eInit, uint8_t pileCount,
+                 int8_t lo, int8_t hi) {
+  #if DEBUG_SERIAL
+  emit(PRIO_LOW, "[GEN] seed seqLen=%u E_init=%u pile=%u lo=%d hi=%d\n",
+       seqLen, eInit, pileCount, lo, hi);
+  #else
+  (void)seqLen; (void)eInit; (void)pileCount; (void)lo; (void)hi;
+  #endif
+}
+
+void emitGenSeedDegenerate(uint16_t seqLen, int8_t singleDegree) {
+  #if DEBUG_SERIAL
+  emit(PRIO_LOW, "[GEN] seed seqLen=%u (pile=1 note %d, repetition)\n",
+       seqLen, singleDegree);
+  #else
+  (void)seqLen; (void)singleDegree;
+  #endif
+}
+
 }  // namespace viewer
