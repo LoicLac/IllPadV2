@@ -2,7 +2,7 @@
 
 _Sync : 2026-05-17. Lu en début de session, gardé à jour au fil de l'eau._
 
-**Focus courant** : LOOP Phase 1 sur main **CLOSE** (5 commits HW-validés + 1 défensif Task 4). ARPEG_GEN feature complete. Prochaine étape : rédiger plan LOOP Phase 2 from scratch (P2 archive-based jeté ; spec + code main seules sources).
+**Focus courant** : LOOP Phase 1 sur main **CLOSE** (5 commits HW-validés + 1 défensif Task 4). ARPEG_GEN feature complete. **Prochaine étape : rédiger plan Refacto Tool 5** (pré-Phase 2 LOOP, Option A — spec [`2026-05-17-tool5-bank-config-refactor-design.md`](docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md) validée). Phase 2 LOOP démarre **après** refacto Tool 5.
 
 ## ARPEG_GEN — historique commits
 
@@ -73,12 +73,14 @@ Pad oct 1-4 : pour ARPEG_GEN = mutation level (1=lock, 2=1/16, 3=1/8, 4=1/4). Po
 
 ## Follow-ups ouverts
 
-- **LOOP Phases 2-6** : à rédiger from scratch depuis spec + code main. Le précédent plan Phase 2 ([docs/archive/2026-05-16-loop-phase-2-plan.md](docs/archive/2026-05-16-loop-phase-2-plan.md)) et son roadmap multi-sessions ([docs/archive/LOOP_ROADMAP-2026-05-16.md](docs/archive/LOOP_ROADMAP-2026-05-16.md)) sont archivés (approche archive-based jetée). Les invariants buffer LOOP extraits restent normatifs : [docs/reference/loop-buffer-invariants.md](docs/reference/loop-buffer-invariants.md).
+- **Refacto Tool 5 (pré-Phase 2 LOOP)** : refacto complet du Tool 5 setup mode pour intégrer élégamment LOOP. Spec dédiée [`docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md`](docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md) (VALIDÉE 2026-05-17). Tableau matriciel banks×params, nav 2D, validator `quantize` discriminé par type, pas de bump NVS. **À exécuter avant Phase 2 LOOP** (Option A — bank LOOP créable via UI propre avant LoopEngine runtime). Plan d'implémentation à rédiger.
+- **LOOP Phases 2-6** : à rédiger from scratch depuis spec + code main, **après refacto Tool 5**. Le précédent plan Phase 2 ([docs/archive/2026-05-16-loop-phase-2-plan.md](docs/archive/2026-05-16-loop-phase-2-plan.md)) et son roadmap multi-sessions ([docs/archive/LOOP_ROADMAP-2026-05-16.md](docs/archive/LOOP_ROADMAP-2026-05-16.md)) sont archivés (approche archive-based jetée). Les invariants buffer LOOP extraits restent normatifs : [docs/reference/loop-buffer-invariants.md](docs/reference/loop-buffer-invariants.md). Phase 3 LOOP réduite à Tool 3 b1 + Tool 4 ext (Tool 5 absorbé dans refacto pré-Phase 2, Tool 7 reste Phase 4).
 
 ## Sources
 
 - Spec ARPEG_GEN : [docs/superpowers/specs/2026-04-25-arpeg-gen-design.md](docs/superpowers/specs/2026-04-25-arpeg-gen-design.md)
-- Spec LOOP : [docs/superpowers/specs/2026-04-19-loop-mode-design.md](docs/superpowers/specs/2026-04-19-loop-mode-design.md) (VALIDÉE, MAJ 2026-05-16 LED v9 ; §28 Q3/Q4 à actualiser)
+- Spec LOOP : [docs/superpowers/specs/2026-04-19-loop-mode-design.md](docs/superpowers/specs/2026-04-19-loop-mode-design.md) (VALIDÉE, MAJ 2026-05-17 — Q6 inversée post refacto Tool 5)
+- Spec Tool 5 refacto (pré-Phase 2 LOOP) : [docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md](docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md) (VALIDÉE 2026-05-17)
 - Invariants buffer LOOP : [docs/reference/loop-buffer-invariants.md](docs/reference/loop-buffer-invariants.md) (extrait des Parties 8-9 du gesture-dispatcher-design archivé)
 - Plan ARPEG_GEN (archivé) : [docs/archive/2026-04-26-arpeg-gen-plan.md](docs/archive/2026-04-26-arpeg-gen-plan.md)
 - Plan LOOP Phase 1 (archivé) : [docs/archive/2026-04-21-loop-phase-1-plan.md](docs/archive/2026-04-21-loop-phase-1-plan.md)
