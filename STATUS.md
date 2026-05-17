@@ -2,7 +2,7 @@
 
 _Sync : 2026-05-17. Lu en début de session, gardé à jour au fil de l'eau._
 
-**Focus courant** : Refacto Tool 5 **CLOSE**. LOOP Phase 1 sur main **CLOSE**. ARPEG_GEN feature complete. **Viewer serial centralization Phase 1 firmware CLOSE** (11 commits firmware + 1 commit viewer doc cross-worktree, tous les events runtime via module `src/viewer/ViewerSerial.{cpp,h}`). **Prochaine étape immédiate : Phase 2 viewer bidirectionnel** (write commands `!CMD=val` viewer → firmware, palier vert ClockMode + ARPEG_GEN per-bank). Phase 2 LOOP toujours en file d'attente après Phase 2 viewer.
+**Focus courant** : Refacto Tool 5 **CLOSE**. LOOP Phase 1 **CLOSE**. ARPEG_GEN feature complete. Viewer serial Phase 1 **CLOSE**. **Viewer bidirectionnel Phase 2 firmware CODE COMPLETE — HW gates G2-G7 en attente du viewer-juce Phase 2 codé** (14 commits firmware sur `main`, build clean RAM 16.9% / Flash 21.9%, HW gates Phase 2.A + G1 validés). **Prochaine étape immédiate : impl spec viewer Phase 2** sur branche `viewer-juce` (parser `[BANK_SETTINGS]` + `[ERROR] cmd=`, `CommandSender`, UI toggle ClockMode + 4 sliders ARPEG_GEN + error toast + lock indicator). Reprise firmware = HW gates G2-G7 via terminal serial OU viewer Phase 2 fonctionnel. Phase 2 LOOP en file d'attente après.
 
 ## ARPEG_GEN — historique commits
 
@@ -111,10 +111,44 @@ Pad oct 1-4 : pour ARPEG_GEN = mutation level (1=lock, 2=1/16, 3=1/8, 4=1/4). Po
 - Seed atomique `s_viewerConnected.store((bool)Serial)` à la fin de `viewer::begin()` (race au boot)
 - `[CLOCK] BPM=` debounce double : delta ≥1 BPM ET throttle ≥200ms
 
+## Viewer bidirectionnel Phase 2 firmware — historique commits (2026-05-17)
+
+Spec : [docs/superpowers/specs/2026-05-17-viewer-bidirectional-phase2-design.md](docs/superpowers/specs/2026-05-17-viewer-bidirectional-phase2-design.md) (838 lignes, validée + cross-audit fixes commits `1d65f9d` + `74b5fa6`).
+Plan : [docs/superpowers/plans/2026-05-17-viewer-bidirectional-phase2-firmware-plan.md](docs/superpowers/plans/2026-05-17-viewer-bidirectional-phase2-firmware-plan.md) (2219 lignes, 23 tasks).
+Spec viewer parallèle (`viewer-juce`) : `../ILLPAD_V2-viewer/docs/2026-05-17-viewer-juce-phase2-bidirectional-spec.md` (commits viewer `6425b27` + `b18e586` lock indicator).
+
+| Phase | Task | Commit | Description |
+|---|---|---|---|
+| 2.A | 2 | `d1de1f6` | NvsManager : private members (Settings/BankType dirty + pending + debounce + _loadedBankType) + constructor init |
+| 2.A | 3 | `6cfb276` | NvsManager : getLoadedBankType / setLoadedBankType API |
+| 2.A | 4 | `5a63857` | NvsManager : populate _loadedBankType in loadAll (success + defaults) |
+| 2.A | 5 | `db4eba0` | NvsManager : queueSettingsWrite / queueBankTypeFromCache (debounced 500ms) |
+| 2.A | 6 | `d7f3b00` | NvsManager : saveSettings + saveBankType + commitAll extension |
+| 2.A | 7 | `9b4b7d2` | NvsManager : extend tickPotDebounce EN TÊTE (anti-bug B1 audit) |
+| 2.A | 8 | `d4d3e54` | NvsManager : rename tickPotDebounce → tickDebounce + main.cpp call site |
+| 2.B | 10 | `e6420a3` | ViewerSerial : emitBankSettings(bankIdx) for ARPEG_GEN banks |
+| 2.B | 11 | `672eff3` | ViewerSerial : emit [BANK_SETTINGS] in auto-resync + ?STATE/?BOTH/?ALL |
+| 2.B | 11 fix | `016f287` | ViewerSerial : fix omission Task 11 — boot dump explicit main.cpp manquait emitBankSettings (HW gate G1 discovery) |
+| 2.B | 13 | `bb25b94` | ViewerSerial : cmdBuf 16→24 chars + s_cmdOverflow flag + emit too_long |
+| 2.B | 14 | `baf6381` | ViewerSerial : dispatchWriteCommand skeleton + handler stubs |
+| 2.B | 15 | `9249ce8` | ViewerSerial : handleClockMode impl (parse master|slave + emit [SETTINGS]+[CLOCK] Source) |
+| 2.B | 16 | `8d5d6a2` | ViewerSerial : handleArpGenParam impl (4 ARPEG_GEN args BONUS/MARGIN/PROX/ECART) |
+
+**HW Checkpoints** :
+- **Phase 2.A** validé 2026-05-17 — boot + Tool 5 / Tool 8 non-régression OK (confirmation user "ok" sur boot trace).
+- **G1** validé 2026-05-17 — boot dump `[BANK_SETTINGS] bank=N bonus=X margin=Y prox=Z ecart=W` émis pour chaque bank ARPEG_GEN (3 + 4 sur instrument courant, valeurs reflètent Tool 5 settings).
+- **G2-G7 EN ATTENTE** — dépendent du viewer-juce Phase 2 fonctionnel (parser `[BANK_SETTINGS]` + `[ERROR] cmd=` + TX path via `OutputQueue`). Possible aussi via terminal serial brut (envoi `!CMD=val\n` manuel) — non testé.
+
+**Finding discovery HW gate G1** : le plan Task 11 a omis 1 site (boot dump explicit dans `main.cpp:646-651`, distinct de l'auto-resync de `taskBody()` qui ne kick PAS quand Serial est connecté au boot — la seed atomic `s_viewerConnected.store((bool)Serial)` empêche la transition false→true). Fix appliqué commit `016f287`. À noter pour audits futurs : le plan était précis sur 3 sites (auto-resync + ?BOTH/?ALL + ?STATE) mais le 4e site était hors radar.
+
+**Bug spawn-task ouvert** : Tool 7 PotMapping setup affiche stale values vs runtime (probable struct version bump non propagé). Antérieur à Phase 2 viewer. À debugger séparément.
+
 ## Follow-ups ouverts
 
-- **Phase 2 viewer bidirectionnel** : write commands `!CMD=val` du viewer vers firmware. Hooks déjà en place côté firmware (`viewer::pollCommands` retourne `[ERROR] write commands not yet implemented (Phase 2)` sur `!*`). Palier vert identifié : `!CLOCKMODE`, `!PANIC_RECONNECT`, `!AFTERTOUCH_RATE`, `!DOUBLE_TAP_MS`, ARPEG_GEN per-bank `!BONUS/MARGIN/PROX/ECART BANK=N`. À brainstormer (scope exact, format, confirmation pattern, NVS triggers) → spec → plan → execute. Voir handoff prompt session suivante.
-- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). Vue d'ensemble + tableau d'étapes + dépendances. Pas un plan figé — mis à jour à chaque jalon franchi. **Étape courante : Phase 2 LOOP à rédiger from scratch** (Refacto Tool 5 livré 2026-05-17, prêt pour LOOP runtime). À enchaîner après Phase 2 viewer.
+- **Viewer Phase 2 impl** : à coder sur branche `viewer-juce` selon la spec déjà validée. ~150 lignes JUCE (parser + Model + CommandSender + UI). Estimation 4-6h dev incluant tests Catch2.
+- **HW gates G2-G7 firmware** : à exécuter post-viewer Phase 2 OU manuellement via terminal serial pour validation isolée. Liste détaillée plan §G2-G7.
+- **Tool 7 PotMapping bug** : spawn-task séparée (cf section ci-dessus).
+- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). **Étape courante : Phase 2 LOOP à rédiger from scratch** (Refacto Tool 5 livré 2026-05-17, prêt pour LOOP runtime). À enchaîner après viewer Phase 2 + HW gates G2-G7.
 
 ## Sources
 
