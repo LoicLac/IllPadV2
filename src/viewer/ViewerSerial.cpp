@@ -689,6 +689,29 @@ void emitSettings() {
 }
 
 // =================================================================
+// Phase 2 — [BANK_SETTINGS] event
+// Émet bank=N bonus=X margin=Y prox=Z ecart=W pour les banks ARPEG_GEN.
+// No-op silencieux pour les autres bank types (le firmware n'émet jamais
+// [BANK_SETTINGS] pour une bank non-ARPEG_GEN — cf spec §6.2).
+// =================================================================
+
+void emitBankSettings(uint8_t bankIdx) {
+  #if DEBUG_SERIAL
+  if (bankIdx >= NUM_BANKS) return;
+  if (s_banks[bankIdx].type != BANK_ARPEG_GEN) return;
+  emit(PRIO_HIGH,
+       "[BANK_SETTINGS] bank=%u bonus=%u margin=%u prox=%u ecart=%u\n",
+       bankIdx + 1,
+       s_nvsManager.getLoadedBonusPile(bankIdx),
+       s_nvsManager.getLoadedMarginWalk(bankIdx),
+       s_nvsManager.getLoadedProximityFactor(bankIdx),
+       s_nvsManager.getLoadedEcart(bankIdx));
+  #else
+  (void)bankIdx;
+  #endif
+}
+
+// =================================================================
 // Phase 1.E — [CLOCK] BPM= debounced (external sync updates)
 // =================================================================
 

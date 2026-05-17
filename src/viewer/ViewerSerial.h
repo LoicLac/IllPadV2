@@ -73,6 +73,14 @@ void emitPanic();
 void emitGlobals();
 void emitSettings();
 
+// --- Phase 2 : [BANK_SETTINGS] event ---
+// Émet [BANK_SETTINGS] bank=N bonus=X margin=Y prox=Z ecart=W
+// Lit depuis s_nvsManager.getLoadedBonusPile(idx) etc. NE PAS appeler pour
+// les banks dont type != BANK_ARPEG_GEN (no-op silencieux : retourne tôt).
+// Émis dans : boot dump auto-resync (1 event par ARPEG_GEN), ?BOTH/?ALL,
+// ?STATE foreground (si ARPEG_GEN), post-write !BONUS/MARGIN/PROX/ECART.
+void emitBankSettings(uint8_t bankIdx);
+
 // --- Phase 1.E : [CLOCK] BPM= debounced (external sync BPM updates) ---
 void emitClockBpm(float bpm, const char* srcLabel);
 
