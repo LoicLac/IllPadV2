@@ -281,12 +281,23 @@ void pollCommands() {
   // ?ALL emit the corresponding dump then [READY]. ?BOTH/?ALL/?STATE also
   // call resetDbgSentinels() so the next debugOutput() iteration re-emits
   // every [POT] param (fixes stuck-sentinel races, e.g. LED_Bright/PadSens).
-  static char    cmdBuf[16];
+  static char    cmdBuf[24];
   static uint8_t cmdLen = 0;
+  static bool    s_cmdOverflow = false;  // Phase 2 : flag set when cmdLen overflows
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\n' || c == '\r') {
       cmdBuf[cmdLen] = '\0';
+      // Phase 2 : si overflow détecté pendant la réception, émettre too_long
+      // avant le dispatch normal. Le cmd tronqué donne au viewer le contexte
+      // pour son toast. Reset état + skip le dispatch (cmdBuf est tronqué,
+      // pas exploitable).
+      if (s_cmdOverflow) {
+        emit(PRIO_HIGH, "[ERROR] cmd=%.20s... code=too_long\n", cmdBuf);
+        cmdLen = 0;
+        s_cmdOverflow = false;
+        continue;
+      }
       if (strcmp(cmdBuf, "?STATE") == 0) {
         emitState(s_bankManager.getCurrentBank());
         // Phase 2 : émet [BANK_SETTINGS] si foreground ARPEG_GEN (no-op sinon).
@@ -326,8 +337,9 @@ void pollCommands() {
     } else if (cmdLen < sizeof(cmdBuf) - 1) {
       cmdBuf[cmdLen++] = c;
     } else {
-      // overflow — discard buffer
-      cmdLen = 0;
+      // Phase 2 : overflow — set flag, keep cmdBuf comme tronqué (le \n
+      // déclenchera l'emit [ERROR] too_long avec les 20 premiers chars).
+      s_cmdOverflow = true;
     }
   }
   #endif
