@@ -249,9 +249,9 @@ En cas d'erreur, **aucun** re-emit confirmation, **uniquement** un event
 [ERROR] cmd=<original_cmd> code=<error_code> [<extra_keys>]\n
 ```
 
-- `cmd=<original_cmd>` : la ligne reçue, sans `\n` (length-limited à 22
-  chars max — si overflow, tronqué + suffixe `...`). Si la ligne contient un
-  espace, **garder le format brut** (pas de quotes, pas d'escape) — c'est
+- `cmd=<original_cmd>` : la ligne reçue, sans `\n` (length-limited à **20
+  chars** max — si overflow, tronqué + suffixe `...`). Si la ligne contient
+  un espace, **garder le format brut** (pas de quotes, pas d'escape) — c'est
   acceptable car le viewer parse ligne complète.
 - `code=<error_code>` : un des codes ci-dessous, lowercase snake_case.
 - `<extra_keys>` : optionnels, key=value séparés par espace. Liste fixe par
@@ -280,7 +280,7 @@ En cas d'erreur, **aucun** re-emit confirmation, **uniquement** un event
 [ERROR] cmd=!BONUS=15 BANK=2 code=bank_type_mismatch expected=ARPEG_GEN got=NORMAL
 [ERROR] cmd=!XYZ=1 code=unknown_command
 [ERROR] cmd=!CLOCKMODE code=parse_error
-[ERROR] cmd=!MARGIN=12 BANK=8 OVERFL... code=too_long
+[ERROR] cmd=!MARGIN=12 BANK=8GAR... code=too_long
 ```
 
 **Priority** : PRIO_HIGH (jamais droppable — l'erreur doit toujours
@@ -296,7 +296,16 @@ Modification minimale du `pollCommands()` existant ([`ViewerSerial.cpp:275`](../
 
 1. **Buffer `cmdBuf` agrandi** : `16` → `24` chars (16 ne suffit pas pour
    `!MARGIN=12 BANK=8\0` = 18 chars).
-2. **Branche `cmdBuf[0] == '!'`** : remplacer le stub `emit("[ERROR] write
+2. **Path overflow reception** : l'impl actuelle [ViewerSerial.cpp:318-322](../../../src/viewer/ViewerSerial.cpp:318)
+   discard silencieusement (`cmdLen = 0`) en cas d'overflow. Phase 2 : ajouter
+   un flag statique `s_cmdOverflow` set à `true` quand `cmdLen` atteint la
+   capacité ; sur réception `\n`, si `s_cmdOverflow == true`, émettre
+   `[ERROR] cmd=<premiers 20 chars>... code=too_long` puis reset
+   (`cmdLen = 0; s_cmdOverflow = false;`). Le `cmd=` tronqué donne au viewer
+   un contexte minimal pour le toast. **Sans ce path, `code=too_long` ne
+   serait jamais émis** — l'utilisateur enverrait une ligne corrompue et le
+   firmware répondrait silencieusement.
+3. **Branche `cmdBuf[0] == '!'`** : remplacer le stub `emit("[ERROR] write
    commands not yet implemented")` par un appel à `dispatchWriteCommand(cmdBuf)`.
 
 Squelette `dispatchWriteCommand` :
@@ -351,14 +360,32 @@ static void dispatchWriteCommand(const char* cmd) {
 }
 ```
 
-**Handlers individuels** : un par command, responsable de :
-1. Parse + valider la valeur (range check).
-2. Valider `BANK=K` si requis (présence + range + type).
-3. Appeler le setter runtime correspondant.
-4. Appeler le `nvs.queueXxxWrite()` ou `nvs.setLoadedX() + queueBankTypeFromCache()`.
-5. Émettre le confirmation event (re-emit `[SETTINGS]` ou `[BANK_SETTINGS]`).
-6. En cas d'erreur à n'importe quelle étape : émettre `[ERROR]` et **return
-   immédiatement** sans modifier le runtime ni le NVS.
+**Handlers individuels** : un par command, ordre **strict** des checks pour
+éviter null deref et garantir l'atomicité (échec n'affecte ni runtime ni NVS) :
+
+1. **Parse value** + range check → `[ERROR] code=out_of_range range=N..M` ou
+   `code=invalid_value expected=...` (cas `!CLOCKMODE`).
+2. **Per-bank commands uniquement** (`!BONUS/MARGIN/PROX/ECART`) :
+   - **a)** Présence `BANK=K` → sinon `code=missing_bank`.
+   - **b)** Range `K ∈ [1..8]` → sinon `code=invalid_bank range=1..8`.
+   - **c)** Vérif type : `s_banks[K-1].type == BANK_ARPEG_GEN` → sinon
+     `code=bank_type_mismatch expected=ARPEG_GEN got=<actual>`. **Critique** :
+     une bank NORMAL/LOOP n'a pas d'`arpEngine` assigné ([main.cpp:507-510](../../../src/main.cpp:507) :
+     seul `isArpType(...)` reçoit un pointeur).
+   - **d)** Guard défensif `s_banks[K-1].arpEngine != nullptr` → sinon
+     `code=bank_type_mismatch` (couvre l'éventualité d'un bank ARPEG_GEN sans
+     engine assigné — ne devrait pas arriver vu §isArpType inclut ARPEG_GEN,
+     mais defense-in-depth).
+3. **Apply setter runtime** (`setMasterMode` / `setBonusPile` / etc.).
+4. **Pour `!CLOCKMODE` uniquement** : modifier `s_settings.clockMode` AVANT
+   d'appeler `emitSettings()` (cf §6.1 ordre strict).
+5. **Queue NVS save** : `nvs.queueSettingsWrite(s_settings)` ou
+   `nvs.setLoadedX(K-1, N) + nvs.queueBankTypeFromCache()`.
+6. **Émettre confirmation events** dans l'ordre §6.1/§6.2 :
+   - `!CLOCKMODE` → `emitSettings()` puis `emitClockSource(...)`.
+   - `!BONUS/MARGIN/PROX/ECART` → `emitBankSettings(K-1)`.
+7. **En cas d'erreur à n'importe quelle étape** : émettre `[ERROR]` et
+   **return immédiatement** sans modifier le runtime ni le NVS.
 
 ### §9 — Sécurité multi-thread
 
@@ -388,7 +415,34 @@ std::atomic<bool> _bankTypeDirty;
 // du save (single source of truth, évite désync).
 uint32_t          _bankTypeLastChangeMs;
 bool              _bankTypePendingSave;
+
+// Phase 2 : cache BankType (parallèle aux _loadedQuantize[], _loadedScaleGroup[]).
+// Peuplé par loadAll() depuis bts.types[], modifié par setLoadedBankType()
+// (Tool 5 setup OU futur runtime). Lu par saveBankType() pour reconstruire
+// le BankTypeStore complet.
+uint8_t _loadedBankType[NUM_BANKS];
 ```
+
+**Init constructor obligatoire** ([NvsManager.cpp:12-32](../../../src/managers/NvsManager.cpp:12)) :
+ajouter dans la list initializer :
+```cpp
+, _settingsDirty(false)
+, _bankTypeDirty(false)
+, _settingsLastChangeMs(0)
+, _bankTypeLastChangeMs(0)
+, _settingsPendingSave(false)
+, _bankTypePendingSave(false)
+```
+Et dans le body constructor (après la boucle `for (uint8_t i = 0; i < NUM_BANKS; i++)` ligne 37-42 qui init `_loadedBonusPile/MarginWalk/Proximity/Ecart`) :
+```cpp
+for (uint8_t i = 0; i < NUM_BANKS; i++) {
+  _loadedBankType[i] = BANK_NORMAL;   // défaut, surchargé par loadAll()
+}
+```
+
+**Sans ces inits**, les fields non-init sont UB en C++ (notamment
+`_settingsPendingSave` pourrait être `true` au boot → trigger save spurious
+au premier tick de loop).
 
 #### §10.2 — Nouvelles méthodes publiques
 
@@ -444,25 +498,56 @@ en `loadAll()` à partir du `bts.types[]` chargé. Cohérent avec le pattern
 
 `tickPotDebounce` ([`NvsManager.h:92`](../../../src/managers/NvsManager.h)) est
 déjà appelé depuis le `loop()`. On étend son body pour aussi gérer settings
-et bankType :
+et bankType.
+
+**Placement critique — anti-bug bloquant** : la fonction actuelle a un
+**early return** ligne 258-260 :
+```cpp
+if (!_potRightPendingSave || (now - _potRightLastChangeMs < POT_NVS_SAVE_DEBOUNCE_MS)) {
+  return;   // ← bloque tout le code qui suit tant que right-pot pas pending+timeout
+}
+_potRightPendingSave = false;
+// ... global pot params, per-bank velocity/pitch/arp ...
+```
+
+Si les checks Phase 2 sont ajoutés **après** cet early return, ils ne
+s'exécutent QUE 10s après un mouvement de pot droit. Conséquence : settings
+et bankType ne seraient **jamais persistés** en usage normal (l'utilisateur
+ne touche pas forcément un pot droit après un toggle viewer). **NVS save
+silencieusement cassé**.
+
+**Solution** : placer les checks Phase 2 **EN TÊTE** de `tickPotDebounce`,
+avant tout le code existant (le rear-pot debounce a déjà ce style en
+séquentiel, pas d'early return). Code complet :
 
 ```cpp
-void NvsManager::tickPotDebounce(uint32_t now, ...) {
-  // ... pot debounce existant ...
-
-  // Phase 2 : Settings debounce
+void NvsManager::tickPotDebounce(uint32_t now, bool rearDirty, bool rightDirty,
+                                  const PotRouter& potRouter,
+                                  uint8_t currentBank, BankType currentType) {
+  // -------------------------------------------------------------------
+  // Phase 2 : Settings + BankType debounce — EN TÊTE pour ne pas être
+  // bloqué par l'early return du right-pot ci-dessous.
+  // -------------------------------------------------------------------
   if (_settingsPendingSave && (now - _settingsLastChangeMs) >= 500) {
     _settingsDirty = true;
     _anyDirty = true;
     _settingsPendingSave = false;
   }
-
-  // Phase 2 : BankType debounce
   if (_bankTypePendingSave && (now - _bankTypeLastChangeMs) >= 500) {
     _bankTypeDirty = true;
     _anyDirty = true;
     _bankTypePendingSave = false;
   }
+
+  // -------------------------------------------------------------------
+  // Rear pot debounce (existant, inchangé)
+  // -------------------------------------------------------------------
+  // ... code existant ligne 217-247 ...
+
+  // -------------------------------------------------------------------
+  // Right pots debounce (existant, inchangé, avec son early return)
+  // -------------------------------------------------------------------
+  // ... code existant ligne 254-319 ...
 }
 ```
 
@@ -703,6 +788,33 @@ en parallèle, HW gate finale teste l'end-to-end.
   scope creep).
 - Authentification / handshake viewer ↔ firmware : single-host USB CDC, pas
   de menace cross-network.
+
+### §19 — Acceptations findings audit (cross-audit 2026-05-17)
+
+Findings audit identifiés et **acceptés par décision utilisateur** sans fix
+code/spec. Documentés ici pour la trace de décision et l'éventuelle revue
+future.
+
+| Finding | Sévérité audit | Décision | Justification |
+|---|---|---|---|
+| **R1** data race `_masterMode` non-atomique entre Core 1 (`setMasterMode` Phase 2) et NimBLE task (`onMidiClockTick` BLE callback) | Runtime | **Accepté par construction** | Conditionnel à `bleInterval != BLE_OFF` ET device BLE master connecté envoyant des ticks 0xF8 ET toggle au moment exact d'un tick. Worst case observable : 1-2 ticks parasites mitigés par `_prevTickUs = 0` reset ([ClockManager.cpp:259](../../../src/midi/ClockManager.cpp:259)). Sur ESP32-S3, `bool` aligné = byte-atomic au niveau hardware (UB C++ strict mais pas de symptôme runtime). Si Loïc force BLE_OFF dans Tool 8, le finding disparaît complètement. |
+| **R3** master mode runtime n'envoie pas MIDI START/STOP (0xFA/0xFC), seulement ticks 0xF8 | Runtime / Question ouverte | **By design** | Comportement firmware existant et documenté ([MidiTransport.h:30](../../../src/core/MidiTransport.h:30) « ticks only, never sends Start/Stop »). Phase 2 ne change rien. Les slaves externes qui requirent un START explicite ne tickent pas — choix assumé. |
+| **R4** transition slave→master en plein live = saut instantané de tempo externe vers `_internalBPM` (pot Tempo) | Runtime | **Attendu côté musicien** | Sémantique master = pot Tempo prend la main. Pas de fade transition. Le musicien comprend cette transition (cohérent avec Tool 8 setup mode classique). |
+| **Y1** sliders ARPEG_GEN inaudibles en `mutationLevel=1` (lock) jusqu'à la prochaine pile change | YAGNI / Runtime | **By design + indicateur viewer** | Comportement attendu (lock = séquence figée). Le viewer affichera un **indicateur visuel « lock »** au niveau du bank ARPEG_GEN pour signaler le contexte au musicien — pas de gray-out des sliders ni de tooltip warning. Sliders restent fully fonctionnels (valeurs persistées immédiatement, audibles dès sortie de lock OU prochain `addPadPosition` qui déclenche les 3 mutations forcées [ArpEngine.cpp:410](../../../src/arp/ArpEngine.cpp:410)). À documenter côté spec viewer §3.8. |
+| **Y2** race théorique saveBlob lit `_pendingSettings` byte-by-byte pendant que Core 1 peut `queueSettingsWrite` (rewrite) | YAGNI | **Accepté — pattern existant** | Même pattern que `_pendingBank`, `_pendingArpPot`, `_pendingScale[]` existants pré-Phase 2. Fenêtre de race ~5-20ms entre `xTaskNotifyGive` et fin `prefs.putBytes`. En pratique, l'utilisateur ne pousse pas 2 toggles ClockMode en <20ms. Si fixé pour Phase 2 seul, divergence du pattern — cohérence projet > optimisation isolée. |
+| **Y3** `SerialReader::run` ne retry pas si `sp_nonblocking_write` partial | YAGNI | **Hors scope Phase 2** | Code viewer existant Phase 1 ([SerialReader.cpp:148-149](../../../../ILLPAD_V2-viewer/ILLPADViewer/Source/serial/SerialReader.cpp:148)). Commands Phase 2 ≤18 bytes, USB CDC TX buffer ≥64 bytes → write partial improbable. À noter pour robustesse future si on observe des drops. |
+
+**R2** (badge clock source stale après `!CLOCKMODE`) a été **fixé** dans la
+spec aux §4 / §6.1 — émission explicite `viewer::emitClockSource(...)` après
+`setMasterMode` + `emitSettings`. Voir commit `1d65f9d`.
+
+Findings audit **également fixés dans la spec** (commit dédié) :
+- **B1** placement checks Phase 2 dans `tickPotDebounce` (§10.5) — anti-bug
+  bloquant NVS persistence.
+- **I1** longueur truncation `cmd=` alignée à 20 chars (§7.1, §7.3, §8).
+- **I2** §8 squelette dispatcher avec ordre explicit type+null check.
+- **M1** init constructor des nouveaux fields NvsManager (§10.1).
+- **M2** path overflow reception dans pollCommands (§8 point 2).
 
 ---
 
