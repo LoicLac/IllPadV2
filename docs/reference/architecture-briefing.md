@@ -182,7 +182,7 @@ change.
 | Scale pads (7 root + 7 mode + 1 chrom) | `ScalePadStore` | Tool 3 | `illpad_spad` / `pads` | Extend category → Tool 3 grid + ScaleManager |
 | Control pad assignments + 3 global DSP params | `ControlPadStore` v2 | Tool 4 | `illpad_ctrl` / `pads` | Add entry : new slot + Tool 4 edit ; globals via 'g' key. Consumed at boot via `ControlPadManager::applyStore` |
 | Arp pads (1 hold + 4 octave) | `ArpPadStore` | Tool 3 | `illpad_apad` / `pads` | New ARPEG control pad → Tool 3 + `main.cpp::handleHoldPad` + ScaleManager |
-| Bank types + quantize + scaleGroup | `BankTypeStore` | Tool 5 | `illpad_btype` / `config` | New `BankType` → Tool 5 cycle + ArpEngine assignment + LED state machine + validator |
+| Bank types + quantize + scaleGroup | `BankTypeStore` | Tool 5 | `illpad_btype` / `config` | New `BankType` → Tool 5 PARAM_TABLE entry + ArpEngine assignment + LED state machine + validator. Tool 5 refacto livré 2026-05-17 (tableau matriciel banks×params, nav 2D, validator quantize contextuel — LOOP intégré côté UI). Pas de bump NVS (reste v4). |
 | Global settings | `SettingsStore` | Tool 6 | `illpad_set` / `settings` | New field → Tool 6 case + validator + bump version + apply in `main.cpp` setup |
 | Pot bindings (user-configurable) | `PotMappingStore` | Tool 7 | `illpad_pmap` / `mapping` | New `PotTarget` → pool line, label+color, `getDiscreteSteps()`, `isPerBankTarget()`, `applyBinding` case |
 | Pot filter tuning | `PotFilterStore` | none (descriptor slot reserved "Monitor in T7", unimplemented) | `illpad_pflt` / `cfg` | **Friction zone** : only editable via code + flash. |

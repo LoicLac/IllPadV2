@@ -2,7 +2,7 @@
 
 _Sync : 2026-05-17. Lu en début de session, gardé à jour au fil de l'eau._
 
-**Focus courant** : LOOP Phase 1 sur main **CLOSE** (5 commits HW-validés + 1 défensif Task 4). ARPEG_GEN feature complete. **Prochaine étape : rédiger plan Refacto Tool 5** (pré-Phase 2 LOOP, Option A — spec [`2026-05-17-tool5-bank-config-refactor-design.md`](docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md) validée). Phase 2 LOOP démarre **après** refacto Tool 5.
+**Focus courant** : Refacto Tool 5 **CLOSE** (3 commits Tasks 1/2/3 — Task 4 no-op car helpers NvsManager utilisés par boot path). LOOP Phase 1 sur main **CLOSE**. ARPEG_GEN feature complete. **Prochaine étape : rédiger plan Phase 2 LOOP from scratch** (LoopEngine + recording µs + playback BPM + premier son MIDI LOOP). Phase 2 LOOP démarre maintenant.
 
 ## ARPEG_GEN — historique commits
 
@@ -31,6 +31,18 @@ Redo sur main après archivage de la branche `loop` (tag `loop-archive-2026-05-1
 | 4 défensif | `2624b12` | BankManager double-tap LOOP consume + ScaleManager early-return BANK_LOOP (refonte gesture-dispatcher abandonnée → câblé directement) |
 
 **Skippés intentionnellement** : Tasks 5 + 6 (champs `fgArpPlayMax` / lignes Tool 8 `FG_PCT` supprimés par v9 LED brightness déjà sur main).
+
+## Refacto Tool 5 — historique commits (2026-05-17)
+
+| Task | Commit | Description |
+|---|---|---|
+| 1 | `69e19ed` | `MAX_LOOP_BANKS = 2` (KeyboardData.h) + validator `quantize[]` contextuel (ARP 0..1 / LOOP 0..2) — pas de bump NVS |
+| 2 | `22e788e` | Header `ToolBankConfig.h` refacto (struct `Tool5Working` + `ParamDescriptor` + extern `PARAM_TABLE`) — compile WIP rouge attendu |
+| 3 | `e2857c5` | Body `ToolBankConfig.cpp` rewrite intégral (tableau matriciel banks×params, nav 2D, INFO 3 états, `PARAM_TABLE` déclarative 7 entrées, labels NORM/ARP_N/LOOP/ARP_G, CELL_W=7, INFO long form "Arpeggio normal/generatif") |
+| 4 | _skippé_ | Helpers `getLoadedBonusPile`/`MarginWalk`/`ProximityFactor`/`Ecart` **conservés** : callsites runtime trouvés (`main.cpp:765-769` push values into `ArpEngine` au boot). Spec §16 anticipait ce cas. |
+| 5 | _ce commit_ | Doc sync : architecture-briefing §4 Table 1 + STATUS.md focus courant |
+
+**HW Checkpoint A validé** (rendering + nav 2D + édition + persistance NVS reboot + non-régression ARPEG_GEN/NORMAL/ARPEG) post Task 3 — feedback user "tout ok passe a la suite" après rename ARPG→ARP_N + AGEN→ARP_G + INFO long form.
 
 ## Tool 5 ARPEG_GEN — paramètres exposés
 
@@ -73,7 +85,7 @@ Pad oct 1-4 : pour ARPEG_GEN = mutation level (1=lock, 2=1/16, 3=1/8, 4=1/4). Po
 
 ## Follow-ups ouverts
 
-- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). Vue d'ensemble + tableau d'étapes + dépendances. Pas un plan figé — mis à jour à chaque jalon franchi. **Étape courante : Refacto Tool 5** (plan rédigé, exécution à venir, cf `LOOP_PROGRESS.md`).
+- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). Vue d'ensemble + tableau d'étapes + dépendances. Pas un plan figé — mis à jour à chaque jalon franchi. **Étape courante : Phase 2 LOOP à rédiger from scratch** (Refacto Tool 5 livré 2026-05-17, prêt pour LOOP runtime).
 
 ## Sources
 
