@@ -140,9 +140,14 @@ Verify the above 5 checks pass. No commit. Proceed to Task 2.
 
 namespace viewer {
 
+// NOTE: PRIO_LOW / PRIO_HIGH instead of LOW / HIGH to avoid collision with
+// Arduino's `#define LOW 0x0` / `#define HIGH 0x1` (esp32-hal-gpio.h:41-42).
+// Les macros sont substituees par le preprocesseur avant le scoping C++, donc
+// meme `Priority::LOW` est casse. Renommer les enumerators est le workaround
+// standard en Arduino-land. (Decouverte HW post-implementation Task 2.)
 enum Priority : uint8_t {
-  LOW  = 0,
-  HIGH = 1,
+  PRIO_LOW  = 0,
+  PRIO_HIGH = 1,
 };
 
 // Lifecycle — to be called from main.cpp setup() / loop()
@@ -264,6 +269,14 @@ bool isConnected() {
 
 - [ ] **Step 3: Modify `src/main.cpp` Serial setup order**
 
+**Decouverte HW post-implementation Task 2** : le projet utilise `USBCDC`
+(TinyUSB composite, cf. `platformio.ini` `ARDUINO_USB_MODE=0 + ARDUINO_USB_CDC_ON_BOOT=1`),
+PAS `HWCDC`. La classe `USBCDC` n'expose **pas** `setTxBufferSize()` — compile
+error "no member named setTxBufferSize". Le tx ring TinyUSB est dimensionné
+via `CFG_TUD_CDC_TX_BUFSIZE` au niveau sdkconfig, hors scope d'un appel
+runtime. Le default (~256 bytes) reste actif en Phase 1.A — le drop-on-full
+logic dans `taskBody` gère les overflow.
+
 Locate `Serial.begin(115200);` at line ~504 in `setup()`. Replace the block:
 
 ```cpp
@@ -274,11 +287,20 @@ Locate `Serial.begin(115200);` at line ~504 in `setup()`. Replace the block:
 with:
 
 ```cpp
-  Serial.setTxBufferSize(8192);  // MUST be before begin() — bump HWCDC ring 256B → 8 KB
+  // NOTE: setTxBufferSize() existe sur HWCDC mais PAS sur USBCDC. Ce projet
+  // utilise USBCDC (TinyUSB composite). Le tx ring TinyUSB est dimensionne
+  // via CFG_TUD_CDC_TX_BUFSIZE au niveau sdkconfig (hors scope Phase 1.A).
+  // Si bursts > 256 bytes saturent le ring -> drop ligne dans taskBody.
   Serial.begin(115200);
-  Serial.setTxTimeoutMs(0);       // non-blocking writes — bypass HWCDC default 100ms
+  Serial.setTxTimeoutMs(0);       // non-blocking writes — bypass USBCDC default timeout
   delay(800);  // Laisse monter le rail d'alim (cold boot apres longue pause)
 ```
+
+**Reserve possible Phase 2** : si le HW gate Task 2 revele des drops visibles
+cote viewer pendant les bursts (boot dump ou ?ALL), ajouter
+`-DCFG_TUD_CDC_TX_BUFSIZE=8192` aux `build_flags` de `platformio.ini`. Modif
+forbidden en Phase 1 (cf. CLAUDE.md projet "platformio.ini DO NOT MODIFY
+unless adding lib_deps"). Necessite override explicit utilisateur.
 
 - [ ] **Step 4: Add `viewer::begin()` call to `src/main.cpp` setup()**
 
