@@ -349,8 +349,90 @@ static void handleClockMode(const char* valStr, const char* origCmd) {
 }
 
 static void handleArpGenParam(ArpGenArg arg, const char* valStr, int bank1, const char* origCmd) {
-  (void)arg; (void)valStr; (void)bank1;
-  emit(PRIO_HIGH, "[ERROR] cmd=%s code=unknown_command\n", origCmd);
+  // 1. Parse value (integer).
+  // atoi returns 0 on parse failure — we accept 0 as a value and let range
+  // check below catch invalid (no range starts at 0 : BONUS≥10, MARGIN≥3,
+  // PROX≥4, ECART≥1, so 0 always triggers out_of_range).
+  int val = atoi(valStr);
+
+  // 2. Range check per arg (cf spec §3).
+  int rangeLo, rangeHi;
+  switch (arg) {
+    case ARG_BONUS:  rangeLo = 10; rangeHi = 20; break;
+    case ARG_MARGIN: rangeLo = 3;  rangeHi = 12; break;
+    case ARG_PROX:   rangeLo = 4;  rangeHi = 20; break;
+    case ARG_ECART:  rangeLo = 1;  rangeHi = 12; break;
+    default:
+      // unreachable (enum closed)
+      emit(PRIO_HIGH, "[ERROR] cmd=%s code=unknown_command\n", origCmd);
+      return;
+  }
+  if (val < rangeLo || val > rangeHi) {
+    emit(PRIO_HIGH, "[ERROR] cmd=%s code=out_of_range range=%d..%d\n",
+         origCmd, rangeLo, rangeHi);
+    return;
+  }
+
+  // 3. Validate BANK=K présence + range.
+  if (bank1 < 0) {
+    emit(PRIO_HIGH, "[ERROR] cmd=%s code=missing_bank\n", origCmd);
+    return;
+  }
+  if (bank1 < 1 || bank1 > NUM_BANKS) {
+    emit(PRIO_HIGH, "[ERROR] cmd=%s code=invalid_bank range=1..%d\n",
+         origCmd, NUM_BANKS);
+    return;
+  }
+  uint8_t bankIdx = (uint8_t)(bank1 - 1);
+
+  // 4. Validate bank type == BANK_ARPEG_GEN.
+  // Critical : une bank NORMAL/LOOP n'a pas d'arpEngine assigné (main.cpp:510
+  // seul isArpType inclut ARPEG_GEN). Bank ARPEG (classic) a un engine mais
+  // n'utilise pas _bonusPilex10 etc → palier rouge spec §17.
+  static const char* TYPE_NAMES[] = { "NORMAL", "ARPEG", "LOOP", "ARPEG_GEN" };
+  if (s_banks[bankIdx].type != BANK_ARPEG_GEN) {
+    uint8_t t = (uint8_t)s_banks[bankIdx].type;
+    const char* got = (t < 4) ? TYPE_NAMES[t] : "?";
+    emit(PRIO_HIGH, "[ERROR] cmd=%s code=bank_type_mismatch expected=ARPEG_GEN got=%s\n",
+         origCmd, got);
+    return;
+  }
+
+  // 5. Defense-in-depth : arpEngine non-null (should be true for ARPEG_GEN).
+  if (!s_banks[bankIdx].arpEngine) {
+    emit(PRIO_HIGH, "[ERROR] cmd=%s code=bank_type_mismatch expected=ARPEG_GEN got=null_engine\n",
+         origCmd);
+    return;
+  }
+
+  // 6. Apply runtime setter + NVS cache update + NVS queue.
+  // 4-way dispatch over ArpGenArg. setter writes _xxx privée dans ArpEngine
+  // (dynamic read at next pickNextDegree step — pas de _sequenceGenDirty).
+  // setLoadedX écrit le cache NvsManager pour saveBankType. queueBankTypeFromCache
+  // arme le timer 500ms (le save effectif arrive via tickDebounce → commitAll).
+  ArpEngine* eng = s_banks[bankIdx].arpEngine;
+  switch (arg) {
+    case ARG_BONUS:
+      eng->setBonusPile((uint8_t)val);
+      s_nvsManager.setLoadedBonusPile(bankIdx, (uint8_t)val);
+      break;
+    case ARG_MARGIN:
+      eng->setMarginWalk((uint8_t)val);
+      s_nvsManager.setLoadedMarginWalk(bankIdx, (uint8_t)val);
+      break;
+    case ARG_PROX:
+      eng->setProximityFactor((uint8_t)val);
+      s_nvsManager.setLoadedProximityFactor(bankIdx, (uint8_t)val);
+      break;
+    case ARG_ECART:
+      eng->setEcart((uint8_t)val);
+      s_nvsManager.setLoadedEcart(bankIdx, (uint8_t)val);
+      break;
+  }
+  s_nvsManager.queueBankTypeFromCache();
+
+  // 7. Emit confirmation [BANK_SETTINGS] (lit depuis _loadedX[] qu'on vient de mettre à jour).
+  emitBankSettings(bankIdx);
 }
 
 }  // namespace
