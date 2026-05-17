@@ -30,6 +30,9 @@
 // Setup
 #include "setup/SetupManager.h"
 
+// Viewer
+#include "viewer/ViewerSerial.h"
+
 // =================================================================
 // Double Buffer (lock-free Core 0 → Core 1)
 // =================================================================
@@ -501,7 +504,12 @@ static void pollRuntimeCommands() {
 // =================================================================
 void setup() {
   uint32_t bootStartMs = millis();  // True boot time for setup window
+  // NOTE: setTxBufferSize() existe sur HWCDC mais PAS sur USBCDC. Ce projet
+  // utilise USBCDC (ARDUINO_USB_MODE=0 + ARDUINO_USB_CDC_ON_BOOT=1, TinyUSB
+  // composite avec USB MIDI). Le tx ring TinyUSB est dimensionne via
+  // CFG_TUD_CDC_TX_BUFSIZE au niveau sdkconfig (hors scope Phase 1.A).
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(0);       // non-blocking writes — bypass USBCDC default timeout
   delay(800);  // Laisse monter le rail d'alim (cold boot apres longue pause)
   Serial.println();
   Serial.println("=== ILLPAD48 V2 ===");
@@ -841,6 +849,7 @@ void setup() {
 
   #if DEBUG_SERIAL
   Serial.println("[INIT] Ready.");
+  viewer::begin();   // Phase 1.A : create queue + task before boot dump
   // Viewer-API boot dump : 1× [BANKS] + 8× [BANK] + 8× [STATE] + 1× [READY].
   // Allows the JUCE viewer to populate its UI from a single boot dump.
   // Plan tasks A.3 + A.4 + A.5 step 3.
@@ -1471,6 +1480,7 @@ void loop() {
   // Viewer-API runtime command poll (?STATE/?BANKS/?BOTH). Non-blocking,
   // cheap (Serial.available() == 0 path is just a register read).
   pollRuntimeCommands();
+  viewer::pollCommands();   // Phase 1.A : stub. Will replace pollRuntimeCommands in 1.D.
   #endif
 
   const SharedKeyboardState& state = s_buffers[s_active.load(std::memory_order_acquire)];
