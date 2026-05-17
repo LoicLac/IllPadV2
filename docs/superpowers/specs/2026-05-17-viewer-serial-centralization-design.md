@@ -69,7 +69,8 @@ Vérifié OK :
 
 ### §2 — Décisions tranchées en brainstorm
 
-8 choix structurants validés par l'utilisateur :
+12 choix structurants validés par l'utilisateur (révisés post-relecture
+2026-05-17) :
 
 | # | Décision | Choix retenu |
 |---|---|---|
@@ -79,12 +80,14 @@ Vérifié OK :
 | 4 | Dormance | **3c** : atomic flag + auto-resync à la transition false→true |
 | 5 | Post-connect re-sync | **X1** silent auto-dump (= `?BOTH` interne implicite) |
 | 6 | Priority levels | **P1** 2-level (HIGH / LOW) avec backpressure à 70% |
-| 7 | Coalescing ARP +/-note | **50 ms** (synthétise `[ARP] Bank N: pile=Y`) |
-| 8 | Coalescing POT live | **Non** (first-emit guard actuel suffit) |
+| 7 | Coalescing ARP +/-note | **Aucun** (révisé — aligné sur Q7b, droppable LOW priority sous backpressure) |
+| 8 | Coalescing POT live | **Aucun** (first-emit guard actuel suffit, droppable LOW) |
 | 9 | Globals split | **G3** : `[GLOBALS]` (runtime) + `[SETTINGS]` (NVS persist) |
 | 10 | Tagging boot | **`[BOOT *]`** uniforme (informational) |
 | 11 | Input command owner | **Module owne `pollCommands()`** (canal complet) |
 | 12 | Fatal boot fail | **Event `[FATAL]`** always-on, parser-recognized |
+| 13 | Task priority | **Strict inférieure au main loop** — posture safe d'entrée (priorité 0 ou `tskIDLE_PRIORITY+1`). Pas de préemption garantie. |
+| 14 | Cross-worktree workflow | **Viewer pré-codé en avance** avec la spec, avant Phase 1.A firmware. Pas de gating entre sous-phases. |
 
 ---
 
@@ -110,6 +113,26 @@ Dépendances sortantes (que le module appelle pour les handlers Phase 2 hooks) :
 - `s_nvsManager` (lecture settings pour `[SETTINGS]`).
 - `s_bankManager` (lecture bank state pour `[STATE]`).
 - Phase 2 only : setters de ces mêmes managers.
+
+### §3b — Task priority — posture safe d'entrée
+
+**Contrainte non-négociable** : la task de drain ne doit JAMAIS préempter le
+main loop Core 1. Le loop gère sensing → MIDI flush → arp scheduler → pot
+pipeline, et toute préemption introduit du jitter MIDI audible.
+
+Implémentation :
+- Priorité task = `0` (idle priority) ou `tskIDLE_PRIORITY+1`. Strictement
+  inférieure au main loop (qui tourne en priorité 1 sur Core 1).
+- Pinned Core 1 (pas Core 0 — Core 0 est saturé par sensingTask priorité 1).
+- Pas de `yield()` ou `taskYIELD()` manuel dans le hot-path d'émission (la
+  préemption par le scheduler suffit, basée sur les priorités).
+- Validation en bench : avant/après mesure du CPU loop (via `uxTaskGetSystemState`
+  ou un proxy serial) — doit être inchangé.
+
+Le coût side : si le main loop est saturé (ce qui est déjà le cas Core 0
+sensing à ~92%), la task drain peut être starved indéfiniment, la queue se
+remplit, des LOW events drop. **C'est le comportement voulu** : la priorité
+absolue est le live MIDI, le viewer attendra.
 
 ### §4 — Channels distincts sur le même Serial
 
@@ -207,50 +230,37 @@ loop:
 Priority levels :
 - **HIGH** (jamais droppable sauf queue 100%) :
   `[PANIC]`, `[READY]`, `[BANK]`, `[STATE]`, `[SCALE]`, `[CLOCK]`, `[MIDI]`,
-  `[ARP] Play/Stop`, `[GLOBALS]`, `[SETTINGS]`, post-connect auto-dump.
+  `[ARP] Play/Stop`, `[ARP] Play — relaunch`, `[ARP_GEN] MutationLevel`,
+  `[GLOBALS]`, `[SETTINGS]`, post-connect auto-dump.
 - **LOW** (droppable backpressure ≥ 70%) :
-  `[POT]` live values, `[ARP_GEN] MutationLevel`, `[GEN] seed`, `[ARP] pile=`
-  (synthétisé par coalesce, cf. §7).
+  `[POT]` live values, `[ARP] Bank N: +note/-note (M total)`, `[GEN] seed`,
+  `[ARP] WARNING: Event queue full`.
 
-### §7 — Coalescing ARP +/-note (50 ms)
+### §7 — Pas de coalescing module-side (révisé — aligné Q7b)
 
-Les events `[ARP] Bank N: +note (M total)` et `-note (M total)` ne sont **pas
-poussés directement** dans la queue à chaque appel. Ils alimentent un buffer
-per-bank :
+Décision : **aucun coalescing au niveau du module**, ni pour POT live ni pour
+ARP +/-note. Chaque event passe directement dans la queue avec sa priority.
 
-```
-struct ArpPileSnapshot {
-  uint8_t count;
-  bool    dirty;
-  bool    lastDeltaWasAdd;   // pour choisir +note vs -note à l'émission
-  uint32_t lastEmitMs;
-};
-ArpPileSnapshot s_arpPile[NUM_BANKS];
-```
+Justifications :
+- Le first-emit guard `s_dbg*` existant dans `debugOutput()` (`main.cpp:1299`)
+  fait déjà le skip-if-unchanged pour les POT — un POT stable n'émet rien.
+- En burst (rotation rapide de pot, ARP rolls rapides), les LOW events
+  saturent la queue → backpressure kick in à 70% → les nouveaux LOW sont
+  droppés. Le viewer perd quelques transitions intermédiaires mais reçoit
+  la valeur finale lorsque le pot se stabilise ou que la queue se vide.
+- Posture safe d'entrée : ajouter du coalescing complique la logique de drain
+  (timer per-bank, snapshot dirty, etc.) pour résoudre un problème
+  hypothétique. À ajouter plus tard si l'usage live le réclame.
 
-Chaque `emit_arp_note_add(bank, count)` :
-```
-s_arpPile[bank].count = count;
-s_arpPile[bank].lastDeltaWasAdd = true;
-s_arpPile[bank].dirty = true;
-```
-Pareil pour `emit_arp_note_remove(bank, count)` avec `lastDeltaWasAdd = false`.
+**Réversibilité** : si l'usage révèle des bursts ARP qui saturent la queue de
+façon visible (compteur de pile désynchronisé, viewer figé pendant un roll),
+ajouter un coalesce 50ms ciblé sera trivial — pattern snapshot-per-bank +
+flush timer dans la task drain. À ce moment, on documentera dans une révision
+de spec.
 
-La task de drain check, à chaque itération, les snapshots dirty avec
-`millis() - lastEmitMs >= 50`. Pour chacun, elle émet :
-```
-[ARP] Bank N: +note (M total)    si lastDeltaWasAdd
-[ARP] Bank N: -note (M total)    sinon
-```
-puis `dirty = false` et `lastEmitMs = millis()`.
-
-**Format protocole inchangé** — le firmware émet toujours `+note (M total)` /
-`-note (M total)`. Le viewer voit moins d'events sous burst rapide (au max 1
-par 50ms par bank) mais avec la valeur finale correcte. Aucun change parser
-viewer.
-
-Les events `[ARP] Play/Stop/Play — relaunch` restent immédiats (HIGH priority,
-pas de coalesce — l'utilisateur veut voir Play/Stop avec zéro latence).
+Les events `[ARP] Play/Stop/Play — relaunch` sont HIGH priority, jamais
+droppés sauf queue 100% pleine — l'utilisateur veut voir Play/Stop avec zéro
+latence visible.
 
 ---
 
@@ -338,43 +348,58 @@ Renommage uniforme :
 | Ancien prefix | Nouveau prefix | Sites |
 |---|---|---|
 | `=== ILLPAD48 V2 ===` | `[BOOT] === ILLPAD48 V2 ===` | main.cpp:507 |
-| `[INIT] *` | `[BOOT] *` | main.cpp:520, 533, 593, 628, 655, 662, 668, 685, 715, 722, 767, 786, 797, 804, 819, 825 |
-| `[INIT] Ready.` | `[BOOT] Ready.` | main.cpp:843 — **breaking change pour ModeDetector viewer** |
+| `[INIT] *` (boot) | `[BOOT] *` | main.cpp:520, 533, 593, 655, 662, 668, 685, 715, 722, 767, 786, 797, 804, 819, 825 |
+| `[INIT] Ready.` | `[BOOT] Ready.` | main.cpp:843 — **breaking change pour ModeDetector viewer** (coordination cf. §14b) |
 | `[INIT] FATAL: *` | `[FATAL] *` | main.cpp:526 — promu en event always-on, cf. §14 |
-| `[KB] *` | `[BOOT KB] *` | CapacitiveKeyboard.cpp:204, 209, 214-216, 224, 226, 407, 417-419, 429-432, 452-454, 539-558, 563-578, 591, 674, 676-680, 698, 702-705, 752-759 |
-| `[NVS] *` (boot calls) | `[BOOT NVS] *` | NvsManager.cpp:172, 513, 520, 539, 541, 547, 574, 580, 588, 610, 626, 658, 674, 692, 710, 723, 751, 754, 769, 782, 793, 808, 820, 835, 850, 864, 882, 902, 920, 924, 936, 949, 980, 1120 |
+| `[SETUP] Entering setup mode...` | **(inchangé)** | main.cpp:628 — parser-recognized setup mode marker, cf. §14b |
+| `[KB] *` (boot) | `[BOOT KB] *` | CapacitiveKeyboard.cpp:204, 209, 214-216, 224, 226, 407, 417-419, 429-432, 452-454, 539-558, 563-578, 591, 674, 676-680, 698, 702-705 |
+| `[KB]` runtime (logFullBaselineTable, UNGATED) | **(supprimé — orphan)** | CapacitiveKeyboard.cpp:752-759 (cf. §17 cleanup) |
+| `[NVS] *` dans `loadAll()` | `[BOOT NVS] *` | NvsManager.cpp:172, 610, 626, 658, 674, 692, 710, 723, 751, 754, 769, 782, 793, 808, 820, 835, 850, 864, 882, 902, 920, 924, 936, 949, 980 |
+| `[NVS] *` dans `loadBlob/saveBlob` + worker task | **(inchangé)** | NvsManager.cpp:513, 520, 539, 541, 547, 574, 580, 588, 1120 — appelé depuis boot ET runtime, ambigu → reste `[NVS]` generic |
 | `[POT] Seed *` (PotFilter) | `[BOOT POT] Seed *` | PotFilter.cpp:136, 144 |
 | `[POT] Rebuilt/initialized *` (PotRouter) | `[BOOT POT] Rebuilt/initialized *` | PotRouter.cpp:275, 364 |
-| `[MIDI] USB MIDI initialized` etc. (boot) | `[BOOT MIDI] *` | MidiTransport.cpp:62, 69, 92, 103, 107, 123 — **uniquement begin() lines** |
+| `[MIDI] USB/BLE MIDI initialized` (boot) | `[BOOT MIDI] *` | MidiTransport.cpp:92, 103, 107 — **uniquement begin() lines** |
+| `[MIDI] USB/BLE connected/disconnected` (runtime) | **(inchangé)** | MidiTransport.cpp:62, 69, 123 — parser-recognized §1.14 |
 
-**Note clé** : `[NVS]` runtime emissions (write failures rares) restent
-`[NVS]` (pas de `BOOT` prefix). Distinction par contexte d'appel — pas par
-prefix. Si `loadAll()` est appelé → boot. Si `notifyIfDirty()` ou
-`workerTaskFunc()` → runtime.
+**Note clé `[NVS]`** : la discrimination boot/runtime se fait par fonction
+appelante. Le `[BOOT NVS]` rename ne s'applique QUE aux lignes situées dans
+`NvsManager::loadAll()` et helpers boot-only. Les helpers `loadBlob`/`saveBlob`
++ le worker task save sont appelés depuis le runtime (NVS write debouncing,
+runtime save errors) — leurs `Serial.printf("[NVS] ...")` restent inchangés
+pour ne pas mislabeler les runtime events comme boot.
 
-**Pour MidiTransport** : `onBleConnected()` / `onBleDisconnected()` / `tud_mounted` change emissions ne sont **pas** boot — elles restent
-`[MIDI] BLE connected` / `[MIDI] USB connected` (parser viewer §1.14).
-Seules les lignes `*MIDI initialized.* /* MIDI disabled (USB only).*` deviennent
-`[BOOT MIDI] *`.
+**Note clé `[KB]`** : `logFullBaselineTable()` (`CapacitiveKeyboard.cpp:751-760`)
+est dead code (0 caller dans `src/`) ET UNGATED. Suppression complète (cf. §17),
+pas de rename `[BOOT KB]` à faire.
 
 ### §11 — Ordre exact post-renaming
 
+Reflète le flow réel de [`setup()`](../../../src/main.cpp:502) :
+
 ```
-[BOOT] === ILLPAD48 V2 ===
-[BOOT] I2C OK.
-[BOOT] Keyboard OK.
-[BOOT] Hold rear button to enter setup mode...
+[BOOT] === ILLPAD48 V2 ===                  ← main.cpp:507 (banner)
+[BOOT] I2C OK.                              ← main.cpp:520 (post-I2C init)
 [BOOT KB] Starting capacitive keyboard init...
 [BOOT KB] Calibration data loaded.
 [BOOT KB] Valid calibration loaded from NVS.
+[BOOT KB] Autoconfig complete.              ← CapacitiveKeyboard.cpp:591 (fin de begin())
+[BOOT] Keyboard OK.                         ← main.cpp:533 (post-keyboard begin)
 [BOOT POT] Seed 0: median=2048 (sorted=...)
-[BOOT POT] MCP3208 boot OK.
-[BOOT MIDI] USB MIDI initialized.
-[BOOT MIDI] BLE MIDI initialized.
-[BOOT] MIDI Transport OK.
-[BOOT] ClockManager OK.
-[BOOT] MIDI Engine OK.
-[BOOT NVS] Bank loaded: 3
+[BOOT POT] Seed 1: ...
+...
+[BOOT POT] MCP3208 boot OK.                 ← PotFilter.cpp:144 (fin de PotFilter::begin)
+[BOOT] Hold rear button to enter setup mode...  ← main.cpp:593
+                                            ← wait window 0-3s, setup mode entry possible
+                                              (si entrée setup : [SETUP] Entering setup mode...
+                                               + VT100 prend le relais, jamais de Ready)
+[BOOT MIDI] USB MIDI initialized.           ← MidiTransport.cpp:92
+[BOOT MIDI] BLE MIDI initialized.           ← MidiTransport.cpp:103 (ou BLE disabled L107)
+[BOOT] MIDI Transport OK.                   ← main.cpp:655
+[CLOCK] ClockManager initialized (internal clock).
+                                            ← ClockManager.cpp:24 (raw, dans clockManager.begin())
+[BOOT] ClockManager OK.                     ← main.cpp:662
+[BOOT] MIDI Engine OK.                      ← main.cpp:668
+[BOOT NVS] Bank loaded: 3                   ← début bloc loadAll() lines
 [BOOT NVS] Scale bank 1: chrom=0 root=2 mode=0
 [BOOT NVS] Bank types + quantize + scale groups + ARPEG_GEN params loaded (v4 store).
 [BOOT NVS] Velocity params loaded.
@@ -397,16 +422,17 @@ Seules les lignes `*MIDI initialized.* /* MIDI disabled (USB only).*` deviennent
 [BOOT NVS] Task created (Core 1, priority 1).
 [BOOT POT] Rebuilt 16 bindings from mapping (4 CC slots)
 [BOOT POT] 16 bindings, 5 pots initialized
-[BOOT] PotFilter + PotRouter OK.
-[BOOT] BankManager OK.
-[BOOT] ScaleManager OK.
-[BOOT] ControlPadManager OK.
-[BOOT] NvsManager OK.
-[BOOT] ArpScheduler OK.
-[BOOT] Ready.                          ← marker ModeDetector
-[CLOCK] ClockManager initialized (internal clock).
-                                       ← viewer::begin() ici, crée queue + task
-[BANKS] count=8                        ← début boot dump via le module
+[BOOT] PotFilter + PotRouter OK.        ← main.cpp:819 (post-PotRouter::begin)
+[BOOT] NvsManager OK.                   ← main.cpp:825 (post-NvsManager::begin)
+[BOOT NVS] Task created (Core 1, priority 1).  ← NvsManager.cpp:172 (DANS NvsManager::begin, donc avant ce point)
+[BOOT] ArpScheduler OK.                 ← main.cpp:767 (note : émis L767, donc avant PotFilter+PotRouter)
+[BOOT] BankManager OK.                  ← main.cpp:786
+[BOOT] ScaleManager OK.                 ← main.cpp:797
+[BOOT] ControlPadManager OK.            ← main.cpp:804
+[BOOT] Ready.                           ← main.cpp:843 — MARKER ModeDetector
+                                        ← viewer::begin() ici (crée queue + task)
+                                        ← À PARTIR D'ICI, tout via le module
+[BANKS] count=8                         ← début boot dump via le module
 [BANK] idx=1 type=...
 [BANK] idx=2 ...
 ...
@@ -418,9 +444,26 @@ Seules les lignes `*MIDI initialized.* /* MIDI disabled (USB only).*` deviennent
 [READY] current=3
 ```
 
-**Note** : `[CLOCK] ClockManager initialized` est émis par `clockManager.begin()`
-qui s'exécute *avant* `viewer::begin()`. C'est donc encore raw Serial.print
-gated DEBUG_SERIAL. Cohérent — le viewer reçoit l'event dans tous les cas.
+**Note ordering réelle** : l'ordre listé ci-dessus reflète la séquence
+serial telle qu'observée. Côté code, la séquence `[BOOT] ArpScheduler OK
+→ BankManager → ScaleManager → ControlPadManager → PotFilter+PotRouter →
+NvsManager → Ready` correspond aux appels `xManager.begin()` successifs
+dans `setup()` — l'ordre listé reflète l'ordre d'émission, pas l'ordre
+arbitraire d'ouverture des managers. À reverifier ligne-par-ligne lors de
+1.B (rename).
+
+**Note `[CLOCK]` init** : émis par `ClockManager::begin()` (ClockManager.cpp:24)
+qui est appelé `setup()` AVANT `viewer::begin()`. Reste donc raw Serial.print
+gated DEBUG_SERIAL — pas migré vers le module en Phase 1. Cohérent — la
+ligne est parser-recognized (§1.13) et arrive bien chez le viewer.
+
+**Note `[BOOT] Ready.` placement** : sentinel marker de transition boot →
+runtime, le `viewer::begin()` est appelé JUSTE APRÈS sa transmission. Tous
+les events suivants ([BANKS], [BANK], [STATE], [GLOBALS], [SETTINGS],
+[READY]) passent par le module. Si Phase 1.A est appliquée sans 1.B
+(scénario théorique — ne devrait pas exister puisque 1.A → 1.B est séquentiel),
+on garderait `[INIT] Ready.` comme marker, et `viewer::begin()` au même
+endroit.
 
 ---
 
@@ -500,6 +543,48 @@ un dernier message avant que le firmware reste bloqué en LED error.
 Impact viewer : 1 nouveau parser branch (~5 lignes) + 1 overlay critique
 rouge persistant (différent du PANIC qui dure 2.5s).
 
+### §14b — `[SETUP]` mode marker et reboot detection
+
+Setup mode est accessible uniquement au boot (rear button held). Le firmware
+émet `[SETUP] Entering setup mode...` ([main.cpp:628](../../../src/main.cpp:628))
+juste avant de basculer tout le serial vers le rendu VT100 cockpit (escape
+sequences ANSI). À partir de cet event, le canal serial **n'est plus** dans
+le contrat protocole ligne-based — c'est un terminal VT100 destiné au mode
+setup interactif.
+
+**Émission** : reste raw Serial.print + `#if DEBUG_SERIAL`. Pas via le module
+(setup mode entré avant `viewer::begin()`). Prefix `[SETUP]` inchangé pour
+préserver la reconnaissance parser.
+
+**Côté viewer (machine d'état)** :
+
+1. À la réception de `[SETUP] Entering setup mode...` :
+   - Geler la machine d'état Model (aucun update sur le stream suivant).
+   - Afficher un état UI dédié, ex. `Firmware in setup mode (VT100 terminal active)`.
+   - Optionnel : router le stream brut vers une fenêtre log, mais sans
+     parsing protocole. Le terminal Python `ItermCode/vt100_serial_terminal.py`
+     est l'outil interactif officiel — le viewer ne se substitue pas à lui.
+2. Sortie de setup mode = `ESP.restart()` (Tool 0 confirmation). USB CDC
+   disconnect brièvement (boot reset hardware), puis reconnect avec
+   descripteur USB ré-énuméré.
+3. Côté viewer, le parser détecte la déconnexion CDC (failed read sur
+   JUCE SerialPort) :
+   - Reset complet du Model.
+   - Afficher UI `Waiting for firmware`.
+   - À la reconnexion, traiter le flux comme un cold boot : recevoir les
+     `[BOOT *]` puis `[BOOT] Ready.` puis le boot dump + `[GLOBALS]` +
+     `[SETTINGS]` + `[READY]`.
+
+**Important** : côté viewer, "CDC disconnect" est ambigu — peut être un reboot
+firmware OU l'utilisateur a fermé l'app sur le Mac. Le reset Model est safe
+dans les deux cas : à la reconnexion, le viewer re-recevra le dump complet
+(boot auto-emit OU auto-resync §5 selon la voie).
+
+**Impact viewer** :
+- ~5 lignes JUCE pour gérer le `[SETUP]` marker + freeze Model.
+- ~10 lignes JUCE pour détecter CDC disconnect + reset Model.
+- 1 état UI supplémentaire `setup mode active` dans le header.
+
 ### §15 — Spec parser viewer §3 fixes embedded
 
 | Finding spec | Phase 1 action |
@@ -541,9 +626,25 @@ rouge persistant (différent du PANIC qui dure 2.5s).
 | MidiTransport.cpp:62, 69 (BLE connect/disconn) | `Serial.println("[MIDI] BLE ...")` | `viewer::emitMidiTransport("BLE", state)` |
 | MidiTransport.cpp:123 (USB connect/disconn) | `Serial.printf("[MIDI] USB ...")` | `viewer::emitMidiTransport("USB", state)` |
 
-**Phase 1 = 30 sites migrés**. Total des `Serial.print*` dans le firmware passe
-de ~300 à ~270 (les 30 migrés deviennent des calls module). Plus une trentaine
-de boot sites renommés `[BOOT *]` mais restant raw Serial.print.
+**Comptage** :
+- ~22 **fonctions/blocs logiques** à migrer (1 fonction de migration par bloc).
+- ~44 **lignes `Serial.printf/println` individuelles** touchées (principalement
+  les 16 printfs séparés de `debugOutput()` et les 9 de `dumpBankState()` —
+  chaque bloc reste 1 migration logique mais N lignes éditées).
+
+**Helpers `?ALL` debug** ([main.cpp:359-447](../../../src/main.cpp:359)) :
+`dumpLedSettings()`, `dumpColorSlots()`, `dumpPotMapping()` avec leurs prefixes
+`[LED_DUMP]`, `[COLORS_DUMP]`, `[POTMAP_DUMP]` (6 lignes header/footer +
+~30 lignes content). **Pas parser-recognized** côté viewer aujourd'hui, debug
+seulement. **Décision** : restent en main.cpp, sont appelés directement par le
+handler `?ALL` du module via callbacks ou un include. Pas de migration vers
+`viewer::emit_*()` — le format vrac n'a pas de sémantique typed à exposer.
+
+Total `Serial.print*` dans le firmware (estimation post-Phase 1) : ~300
+aujourd'hui → ~280 après migration (les 22 blocs deviennent N appels module +
+quelques lignes `[BOOT *]` raw Serial.print restantes). SetupUI.cpp (~80
+calls) et CapacitiveKeyboard.cpp (~55 calls) restent inchangés en volume —
+seuls leurs prefixes sont rebrandés `[BOOT KB]` etc.
 
 ### §17 — Cleanup UNGATED + dead code
 
@@ -557,35 +658,70 @@ de boot sites renommés `[BOOT *]` mais restant raw Serial.print.
 
 ### §18 — Découpage en sous-phases (proposé pour le plan)
 
-Le plan d'implémentation (étape suivante) découpera Phase 1 en sous-tâches
-indépendamment commitables :
+**Pré-Phase 1.A — Préparation viewer-juce** : avant toute migration firmware,
+le viewer-juce est pré-codé selon cette spec :
+- ModeDetector : `[BOOT] Ready.` au lieu de `[INIT] Ready.`.
+- Parser branches pour `[BOOT *]`, `[GLOBALS]`, `[SETTINGS]`, `[FATAL]`,
+  `[CLOCK] BPM=`, `[SETUP]` mode marker.
+- UI : boot log panel (optionnel), [FATAL] overlay, setup-mode state in header.
+- Handler `Model::applyGlobals()` + `Model::applySettings()`. Suppression du
+  slot-scanning brittle dans `Model::applyState`.
+- CDC disconnect handler (reset Model + UI "Waiting for firmware").
+
+Tout est en place AVANT de lancer Phase 1.A firmware. Pas de gating
+intermédiaire — le workflow firmware run sans pause entre les sous-phases.
+Trade-off (cf. §24) : si un HW gate échoue, debug bilateral possible
+(firmware + viewer).
+
+Le plan d'implémentation (étape suivante) découpe Phase 1 firmware en
+sous-tâches indépendamment commitables :
 
 - **1.A — Plomberie module** : créer `ViewerSerial.{cpp,h}`, queue, task,
-  atomic flag, `if (Serial)` dormance, `setTxTimeoutMs(0) + setTxBufferSize(8192)`.
-  Aucune migration d'emit. Compile gate.
-- **1.B — Boot debug tagging** : renommage `[INIT/KB/NVS/POT/MIDI init]` →
-  `[BOOT *]`. Cleanup UNGATED (banner, ArpPotStore v0, logFullBaselineTable).
-  Pas de touche au module encore. Compile + HW gate (viewer affiche les nouveaux
-  prefixes — test visuel).
-- **1.C — Migration emissions runtime** : un sous-système à la fois pour limiter
-  le risque :
-  - 1.C.1 — `[POT]` debugOutput + handlePotPipeline.
-  - 1.C.2 — `[BANK]` + `[STATE]` (BankManager + dumpBankState).
-  - 1.C.3 — `[ARP]` + `[GEN]` (ArpEngine).
-  - 1.C.4 — `[SCALE]` + `[ARP_GEN]` octave (ScaleManager).
-  - 1.C.5 — `[CLOCK]` + `[MIDI]` (ClockManager + MidiTransport).
-  - 1.C.6 — `[PANIC]` (midiPanic).
-  Chaque sous-step est un commit avec compile gate + HW smoke test.
-- **1.D — `[GLOBALS]` + `[SETTINGS]` + sentinel reset** : nouveau code (pas
-  migration). Émet au boot + auto-resync + `?BOTH/?ALL`. Inclut le nouveau
-  getter `s_clockManager.getActiveSourceLabel()`. Compile + HW gate.
-- **1.E — `[CLOCK] BPM=` debounced** : nouveau emit dans `ClockManager::updatePLL()`
-  ou `processIncomingTicks()`. Compile + HW gate avec source externe.
-- **1.F — `[FATAL]` event** : promotion de `[INIT] FATAL` + parser branch
-  côté viewer (sur la branche `viewer-juce`). Coordination cross-worktree.
-- **1.G — Sync spec viewer doc** : update `firmware-viewer-protocol.md` côté
-  viewer-juce avec les nouveaux events `[BOOT *]`, `[GLOBALS]`, `[SETTINGS]`,
-  `[FATAL]`, marquage §3.2 DONE.
+  atomic flag, `if (Serial)` dormance. Configuration HWCDC **dans cet ordre
+  strict en début de `setup()`** :
+  1. `Serial.setTxBufferSize(8192)` ← **doit être appelé AVANT `begin()`**
+  2. `Serial.begin(115200)`
+  3. `Serial.setTxTimeoutMs(0)` ← après `begin()`, pour bypasser l'auto-set
+     à 100ms du framework
+  Task créée en fin de `setup()` (avant le boot dump). Aucune migration
+  d'emit dans cette sous-phase — `Serial.print*` raw inchangé partout.
+  Compile gate + smoke test (viewer connecte sans regression).
+- **1.B — Boot debug tagging + cleanup UNGATED** : renommage `[INIT/KB/NVS
+  (loadAll only)/POT/MIDI init]` → `[BOOT *]`. Cleanup : banner gated,
+  ArpPotStore v0 warning gated, `logFullBaselineTable()` supprimé. Pas de
+  touche au module encore. Compile + smoke test (viewer reconnaît
+  `[BOOT] Ready.` et continue à hydrater).
+- **1.C — Migration emissions runtime vers le module** : un sous-système à
+  la fois pour limiter le risque. Chaque sous-step est 1 commit avec compile
+  gate + HW smoke test ciblé :
+  - 1.C.1 — `[POT]` debugOutput + handlePotPipeline. Test : tourner chaque
+    pot, viewer reflète.
+  - 1.C.2 — `[BANK]` + `[STATE]` (BankManager + dumpBankState). Test :
+    switch bank, viewer met à jour cells + active bank.
+  - 1.C.3 — `[ARP]` + `[GEN]` (ArpEngine). **Pas de coalescing** (cf. §7
+    révisé) — migration straightforward, +/-note LOW droppable, Play/Stop
+    HIGH. Test : Play/Stop visible instantané, +note compteur correct sous
+    burst.
+  - 1.C.4 — `[SCALE]` + octave/mutation (ScaleManager). Test : change
+    root/mode/chromatic + octave, viewer reflète.
+  - 1.C.5 — `[CLOCK]` source + `[MIDI]` connect/disconnect. Test : plug/unplug
+    USB et BLE, viewer header MIDI state correct.
+  - 1.C.6 — `[PANIC]` (midiPanic). Test : triple-click rear, viewer overlay
+    rouge 2.5s.
+- **1.D — `[GLOBALS]` + `[SETTINGS]` + sentinel reset** : nouveau code. Inclut
+  le nouveau getter `s_clockManager.getActiveSourceLabel()`. Émet au boot +
+  auto-resync + `?BOTH/?ALL`. Reset `s_dbg*` sentinels sur `?BOTH/?ALL`.
+  Compile + HW gate (header viewer populé immédiatement au boot).
+- **1.E — `[CLOCK] BPM=` debounced** : nouveau emit dans `ClockManager` sur
+  change ±1 BPM. HW gate avec source externe (DAW, hardware clock).
+- **1.F — `[FATAL]` event** : promotion de `[INIT] FATAL` + Serial.flush().
+  Émission UNGATED defensive. HW gate : forcer fail-init temporairement via
+  commenter `kbOk` check, reboot, vérifier overlay. Restaurer code.
+- **1.G — Sync spec viewer doc** : update `firmware-viewer-protocol.md` (côté
+  worktree `viewer-juce`) avec les nouveaux events `[BOOT *]`, `[GLOBALS]`,
+  `[SETTINGS]`, `[FATAL]`, `[SETUP]` mode marker, marquage §3.2 DONE.
+
+**Estimation totale** : ~20h dev (firmware + viewer pré-coding).
 
 ---
 
@@ -662,21 +798,45 @@ Smoke tests par sous-step :
 - 1.F : débrancher MPR121 #1 → reboot → viewer reçoit `[FATAL]` overlay.
 - 1.G : viewer parser cross-audit avec spec doc cohérent.
 
-### §24 — Côté viewer (impact à coder dans le worktree `viewer-juce`)
+### §24 — Côté viewer (workflow pré-codage)
 
-| Phase 1 step | Code viewer requis |
-|---|---|
-| 1.A plomberie | **Aucun** |
-| 1.B boot tagging | ModeDetector : guette `[BOOT] Ready.` au lieu de `[INIT] Ready.` (~1 ligne). **Optionnel** : new parse branch `[BOOT *]` pour boot log panel UI (~30 lignes + UI). Sans, les boot lines restent UnknownEvent comme aujourd'hui — pas de régression. |
-| 1.C migration | **Aucun** (format identique) |
-| 1.D `[GLOBALS]`/`[SETTINGS]` | New parse branches (~15 lignes) + handler dans Model.cpp pour hydrater `device.*` (~10 lignes). Suppression du slot-scanning brittle dans `Model::applyState` (~15 lignes nettes). |
-| 1.E `[CLOCK] BPM=` | New parse branch (~5 lignes) + handler dans Model.cpp (~3 lignes). |
-| 1.F `[FATAL]` | New parse branch (~5 lignes) + UI overlay critique (~30 lignes JUCE component). |
-| 1.G sync doc | Update `firmware-viewer-protocol.md` (édition pure doc). |
+**Workflow révisé** : le viewer-juce est **pré-codé en avance** avec toute
+cette spec, AVANT le début de Phase 1.A firmware. Pas de gating
+cross-worktree entre les sous-phases firmware — chaque HW gate teste la
+chaîne complète end-to-end.
+
+**Avantage** : aucune coordination synchrone, le workflow firmware run sans
+pause, le viewer est déjà prêt à hydrater quoi que le firmware émette.
+
+**Trade-off** : un HW gate qui échoue peut nécessiter du debug bilatéral
+(firmware OR viewer ne respecte pas la spec). Le user accepte ce risque
+car les changements côté viewer sont simples (~100 lignes au total).
+
+**Inventaire pré-codage viewer-juce (à faire dans `../ILLPAD_V2-viewer/`)** :
+
+| Code requis | Lignes estimées | Fichier viewer |
+|---|---|---|
+| ModeDetector : `[BOOT] Ready.` au lieu de `[INIT] Ready.` | ~1 ligne | `ModeDetector.cpp` |
+| Parser branch `[BOOT *]` → boot log panel (optionnel) | ~10 lignes + UI panel ~30 lignes | `RuntimeParser.cpp` + UI |
+| Parser branch `[GLOBALS]` + handler `Model::applyGlobals()` | ~15 + ~10 lignes | `RuntimeParser.cpp` + `Model.cpp` |
+| Parser branch `[SETTINGS]` + handler `Model::applySettings()` | ~15 + ~10 lignes | `RuntimeParser.cpp` + `Model.cpp` |
+| Suppression slot-scanning brittle dans `Model::applyState` | ~15 lignes nettes | `Model.cpp` |
+| Parser branch `[CLOCK] BPM=` | ~5 + ~3 lignes | `RuntimeParser.cpp` + `Model.cpp` |
+| Parser branch `[FATAL]` + UI overlay critique | ~5 + ~30 lignes JUCE | `RuntimeParser.cpp` + new component |
+| Parser branch `[SETUP]` mode marker + freeze Model | ~5 lignes | `RuntimeParser.cpp` |
+| CDC disconnect handler + reset Model + UI "Waiting for firmware" | ~10 lignes | `SerialReader.cpp` (ou équivalent) |
+
+**Total estimé** : ~135 lignes côté viewer-juce, en grande partie dans
+`RuntimeParser.cpp` + `Model.cpp`. UI overlay [FATAL] est le seul morceau
+new component.
 
 Toutes les coding changes côté viewer vivent sur la branche `viewer-juce`,
 worktree `../ILLPAD_V2-viewer/`, conformément au CLAUDE.md projet "Branche
 viewer-juce — exception au git workflow toujours main".
+
+**Mise à jour spec viewer doc** : `firmware-viewer-protocol.md` est mis à
+jour en fin de Phase 1 (sous-step 1.G) avec les nouveaux events. Pendant
+Phase 1, le doc est temporairement désynchronisé du code — c'est attendu.
 
 ---
 
