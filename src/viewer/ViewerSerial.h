@@ -23,6 +23,13 @@ void pollCommands();   // non-blocking, call in tete de loop()
 // Connection state — cheap atomic load
 bool isConnected();
 
+// --- Phase 1.C.1 : [POT] events ---
+// slot : "R1", "R1H", ..., "R4H", or "--" for rear pot / global no-slot.
+// target : printable target name (e.g., "Tempo", "LED_Bright", "CC74").
+// valueStr : pre-formatted value ("120", "0.50", "Dorian", ...).
+// unit : optional unit suffix ("BPM"), pass nullptr for none.
+void emitPot(const char* slot, const char* target, const char* valueStr, const char* unit);
+
 // Phase 1.A : pas d'emit_xxx() encore. Ajoutés au fur et à mesure des
 // sous-phases 1.C.*, 1.D, 1.E, 1.F.
 

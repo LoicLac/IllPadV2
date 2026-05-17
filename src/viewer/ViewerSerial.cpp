@@ -4,6 +4,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
+#include <stdarg.h>
 
 namespace viewer {
 
@@ -25,6 +26,30 @@ constexpr BaseType_t  TASK_CORE        = 1;     // Core 1 (Core 0 saturé par se
 QueueHandle_t       s_queue           = nullptr;
 TaskHandle_t        s_task            = nullptr;
 std::atomic<bool>   s_viewerConnected{false};
+
+// Internal emit : format ligne complete + push queue avec backpressure.
+// Drop si viewer absent, queue pleine (HIGH), ou backpressure 70% (LOW).
+void emit(Priority prio, const char* fmt, ...) {
+  if (!s_viewerConnected.load(std::memory_order_acquire)) return;
+  if (!s_queue) return;
+
+  QueuedEvent ev;
+  ev.prio = (uint8_t)prio;
+
+  va_list args;
+  va_start(args, fmt);
+  int n = vsnprintf(ev.line, sizeof(ev.line), fmt, args);
+  va_end(args);
+  if (n <= 0) return;
+  if (n > (int)sizeof(ev.line)) n = sizeof(ev.line);
+  ev.len = (uint8_t)n;
+
+  // Backpressure : si LOW et moins de 30% libre, drop
+  UBaseType_t freeSlots = uxQueueSpacesAvailable(s_queue);
+  if (prio == PRIO_LOW && freeSlots < (QUEUE_DEPTH * 3 / 10)) return;
+
+  xQueueSend(s_queue, &ev, 0);  // timeout 0 = drop si pleine
+}
 
 void taskBody(void* /*arg*/) {
   QueuedEvent ev;
@@ -91,6 +116,18 @@ void pollCommands() {
 
 bool isConnected() {
   return s_viewerConnected.load(std::memory_order_acquire);
+}
+
+void emitPot(const char* slot, const char* target, const char* valueStr, const char* unit) {
+  #if DEBUG_SERIAL
+  if (unit && unit[0] != '\0') {
+    emit(PRIO_LOW, "[POT] %s: %s=%s %s\n", slot, target, valueStr, unit);
+  } else {
+    emit(PRIO_LOW, "[POT] %s: %s=%s\n", slot, target, valueStr);
+  }
+  #else
+  (void)slot; (void)target; (void)valueStr; (void)unit;
+  #endif
 }
 
 }  // namespace viewer

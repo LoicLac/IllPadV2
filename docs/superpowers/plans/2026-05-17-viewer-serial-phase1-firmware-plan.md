@@ -861,6 +861,27 @@ Expected: Exit 0.
    blockage perceptible.
 6. **Wait for user OK before commit.**
 
+**Bug connu Phase 1.C.1 — LED_Bright + PadSens "stuck" au boot** :
+race condition entre first-emit (boot) et task drain qui set
+`s_viewerConnected`. Le `viewer::emit()` check `s_viewerConnected` AVANT
+d'enqueue. Au premier `debugOutput()`, la task n'a pas encore eu son slot
+CPU → atomic encore `false` → 16 events `[POT]` droppes silencieusement.
+
+Conséquence visible : valeurs de pots **non touchés en live** (LED_Bright et
+PadSens typiquement, configures au setup mode et jamais bouges) restent
+invisibles cote viewer. Shape/Slew/Tempo/Gate/etc. apparaissent normalement
+quand l'utilisateur tourne le pot correspondant.
+
+**Resolution Phase 1.D** (Task 10) : l'auto-resync hook au task first-tick
+(false→true transition) inclut `resetDbgSentinels()` qui force le prochain
+`debugOutput()` a ré-émettre TOUS les params, peu importe la valeur. Le bug
+disparait des que Phase 1.D commit.
+
+**Workaround alternatif (NON applique)** : 1 ligne dans `viewer::begin()`
+post-task-creation : `s_viewerConnected.store((bool)Serial,
+std::memory_order_release);` — seed l'atomic synchronement avant que
+`begin()` retourne. Utilisateur a choisi d'attendre Phase 1.D (B).
+
 - [ ] **Step 7: Commit**
 
 ```bash

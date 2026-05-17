@@ -1217,20 +1217,17 @@ static void handlePotPipeline(bool leftHeld, bool rearHeld) {
     uint8_t ccNum, ccVal;
     while (s_potRouter.consumeCC(ccNum, ccVal)) {
       s_transport.sendCC(potSlot.channel, ccNum, ccVal);
-      #if DEBUG_SERIAL
-      Serial.printf("[POT] %s: CC%u=%u\n",
-                    potSlotName(s_potRouter.getSlotForCcNumber(ccNum, ccCurType)),
-                    ccNum, ccVal);
-      #endif
+      char ccTarget[8]; snprintf(ccTarget, sizeof(ccTarget), "CC%u", ccNum);
+      char ccValueStr[8]; snprintf(ccValueStr, sizeof(ccValueStr), "%u", ccVal);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForCcNumber(ccNum, ccCurType)),
+                      ccTarget, ccValueStr, nullptr);
     }
     uint16_t pbVal;
     if (s_potRouter.consumePitchBend(pbVal)) {
       s_transport.sendPitchBend(potSlot.channel, pbVal);
-      #if DEBUG_SERIAL
-      Serial.printf("[POT] %s: PB=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_MIDI_PITCHBEND, ccCurType)),
-                    pbVal);
-      #endif
+      char pbValueStr[8]; snprintf(pbValueStr, sizeof(pbValueStr), "%u", pbVal);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_MIDI_PITCHBEND, ccCurType)),
+                      "PB", pbValueStr, nullptr);
     }
   }
 
@@ -1343,86 +1340,99 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     // Global params — slot prefix derived from current mapping & context.
     // Format: "[POT] <SLOT>: <param>=<value> [unit]" (viewer-API §A.2).
     if (s_firstEmit || (int)(shape * 100) != (int)(s_dbgShape * 100)) {
-      Serial.printf("[POT] %s: Shape=%.2f\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_RESPONSE_SHAPE, curType)), shape);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%.2f", shape);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_RESPONSE_SHAPE, curType)),
+                      "Shape", valStr, nullptr);
       s_dbgShape = shape;
     }
     if (s_firstEmit || slew != s_dbgSlew) {
-      Serial.printf("[POT] %s: Slew=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_SLEW_RATE, curType)), slew);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", slew);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_SLEW_RATE, curType)),
+                      "Slew", valStr, nullptr);
       s_dbgSlew = slew;
     }
     if (s_firstEmit || atDz != s_dbgAtDz) {
-      Serial.printf("[POT] %s: AT_Deadzone=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_AT_DEADZONE, curType)), atDz);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", atDz);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_AT_DEADZONE, curType)),
+                      "AT_Deadzone", valStr, nullptr);
       s_dbgAtDz = atDz;
     }
     if (s_firstEmit || tempo != s_dbgTempo) {
-      Serial.printf("[POT] %s: Tempo=%u BPM\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_TEMPO_BPM, curType)), tempo);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", tempo);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_TEMPO_BPM, curType)),
+                      "Tempo", valStr, "BPM");
       s_dbgTempo = tempo;
     }
     if (s_firstEmit || ledBr != s_dbgLedBr) {
-      Serial.printf("[POT] %s: LED_Bright=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_LED_BRIGHTNESS, curType)), ledBr);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", ledBr);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_LED_BRIGHTNESS, curType)),
+                      "LED_Bright", valStr, nullptr);
       s_dbgLedBr = ledBr;
     }
     if (s_firstEmit || padSens != s_dbgPadSens) {
-      Serial.printf("[POT] %s: PadSens=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_PAD_SENSITIVITY, curType)), padSens);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", padSens);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_PAD_SENSITIVITY, curType)),
+                      "PadSens", valStr, nullptr);
       s_dbgPadSens = padSens;
     }
 
     // Per-bank params (always tracked, foreground bank)
     if (s_firstEmit || baseVel != s_dbgBaseVel) {
-      Serial.printf("[POT] %s: BaseVel=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_BASE_VELOCITY, curType)), baseVel);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", baseVel);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_BASE_VELOCITY, curType)),
+                      "BaseVel", valStr, nullptr);
       s_dbgBaseVel = baseVel;
     }
     if (s_firstEmit || velVar != s_dbgVelVar) {
-      Serial.printf("[POT] %s: VelVar=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_VELOCITY_VARIATION, curType)), velVar);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", velVar);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_VELOCITY_VARIATION, curType)),
+                      "VelVar", valStr, nullptr);
       s_dbgVelVar = velVar;
     }
     if (s_firstEmit || pb != s_dbgPB) {
-      Serial.printf("[POT] %s: PitchBend=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_PITCH_BEND, curType)), pb);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", pb);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_PITCH_BEND, curType)),
+                      "PitchBend", valStr, nullptr);
       s_dbgPB = pb;
     }
 
     // Arp params
     if (s_firstEmit || (int)(gate * 100) != (int)(s_dbgGate * 100)) {
-      Serial.printf("[POT] %s: Gate=%.2f\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_GATE_LENGTH, curType)), gate);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%.2f", gate);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_GATE_LENGTH, curType)),
+                      "Gate", valStr, nullptr);
       s_dbgGate = gate;
     }
     if (s_firstEmit || (int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) {
-      Serial.printf("[POT] %s: ShufDepth=%.2f\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_DEPTH, curType)), shufDep);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%.2f", shufDep);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_DEPTH, curType)),
+                      "ShufDepth", valStr, nullptr);
       s_dbgShufDep = shufDep;
     }
     if (s_firstEmit || div != s_dbgDiv) {
-      Serial.printf("[POT] %s: Division=%s\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_DIVISION, curType)),
-                    div < 9 ? s_divNames[div] : "?");
+      const char* divStr = (div < 9) ? s_divNames[div] : "?";
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_DIVISION, curType)),
+                      "Division", divStr, nullptr);
       s_dbgDiv = div;
     }
     if (s_firstEmit || pat != s_dbgPat) {
-      Serial.printf("[POT] %s: Pattern=%s\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_PATTERN, curType)),
-                    pat < NUM_ARP_PATTERNS ? s_patNames[pat] : "?");
+      const char* patStr = (pat < NUM_ARP_PATTERNS) ? s_patNames[pat] : "?";
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_PATTERN, curType)),
+                      "Pattern", patStr, nullptr);
       s_dbgPat = pat;
     }
     // V4 Task 22 : R2+hold sur ARPEG_GEN pilote _genPosition (TARGET_GEN_POSITION binding),
     // distinct de _pattern. Trace pour observabilite live du sweep 0..NUM_GEN_POSITIONS-1.
     if (s_firstEmit || genPos != s_dbgGenPos) {
-      Serial.printf("[POT] %s: GenPos=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_GEN_POSITION, curType)), genPos);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", genPos);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_GEN_POSITION, curType)),
+                      "GenPos", valStr, nullptr);
       s_dbgGenPos = genPos;
     }
     if (s_firstEmit || shufTpl != s_dbgShufTpl) {
-      Serial.printf("[POT] %s: ShufTpl=%u\n",
-                    potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_TEMPLATE, curType)), shufTpl);
+      char valStr[16]; snprintf(valStr, sizeof(valStr), "%u", shufTpl);
+      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_TEMPLATE, curType)),
+                      "ShufTpl", valStr, nullptr);
       s_dbgShufTpl = shufTpl;
     }
 
