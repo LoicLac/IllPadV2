@@ -93,6 +93,8 @@ void taskBody(void* /*arg*/) {
       emitBanksHeader(NUM_BANKS);
       for (uint8_t i = 0; i < NUM_BANKS; i++) emitBank(i);
       for (uint8_t i = 0; i < NUM_BANKS; i++) emitState(i);
+      // Phase 2 : [BANK_SETTINGS] pour chaque bank ARPEG_GEN (no-op autre type).
+      for (uint8_t i = 0; i < NUM_BANKS; i++) emitBankSettings(i);
       emitGlobals();
       emitSettings();
       resetDbgSentinels();
@@ -287,6 +289,8 @@ void pollCommands() {
       cmdBuf[cmdLen] = '\0';
       if (strcmp(cmdBuf, "?STATE") == 0) {
         emitState(s_bankManager.getCurrentBank());
+        // Phase 2 : émet [BANK_SETTINGS] si foreground ARPEG_GEN (no-op sinon).
+        emitBankSettings(s_bankManager.getCurrentBank());
         emitReady(s_bankManager.getCurrentBank() + 1);
       } else if (strcmp(cmdBuf, "?BANKS") == 0) {
         emitBanksHeader(NUM_BANKS);
@@ -296,6 +300,8 @@ void pollCommands() {
         emitBanksHeader(NUM_BANKS);
         for (uint8_t i = 0; i < NUM_BANKS; i++) emitBank(i);
         for (uint8_t i = 0; i < NUM_BANKS; i++) emitState(i);
+        // Phase 2 : [BANK_SETTINGS] pour chaque bank ARPEG_GEN.
+        for (uint8_t i = 0; i < NUM_BANKS; i++) emitBankSettings(i);
         emitGlobals();
         emitSettings();
         resetDbgSentinels();
@@ -304,6 +310,8 @@ void pollCommands() {
         emitBanksHeader(NUM_BANKS);
         for (uint8_t i = 0; i < NUM_BANKS; i++) emitBank(i);
         for (uint8_t i = 0; i < NUM_BANKS; i++) emitState(i);
+        // Phase 2 : [BANK_SETTINGS] pour chaque bank ARPEG_GEN.
+        for (uint8_t i = 0; i < NUM_BANKS; i++) emitBankSettings(i);
         emitGlobals();
         emitSettings();
         resetDbgSentinels();
