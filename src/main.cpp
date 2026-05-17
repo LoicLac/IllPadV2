@@ -54,18 +54,18 @@ static CapacitiveKeyboard s_keyboard;
 static MidiTransport      s_transport;
 static MidiEngine         s_midiEngine;
 static LedController      s_leds;
-static BankManager        s_bankManager;
+       BankManager        s_bankManager;       // external linkage (ViewerSerial reads)
 static ScaleManager       s_scaleManager;
-static PotRouter          s_potRouter;
+       PotRouter          s_potRouter;         // external linkage (ViewerSerial reads)
 static BatteryMonitor     s_batteryMonitor;
-static NvsManager         s_nvsManager;
+       NvsManager         s_nvsManager;        // external linkage (ViewerSerial reads)
 static ControlPadManager  s_controlPadManager;
 static SetupManager       s_setupManager;
 static ClockManager       s_clockManager;
 static ArpScheduler       s_arpScheduler;
 
 // 8 banks — all NORMAL for now
-static BankSlot s_banks[NUM_BANKS];
+       BankSlot s_banks[NUM_BANKS];             // external linkage (ViewerSerial reads)
 
 // Static ArpEngine pool (max 4 ARPEG banks)
 static ArpEngine s_arpEngines[4];
@@ -156,199 +156,12 @@ static void midiPanic() {
 }
 
 // =================================================================
-// Viewer API helpers — boot dump, per-bank state dump, ?STATE/?BANKS/?BOTH
-// runtime command handler, [READY] marker. All gated by DEBUG_SERIAL.
-// Plan: docs/superpowers/plans/2026-05-15-illpad-firmware-viewer-api.md
+// Viewer API helpers — ?STATE/?BANKS/?BOTH runtime command handler,
+// settings dumps (?ALL only). All gated by DEBUG_SERIAL.
+// [BANKS]/[BANK]/[STATE]/[READY] emission migrated to ViewerSerial module
+// (Phase 1.C.2). Plan: docs/superpowers/plans/2026-05-17-viewer-serial-phase1-firmware-plan.md
 // =================================================================
 #if DEBUG_SERIAL
-
-// Emit [BANKS] count=8 + 8× [BANK] idx=N ... headers at boot.
-// Per-bank metadata (type, channel, group, division+playing+octave for ARPEG,
-// division+playing+mutationLevel for ARPEG_GEN). NORMAL/LOOP have only the
-// minimal fields. Plan task A.3.
-static void dumpBanksGlobal() {
-  // ORDER MATCHES enum BankType in KeyboardData.h:324-329
-  // BANK_NORMAL=0, BANK_ARPEG=1, BANK_LOOP=2, BANK_ARPEG_GEN=3
-  static const char* TYPE_NAMES[] = { "NORMAL", "ARPEG", "LOOP", "ARPEG_GEN" };
-  static const char* DIV_NAMES[]  = { "4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64" };
-
-  Serial.printf("[BANKS] count=%d\n", NUM_BANKS);
-  for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    BankSlot& b = s_banks[i];
-    uint8_t group = s_nvsManager.getLoadedScaleGroup(i);
-    char groupChar = (group == 0) ? '0' : (char)('A' + group - 1);
-    uint8_t typeIdx = (uint8_t)b.type;
-    const char* typeName = (typeIdx < 4) ? TYPE_NAMES[typeIdx] : "?";
-
-    Serial.printf("[BANK] idx=%d type=%s ch=%d group=%c",
-                  i + 1, typeName, i + 1, groupChar);
-
-    bool isArp = (b.type == BANK_ARPEG) || (b.type == BANK_ARPEG_GEN);
-    if (isArp && b.arpEngine) {
-      ArpDivision d = b.arpEngine->getDivision();
-      uint8_t dIdx = (uint8_t)d;
-      Serial.printf(" division=%s playing=%s",
-                    dIdx < 9 ? DIV_NAMES[dIdx] : "?",
-                    b.arpEngine->isPlaying() ? "true" : "false");
-      if (b.type == BANK_ARPEG) {
-        Serial.printf(" octave=%d", b.arpEngine->getOctaveRange());
-      } else { // ARPEG_GEN
-        Serial.printf(" mutationLevel=%d", b.arpEngine->getMutationLevel());
-      }
-    }
-    Serial.println();
-  }
-}
-
-// Format the "target:value" string for a given target, reading from the
-// per-bank storage (s_banks[bankIdx] / arpEngine) for per-bank values, or
-// from PotRouter for global values. Plan task A.4.
-static void formatTargetValueForBank(char* buf, size_t bufSize,
-                                     PotTarget t, uint8_t bankIdx,
-                                     uint8_t mappingCcNumber,
-                                     bool isForeground) {
-  (void)isForeground;  // V1: same emit for foreground or not (CC live value
-                       // delivered via [POT] events). Param kept for V2.
-  static const char* DIV_NAMES[] = { "4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64" };
-  static const char* PAT_NAMES[] = { "Up","Down","UpDown","Order","PedalUp","Converge" };
-
-  BankSlot& b = s_banks[bankIdx];
-  ArpEngine* eng = b.arpEngine;
-
-  switch (t) {
-    // --- Global params (PotRouter is the single source of truth) ---
-    case TARGET_RESPONSE_SHAPE:
-      snprintf(buf, bufSize, "Shape:%.2f", s_potRouter.getResponseShape()); break;
-    case TARGET_SLEW_RATE:
-      snprintf(buf, bufSize, "Slew:%u", s_potRouter.getSlewRate()); break;
-    case TARGET_AT_DEADZONE:
-      snprintf(buf, bufSize, "AT_Deadzone:%u", s_potRouter.getAtDeadzone()); break;
-    case TARGET_TEMPO_BPM:
-      snprintf(buf, bufSize, "Tempo:%u", s_potRouter.getTempoBPM()); break;
-    case TARGET_LED_BRIGHTNESS:
-      snprintf(buf, bufSize, "LED_Bright:%u", s_potRouter.getLedBrightness()); break;
-    case TARGET_PAD_SENSITIVITY:
-      snprintf(buf, bufSize, "PadSens:%u", s_potRouter.getPadSensitivity()); break;
-
-    // --- Per-bank static params (stored in BankSlot directly) ---
-    case TARGET_BASE_VELOCITY:
-      snprintf(buf, bufSize, "BaseVel:%u", b.baseVelocity); break;
-    case TARGET_VELOCITY_VARIATION:
-      snprintf(buf, bufSize, "VelVar:%u", b.velocityVariation); break;
-    case TARGET_PITCH_BEND:
-      snprintf(buf, bufSize, "PitchBend:%u", b.pitchBendOffset); break;
-
-    // --- Per-bank arp params (stored in ArpEngine) ---
-    case TARGET_GATE_LENGTH:
-      if (eng) snprintf(buf, bufSize, "Gate:%.2f", eng->getGateLength());
-      else     snprintf(buf, bufSize, "Gate:-");
-      break;
-    case TARGET_SHUFFLE_DEPTH:
-      if (eng) snprintf(buf, bufSize, "ShufDepth:%.2f", eng->getShuffleDepth());
-      else     snprintf(buf, bufSize, "ShufDepth:-");
-      break;
-    case TARGET_DIVISION: {
-      if (eng) {
-        uint8_t d = (uint8_t)eng->getDivision();
-        snprintf(buf, bufSize, "Division:%s", d < 9 ? DIV_NAMES[d] : "?");
-      } else {
-        snprintf(buf, bufSize, "Division:-");
-      }
-      break;
-    }
-    case TARGET_PATTERN: {
-      if (eng) {
-        uint8_t p = (uint8_t)eng->getPattern();
-        snprintf(buf, bufSize, "Pattern:%s", p < 6 ? PAT_NAMES[p] : "?");
-      } else {
-        snprintf(buf, bufSize, "Pattern:-");
-      }
-      break;
-    }
-    case TARGET_GEN_POSITION:
-      if (eng) snprintf(buf, bufSize, "GenPos:%u", eng->getGenPosition());
-      else     snprintf(buf, bufSize, "GenPos:-");
-      break;
-    case TARGET_SHUFFLE_TEMPLATE:
-      if (eng) snprintf(buf, bufSize, "ShufTpl:%u", eng->getShuffleTemplate());
-      else     snprintf(buf, bufSize, "ShufTpl:-");
-      break;
-
-    // --- MIDI CC/PB (mapping-driven). V1 emits ':?' ; live value comes via
-    //     [POT] CCnn= / PB= events in the loop. ---
-    case TARGET_MIDI_CC:
-      snprintf(buf, bufSize, "CC%u:?", mappingCcNumber); break;
-    case TARGET_MIDI_PITCHBEND:
-      snprintf(buf, bufSize, "PB:?"); break;
-
-    case TARGET_EMPTY:
-    case TARGET_NONE:
-    default:
-      snprintf(buf, bufSize, "---"); break;
-  }
-}
-
-// Dump the [STATE] line for a specific bank (any bank, not just foreground).
-// At boot, called 8× ; after bank switch, called 1× for the new foreground.
-// Plan task A.4.
-void dumpBankState(uint8_t bankIdx) {  // non-static : referenced by BankManager via extern
-  static const char* TYPE_NAMES[] = { "NORMAL", "ARPEG", "LOOP", "ARPEG_GEN" };
-  static const char* SLOT_NAMES[] = { "R1","R1H","R2","R2H","R3","R3H","R4","R4H" };
-  static const char* ROOT_NAMES[] = { "A","B","C","D","E","F","G" };
-  static const char* MODE_NAMES[] = {
-    "Ionian","Dorian","Phrygian","Lydian","Mixolydian","Aeolian","Locrian"
-  };
-
-  if (bankIdx >= NUM_BANKS) return;
-  BankSlot& b = s_banks[bankIdx];
-  uint8_t typeIdx = (uint8_t)b.type;
-  const char* typeName = (typeIdx < 4) ? TYPE_NAMES[typeIdx] : "?";
-  bool isForeground = (bankIdx == s_bankManager.getCurrentBank());
-
-  Serial.printf("[STATE] bank=%d mode=%s ch=%d",
-                bankIdx + 1, typeName, bankIdx + 1);
-
-  // Scale
-  if (b.scale.chromatic) {
-    Serial.printf(" scale=Chromatic:%s",
-                  b.scale.root < 7 ? ROOT_NAMES[b.scale.root] : "?");
-  } else {
-    Serial.printf(" scale=%s:%s",
-                  b.scale.root < 7 ? ROOT_NAMES[b.scale.root] : "?",
-                  b.scale.mode < 7 ? MODE_NAMES[b.scale.mode] : "?");
-  }
-
-  // Octave (ARPEG) / mutationLevel (ARPEG_GEN)
-  if (b.type == BANK_ARPEG && b.arpEngine) {
-    Serial.printf(" octave=%d", b.arpEngine->getOctaveRange());
-  } else if (b.type == BANK_ARPEG_GEN && b.arpEngine) {
-    Serial.printf(" mutationLevel=%d", b.arpEngine->getMutationLevel());
-  }
-
-  // 8 slots — LOOP has no PotRouter binding at runtime, emit "---" everywhere.
-  if (b.type == BANK_LOOP) {
-    for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
-      Serial.printf(" %s=---", SLOT_NAMES[i]);
-    }
-    Serial.println();
-    return;
-  }
-
-  // Iterate the 8 user-visible slots and ask PotRouter for the effective
-  // target wired to (slot, b.type) in the runtime bindings. Consulting
-  // bindings (not the mapping store) ensures that ARPEG_GEN slots driven by
-  // the PATTERN→GEN_POSITION mirror are correctly reported as `GenPos:N`
-  // (not `Pattern:Up`). Future LOOP / other context-substitution bindings
-  // will be picked up here without any change to dumpBankState.
-  char valBuf[32];
-  for (uint8_t i = 0; i < POT_MAPPING_SLOTS; i++) {
-    uint8_t cc = 0;
-    PotTarget t = s_potRouter.getEffectiveTargetForSlot(i, b.type, &cc);
-    formatTargetValueForBank(valBuf, sizeof(valBuf), t, bankIdx, cc, isForeground);
-    Serial.printf(" %s=%s", SLOT_NAMES[i], valBuf);
-  }
-  Serial.println();
-}
 
 // =================================================================
 // Persistent settings dumps (v9, 2026-05-16) — paste-friendly snippets
@@ -450,14 +263,6 @@ static void dumpPotMapping() {
   Serial.println("[/POTMAP_DUMP]");
 }
 
-// Emit "[READY] current=N" — boot dump completion marker, also at the end
-// of each ?STATE/?BANKS/?BOTH/?ALL response. N is the 1-based foreground
-// bank index — viewer uses this to set Model.current.idx after the boot's
-// 8× [STATE] sequence (which alone doesn't identify the foreground).
-static void emitReady() {
-  Serial.printf("[READY] current=%u\n", s_bankManager.getCurrentBank() + 1);
-}
-
 // Non-blocking Serial poll for viewer-API runtime commands. Recognizes
 // ?STATE / ?BANKS / ?BOTH ; each emits the corresponding dump then [READY].
 // Plan task A.5.
@@ -470,22 +275,25 @@ static void pollRuntimeCommands() {
     if (c == '\n' || c == '\r') {
       cmdBuf[cmdLen] = '\0';
       if (strcmp(cmdBuf, "?STATE") == 0) {
-        dumpBankState(s_bankManager.getCurrentBank());
-        emitReady();
+        viewer::emitState(s_bankManager.getCurrentBank());
+        viewer::emitReady(s_bankManager.getCurrentBank() + 1);
       } else if (strcmp(cmdBuf, "?BANKS") == 0) {
-        dumpBanksGlobal();
-        emitReady();
+        viewer::emitBanksHeader(NUM_BANKS);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBank(i);
+        viewer::emitReady(s_bankManager.getCurrentBank() + 1);
       } else if (strcmp(cmdBuf, "?BOTH") == 0) {
-        dumpBanksGlobal();
-        for (uint8_t i = 0; i < NUM_BANKS; i++) dumpBankState(i);
-        emitReady();
+        viewer::emitBanksHeader(NUM_BANKS);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBank(i);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitState(i);
+        viewer::emitReady(s_bankManager.getCurrentBank() + 1);
       } else if (strcmp(cmdBuf, "?ALL") == 0) {
-        dumpBanksGlobal();
-        for (uint8_t i = 0; i < NUM_BANKS; i++) dumpBankState(i);
+        viewer::emitBanksHeader(NUM_BANKS);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBank(i);
+        for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitState(i);
         dumpLedSettings();
         dumpColorSlots();
         dumpPotMapping();
-        emitReady();
+        viewer::emitReady(s_bankManager.getCurrentBank() + 1);
       }
       cmdLen = 0;
     } else if (cmdLen < sizeof(cmdBuf) - 1) {
@@ -860,9 +668,10 @@ void setup() {
   // Viewer-API boot dump : 1× [BANKS] + 8× [BANK] + 8× [STATE] + 1× [READY].
   // Allows the JUCE viewer to populate its UI from a single boot dump.
   // Plan tasks A.3 + A.4 + A.5 step 3.
-  dumpBanksGlobal();
-  for (uint8_t i = 0; i < NUM_BANKS; i++) dumpBankState(i);
-  emitReady();
+  viewer::emitBanksHeader(NUM_BANKS);
+  for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitBank(i);
+  for (uint8_t i = 0; i < NUM_BANKS; i++) viewer::emitState(i);
+  viewer::emitReady(s_bankManager.getCurrentBank() + 1);
   #endif
 }
 

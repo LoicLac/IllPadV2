@@ -3,15 +3,9 @@
 #include "../core/MidiTransport.h"
 #include "../core/LedController.h"
 #include "../arp/ArpEngine.h"
+#include "../viewer/ViewerSerial.h"
 #include <Arduino.h>
 #include <string.h>
-
-#if DEBUG_SERIAL
-// Forward declaration of the viewer-API per-bank state dump (defined in
-// main.cpp). Called right after the [BANK] log so the viewer receives the
-// new foreground bank's full slot state. Plan task A.4 step 4.
-extern void dumpBankState(uint8_t bankIdx);
-#endif
 
 BankManager::BankManager()
   : _engine(nullptr)
@@ -225,19 +219,7 @@ void BankManager::switchToBank(uint8_t newBank) {
   sendBankSelectMidi(oldBank, false);
   sendBankSelectMidi(_currentBank, true);
 
-  #if DEBUG_SERIAL
-  const char* typeLabel = "?";
-  switch (_banks[_currentBank].type) {
-    case BANK_NORMAL:    typeLabel = "NORMAL";    break;
-    case BANK_ARPEG:     typeLabel = "ARPEG";     break;
-    case BANK_ARPEG_GEN: typeLabel = "ARPEG_GEN"; break;
-    case BANK_LOOP:      typeLabel = "LOOP";      break;  // placeholder LOOP Phase 1
-    default:             typeLabel = "?";         break;
-  }
-  Serial.printf("[BANK] Bank %d (ch %d, %s)\n",
-                _currentBank + 1, _currentBank + 1, typeLabel);
-  dumpBankState(_currentBank);
-  #endif
+  viewer::emitBankSwitch(_currentBank);
 }
 
 // =================================================================

@@ -30,6 +30,14 @@ bool isConnected();
 // unit : optional unit suffix ("BPM"), pass nullptr for none.
 void emitPot(const char* slot, const char* target, const char* valueStr, const char* unit);
 
+// --- Phase 1.C.2 : [BANK]/[STATE]/[READY] events ---
+// Boot dump uses these directly. Runtime bank switch uses emitBankSwitch.
+void emitBanksHeader(uint8_t count);          // [BANKS] count=N
+void emitBank(uint8_t idx);                    // [BANK] idx=N type=... (reads s_banks)
+void emitState(uint8_t bankIdx);               // [STATE] bank=N ... (reads s_banks + s_potRouter)
+void emitReady(uint8_t currentBank1Based);     // [READY] current=N
+void emitBankSwitch(uint8_t newBankIdx);       // [BANK] Bank N + [STATE] bank=N
+
 // Phase 1.A : pas d'emit_xxx() encore. Ajoutés au fur et à mesure des
 // sous-phases 1.C.*, 1.D, 1.E, 1.F.
 
