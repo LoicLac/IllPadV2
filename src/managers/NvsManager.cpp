@@ -25,8 +25,10 @@ NvsManager::NvsManager()
   , _pendingResponseShape(RESPONSE_SHAPE_DEFAULT)
   , _pendingSlewRate(SLEW_RATE_DEFAULT)
   , _pendingAtDeadzone(AT_DEADZONE_DEFAULT)
-  , _potLastChangeMs(0)
-  , _potPendingSave(false)
+  , _potRightLastChangeMs(0)
+  , _potRearLastChangeMs(0)
+  , _potRightPendingSave(false)
+  , _potRearPendingSave(false)
   , _anyPadPressed(false)
 {
   // BankTypeStore v3 + v4 : ARPEG_GEN per-bank params.
@@ -200,18 +202,63 @@ void NvsManager::notifyIfDirty() {
 }
 
 // =================================================================
-// tickPotDebounce — 10s debounce for pot param saves
+// tickPotDebounce — split debounce: 2s for rear pot (tempo/LED/PadSens),
+// 10s for right pots (per-bank params live-twiddled in performance).
 // =================================================================
-void NvsManager::tickPotDebounce(uint32_t now, bool potRouterDirty, const PotRouter& potRouter,
+void NvsManager::tickPotDebounce(uint32_t now, bool rearDirty, bool rightDirty,
+                                  const PotRouter& potRouter,
                                   uint8_t currentBank, BankType currentType) {
-  if (potRouterDirty) {
-    _potLastChangeMs = now;
-    _potPendingSave = true;
+  // -------------------------------------------------------------------
+  // Rear pot (tempo, LED brightness, pad sensitivity) — 2 s debounce.
+  // These are global params adjusted by intentional gesture (LEFT held,
+  // REAR held, or rear-pot tweak), not twiddled continuously. Short
+  // debounce so a quick reboot after the gesture preserves the change.
+  // -------------------------------------------------------------------
+  if (rearDirty) {
+    _potRearLastChangeMs = now;
+    _potRearPendingSave = true;
   }
-  if (!_potPendingSave || (now - _potLastChangeMs < POT_NVS_SAVE_DEBOUNCE_MS)) {
+  if (_potRearPendingSave && (now - _potRearLastChangeMs >= POT_REAR_NVS_SAVE_DEBOUNCE_MS)) {
+    _potRearPendingSave = false;
+
+    // Tempo (global)
+    uint16_t newTempo = potRouter.getTempoBPM();
+    if (newTempo != _pendingTempo) {
+      _pendingTempo = newTempo;
+      _tempoDirty = true;
+      _anyDirty = true;
+    }
+
+    // LED brightness (global)
+    uint8_t newBright = potRouter.getLedBrightness();
+    if (newBright != _pendingLedBright) {
+      _pendingLedBright = newBright;
+      _ledBrightDirty = true;
+      _anyDirty = true;
+    }
+
+    // Pad sensitivity (global)
+    uint8_t newSens = potRouter.getPadSensitivity();
+    if (newSens != _pendingPadSens) {
+      _pendingPadSens = newSens;
+      _padSensDirty = true;
+      _anyDirty = true;
+    }
+  }
+
+  // -------------------------------------------------------------------
+  // Right pots (R1-R4) — 10 s debounce.
+  // Shape/slew/deadzone (global pot params), per-bank velocity,
+  // pitch bend, and arp pot params (gate/shuffle/division/pattern/tpl).
+  // -------------------------------------------------------------------
+  if (rightDirty) {
+    _potRightLastChangeMs = now;
+    _potRightPendingSave = true;
+  }
+  if (!_potRightPendingSave || (now - _potRightLastChangeMs < POT_NVS_SAVE_DEBOUNCE_MS)) {
     return;
   }
-  _potPendingSave = false;
+  _potRightPendingSave = false;
 
   // === Global pot params (shape, slew, deadzone) ===
   float newShape = potRouter.getResponseShape();
@@ -223,30 +270,6 @@ void NvsManager::tickPotDebounce(uint32_t now, bool potRouterDirty, const PotRou
     _pendingSlewRate = newSlew;
     _pendingAtDeadzone = newDeadzone;
     _potDirty = true;
-    _anyDirty = true;
-  }
-
-  // === Tempo (global) ===
-  uint16_t newTempo = potRouter.getTempoBPM();
-  if (newTempo != _pendingTempo) {
-    _pendingTempo = newTempo;
-    _tempoDirty = true;
-    _anyDirty = true;
-  }
-
-  // === LED brightness (global) ===
-  uint8_t newBright = potRouter.getLedBrightness();
-  if (newBright != _pendingLedBright) {
-    _pendingLedBright = newBright;
-    _ledBrightDirty = true;
-    _anyDirty = true;
-  }
-
-  // === Pad sensitivity (global) ===
-  uint8_t newSens = potRouter.getPadSensitivity();
-  if (newSens != _pendingPadSens) {
-    _pendingPadSens = newSens;
-    _padSensDirty = true;
     _anyDirty = true;
   }
 

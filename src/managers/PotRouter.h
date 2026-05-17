@@ -108,9 +108,14 @@ public:
   uint8_t getBargraphPotLevel() const;   // Physical pot position mapped to 0-7
   bool    isBargraphCaught() const;      // True if active binding is caught
 
-  // Dirty flag for NVS save debounce
-  bool isDirty() const;
-  void clearDirty();
+  // Dirty flags for NVS save debounce. Split rear/right so the rear pot
+  // (tempo, LED brightness, pad sensitivity — global params adjusted via
+  // intentional gestures) gets a shorter debounce than the right pots
+  // (per-bank params twiddled live).
+  bool isRearDirty() const;
+  bool isRightDirty() const;
+  void clearRearDirty();
+  void clearRightDirty();
 
   // POT_PINS[] now in HardwareConfig.h (shared globally)
   // ADC reads now in PotFilter (getStable/hasMoved)
@@ -182,8 +187,11 @@ private:
   uint8_t _bargraphPotLevel;   // Physical pot position (0-7)
   bool    _bargraphCaught;     // Catch state of active binding
 
-  // Dirty (any output changed since last clearDirty)
-  bool _dirty;
+  // Dirty (any output changed since last clear). Split by pot family so
+  // NvsManager can debounce them independently — rear pot params persist
+  // faster (2 s) than right pots (10 s).
+  bool _dirtyRear;
+  bool _dirtyRight;
 
   void resolveBindings(bool btnLeft, bool btnRear, BankType type);
   void applyBinding(uint8_t potIndex);

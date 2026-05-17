@@ -69,7 +69,8 @@ PotRouter::PotRouter()
   , _bargraphLevel(0.0f)
   , _bargraphPotLevel(0)
   , _bargraphCaught(false)            // F-CODE-1: align init order with .h declaration
-  , _dirty(false)
+  , _dirtyRear(false)
+  , _dirtyRight(false)
 {
   // Init per-pot state (ADC arrays now in PotFilter)
   for (uint8_t i = 0; i < NUM_POTS; i++) {
@@ -451,7 +452,7 @@ void PotRouter::applyBinding(uint8_t potIndex) {
     _ledBrightness = (uint8_t)adcToRange(adc, bind.rangeMin, bind.rangeMax);
     cs.storedValue = (uint16_t)adc;
     cs.caught = true;
-    _dirty = true;
+    _dirtyRear = true;
     return;
   }
 
@@ -617,9 +618,12 @@ void PotRouter::applyBinding(uint8_t potIndex) {
   _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f + 0.5f);
   _bargraphCaught = true;
   _bargraphDirty = true;
-  // Only set NVS dirty for non-volatile targets (CC/PB are volatile, not saved)
+  // Only set NVS dirty for non-volatile targets (CC/PB are volatile, not saved).
+  // Split by pot family so rear-pot params (tempo / pad sens) commit on a
+  // shorter debounce than right-pot params.
   if (bind.target != TARGET_MIDI_CC && bind.target != TARGET_MIDI_PITCHBEND) {
-    _dirty = true;
+    if (bind.potIndex == 4) _dirtyRear = true;
+    else                    _dirtyRight = true;
   }
 }
 
@@ -759,8 +763,10 @@ float     PotRouter::getBargraphLevel() const     { return _bargraphLevel; }
 uint8_t   PotRouter::getBargraphPotLevel() const { return _bargraphPotLevel; }
 bool      PotRouter::isBargraphCaught() const    { return _bargraphCaught; }
 
-bool PotRouter::isDirty() const   { return _dirty; }
-void PotRouter::clearDirty()      { _dirty = false; }
+bool PotRouter::isRearDirty() const  { return _dirtyRear; }
+bool PotRouter::isRightDirty() const { return _dirtyRight; }
+void PotRouter::clearRearDirty()     { _dirtyRear = false; }
+void PotRouter::clearRightDirty()    { _dirtyRight = false; }
 
 uint8_t PotRouter::getSlotForTarget(PotTarget t, BankType bankType) const {
   // Iterate runtime bindings — they hold the effective (post-substitution)

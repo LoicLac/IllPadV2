@@ -166,7 +166,8 @@ const int   POT_DEADZONE        = 50;    // ADC change threshold for debug displ
 // --- Pot Catch & Bargraph ---
 const int      POT_CATCH_WINDOW          = 100;   // ADC units (±2.4% of 4095) to catch stored value
 const uint32_t POT_BARGRAPH_DURATION_MS  = 3000;  // Show bargraph for 3s after last movement (legacy, used as fallback)
-const uint32_t POT_NVS_SAVE_DEBOUNCE_MS  = 10000; // Save to NVS 10s after last pot change
+const uint32_t POT_NVS_SAVE_DEBOUNCE_MS      = 10000; // Save to NVS 10s after last right-pot change (R1-R4)
+const uint32_t POT_REAR_NVS_SAVE_DEBOUNCE_MS = 2000;  // Save to NVS 2s after last rear-pot change (tempo/LED/PadSens)
 
 // --- Battery Monitoring ---
 const uint8_t BAT_ADC_PIN = 10;              // GPIO10 — ADC1_CH9, left header

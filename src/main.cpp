@@ -1291,6 +1291,13 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     static uint8_t  s_dbgGenPos   = 0xFF;
     static uint8_t  s_dbgShufTpl  = 0xFF;
 
+    // First call after boot forces emission of every param regardless of
+    // its initial value — same pattern as the s_hwInit gate below. Guards
+    // against sentinel collision (e.g. LED_Bright=255 == uint8_t 0xFF init)
+    // and gives the viewer a complete state dump in the [READY] window
+    // without requiring the user to wiggle each pot.
+    static bool s_firstEmit = true;
+
     static const char* s_divNames[] = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64"};
     static const char* s_patNames[] = {
       "Up","Down","UpDown","Order","PedalUp","Converge"
@@ -1319,72 +1326,72 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
 
     // Global params — slot prefix derived from current mapping & context.
     // Format: "[POT] <SLOT>: <param>=<value> [unit]" (viewer-API §A.2).
-    if ((int)(shape * 100) != (int)(s_dbgShape * 100)) {
+    if (s_firstEmit || (int)(shape * 100) != (int)(s_dbgShape * 100)) {
       Serial.printf("[POT] %s: Shape=%.2f\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_RESPONSE_SHAPE, curType)), shape);
       s_dbgShape = shape;
     }
-    if (slew != s_dbgSlew) {
+    if (s_firstEmit || slew != s_dbgSlew) {
       Serial.printf("[POT] %s: Slew=%u\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_SLEW_RATE, curType)), slew);
       s_dbgSlew = slew;
     }
-    if (atDz != s_dbgAtDz) {
+    if (s_firstEmit || atDz != s_dbgAtDz) {
       Serial.printf("[POT] %s: AT_Deadzone=%u\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_AT_DEADZONE, curType)), atDz);
       s_dbgAtDz = atDz;
     }
-    if (tempo != s_dbgTempo) {
+    if (s_firstEmit || tempo != s_dbgTempo) {
       Serial.printf("[POT] %s: Tempo=%u BPM\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_TEMPO_BPM, curType)), tempo);
       s_dbgTempo = tempo;
     }
-    if (ledBr != s_dbgLedBr) {
+    if (s_firstEmit || ledBr != s_dbgLedBr) {
       Serial.printf("[POT] %s: LED_Bright=%u\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_LED_BRIGHTNESS, curType)), ledBr);
       s_dbgLedBr = ledBr;
     }
-    if (padSens != s_dbgPadSens) {
+    if (s_firstEmit || padSens != s_dbgPadSens) {
       Serial.printf("[POT] %s: PadSens=%u\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_PAD_SENSITIVITY, curType)), padSens);
       s_dbgPadSens = padSens;
     }
 
     // Per-bank params (always tracked, foreground bank)
-    if (baseVel != s_dbgBaseVel) {
+    if (s_firstEmit || baseVel != s_dbgBaseVel) {
       Serial.printf("[POT] %s: BaseVel=%u\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_BASE_VELOCITY, curType)), baseVel);
       s_dbgBaseVel = baseVel;
     }
-    if (velVar != s_dbgVelVar) {
+    if (s_firstEmit || velVar != s_dbgVelVar) {
       Serial.printf("[POT] %s: VelVar=%u\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_VELOCITY_VARIATION, curType)), velVar);
       s_dbgVelVar = velVar;
     }
-    if (pb != s_dbgPB) {
+    if (s_firstEmit || pb != s_dbgPB) {
       Serial.printf("[POT] %s: PitchBend=%u\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_PITCH_BEND, curType)), pb);
       s_dbgPB = pb;
     }
 
     // Arp params
-    if ((int)(gate * 100) != (int)(s_dbgGate * 100)) {
+    if (s_firstEmit || (int)(gate * 100) != (int)(s_dbgGate * 100)) {
       Serial.printf("[POT] %s: Gate=%.2f\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_GATE_LENGTH, curType)), gate);
       s_dbgGate = gate;
     }
-    if ((int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) {
+    if (s_firstEmit || (int)(shufDep * 100) != (int)(s_dbgShufDep * 100)) {
       Serial.printf("[POT] %s: ShufDepth=%.2f\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_DEPTH, curType)), shufDep);
       s_dbgShufDep = shufDep;
     }
-    if (div != s_dbgDiv) {
+    if (s_firstEmit || div != s_dbgDiv) {
       Serial.printf("[POT] %s: Division=%s\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_DIVISION, curType)),
                     div < 9 ? s_divNames[div] : "?");
       s_dbgDiv = div;
     }
-    if (pat != s_dbgPat) {
+    if (s_firstEmit || pat != s_dbgPat) {
       Serial.printf("[POT] %s: Pattern=%s\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_PATTERN, curType)),
                     pat < NUM_ARP_PATTERNS ? s_patNames[pat] : "?");
@@ -1392,16 +1399,18 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     }
     // V4 Task 22 : R2+hold sur ARPEG_GEN pilote _genPosition (TARGET_GEN_POSITION binding),
     // distinct de _pattern. Trace pour observabilite live du sweep 0..NUM_GEN_POSITIONS-1.
-    if (genPos != s_dbgGenPos) {
+    if (s_firstEmit || genPos != s_dbgGenPos) {
       Serial.printf("[POT] %s: GenPos=%u\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_GEN_POSITION, curType)), genPos);
       s_dbgGenPos = genPos;
     }
-    if (shufTpl != s_dbgShufTpl) {
+    if (s_firstEmit || shufTpl != s_dbgShufTpl) {
       Serial.printf("[POT] %s: ShufTpl=%u\n",
                     potSlotName(s_potRouter.getSlotForTarget(TARGET_SHUFFLE_TEMPLATE, curType)), shufTpl);
       s_dbgShufTpl = shufTpl;
     }
+
+    s_firstEmit = false;
   }
   #endif
 
@@ -1529,11 +1538,13 @@ void loop() {
 
   handlePanicChecks(now, rearHeld);
 
-  // --- NVS: pot debounce (10s after last change) + signal task ---
-  bool potDirty = s_potRouter.isDirty();
-  s_nvsManager.tickPotDebounce(now, potDirty, s_potRouter,
+  // --- NVS: pot debounce (rear=2s, right=10s) + signal task ---
+  bool rearDirty  = s_potRouter.isRearDirty();
+  bool rightDirty = s_potRouter.isRightDirty();
+  s_nvsManager.tickPotDebounce(now, rearDirty, rightDirty, s_potRouter,
                                 s_bankManager.getCurrentBank(), s_bankManager.getCurrentSlot().type);
-  if (potDirty) s_potRouter.clearDirty();
+  if (rearDirty)  s_potRouter.clearRearDirty();
+  if (rightDirty) s_potRouter.clearRightDirty();
 
   // Check if any pad is pressed (NVS won't write during play)
   bool anyPressed = false;

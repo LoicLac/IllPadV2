@@ -85,9 +85,12 @@ public:
   // Call at end of loop — signals NVS task if anything is dirty
   void notifyIfDirty();
 
-  // Debounce: call with current millis, pot dirty state, pot router for value snapshot,
-  // and current bank context for per-bank params.
-  void tickPotDebounce(uint32_t now, bool potRouterDirty, const PotRouter& potRouter,
+  // Debounce: call with current millis, pot dirty states (rear + right tracked
+  // separately so the rear pot saves faster — tempo/LED/PadSens are global
+  // params adjusted via intentional gestures, not live-twiddled), pot router
+  // for value snapshot, and current bank context for per-bank params.
+  void tickPotDebounce(uint32_t now, bool rearDirty, bool rightDirty,
+                        const PotRouter& potRouter,
                         uint8_t currentBank, BankType currentType);
 
 private:
@@ -140,9 +143,11 @@ private:
   uint16_t    _pendingSlewRate;
   uint16_t    _pendingAtDeadzone;
 
-  // Pot debounce timer
-  uint32_t    _potLastChangeMs;
-  bool        _potPendingSave;
+  // Pot debounce timers (independent for rear vs right pots — see tickPotDebounce).
+  uint32_t    _potRightLastChangeMs;
+  uint32_t    _potRearLastChangeMs;
+  bool        _potRightPendingSave;
+  bool        _potRearPendingSave;
 
   // Safety: no write while pads pressed
   std::atomic<bool> _anyPadPressed;
