@@ -51,6 +51,14 @@ void emitGenSeed(uint16_t seqLen, uint8_t eInit, uint8_t pileCount,
                  int8_t lo, int8_t hi);
 void emitGenSeedDegenerate(uint16_t seqLen, int8_t singleDegree);
 
+// --- Phase 1.C.4 : [SCALE]/[ARP_GEN] events ---
+enum ScaleEventKind : uint8_t {
+  SCALE_ROOT, SCALE_MODE, SCALE_CHROMATIC,
+};
+void emitScale(ScaleEventKind kind, uint8_t rootIdx, uint8_t modeIdx);
+void emitArpOctave(uint8_t octave);                   // [ARP] Octave N
+void emitArpGenMutation(uint8_t mutationLevel);       // [ARP_GEN] MutationLevel N
+
 // Phase 1.A : pas d'emit_xxx() encore. Ajoutés au fur et à mesure des
 // sous-phases 1.C.*, 1.D, 1.E, 1.F.
 

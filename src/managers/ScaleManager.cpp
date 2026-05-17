@@ -1,17 +1,9 @@
 #include "ScaleManager.h"
 #include "../midi/MidiEngine.h"
 #include "../arp/ArpEngine.h"
+#include "../viewer/ViewerSerial.h"
 #include <Arduino.h>
 #include <string.h>
-
-// Root names for debug
-#if DEBUG_SERIAL
-static const char* ROOT_NAMES[7] = {"A", "B", "C", "D", "E", "F", "G"};
-static const char* MODE_NAMES[7] = {
-  "Ionian", "Dorian", "Phrygian", "Lydian",
-  "Mixolydian", "Aeolian", "Locrian"
-};
-#endif
 
 ScaleManager::ScaleManager()
   : _banks(nullptr)
@@ -136,9 +128,7 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       slot.scale.chromatic = false;  // Selecting root exits chromatic
       _scaleChangeType = SCALE_CHANGE_ROOT;
 
-      #if DEBUG_SERIAL
-      Serial.printf("[SCALE] Root %s (mode %s)\n", ROOT_NAMES[r], MODE_NAMES[slot.scale.mode]);
-      #endif
+      viewer::emitScale(viewer::SCALE_ROOT, r, slot.scale.mode);
     }
     _lastScaleKeys[pad] = pressed;
   }
@@ -158,9 +148,7 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       slot.scale.chromatic = false;  // Selecting mode exits chromatic
       _scaleChangeType = SCALE_CHANGE_MODE;
 
-      #if DEBUG_SERIAL
-      Serial.printf("[SCALE] Mode %s (root %s)\n", MODE_NAMES[m], ROOT_NAMES[slot.scale.root]);
-      #endif
+      viewer::emitScale(viewer::SCALE_MODE, slot.scale.root, m);
     }
     _lastScaleKeys[pad] = pressed;
   }
@@ -176,9 +164,7 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
       slot.scale.chromatic = true;
       _scaleChangeType = SCALE_CHANGE_CHROMATIC;
 
-      #if DEBUG_SERIAL
-      Serial.printf("[SCALE] Chromatic (root %s)\n", ROOT_NAMES[slot.scale.root]);
-      #endif
+      viewer::emitScale(viewer::SCALE_CHROMATIC, slot.scale.root, slot.scale.mode);
     }
     _lastScaleKeys[_chromaticPad] = pressed;
   }
@@ -202,14 +188,10 @@ void ScaleManager::processScalePads(const uint8_t* keyIsPressed, BankSlot& slot)
         _octaveChanged = true;
         if (slot.arpEngine->getEngineMode() == EngineMode::GENERATIVE) {
           slot.arpEngine->setMutationLevel(o + 1);
-          #if DEBUG_SERIAL
-          Serial.printf("[ARP_GEN] MutationLevel %d\n", o + 1);
-          #endif
+          viewer::emitArpGenMutation(o + 1);
         } else {
           slot.arpEngine->setOctaveRange(o + 1);
-          #if DEBUG_SERIAL
-          Serial.printf("[ARP] Octave %d\n", o + 1);
-          #endif
+          viewer::emitArpOctave(o + 1);
         }
       }
       _lastScaleKeys[pad] = pressed;

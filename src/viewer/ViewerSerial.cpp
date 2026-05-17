@@ -481,4 +481,50 @@ void emitGenSeedDegenerate(uint16_t seqLen, int8_t singleDegree) {
   #endif
 }
 
+// =================================================================
+// Phase 1.C.4 : [SCALE]/[ARP_GEN] events
+// Migrated from src/managers/ScaleManager.cpp. Format strictly identical —
+// JUCE viewer parser unchanged.
+// =================================================================
+
+void emitScale(ScaleEventKind kind, uint8_t rootIdx, uint8_t modeIdx) {
+  #if DEBUG_SERIAL
+  static const char* ROOT_NAMES[7] = {"A", "B", "C", "D", "E", "F", "G"};
+  static const char* MODE_NAMES[7] = {
+    "Ionian", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Aeolian", "Locrian"
+  };
+  const char* root = (rootIdx < 7) ? ROOT_NAMES[rootIdx] : "?";
+  const char* mode = (modeIdx < 7) ? MODE_NAMES[modeIdx] : "?";
+  switch (kind) {
+    case SCALE_ROOT:
+      emit(PRIO_HIGH, "[SCALE] Root %s (mode %s)\n", root, mode);
+      break;
+    case SCALE_MODE:
+      emit(PRIO_HIGH, "[SCALE] Mode %s (root %s)\n", mode, root);
+      break;
+    case SCALE_CHROMATIC:
+      emit(PRIO_HIGH, "[SCALE] Chromatic (root %s)\n", root);
+      break;
+  }
+  #else
+  (void)kind; (void)rootIdx; (void)modeIdx;
+  #endif
+}
+
+void emitArpOctave(uint8_t octave) {
+  #if DEBUG_SERIAL
+  emit(PRIO_HIGH, "[ARP] Octave %d\n", octave);
+  #else
+  (void)octave;
+  #endif
+}
+
+void emitArpGenMutation(uint8_t mutationLevel) {
+  #if DEBUG_SERIAL
+  emit(PRIO_HIGH, "[ARP_GEN] MutationLevel %d\n", mutationLevel);
+  #else
+  (void)mutationLevel;
+  #endif
+}
+
 }  // namespace viewer
