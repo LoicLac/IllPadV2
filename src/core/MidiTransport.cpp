@@ -1,5 +1,6 @@
 #include "MidiTransport.h"
 #include "HardwareConfig.h"
+#include "../viewer/ViewerSerial.h"
 #include <Arduino.h>
 #include <atomic>
 
@@ -58,16 +59,12 @@ static void onBleConnected() {
     }
   }
 
-  #if DEBUG_SERIAL
-  Serial.println("[MIDI] BLE connected");
-  #endif
+  viewer::emitMidiTransport("BLE", "connected");
 }
 
 static void onBleDisconnected() {
   s_bleConnected = false;
-  #if DEBUG_SERIAL
-  Serial.println("[MIDI] BLE disconnected");
-  #endif
+  viewer::emitMidiTransport("BLE", "disconnected");
 }
 
 // =================================================================
@@ -115,16 +112,14 @@ void MidiTransport::begin() {
 
 void MidiTransport::update() {
   // Track USB connection state changes
-  #if DEBUG_SERIAL
   {
     static bool s_lastUsbMounted = false;
     bool mounted = tud_mounted();
     if (mounted != s_lastUsbMounted) {
-      Serial.printf("[MIDI] USB %s\n", mounted ? "connected" : "disconnected");
+      viewer::emitMidiTransport("USB", mounted ? "connected" : "disconnected");
       s_lastUsbMounted = mounted;
     }
   }
-  #endif
 
   // Poll USB MIDI for incoming clock messages (system real-time)
   if (tud_mounted()) {

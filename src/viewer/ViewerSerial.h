@@ -59,6 +59,13 @@ void emitScale(ScaleEventKind kind, uint8_t rootIdx, uint8_t modeIdx);
 void emitArpOctave(uint8_t octave);                   // [ARP] Octave N
 void emitArpGenMutation(uint8_t mutationLevel);       // [ARP_GEN] MutationLevel N
 
+// --- Phase 1.C.5 : [CLOCK]/[MIDI] events ---
+// srcLabel : "USB", "BLE", "internal (no external BPM)", "BLE (USB timed out)", etc.
+// bpm : > 0.0f means include "last known (X BPM)" form, 0 means just source name
+void emitClockSource(const char* srcLabel, float bpm);
+// transport : "USB" or "BLE". state : "connected" or "disconnected"
+void emitMidiTransport(const char* transport, const char* state);
+
 // Phase 1.A : pas d'emit_xxx() encore. Ajoutés au fur et à mesure des
 // sous-phases 1.C.*, 1.D, 1.E, 1.F.
 

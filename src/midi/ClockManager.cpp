@@ -1,6 +1,7 @@
 #include "ClockManager.h"
 #include "../core/HardwareConfig.h"
 #include "../core/MidiTransport.h"
+#include "../viewer/ViewerSerial.h"
 #include <Arduino.h>
 
 ClockManager::ClockManager()
@@ -94,9 +95,7 @@ void ClockManager::processIncomingTicks(uint32_t nowUs, uint8_t usbTicks, uint8_
     if (_activeSource != prevSource) {
       _prevTickUs = 0;
       _tickIntervalCount = 0;
-      #if DEBUG_SERIAL
-      Serial.printf("[CLOCK] Source: %s\n", _activeSource == SRC_USB ? "USB" : "BLE");
-      #endif
+      viewer::emitClockSource(_activeSource == SRC_USB ? "USB" : "BLE", 0.0f);
     }
 
     // Calculate interval from previous tick.
@@ -131,9 +130,7 @@ void ClockManager::resolveTimeouts(uint32_t nowUs) {
           _activeSource = SRC_BLE;
           _prevTickUs = 0;
           _tickIntervalCount = 0;
-          #if DEBUG_SERIAL
-          Serial.println("[CLOCK] Source: BLE (USB timed out)");
-          #endif
+          viewer::emitClockSource("BLE (USB timed out)", 0.0f);
           return;  // BLE fallback active — skip further timeout handling
         }
       }
@@ -152,14 +149,10 @@ void ClockManager::resolveTimeouts(uint32_t nowUs) {
         _lastKnownEntryUs = nowUs;
         _pllBPM = _lastKnownBPM;
         _pllTickInterval = 60000000.0f / (_pllBPM * 24.0f);
-        #if DEBUG_SERIAL
-        Serial.printf("[CLOCK] Source: last known (%.0f BPM)\n", _pllBPM);
-        #endif
+        viewer::emitClockSource("last known", _pllBPM);
       } else {
         _activeSource = SRC_INTERNAL;
-        #if DEBUG_SERIAL
-        Serial.println("[CLOCK] Source: internal (no external BPM)");
-        #endif
+        viewer::emitClockSource("internal (no external BPM)", 0.0f);
       }
       _tickIntervalCount = 0;
       _prevTickUs = 0;
@@ -171,9 +164,7 @@ void ClockManager::resolveTimeouts(uint32_t nowUs) {
       _lastKnownEntryUs > 0 && (nowUs - _lastKnownEntryUs) > LAST_KNOWN_TIMEOUT_US) {
     _activeSource = SRC_INTERNAL;
     _lastTickTimeUs = nowUs;
-    #if DEBUG_SERIAL
-    Serial.println("[CLOCK] Source: internal (last known timed out)");
-    #endif
+    viewer::emitClockSource("internal (last known timed out)", 0.0f);
   }
 }
 

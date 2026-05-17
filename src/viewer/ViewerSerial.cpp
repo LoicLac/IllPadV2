@@ -527,4 +527,31 @@ void emitArpGenMutation(uint8_t mutationLevel) {
   #endif
 }
 
+// =================================================================
+// Phase 1.C.5 : [CLOCK]/[MIDI] events
+// Migrated from src/midi/ClockManager.cpp (5 sites) and
+// src/core/MidiTransport.cpp (3 sites). Format strictly identical —
+// JUCE viewer parser unchanged.
+// =================================================================
+
+void emitClockSource(const char* srcLabel, float bpm) {
+  #if DEBUG_SERIAL
+  if (bpm > 0.0f) {
+    emit(PRIO_HIGH, "[CLOCK] Source: last known (%.0f BPM)\n", bpm);
+  } else {
+    emit(PRIO_HIGH, "[CLOCK] Source: %s\n", srcLabel);
+  }
+  #else
+  (void)srcLabel; (void)bpm;
+  #endif
+}
+
+void emitMidiTransport(const char* transport, const char* state) {
+  #if DEBUG_SERIAL
+  emit(PRIO_HIGH, "[MIDI] %s %s\n", transport, state);
+  #else
+  (void)transport; (void)state;
+  #endif
+}
+
 }  // namespace viewer
