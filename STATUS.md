@@ -2,7 +2,7 @@
 
 _Sync : 2026-05-17. Lu en début de session, gardé à jour au fil de l'eau._
 
-**Focus courant** : Refacto Tool 5 **CLOSE** (3 commits Tasks 1/2/3 — Task 4 no-op car helpers NvsManager utilisés par boot path). LOOP Phase 1 sur main **CLOSE**. ARPEG_GEN feature complete. **Prochaine étape : rédiger plan Phase 2 LOOP from scratch** (LoopEngine + recording µs + playback BPM + premier son MIDI LOOP). Phase 2 LOOP démarre maintenant.
+**Focus courant** : Refacto Tool 5 **CLOSE**. LOOP Phase 1 sur main **CLOSE**. ARPEG_GEN feature complete. **Viewer serial centralization Phase 1 firmware CLOSE** (11 commits firmware + 1 commit viewer doc cross-worktree, tous les events runtime via module `src/viewer/ViewerSerial.{cpp,h}`). **Prochaine étape immédiate : Phase 2 viewer bidirectionnel** (write commands `!CMD=val` viewer → firmware, palier vert ClockMode + ARPEG_GEN per-bank). Phase 2 LOOP toujours en file d'attente après Phase 2 viewer.
 
 ## ARPEG_GEN — historique commits
 
@@ -83,15 +83,47 @@ Pad oct 1-4 : pour ARPEG_GEN = mutation level (1=lock, 2=1/16, 3=1/8, 4=1/4). Po
 - Aucun observable runtime tant qu'une bank LOOP n'existe pas (impossible Phase 1, Tool 5 ne propose pas LOOP)
 - Guards défensifs prêts pour Phase 2 : double-tap LOOP n'entraînera pas de bank switch parasite, scale change no-op sur bank LOOP
 
+## Viewer serial centralization Phase 1 — historique commits (2026-05-17)
+
+11 commits firmware (`main`) + 1 commit viewer (`viewer-juce` worktree). Plan exécuté de bout en bout en single session avec build-gate uniquement, fixes HW appliqués au fil de l'eau quand observés.
+
+| Phase | Commit | Description |
+|---|---|---|
+| 1.A | `fedeb81` | Plomberie module `src/viewer/ViewerSerial.{cpp,h}` : FreeRTOS xQueue 32×256B, task Core 1 prio 0, atomic flag dormance via `if (Serial)`, `Serial.setTxTimeoutMs(0)` |
+| 1.B | `1c46e0e` | Boot debug tagging `[BOOT *]` (72 sites) + cleanup UNGATED (banner, ArpPotStore v0) + `[INIT] FATAL` → `[FATAL]` always-on + `logFullBaselineTable` dead code retiré |
+| 1.C.1 | `01e8a17` | Migration `[POT]` events (17 sites) via `viewer::emitPot()` PRIO_LOW |
+| 1.C.2 | `8399b61` | Migration `[BANKS]/[BANK]/[STATE]/[READY]` + déplacement `dumpBanksGlobal/dumpBankState/formatTargetValueForBank` vers le module + race fixes (seed atomic, wait-retry, auto-resync hook) |
+| 1.C.3 | `b03dc14` | Migration `[ARP]/[GEN]` (8 sites) — `+/-note` PRIO_LOW droppable, `Play/Stop` PRIO_HIGH |
+| 1.C.4 | `c6957b8` | Migration `[SCALE]/[ARP]/[ARP_GEN] octave` (5 sites) + ROOT_NAMES/MODE_NAMES déplacées dans le module |
+| 1.C.5 | `cd0171d` | Migration `[CLOCK] source` + `[MIDI]` runtime connect/disconnect (8 sites) |
+| 1.C.6 | `70dff60` | Migration `[PANIC]` (1 site) |
+| 1.D | `681c2a2` | `[GLOBALS]` + `[SETTINGS]` + `resetDbgSentinels` + `pollCommands` complet + auto-resync chain (résout race boot dump observée Phase 1.C.2) |
+| 1.E | `978d93b` | `[CLOCK] BPM=` debounced ±1 BPM (résout audit R3 — viewer reflète PLL BPM externe en mode slave) |
+| fix | `6a78d02` | Chunked write dans task drain — résout drop des longues lignes pendant cold-USB-connect (issue HW boot dump partiel ~1.5s post-flash) |
+| fix | `9d6a40f` | Throttle 200ms sur `[CLOCK] BPM=` — anti-flood pendant convergence PLL (max 5 events/sec en regime ripple, 0 en stable) |
+
+**HW Checkpoint** validé en fin de session — boot dump complet, bank switch, scale change, ARPEG live, external MIDI clock (USB slave). Tempo widget viewer side fixé séparément par utilisateur dans le worktree `viewer-juce` (switch `clockSource == internal ? tempoBpm : externalBpm` dans le header component).
+
+**Post-impl fixes non-prévus dans le plan** (acquis HW discovery) :
+- PRIO_LOW/PRIO_HIGH au lieu de LOW/HIGH (collision macros Arduino `esp32-hal-gpio.h:41-42`)
+- Pas de `Serial.setTxBufferSize` (existe sur HWCDC, pas sur USBCDC — projet utilise USBCDC via `ARDUINO_USB_MODE=0`). TX ring TinyUSB reste au default sdkconfig.
+- Chunked write avec timeout 5s ultimate + stream resync `\n` (au lieu de drop-after-100ms initial)
+- Seed atomique `s_viewerConnected.store((bool)Serial)` à la fin de `viewer::begin()` (race au boot)
+- `[CLOCK] BPM=` debounce double : delta ≥1 BPM ET throttle ≥200ms
+
 ## Follow-ups ouverts
 
-- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). Vue d'ensemble + tableau d'étapes + dépendances. Pas un plan figé — mis à jour à chaque jalon franchi. **Étape courante : Phase 2 LOOP à rédiger from scratch** (Refacto Tool 5 livré 2026-05-17, prêt pour LOOP runtime).
+- **Phase 2 viewer bidirectionnel** : write commands `!CMD=val` du viewer vers firmware. Hooks déjà en place côté firmware (`viewer::pollCommands` retourne `[ERROR] write commands not yet implemented (Phase 2)` sur `!*`). Palier vert identifié : `!CLOCKMODE`, `!PANIC_RECONNECT`, `!AFTERTOUCH_RATE`, `!DOUBLE_TAP_MS`, ARPEG_GEN per-bank `!BONUS/MARGIN/PROX/ECART BANK=N`. À brainstormer (scope exact, format, confirmation pattern, NVS triggers) → spec → plan → execute. Voir handoff prompt session suivante.
+- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). Vue d'ensemble + tableau d'étapes + dépendances. Pas un plan figé — mis à jour à chaque jalon franchi. **Étape courante : Phase 2 LOOP à rédiger from scratch** (Refacto Tool 5 livré 2026-05-17, prêt pour LOOP runtime). À enchaîner après Phase 2 viewer.
 
 ## Sources
 
 - Spec ARPEG_GEN : [docs/superpowers/specs/2026-04-25-arpeg-gen-design.md](docs/superpowers/specs/2026-04-25-arpeg-gen-design.md)
 - Spec LOOP : [docs/superpowers/specs/2026-04-19-loop-mode-design.md](docs/superpowers/specs/2026-04-19-loop-mode-design.md) (VALIDÉE, MAJ 2026-05-17 — Q6 inversée post refacto Tool 5)
 - Spec Tool 5 refacto (pré-Phase 2 LOOP) : [docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md](docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md) (VALIDÉE 2026-05-17)
+- Spec viewer serial centralization Phase 1 : [docs/superpowers/specs/2026-05-17-viewer-serial-centralization-design.md](docs/superpowers/specs/2026-05-17-viewer-serial-centralization-design.md) (CLOSE 2026-05-17)
+- Plan viewer serial Phase 1 firmware : [docs/superpowers/plans/2026-05-17-viewer-serial-phase1-firmware-plan.md](docs/superpowers/plans/2026-05-17-viewer-serial-phase1-firmware-plan.md) (EXÉCUTÉ 2026-05-17)
+- Spec parser viewer (cross-worktree `viewer-juce`) : `../ILLPAD_V2-viewer/ILLPADViewer/docs/firmware-viewer-protocol.md` (mis à jour 2026-05-17 commit viewer-juce `b3079ce`)
 - Progrès LOOP (jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md) (suivi léger, MAJ par jalon)
 - Invariants buffer LOOP : [docs/reference/loop-buffer-invariants.md](docs/reference/loop-buffer-invariants.md) (extrait des Parties 8-9 du gesture-dispatcher-design archivé)
 - Plan ARPEG_GEN (archivé) : [docs/archive/2026-04-26-arpeg-gen-plan.md](docs/archive/2026-04-26-arpeg-gen-plan.md)
