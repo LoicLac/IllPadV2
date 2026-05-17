@@ -323,8 +323,29 @@ static void dispatchWriteCommand(const char* cmd) {
 // dispatcher avant de remplir les bodies.
 
 static void handleClockMode(const char* valStr, const char* origCmd) {
-  (void)valStr;
-  emit(PRIO_HIGH, "[ERROR] cmd=%s code=unknown_command\n", origCmd);
+  // 1. Parse + validate value (master|slave string).
+  bool isMaster;
+  if      (strcmp(valStr, "master") == 0) isMaster = true;
+  else if (strcmp(valStr, "slave")  == 0) isMaster = false;
+  else {
+    emit(PRIO_HIGH, "[ERROR] cmd=%s code=invalid_value expected=master|slave\n", origCmd);
+    return;
+  }
+
+  // 2. Apply runtime (ClockManager state — drains pending ticks if master).
+  s_clockManager.setMasterMode(isMaster);
+
+  // 3. Update s_settings BEFORE emitSettings() reads it (cf spec §6.1 ordre strict).
+  s_settings.clockMode = isMaster ? CLOCK_MASTER : CLOCK_SLAVE;
+
+  // 4. Queue NVS save (debounced 500ms via tickDebounce).
+  s_nvsManager.queueSettingsWrite(s_settings);
+
+  // 5. Emit confirmation events dans l'ordre §6.1 : [SETTINGS] puis [CLOCK] Source.
+  // [CLOCK] Source: synchronise device.clockSource côté viewer — sinon le badge
+  // resterait stale jusqu'au prochain tick externe / timeout / Resync manuel.
+  emitSettings();
+  emitClockSource(s_clockManager.getActiveSourceLabel(), 0.0f);
 }
 
 static void handleArpGenParam(ArpGenArg arg, const char* valStr, int bank1, const char* origCmd) {
