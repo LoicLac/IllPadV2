@@ -325,6 +325,15 @@ public:
   // Called by midiPanic() and by bank switch on REC/OD lock (spec §23.2).
   void flushPendingNoteOffs(MidiTransport& transport);
 
+  // --- Background transition hook (Audit-fix B-N1 / R-N1) ---
+  // Appelé depuis main.cpp quand cette bank LOOP passe de FG à BG (bank switch out).
+  // 1. Pour chaque pad encore physiquement enfoncé (_padHeldLive[pad] == true) :
+  //    refCountNoteOff + reset flag. Évite stuck note au DAW (invariant §23.1).
+  // 2. Reset CLEAR press tracker (_clearPressStartMs = 0, _clearFired = false)
+  //    pour éviter wipe instantané au retour FG si CLEAR encore tenu (spec §9).
+  // NE CHANGE PAS `_state` — la bank LOOP en BG doit pouvoir continuer son playback.
+  void onBackgroundTransition(MidiTransport& transport);
+
   // --- Queries ---
   LoopState getState() const          { return _state; }
   bool      isPlaying() const         { return _state == LoopState::PLAYING || _state == LoopState::OVERDUBBING; }
@@ -418,8 +427,15 @@ private:
   uint32_t         _clearPressStartMs;   // 0 = not pressing
   bool             _clearFired;          // true once threshold fired (avoid re-fire)
 
-  // --- Per-pad active flag for recording (which pads are currently held in REC/OD) ---
-  bool             _padHeldInRec[NUM_KEYS];
+  // --- Per-pad live-press tracker (Audit-fix B-N1 / B-N2 / R-N1) ---
+  // Set true à chaque live monitor noteOn (peu importe le state : EMPTY / STOPPED /
+  // PLAYING / RECORDING / OVERDUBBING / WAITING_*). Reset au falling edge.
+  // Trois consumers :
+  //   - stopRecording → flushHeldPadsAsNoteOffs(snappedDurUs) : inject noteOff fin de loop.
+  //   - mergeOverdub → inject noteOff dans _events à _playPositionUs (B-N2 fix).
+  //   - onBackgroundTransition → refCountNoteOff direct + reset flag (B-N1 fix).
+  // Remplace l'ancien _padHeldLive[] qui ne couvrait que RECORDING (insuffisant).
+  bool             _padHeldLive[NUM_KEYS];
 
   // --- Helpers ---
   // Recording
@@ -537,7 +553,7 @@ LoopEngine::LoopEngine()
     _pendingNoteOffs[i].active = false;
   }
   memset(_noteRefCount, 0, sizeof(_noteRefCount));
-  memset(_padHeldInRec, 0, sizeof(_padHeldInRec));
+  memset(_padHeldLive, 0, sizeof(_padHeldLive));
 }
 
 // =================================================================
@@ -1876,7 +1892,7 @@ void LoopEngine::startRecording(MidiTransport& transport) {
   _recordBpm = _clock ? _clock->getSmoothedBPM() : 120;
   if (_recordBpm == 0) _recordBpm = 120;
   _recordFirstPressDone = false;
-  memset(_padHeldInRec, 0, sizeof(_padHeldInRec));
+  memset(_padHeldLive, 0, sizeof(_padHeldLive));
   for (uint16_t i = 0; i < MAX_LOOP_EVENTS; i++) _events[i].active = false;
   _state = LoopState::RECORDING;
 }
@@ -1947,6 +1963,15 @@ void LoopEngine::capturePadEvent(uint8_t padIndex, uint8_t velocity, MidiTranspo
     refCountNoteOff(transport, midiNote);
   }
 
+  // Audit-fix B-N1 / B-N2 / R-N1 : tracker live press (TOUS états).
+  // Set true à chaque rising edge, false à chaque falling edge. Consommé par :
+  //   - stopRecording flushHeldPadsAsNoteOffs (fin de loop).
+  //   - mergeOverdub flush held (inject noteOff à _playPositionUs).
+  //   - onBackgroundTransition (refCountNoteOff direct au bank switch out).
+  // Invariant : _padHeldLive[pad] == true ssi pad physiquement enfoncé ET live
+  // monitor a émis noteOn (refCountNoteOn ci-dessus). Set/reset symétrique.
+  _padHeldLive[padIndex] = isNoteOn ? 1 : 0;
+
   // Capture buffer écriture conditionnelle (RECORDING ou OVERDUBBING seuls).
   if (_state == LoopState::RECORDING) {
     uint32_t nowUs = micros();
@@ -1972,8 +1997,7 @@ void LoopEngine::capturePadEvent(uint8_t padIndex, uint8_t velocity, MidiTranspo
       viewer::emitLoopBufferFull(_channel, "main");
     }
 
-    // Track held pads for flush on stopRecording
-    _padHeldInRec[padIndex] = isNoteOn;
+    // Audit-fix : _padHeldLive[padIndex] déjà set en haut de capturePadEvent (tracker unifié).
     return;
   }
 
@@ -2021,11 +2045,11 @@ Expected: PASS.
 // M2 fix : utilise insertEventSorted pour maintenir buffer trié (live-sort).
 void LoopEngine::flushHeldPadsAsNoteOffs(uint32_t timestampUs) {
   for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
-    if (!_padHeldInRec[pad]) continue;
+    if (!_padHeldLive[pad]) continue;
     // insertion triée (M2). insertEventSorted retourne false si buffer plein → silent drop.
     insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
                        timestampUs, pad, resolvePadToMidiNote(pad), /*velocity=*/0);
-    _padHeldInRec[pad] = false;
+    _padHeldLive[pad] = false;
   }
 }
 
@@ -2158,12 +2182,20 @@ Insérer **avant** le `flushPendingNoteOffs(transport)` final dans `stopRecordin
 
 - [ ] **Step 4: Retirer la trace `[LOOP REC CLOSED]` (m10 fix : trace explicitement éphémère, pas committée)**
 
+Manuellement Edit le fichier pour supprimer le bloc `#if DEBUG_SERIAL ... Serial.printf("[LOOP REC CLOSED]...) ... #endif` ajouté en Step 1. Le commit Phase 2.E ne doit PAS inclure cette trace temporaire.
+
+**HARD-ASSERT bloquant avant Step 5** (Audit-renforcement vigilance Claude) :
+
 ```bash
-# Vérif que la trace est bien dans stopRecording
-grep -n "LOOP REC CLOSED" /Users/loic/Code/PROJECTS/ILLPAD_V2/src/loop/LoopEngine.cpp
+TRACE_COUNT=$(grep -c "LOOP REC CLOSED" /Users/loic/Code/PROJECTS/ILLPAD_V2/src/loop/LoopEngine.cpp)
+if [ "$TRACE_COUNT" -ne 0 ]; then
+  echo "FAIL: trace temporaire encore présente ($TRACE_COUNT occurrences). STOP — ne pas commit."
+  exit 1
+fi
+echo "PASS: trace temporaire retirée, OK pour commit."
 ```
 
-Manuellement Edit le fichier pour supprimer le bloc `#if DEBUG_SERIAL ... Serial.printf("[LOOP REC CLOSED]...) ... #endif` ajouté en Step 1. Le commit Phase 2.E ne doit PAS inclure cette trace temporaire.
+Si exit 1 : **STOP immédiat**. Signaler à Loïc que la trace n'a pas été retirée. Ne pas continuer vers Step 5 (commit). Re-éditer LoopEngine.cpp pour retirer le bloc, ré-exécuter l'assert.
 
 - [ ] **Step 2: Commit gate Phase 2.E**
 
@@ -2176,7 +2208,7 @@ feat(loop): recording + bar-snap deadzone 25% (Phase 2.E)
 - capturePadEvent : append events to main buffer (REC) with µs timestamps,
   latches recordBpm + recordStartUs on first noteOn press (invariant §23.5).
   Live monitor : noteOn/noteOff also fired immediately so musician hears
-  their press while recording. Tracks _padHeldInRec for stopRecording flush.
+  their press while recording. Tracks _padHeldLive for stopRecording flush.
 - stopRecording : compute raw duration, bar-snap with 25% deadzone (snap
   down if remainder ≤ 0.25×barDur, else round up), clamp 1..64 bars,
   rescale event timestamps proportionally to fill snapped duration,
@@ -2238,7 +2270,23 @@ void LoopEngine::stopPlayback(MidiTransport& transport, bool flushNotes) {
 
 > **Note `computeLoopPositionUs` supprimée** : la position est désormais maintenue par accumulation dans `update()` (cf Task 21 refactor), plus besoin de la calculer "à la demande" depuis `_playStartUs`. La méthode existait dans le squelette Task 1 mais devient morte — supprimer le prototype dans `LoopEngine.h` Helpers privés. Si certains callers (par ex. `capturePadEvent` OVERDUBBING) ont besoin de la position actuelle, ils lisent `_playPositionUs` directement (mis à jour par `update()` du frame précédent — précision ~1 ms acceptable pour overdub capture).
 
-- [ ] **Step 2: Supprimer le prototype `uint32_t computeLoopPositionUs(uint32_t nowUs) const;` de `LoopEngine.h`** (le membre privé `_playPositionUs` reste).
+- [ ] **Step 2: Vérifier que le prototype `computeLoopPositionUs` est ABSENT de `LoopEngine.h`** (cas attendu post-Task 1 step 3 — la méthode a été supprimée du squelette dès Task 1, ce step est donc un no-op de sanity).
+
+**HARD-ASSERT bloquant** (Audit-renforcement vigilance Claude — l'instruction originale "supprimer le prototype" était trompeuse car le prototype n'est jamais déclaré dans Task 1 step 3) :
+
+```bash
+PROTO_COUNT=$(grep -c "computeLoopPositionUs" /Users/loic/Code/PROJECTS/ILLPAD_V2/src/loop/LoopEngine.h)
+if [ "$PROTO_COUNT" -ne 0 ]; then
+  echo "FAIL: prototype 'computeLoopPositionUs' inattendu présent dans LoopEngine.h ($PROTO_COUNT occurrences)."
+  echo "Task 1 step 3 n'a pas été suivi correctement — header diverge du plan. STOP."
+  exit 1
+fi
+echo "PASS: prototype absent comme attendu (no-op de cette step)."
+```
+
+Si exit 1 : **STOP immédiat**. Header diverge du plan Task 1 step 3 — signaler à Loïc, ne pas tenter de "fixer" en aveugle.
+
+Si PASS : passer à Step 3 (le membre privé `_playPositionUs` reste, déjà déclaré Task 1 step 3).
 
 > **Audit-fix I2 — step 3 retirée** : Task 17 step 4 livre déjà la forme finale de `capturePadEvent` OVERDUBBING (avec `uint32_t posInLoop = _playPositionUs;` direct, sans appel à `computeLoopPositionUs`). Aucune mise à jour à faire ici, le step 3 antérieur était un no-op redondant qui risquait de semer la confusion à l'implémenteur.
 
@@ -2519,6 +2567,33 @@ bool LoopEngine::mergeOverdub() {
     insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
                        e.timestampUs, e.padIndex, e.midiNote, e.velocity);
     // insertEventSorted ne devrait jamais retourner false ici (pré-check Step 1 garantit la capacité).
+  }
+
+  // (2.5) Audit-fix B-N2 : flush held pads (spec §8 "les pads tenus sont flushés
+  //       comme à la clôture d'un RECORDING initial").
+  // Pour chaque pad encore physiquement enfoncé pendant le merge, inject noteOff
+  // dans _events[] à _playPositionUs courant (= position au moment du tap REC).
+  // Sans ça, le noteOn de l'overdub mergé n'a pas de noteOff matching → refcount
+  // accumule cycle après cycle → stuck note au DAW (cf audit Bloquant B-N2).
+  //
+  // Position choisie : _playPositionUs (= "position courante" au moment du merge).
+  // Sémantique : la note jouée dure du press jusqu'au merge, ce qui correspond
+  // à la durée pendant laquelle le user a physiquement tenu le pad en OD.
+  //
+  // IMPORTANT : ne PAS reset _padHeldLive[pad] ici. Le pad est encore physiquement
+  // enfoncé — le tracker doit refléter l'état réel. Reset au falling edge naturel
+  // dans capturePadEvent (rising → set, falling → reset), ou via onBackgroundTransition
+  // si bank switch out avant release.
+  for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
+    if (!_padHeldLive[pad]) continue;
+    bool flushOk = insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
+                                      _playPositionUs, pad,
+                                      resolvePadToMidiNote(pad), /*velocity=*/0);
+    if (!flushOk) {
+      // Buffer full au flush (pré-check (1) passait sans compter ces N noteOffs).
+      // Best-effort + telemetry. Live press refcount sera silencé au release naturel.
+      viewer::emitLoopBufferFull(_channel, "merge_flush");
+    }
   }
 
   // (3) Reset overdub buffer
@@ -3247,11 +3322,128 @@ Modified (même guard appliqué au fast-forward) :
 ```
 Expected: PASS.
 
+### Task 34.5 — Audit-fix B-N1 / R-N1 : `onBackgroundTransition` + main.cpp call
+
+**Files:**
+- Modify: `src/loop/LoopEngine.cpp` (implémentation `onBackgroundTransition`)
+- Modify: `src/main.cpp` (`handleManagerUpdates` — snapshot prevBank + appel post-bank-switch)
+
+> **Rationale** : audit final adversarial 2026-05-18 a identifié 2 bugs invariant-violating laissés par M9 guard :
+> - **B-N1** : bank switch depuis LOOP non-locked + live press → `refCountNoteOn` (live monitor) sur l'ancien engine jamais décrémenté → MIDI noteOff jamais envoyé sur l'ancien channel → stuck note au DAW. Spec §23.1 invariant 1 violé.
+> - **R-N1** : `_clearPressStartMs` stale quand la bank LOOP passe en BG → retour FG avec CLEAR encore tenu = `isClearHoldFired` retourne true au 1er frame (parce que `now - _clearPressStartMs >> 500ms`) → `longPressClear` fire instantanément, buffer wipé sans le seuil 500 ms. Spec §9 garde-fou court-circuité.
+>
+> Fix unifié : méthode `LoopEngine::onBackgroundTransition(transport)` qui flushe le live press refcount (via tracker `_padHeldLive[]`) ET reset CLEAR tracker (via `notifyClearPressEnd()`). Appelée depuis main.cpp dès qu'un bank switch détecté, sur l'**ancienne** bank si LOOP.
+>
+> Coût : ~25 lignes total (méthode + call site). 48 bytes RAM (tracker `_padHeldLive[NUM_KEYS]` qui remplace `_padHeldInRec[]`, voir Task 1 step 3 patch). CPU O(48+128) au moment du switch (événement rare, ~1/10s en jeu live).
+
+- [ ] **Step 1: Implémenter `LoopEngine::onBackgroundTransition` dans `src/loop/LoopEngine.cpp`**
+
+Ajouter à la fin de LoopEngine.cpp (ou à côté de `flushPendingNoteOffs`) :
+
+```cpp
+// =================================================================
+// onBackgroundTransition — appelé au bank switch quand cette bank passe FG → BG
+// =================================================================
+// Audit-fix B-N1 / R-N1 (audit adversarial 2026-05-18) :
+//   B-N1 : pads physiquement tenus (live press refCount > 0) ne reçoivent
+//          jamais de noteOff naturel parce que processLoopMode n'est plus appelé
+//          pour cette bank en BG. Stuck note au DAW. Solution : refCountNoteOff
+//          direct pour chaque pad du tracker _padHeldLive[].
+//   R-N1 : _clearPressStartMs stale (figé à la valeur du moment où la bank était
+//          FG). Au retour FG, isClearHoldFired retourne true instantanément si
+//          assez de temps a passé en BG → wipe sans seuil 500 ms. Solution :
+//          notifyClearPressEnd() reset le tracker (et _clearFired).
+// IMPORTANT : ne PAS changer `_state`. La bank LOOP en BG doit pouvoir continuer
+// à jouer son buffer normalement (spec §14 multi-bank LOOP).
+// =================================================================
+void LoopEngine::onBackgroundTransition(MidiTransport& transport) {
+  // Phase 1 (B-N1) : flush live press refCount pour chaque pad encore physiquement tenu.
+  // refCountNoteOff décrémente uniquement la contribution live press ; si le buffer
+  // playback avait aussi incrémenté la même note (refCount = 2), le noteOff MIDI
+  // ne fire pas ici (1→1, return early sur 0→0), mais le buffer fire naturellement
+  // son noteOff matching plus tard → MIDI noteOff cohérent au DAW.
+  for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
+    if (_padHeldLive[pad]) {
+      refCountNoteOff(transport, resolvePadToMidiNote(pad));
+      _padHeldLive[pad] = 0;
+    }
+  }
+  // Phase 2 (R-N1) : reset CLEAR press tracker. Au retour FG, notifyClearPressStart
+  // détectera la nouvelle frame avec _clearPressStartMs == 0 et armera le timer
+  // fresh (500ms à attendre depuis le retour, pas depuis le press d'origine).
+  notifyClearPressEnd();
+}
+```
+
+- [ ] **Step 2: Snapshot `prevBank` + appel `onBackgroundTransition` dans `main.cpp::handleManagerUpdates`**
+
+Locate `handleManagerUpdates` (autour de main.cpp:821-884) :
+
+```bash
+grep -n "static bool handleManagerUpdates\|bool bankSwitched = s_bankManager.update" /Users/loic/Code/PROJECTS/ILLPAD_V2/src/main.cpp
+```
+
+Modifier la séquence `update + bankSwitched` :
+
+Original :
+```cpp
+static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld) {
+  bool bankSwitched = s_bankManager.update(state.keyIsPressed, leftHeld);
+  s_scaleManager.update(state.keyIsPressed, leftHeld, s_bankManager.getCurrentSlot());
+
+  if (bankSwitched) {
+    s_nvsManager.queueBankWrite(s_bankManager.getCurrentBank());
+    reloadPerBankParams(s_bankManager.getCurrentSlot());
+  }
+  ...
+}
+```
+
+Modified (snapshot prevBank avant update + appel `onBackgroundTransition` post-switch) :
+```cpp
+static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld) {
+  // Audit-fix B-N1/R-N1 : snapshot la bank courante AVANT le switch pour pouvoir
+  // appeler onBackgroundTransition sur l'ancien LoopEngine si nécessaire.
+  uint8_t prevBank = s_bankManager.getCurrentBank();
+  bool bankSwitched = s_bankManager.update(state.keyIsPressed, leftHeld);
+  s_scaleManager.update(state.keyIsPressed, leftHeld, s_bankManager.getCurrentSlot());
+
+  if (bankSwitched) {
+    // Audit-fix B-N1/R-N1 : si l'ancienne bank était LOOP, flushe son live press
+    // refCount + reset CLEAR tracker. Évite stuck note au DAW (invariant §23.1)
+    // et wipe instantané au retour FG (spec §9).
+    if (s_banks[prevBank].type == BANK_LOOP && s_banks[prevBank].loopEngine) {
+      s_banks[prevBank].loopEngine->onBackgroundTransition(s_transport);
+    }
+    s_nvsManager.queueBankWrite(s_bankManager.getCurrentBank());
+    reloadPerBankParams(s_bankManager.getCurrentSlot());
+  }
+  ...
+}
+```
+
+- [ ] **Step 3: Build gate**
+
+```bash
+~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1 2>&1 | tail -30
+```
+Expected: PASS.
+
+- [ ] **Step 4: Auto-review**
+
+```bash
+grep -n "onBackgroundTransition" /Users/loic/Code/PROJECTS/ILLPAD_V2/src/loop/LoopEngine.cpp /Users/loic/Code/PROJECTS/ILLPAD_V2/src/loop/LoopEngine.h /Users/loic/Code/PROJECTS/ILLPAD_V2/src/main.cpp
+```
+Expected: 3 occurrences au minimum :
+- 1 dans `LoopEngine.h` (declaration).
+- 1 dans `LoopEngine.cpp` (implémentation).
+- 1 dans `main.cpp` (call site dans handleManagerUpdates).
+
 ### Task 35 — HW Gate G9 + commit Phase 2.J
 
 - [ ] **Step 1: Upload + monitor + DAW**
 
-**HW Gate G9 procedure** (post-M9 bank switch guard) :
+**HW Gate G9 procedure** (post-M9 bank switch guard + audit-fix B-N1/B-N2/R-N1) :
 1. Créer 4 banks LOOP (MAX_LOOP_BANKS=4 acté). Enregistrer une boucle simple sur 2 d'entre elles.
 2. Mettre les 2 banks en PLAYING.
 3. LEFT + hold pad simple tap → `toggleAllArpsAndLoops` → toutes les LOOP doivent stopper en même temps. ARPEG aussi si présent.
@@ -3260,15 +3452,18 @@ Expected: PASS.
 6. Test panic : tap rear button longuement (raccourci panic, si configuré) ou trigger panic via viewer. Tous les LoopEngines flushent leurs notes. Pas de stuck note.
 7. **Test M9 bank switch guard** : sur bank A LOOP, tap REC → RECORDING. Pendant RECORDING, LEFT + tap bank B pad → switch DOIT être refusé silencieusement. Tap REC à nouveau pour finir RECORDING → PLAYING. Re-test bank switch → maintenant autorisé.
 8. Test invariant 11 §23 : tenter REC sur bank A pendant que bank B est en RECORDING (impossible par construction puisque bank switch refusé pendant REC). Vérifier que le scenario "REC sur deux banks simultanément" n'est jamais atteignable.
+9. **Test Audit-fix B-N1 (bank switch + live press)** : sur LOOP A en PLAYING, **maintenir physiquement** un drum pad (live monitor → MIDI noteOn au DAW). LEFT + tap bank pad B → switch autorisé (A non-locked). **Relâcher** le drum pad. Vérifier au DAW que le **MIDI noteOff arrive sur le channel A** dans la même frame que le bank switch (pas après le release physique). Sans le fix : note bloquée indéfiniment.
+10. **Test Audit-fix B-N2 (overdub merge + pad tenu)** : sur LOOP avec un loop simple en PLAYING, tap REC → OVERDUBBING. Presser et **maintenir** un nouveau drum pad. **Sans relâcher**, tap REC pour merger → état PLAYING. Relâcher le pad. Vérifier au DAW que la note **s'arrête bien au release** (pas de drone bloqué). Au cycle suivant, le hat merged doit jouer normalement dans le motif. Sans le fix : note bloquée indéfiniment.
+11. **Test Audit-fix R-N1 (CLEAR stale au retour FG)** : sur LOOP A, presser CLEAR pad et **maintenir**. Avant 500 ms, LEFT + tap bank B → switch autorisé. **Garder CLEAR enfoncé** pendant 2+ secondes. LEFT + tap bank A pour revenir. Vérifier que le buffer **n'est PAS wipé instantanément** — soit attendre 500 ms post-retour pour qu'il wipe (rampe LED cyan visible), soit relâcher CLEAR sans wipe. Sans le fix : wipe instantané au 1er frame de retour sans seuil ni rampe.
 
-**Critère G9** : Toggle multi-bank fonctionnel ARPEG+LOOP. BG LOOP toggle via double-tap fonctionne. midiPanic clean toutes les LOOP banks. **M9 guard : bank switch silently refusé pendant LOOP REC/OD**. Pas de notes bloquées au panic.
+**Critère G9** : Toggle multi-bank fonctionnel ARPEG+LOOP. BG LOOP toggle via double-tap fonctionne. midiPanic clean toutes les LOOP banks. **M9 guard : bank switch silently refusé pendant LOOP REC/OD**. **Audit-fix B-N1/B-N2/R-N1 validés (steps 9/10/11)**. Pas de notes bloquées au panic ni dans les 3 scenarios audit.
 
 - [ ] **Step 2: Commit gate Phase 2.J**
 
 ```bash
-git add src/managers/BankManager.cpp src/main.cpp
+git add src/managers/BankManager.cpp src/main.cpp src/loop/LoopEngine.cpp src/loop/LoopEngine.h
 git commit -m "$(cat <<'EOF'
-feat(loop): BankManager double-tap LOOP + toggleAllArpsAndLoops + midiPanic ext (Phase 2.J)
+feat(loop): BankManager LOOP + toggleAllArpsAndLoops + midiPanic + audit-fix B-N1/B-N2/R-N1 (Phase 2.J)
 
 - BankManager double-tap LOOP : remplace le silent-consume Phase 1 par
   loopEngine->tapPlayStop() (FG ou BG). Spec §19.
@@ -3283,10 +3478,22 @@ feat(loop): BankManager double-tap LOOP + toggleAllArpsAndLoops + midiPanic ext 
 - M9 + spec §23.2 : BankManager guard bank switch silent deny pendant LOOP REC/OD
    - pending-timeout path : check current.loopEngine->isLocked()
    - LEFT-release fast-forward path : même check (M9 audit fix les 2 paths explicit)
-- HW gate G9 OK : multi-bank toggle ARPEG+LOOP, BG LOOP double-tap toggle,
-  panic clean toutes LOOP banks, bank switch refused pendant LOOP REC/OD
+- Audit adversarial 2026-05-18 — fix B-N1/B-N2/R-N1 :
+   - LoopEngine::onBackgroundTransition() : flush live press refcount via tracker
+     _padHeldLive[] + reset CLEAR press tracker. NE CHANGE PAS _state (LOOP en BG
+     continue son playback per spec §14).
+   - main.cpp handleManagerUpdates : snapshot prevBank, appel post-bank-switch
+     sur l'ancienne bank si type LOOP.
+   - Tracker _padHeldLive[NUM_KEYS] (remplace _padHeldInRec[]) set en top de
+     capturePadEvent dans TOUS les états (live press tracking unifié).
+   - mergeOverdub : flush held pads (inject noteOff à _playPositionUs) — fix B-N2
+     spec §8 "pads tenus flushés comme à la clôture d'un RECORDING initial".
+- HW gate G9 OK : multi-bank toggle ARPEG+LOOP, BG LOOP double-tap, panic clean,
+  bank switch refused pendant LOOP REC/OD, audit-fix B-N1/B-N2/R-N1 validés
+  (steps 9/10/11 procédure G9).
 
-Spec §14, §19, §23.1 §23.2 + loop-buffer-invariants §6 + invariant 11
+Spec §8, §9, §14, §19, §23.1 §23.2 + loop-buffer-invariants §6 + invariant 11
+Audit : audit final adversarial 2026-05-18 (B-N1, B-N2, R-N1).
 EOF
 )"
 ```
@@ -3341,7 +3548,45 @@ Ajouter section "LOOP Phase 2 — historique commits" alignée avec Phase 1, ARP
 - Tableau d'étapes : Phase 2 LOOP statut `✅ **CLOSE** (commits Phase 2.A → 2.J)` au lieu de `⏳ À rédiger`.
 - Sources actives : confirmer references à jour.
 
-- [ ] **Step 7: Commit gate Task 36 doc-sync**
+- [ ] **Step 7: HARD-ASSERT doc-sync** (Audit-renforcement vigilance Claude — Task 36 est la zone de survol la plus à risque du plan)
+
+Avant le commit gate, exécuter le hard-assert qui vérifie que chaque fichier contient au moins un keyword attendu. Si une seule assertion échoue, **STOP** — la doc-sync est incomplète.
+
+```bash
+FAIL_COUNT=0
+
+check() {
+  local file="$1"
+  local pattern="$2"
+  local count=$(grep -E -c "$pattern" "/Users/loic/Code/PROJECTS/ILLPAD_V2/$file" 2>/dev/null || echo 0)
+  if [ "$count" -eq 0 ]; then
+    echo "FAIL: $file missing expected pattern: $pattern"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+  else
+    echo "PASS: $file has '$pattern' ($count match(es))."
+  fi
+}
+
+check "docs/reference/runtime-flows.md"                    "LOOP runtime flow|LoopEngine::update"
+check "docs/reference/nvs-reference.md"                    "getLoadedLoopPadStore|applyDevSeedLoopPadsIfSafe"
+check "docs/reference/architecture-briefing.md"            "BANK_LOOP|LoopEngine"
+check "STATUS.md"                                          "LOOP Phase 2"
+check "docs/superpowers/specs/2026-04-19-loop-mode-design.md"  "MAX_LOOP_BANKS = 4|MAX_LOOP_BANKS=4"
+check "docs/superpowers/LOOP_PROGRESS.md"                  "CLOSE"
+
+if [ "$FAIL_COUNT" -gt 0 ]; then
+  echo ""
+  echo "FAIL: $FAIL_COUNT doc files incomplete. STOP — ne pas commit doc-sync."
+  echo "Re-éditer les fichiers manquants (steps 1-6), puis relancer ce hard-assert."
+  exit 1
+fi
+echo ""
+echo "PASS: tous les 6 fichiers doc-sync contiennent les keywords attendus. OK pour commit."
+```
+
+Si exit 1 : **STOP immédiat**. Signaler à Loïc quels fichiers manquent. Ne PAS faire le `git add` ni le commit. Re-éditer les fichiers concernés (steps 1-6 du plan ci-dessus) puis relancer ce hard-assert.
+
+- [ ] **Step 8: Commit gate Task 36 doc-sync** (uniquement si Step 7 PASS)
 
 ```bash
 git add docs/reference/runtime-flows.md docs/reference/nvs-reference.md docs/reference/architecture-briefing.md STATUS.md docs/superpowers/specs/2026-04-19-loop-mode-design.md docs/superpowers/LOOP_PROGRESS.md
@@ -3453,6 +3698,16 @@ Chaque ligne doit être précédée d'un check `if (slot.loopEngine)` ou équiva
 - [ ] Velocity randomisée 1× au playback (M3 audit fix) — pas de double randomization au capture
 - [ ] mergeOverdub atomique (M4 audit fix) — drop atomique si capacité dépassée, pas de paires noteOn/Off cassées
 - [ ] LoopEvent sizeof == 8 B (m1 audit fix) — static_assert au .h
+- [ ] **Audit-fix B-N1** : Aucune note bloquée après bank switch depuis LOOP non-locked avec live press tenue. Test HW : sur LOOP A en PLAYING, maintenir un drum pad → LEFT + tap bank B → release pad → vérifier que MIDI noteOff arrive sur channel A au DAW. Validé par HW Gate G9 step 9 (Task 35).
+- [ ] **Audit-fix B-N2** : Aucune note bloquée après overdub merge avec pad tenu. Test HW : pendant OVERDUBBING, presser et maintenir un drum pad → tap REC pour merger (sans relâcher) → release physique du pad → vérifier que la note s'arrête bien au DAW. Validé par HW Gate G9 step 10 (Task 35).
+- [ ] **Audit-fix R-N1** : Pas de wipe instantané au retour FG si CLEAR a été tenu durant tout le bank switch. Test HW : press CLEAR sur LOOP A, switch bank B sans relâcher CLEAR, attendre 2 s, retour bank A → soit wipe seulement après 500 ms post-retour, soit relâcher CLEAR sans wipe. Validé par HW Gate G9 step 11 (Task 35).
+- [ ] **Audit-fix tracker `_padHeldLive`** : invariant set ssi pad physiquement enfoncé ET live monitor MIDI noteOn fired. Auto-review code (post-Task 17 step 4) :
+  ```bash
+  # Le set _padHeldLive doit être en TOP de capturePadEvent (avant le if RECORDING),
+  # pas seulement dans la branche RECORDING.
+  grep -B5 -A2 "_padHeldLive\[padIndex\]" /Users/loic/Code/PROJECTS/ILLPAD_V2/src/loop/LoopEngine.cpp
+  ```
+  La/les occurrence(s) doivent montrer le set juste après le live monitor `refCountNoteOn/Off`, AVANT le test `if (_state == LoopState::RECORDING)`.
 
 ---
 
