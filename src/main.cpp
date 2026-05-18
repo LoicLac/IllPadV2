@@ -383,6 +383,18 @@ void setup() {
   }
 
   // =================================================================
+  // NVS — load all persisted data BEFORE setup gate
+  // setupManager.run() never returns, so loading after the gate would leave
+  // setup tools reading uninitialized state (Tool 7 PotMapping bug fix 2026-05-17).
+  // =================================================================
+  uint8_t currentBank = DEFAULT_BANK;
+  // bankPads[], rootPads[], modePads[], chromaticPad, holdPad initialized above (~L344-362).
+  // s_settings is a file-scope global (external linkage — ViewerSerial reads it).
+  s_nvsManager.loadAll(s_banks, currentBank, s_padOrder, bankPads,
+                        rootPads, modePads, chromaticPad, holdPad,
+                        octavePads, s_potRouter, s_settings);
+
+  // =================================================================
   // Setup Mode Detection (hold rear button 3s at boot)
   // Must happen BEFORE sensing task starts (needs direct keyboard access)
   // =================================================================
@@ -466,16 +478,7 @@ void setup() {
   Serial.println("[BOOT] MIDI Engine OK.");
   #endif
 
-  // NVS — load all persisted data (overwrites defaults where saved)
-  uint8_t currentBank = DEFAULT_BANK;
-  // bankPads[], rootPads[], modePads[], chromaticPad, holdPad initialized above (before setup check)
-
-  // s_settings is a file-scope global (external linkage — ViewerSerial reads it).
-  s_nvsManager.loadAll(s_banks, currentBank, s_padOrder, bankPads,
-                        rootPads, modePads, chromaticPad, holdPad,
-                        octavePads, s_potRouter, s_settings);
-
-  // Apply loaded bank
+  // Apply loaded bank (currentBank populated by loadAll() above the setup gate)
   s_banks[currentBank].isForeground = true;
   s_leds.showBootProgress(5);  // Step 5: NVS loaded
   s_leds.update();
