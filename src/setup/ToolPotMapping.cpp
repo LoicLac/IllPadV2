@@ -689,6 +689,14 @@ void ToolPotMapping::run() {
         _pots.disable(0);
         screenDirty = true;
       }
+      // The `continue` below skips the loop-bottom render block. _ccEditing
+      // persists across iterations (unlike _confirmDefaults / _confirmSteal
+      // which are one-shot transitions), so arrow/pot edits would never
+      // appear on screen without an explicit render here.
+      if (screenDirty) {
+        screenDirty = false;
+        drawScreen();
+      }
       delay(5);
       continue;
     }
