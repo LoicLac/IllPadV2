@@ -1105,7 +1105,8 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
                                         "1/4","1/4T","1/8","1/8T",
                                         "1/16","1/16T","1/32","1/64"};
     static const char* s_patNames[] = {
-      "Up","Down","UpDown","Order","PedalUp","Converge"
+      "Up","Down","UpDown","Order","PedalUp","Converge",
+      "Random","Diverge","OctRotate","OctSkip","OctAltern","OctEcho"
     };
 
     // Foreground bank type — passed directly to PotRouter slot lookups.

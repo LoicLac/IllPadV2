@@ -649,6 +649,121 @@ void ArpEngine::rebuildSequence() {
       break;
     }
 
+    // ---------------------------------------------------------------
+    // ARP_DIVERGE — inverse Converge : mid -> bords symetriques
+    // Pile asc [n0,n1,n2,n3,n4] -> n2, n3, n1, n4, n0
+    // ---------------------------------------------------------------
+    case ARP_DIVERGE:
+    {
+      if (sourceCount == 0) break;
+      uint8_t temp[MAX_ARP_SEQUENCE];
+      uint16_t tempLen = 0;
+      for (uint8_t oct = 0; oct < octaves; oct++) {
+        for (uint8_t i = 0; i < sourceCount; i++) {
+          uint8_t encoded = source[i] + oct * 48;
+          if (encoded > 191) continue;
+          if (tempLen >= MAX_ARP_SEQUENCE) break;
+          temp[tempLen++] = encoded;
+        }
+        if (tempLen >= MAX_ARP_SEQUENCE) break;
+      }
+      if (tempLen == 0) break;
+      int16_t mid = (int16_t)tempLen / 2;
+      _sequence[_sequenceLen++] = temp[mid];
+      int16_t up = mid + 1;
+      int16_t down = mid - 1;
+      while ((up < (int16_t)tempLen || down >= 0) && _sequenceLen < MAX_ARP_SEQUENCE) {
+        if (up < (int16_t)tempLen) {
+          _sequence[_sequenceLen++] = temp[up++];
+          if (_sequenceLen >= MAX_ARP_SEQUENCE) break;
+        }
+        if (down >= 0) {
+          _sequence[_sequenceLen++] = temp[down--];
+        }
+      }
+      break;
+    }
+
+    // ---------------------------------------------------------------
+    // ARP_OCT_ROTATE — chord inversions : rotation +1 par octave
+    // Pile [A,B,C] oct=3 -> A,B,C, B+12,C+12,A+12, C+24,A+24,B+24
+    // ---------------------------------------------------------------
+    case ARP_OCT_ROTATE:
+    {
+      if (sourceCount == 0) break;
+      for (uint8_t oct = 0; oct < octaves; oct++) {
+        uint8_t shift = oct % sourceCount;
+        for (uint8_t i = 0; i < sourceCount; i++) {
+          uint8_t rotated = (i + shift) % sourceCount;
+          uint8_t encoded = source[rotated] + oct * 48;
+          if (encoded > 191) continue;
+          _sequence[_sequenceLen++] = encoded;
+          if (_sequenceLen >= MAX_ARP_SEQUENCE) goto done;
+        }
+      }
+      break;
+    }
+
+    // ---------------------------------------------------------------
+    // ARP_OCT_SKIP — chaque note pile a une octave differente
+    // Pile [A,B,C] oct=3 -> A, B+12, C+24 (sequence courte = sourceCount steps)
+    // ---------------------------------------------------------------
+    case ARP_OCT_SKIP:
+    {
+      if (sourceCount == 0 || octaves == 0) break;
+      for (uint8_t i = 0; i < sourceCount; i++) {
+        uint8_t oct = i % octaves;
+        uint8_t encoded = source[i] + oct * 48;
+        if (encoded > 191) continue;
+        _sequence[_sequenceLen++] = encoded;
+        if (_sequenceLen >= MAX_ARP_SEQUENCE) goto done;
+      }
+      break;
+    }
+
+    // ---------------------------------------------------------------
+    // ARP_OCT_ALTERN — Up/Down alterne par octave (zigzag etale)
+    // Pile [A,B,C] oct=3 -> A,B,C / C+12,B+12,A+12 / A+24,B+24,C+24
+    // ---------------------------------------------------------------
+    case ARP_OCT_ALTERN:
+    {
+      if (sourceCount == 0) break;
+      for (uint8_t oct = 0; oct < octaves; oct++) {
+        for (uint8_t i = 0; i < sourceCount; i++) {
+          uint8_t idx = (oct & 1) ? (sourceCount - 1 - i) : i;
+          uint8_t encoded = source[idx] + oct * 48;
+          if (encoded > 191) continue;
+          _sequence[_sequenceLen++] = encoded;
+          if (_sequenceLen >= MAX_ARP_SEQUENCE) goto done;
+        }
+      }
+      break;
+    }
+
+    // ---------------------------------------------------------------
+    // ARP_OCT_ECHO — chaque note doublee a l'octave suivante (oct >= 2)
+    // Pile [A,B,C] oct=2 -> A, A+12, B, B+12, C, C+12
+    // octaveRange > 2 ignore : l'echo ne couvre qu'un saut d'octave.
+    // ---------------------------------------------------------------
+    case ARP_OCT_ECHO:
+    {
+      if (sourceCount == 0) break;
+      uint8_t maxOct = (octaves >= 2) ? 2 : 1;
+      for (uint8_t i = 0; i < sourceCount; i++) {
+        for (uint8_t oct = 0; oct < maxOct; oct++) {
+          uint8_t encoded = source[i] + oct * 48;
+          if (encoded > 191) continue;
+          _sequence[_sequenceLen++] = encoded;
+          if (_sequenceLen >= MAX_ARP_SEQUENCE) goto done;
+        }
+      }
+      break;
+    }
+
+    // ARP_RANDOM : bypass _sequence[], handled directly in executeStep().
+    // No case here — falls through to default (= ARP_UP fallback sequence,
+    // never actually consumed since executeStep branches on _pattern first).
+
   } // end switch
 
   done:
@@ -738,6 +853,35 @@ void ArpEngine::executeStep(MidiTransport& transport, uint32_t stepDurationUs) {
   // ---------------------------------------------------------------
   // CLASSIC path (ARPEG bank) — existing logic
   // ---------------------------------------------------------------
+
+  // ARP_RANDOM : non-deterministe, bypass _sequence[]. Tire un index pile +
+  // une octave aleatoire a chaque step. Le shuffleStepCounter avance comme
+  // pour les autres patterns -> shuffle template applique normalement.
+  if (_pattern == ARP_RANDOM) {
+    if (_positionCount == 0 || !_padOrder) return;
+    uint8_t srcIdx = (uint8_t)random(0, _positionCount);
+    uint8_t pos = _positions[srcIdx];
+    uint8_t octOffset = (_octaveRange > 1) ? (uint8_t)random(0, _octaveRange) : 0;
+
+    uint8_t padIndex = 0xFF;
+    for (uint8_t i = 0; i < NUM_KEYS; i++) {
+      if (_padOrder[i] == pos) { padIndex = i; break; }
+    }
+    if (padIndex == 0xFF) return;
+
+    uint8_t midiNote = ScaleResolver::resolve(padIndex, _padOrder, _scale);
+    if (midiNote == 0xFF) return;
+
+    uint8_t finalNote = midiNote + octOffset * 12;
+    while (finalNote > 127) finalNote -= 12;
+    if (finalNote > 127) return;
+
+    executeStepNote(transport, stepDurationUs, finalNote);
+    _tickFlash = true;
+    _shuffleStepCounter++;
+    return;
+  }
+
   if (_sequenceDirty) rebuildSequence();
   if (_sequenceLen == 0) return;
 

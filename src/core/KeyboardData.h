@@ -129,7 +129,7 @@ struct ArpPotStore {
   uint16_t gateRaw;           // gate × 4095 (range 0-32760, i.e. 0.0-8.0; floor 0.005 on load)
   uint16_t shuffleDepthRaw;   // 0-4095 (maps to 0.0-1.0)
   uint8_t  division;          // ArpDivision enum (0..NUM_ARP_DIVISIONS-1)
-  uint8_t  pattern;           // ArpPattern (0-5) OR _genPosition (0-14) — see comment above
+  uint8_t  pattern;           // ArpPattern (0..NUM_ARP_PATTERNS-1) OR _genPosition (0..NUM_GEN_POSITIONS-1) — see comment above
   uint8_t  octaveRange;       // 1-4 (semantically = mutationLevel for ARPEG_GEN)
   uint8_t  shuffleTemplate;   // 0..NUM_SHUFFLE_TEMPLATES-1 (index into groove templates)
 };
@@ -446,13 +446,21 @@ inline void validateControlPadStore(ControlPadStore& s) {
 // =================================================================
 
 enum ArpPattern : uint8_t {
-  ARP_UP             = 0,   // (kept) low -> high
-  ARP_DOWN           = 1,   // (kept) high -> low
-  ARP_UP_DOWN        = 2,   // (kept) UP puis indices descendants
-  ARP_ORDER          = 3,   // (was 4) chronologique
-  ARP_PEDAL_UP       = 4,   // (was 8) basse pedale + arpege
-  ARP_CONVERGE       = 5,   // (was 6) zigzag low/high vers centre
-  NUM_ARP_PATTERNS   = 6
+  // Classics (deterministe, walk via rebuildSequence)
+  ARP_UP             = 0,   // low -> high
+  ARP_DOWN           = 1,   // high -> low
+  ARP_UP_DOWN        = 2,   // UP puis indices descendants
+  ARP_ORDER          = 3,   // chronologique (ordre tape)
+  ARP_PEDAL_UP       = 4,   // basse pedale + arpege ascendant
+  ARP_CONVERGE       = 5,   // bords -> centre
+  // Extensions (V2 — pattern set expansion)
+  ARP_RANDOM         = 6,   // index pile + octave random a chaque step (non-deterministe, bypass _sequence)
+  ARP_DIVERGE        = 7,   // centre -> bords (inverse Converge)
+  ARP_OCT_ROTATE     = 8,   // chord inversions : rotation +1 de l'ordre pile par octave
+  ARP_OCT_SKIP       = 9,   // chaque note de la pile a une octave differente
+  ARP_OCT_ALTERN     = 10,  // Up/Down alternes par octave
+  ARP_OCT_ECHO       = 11,  // chaque note doublee a l'octave suivante (2 octaves max)
+  NUM_ARP_PATTERNS   = 12
 };
 
 // Interleaved binary + triplet, ordered by descending ticks (slow → fast).
@@ -695,10 +703,11 @@ inline void validateSettingsStore(SettingsStore& s) {
 
 inline void validateArpPotStore(ArpPotStore& s) {
   // pattern range etendu pour couvrir les 2 semantiques :
-  //   - ARPEG classique : 0..NUM_ARP_PATTERNS-1 (= 0..5 apres Task 4)
-  //   - ARPEG_GEN     : 0..7 (8 positions de grille — V4 Task 22 retune)
-  // Le validate clampe au max des deux pour ne pas casser un pattern stocke pour une bank ARPEG_GEN.
-  if (s.pattern > 7) s.pattern = 0;
+  //   - ARPEG classique : 0..NUM_ARP_PATTERNS-1 (= 0..11 apres pattern set expansion)
+  //   - ARPEG_GEN       : 0..7 (8 positions de grille)
+  // Le validate clampe au max des deux : NUM_ARP_PATTERNS - 1 = 11.
+  // ARPEG_GEN clamp implicite a 7 cote setGenPosition (boot path).
+  if (s.pattern >= NUM_ARP_PATTERNS) s.pattern = 0;
   if (s.division >= NUM_ARP_DIVISIONS) s.division = DIV_1_8;
   if (s.octaveRange < 1 || s.octaveRange > 4) s.octaveRange = 1;
   if (s.shuffleTemplate >= NUM_SHUFFLE_TEMPLATES) s.shuffleTemplate = 0;

@@ -166,17 +166,23 @@ Overflow handling :
 
 ## 6. Patterns (CLASSIC mode)
 
-6 patterns via hold-left + R2 pot (discrete 6 values, post ARPEG_GEN
-reduction 15→6) :
+12 patterns via hold-left + R2 pot (discrete 12 values). 6 classics + 6
+extensions (V2 expansion).
 
-| ID | Name | Position walk |
-|---|---|---|
-| 0 | Up | low → high, wrap |
-| 1 | Down | high → low, wrap |
-| 2 | UpDown | low → high → low, no endpoint repeat |
-| 3 | Order | as-entered into pile |
-| 4 | PedalUp | basse pédale + arpège ascendant |
-| 5 | Converge | zigzag low/high vers centre |
+| ID | Name | Position walk | Note |
+|---|---|---|---|
+| 0 | Up | low → high, wrap | classic |
+| 1 | Down | high → low, wrap | classic |
+| 2 | UpDown | low → high → low, no endpoint repeat | classic |
+| 3 | Order | as-entered into pile | classic |
+| 4 | PedalUp | basse pédale + arpège ascendant | classic |
+| 5 | Converge | bords → centre | classic |
+| 6 | Random | index pile + octave random à chaque step | **non-déterministe** |
+| 7 | Diverge | centre → bords (inverse Converge) | extension |
+| 8 | OctRotate | chord inversions : rotation +1 par octave | exploite octaveRange |
+| 9 | OctSkip | chaque note pile à une octave différente | exploite octaveRange |
+| 10 | OctAltern | Up/Down alterne par octave | exploite octaveRange |
+| 11 | OctEcho | chaque note doublée à l'octave suivante | exploite octaveRange (max 2) |
 
 Octave range : 1–4 littérales (pad oct dédiés). `rebuildSequence()`
 expands pile → sequence (up to 192 entries = 48 positions × 4 octaves)
@@ -185,9 +191,21 @@ lazily via `_sequenceDirty` flag (P2).
 Dirty flag set by : `addPadPosition`, `removePadPosition`, `setPattern`,
 `setOctaveRange`.
 
-Patterns dropped from V1 (Random, Cascade, Diverge, UpOctave, DownOctave,
-Chord, OctaveWave, OctaveBounce, Probability) : retired during ARPEG_GEN
-plumbing because their behavior is subsumed by GENERATIVE mode (see §13).
+**ARP_RANDOM exception** : non-déterministe, bypass `rebuildSequence()` /
+`_sequence[]`. Branche directe dans `executeStep()` qui pick un index +
+octave aléatoire à chaque tick. Le `_shuffleStepCounter` avance normalement
+→ shuffle template appliqué sur Random comme sur tout autre pattern.
+
+**Oct\* family** (`OctRotate`, `OctSkip`, `OctAltern`, `OctEcho`) :
+transforme `octaveRange` d'un paramètre "size" en un paramètre
+"modulation harmonique". À `oct=1` ces patterns sonnent comme Up.
+À `oct≥2` chacun crée une couleur distincte (voicing, montée, zigzag,
+écho octavique).
+
+Patterns dropped from V1 (Cascade, UpOctave, DownOctave, Chord,
+OctaveWave, OctaveBounce, Probability) : retired during ARPEG_GEN
+plumbing. Random and Diverge re-added in V2 expansion (musically
+distinct from GENERATIVE mode, useful for live transitions).
 
 ---
 

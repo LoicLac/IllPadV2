@@ -273,10 +273,11 @@ void ToolPotMapping::printTargetDescription(PotTarget t) {
       _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter. Lower fraction = faster." VT_RESET);
       break;
     case TARGET_PATTERN:
-      _ui->drawFrameLine(VT_BRIGHT_WHITE "Pattern" VT_RESET VT_DIM "  --  Arp playback shape (6 patterns)" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Up  Down  UpDown  Order  PedalUp  Converge" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "On ARPEG_GEN banks: this slot maps to GenPos (8 grid positions)" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "instead -- substitution is automatic per bank type." VT_RESET);
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Pattern" VT_RESET VT_DIM "  --  Arp playback shape (12 patterns)" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Up Down UpDown Order PedalUp Converge" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Random Diverge OctRotate OctSkip OctAltern OctEcho" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Oct* patterns use octaveRange as a musical modulator." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "ARPEG_GEN banks : this slot maps to GenPos (8 grid positions)." VT_RESET);
       break;
     case TARGET_BASE_VELOCITY:
       _ui->drawFrameLine(VT_BRIGHT_WHITE "Base Velocity" VT_RESET VT_DIM "  --  noteOn velocity" VT_RESET);
