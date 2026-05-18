@@ -280,7 +280,7 @@ applyBinding():
   if caught: convert ADC → parameter range, write output, show bargraph
   → Global targets: propagate storedValue across contexts
 handlePotPipeline(): read getters → write to BankSlot/ArpEngine/atomics
-  → consumeCC/consumePitchBend → MidiTransport sends
+  → consumeCC → MidiTransport sends
 ```
 
 Entry points :
@@ -324,7 +324,6 @@ All lock-free. No mutex anywhere in runtime code.
 | `_tickFlash` | `ArpEngine::tick()` | `LedController::update()` via `consumeTickFlash()` | LED beat flash |
 | `hasMoved(p)` | `PotFilter::updateAll()` deadband | `applyBinding()` per frame | Pot movement gate |
 | `_ccDirty[s]` | `applyBinding()` CC value change | `consumeCC()` in main loop | MIDI CC send |
-| `_midiPbDirty` | `applyBinding()` PB value change | `consumePitchBend()` in main loop | MIDI PB send |
 | `_dirty` (pot) | Any parameter write | `clearDirty()` after NVS debounce | NVS save trigger |
 | `_scaleChangeType` | `processScalePads()` | `consumeScaleChange()` (auto-clear) | Scale change flag |
 | `_octaveChanged` | Octave pad press | `hasOctaveChanged()` (auto-clear) | Octave change flag |

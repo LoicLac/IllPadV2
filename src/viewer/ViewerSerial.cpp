@@ -243,12 +243,10 @@ void formatTargetValueForBank(char* buf, size_t bufSize,
       else     snprintf(buf, bufSize, "ShufTpl:-");
       break;
 
-    // --- MIDI CC/PB (mapping-driven). V1 emits ':?' ; live value comes via
-    //     [POT] CCnn= / PB= events in the loop. ---
+    // --- MIDI CC (mapping-driven). V1 emits ':?' ; live value comes via
+    //     [POT] CCnn= events in the loop. ---
     case TARGET_MIDI_CC:
       snprintf(buf, bufSize, "CC%u:?", mappingCcNumber); break;
-    case TARGET_MIDI_PITCHBEND:
-      snprintf(buf, bufSize, "PB:?"); break;
 
     case TARGET_EMPTY:
     case TARGET_NONE:

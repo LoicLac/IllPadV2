@@ -97,10 +97,9 @@ public:
   uint8_t     getLedBrightness() const;
   uint8_t     getPadSensitivity() const;
 
-  // Getters — MIDI CC/PB output (Phase 2)
+  // Getters — MIDI CC output (Phase 2)
   // Returns true if there's a pending CC to send, fills slot/cc/value
   bool    consumeCC(uint8_t& ccNumber, uint8_t& ccValue);
-  bool    consumePitchBend(uint16_t& pbValue);
 
   // LED bargraph — caller reads and shows on LEDs
   bool    hasBargraphUpdate();
@@ -178,8 +177,6 @@ private:
   bool     _ccDirty[MAX_CC_SLOTS];
   uint8_t  _ccBindingIdx[MAX_CC_SLOTS]; // Which binding index maps to this CC slot
   uint8_t  _ccSlotCount;
-  uint16_t _midiPitchBend;
-  bool     _midiPbDirty;
 
   // Bargraph
   bool    _bargraphDirty;
