@@ -243,14 +243,14 @@ void dumpColorSlots() {
 
 // External linkage : called by viewer::pollCommands() on ?ALL command.
 void dumpPotMapping() {
-  // Order MUST match enum PotTarget in KeyboardData.h (0..18)
+  // Order MUST match enum PotTarget in KeyboardData.h (0..17)
   static const char* const TARGET_NAMES[] = {
     "RESPONSE_SHAPE", "SLEW_RATE", "AT_DEADZONE",
     "PITCH_BEND", "GATE_LENGTH", "SHUFFLE_DEPTH",
     "DIVISION", "PATTERN", "SHUFFLE_TEMPLATE",
     "BASE_VELOCITY", "VELOCITY_VARIATION",
     "TEMPO_BPM", "LED_BRIGHTNESS", "PAD_SENSITIVITY",
-    "MIDI_CC", "MIDI_PITCHBEND",
+    "MIDI_CC",
     "GEN_POSITION",
     "EMPTY", "NONE"
   };
@@ -1009,13 +1009,6 @@ static void handlePotPipeline(bool leftHeld, bool rearHeld) {
       char ccValueStr[8]; snprintf(ccValueStr, sizeof(ccValueStr), "%u", ccVal);
       viewer::emitPot(potSlotName(s_potRouter.getSlotForCcNumber(ccNum, ccCurType)),
                       ccTarget, ccValueStr, nullptr);
-    }
-    uint16_t pbVal;
-    if (s_potRouter.consumePitchBend(pbVal)) {
-      s_transport.sendPitchBend(potSlot.channel, pbVal);
-      char pbValueStr[8]; snprintf(pbValueStr, sizeof(pbValueStr), "%u", pbVal);
-      viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_MIDI_PITCHBEND, ccCurType)),
-                      "PB", pbValueStr, nullptr);
     }
   }
 

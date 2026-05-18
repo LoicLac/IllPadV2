@@ -27,7 +27,6 @@ const char* ToolPotMapping::targetName(PotTarget t) {
     case TARGET_BASE_VELOCITY:      return "BaseVel";
     case TARGET_VELOCITY_VARIATION: return "VelVar";
     case TARGET_MIDI_CC:            return "CC";
-    case TARGET_MIDI_PITCHBEND:     return "PB";
     case TARGET_EMPTY:              return "(empty)";
     default:                        return "???";
   }
@@ -100,7 +99,6 @@ void ToolPotMapping::buildPool() {
     _pool[_poolCount++] = params[i];
   }
   if (_poolCount < MAX_POOL) _pool[_poolCount++] = TARGET_MIDI_CC;
-  if (_poolCount < MAX_POOL) _pool[_poolCount++] = TARGET_MIDI_PITCHBEND;
   if (_poolCount < MAX_POOL) _pool[_poolCount++] = TARGET_EMPTY;
 }
 
@@ -193,29 +191,6 @@ void ToolPotMapping::assignCurrentTarget() {
     // Seed pot for CC# sweep (ABSOLUTE 0-127)
     _potCcNum = _ccNumber;
     _pots.seed(0, &_potCcNum, 0, 127, POT_ABSOLUTE);
-    return;
-  }
-
-  if (newTarget == TARGET_MIDI_PITCHBEND) {
-    int8_t existing = findSlotWithTarget(TARGET_MIDI_PITCHBEND);
-    PotMapping savedSlot = map[slot];
-    PotMapping savedExisting = {TARGET_EMPTY, 0};
-    if (existing >= 0 && existing != (int8_t)slot) {
-      savedExisting = map[existing];
-      map[existing].target = TARGET_EMPTY;
-      map[existing].ccNumber = 0;
-    }
-    map[slot].target = TARGET_MIDI_PITCHBEND;
-    map[slot].ccNumber = 0;
-    if (saveMapping()) {
-      _ui->flashSaved();
-      _editing = false;
-    } else {
-      // Restore working copy on NVS failure
-      map[slot] = savedSlot;
-      if (existing >= 0 && existing != (int8_t)slot)
-        map[existing] = savedExisting;
-    }
     return;
   }
 
@@ -320,12 +295,6 @@ void ToolPotMapping::printTargetDescription(PotTarget t) {
       _ui->drawFrameLine(VT_DIM "Send CC on foreground bank's channel. Multiple CCs allowed (diff CC#)." VT_RESET);
       _ui->drawFrameLine(VT_DIM "Only sends on value change (dirty flag -- no MIDI flood)." VT_RESET);
       _ui->drawFrameLine(VT_DIM "Enter CC# (0-127) after selection." VT_RESET);
-      break;
-    case TARGET_MIDI_PITCHBEND:
-      _ui->drawFrameLine(VT_BRIGHT_WHITE "MIDI Pitchbend" VT_RESET VT_DIM "  --  PB output" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Send PB on foreground bank's channel. Max one per context." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "14-bit resolution. Auto-steals if second assigned." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Only sends on value change." VT_RESET);
       break;
     case TARGET_EMPTY:
       _ui->drawFrameLine(VT_DIM "No parameter assigned to this slot." VT_RESET);

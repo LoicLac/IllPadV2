@@ -584,7 +584,6 @@ enum PotTarget : uint8_t {
   TARGET_PAD_SENSITIVITY,
   // MIDI output (user-assignable via Tool 6)
   TARGET_MIDI_CC,
-  TARGET_MIDI_PITCHBEND,
   // ARPEG_GEN per-bank (NEW — runtime-only, not user-mappable in Tool 7).
   // Substitutes TARGET_PATTERN on banks of type BANK_ARPEG_GEN via two-binding strategy
   // in PotRouter::rebuildBindings (D3, plan §0).
@@ -615,7 +614,11 @@ static const uint8_t POT_MAPPING_SLOTS = 8;
 // =================================================================
 // v2 : Tempo retiré des pools Tool 7 (déplacé sur LEFT + rear pot, binding fixe).
 //      Reset des user mappings au reload (politique zero-NVS-migration).
-#define POTMAP_VERSION 2
+// v3 : TARGET_MIDI_PITCHBEND retiré (PitchBnd persistant per-bank suffit, PB
+//      volatile était une duplication UX sur le même canal MIDI). Enum value
+//      ancien (15) shifte TARGET_GEN_POSITION/EMPTY/NONE — anciens mappings
+//      contenant la valeur rejetés au reload (Zero Migration Policy).
+#define POTMAP_VERSION 3
 
 struct PotMappingStore {
   uint16_t   magic;    // Must match EEPROM_MAGIC

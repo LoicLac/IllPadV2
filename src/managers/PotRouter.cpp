@@ -63,8 +63,6 @@ PotRouter::PotRouter()
   , _ledBrightness(128)
   , _padSensitivity(PAD_SENSITIVITY_DEFAULT)
   , _ccSlotCount(0)
-  , _midiPitchBend(8192)
-  , _midiPbDirty(false)
   , _bargraphDirty(false)
   , _bargraphLevel(0.0f)
   , _bargraphPotLevel(0)
@@ -160,7 +158,6 @@ void PotRouter::getRangeForTarget(PotTarget t, uint16_t& lo, uint16_t& hi) {
     case TARGET_LED_BRIGHTNESS:     lo = 0; hi = 255; break;
     case TARGET_PAD_SENSITIVITY:    lo = PAD_SENSITIVITY_MIN; hi = PAD_SENSITIVITY_MAX; break;
     case TARGET_MIDI_CC:            lo = 0; hi = 127; break;
-    case TARGET_MIDI_PITCHBEND:     lo = 0; hi = 16383; break;
     default:                        lo = 0; hi = 4095; break;
   }
 }
@@ -179,7 +176,6 @@ void PotRouter::rebuildBindings() {
     _ccDirty[i] = false;
     _ccBindingIdx[i] = 0xFF;
   }
-  _midiPbDirty = false;
 
   // --- User-configurable right pots (from mapping) ---
   for (uint8_t ctx = 0; ctx < 2; ctx++) {
@@ -338,9 +334,6 @@ void PotRouter::seedCatchValues(bool keepGlobalCatch) {
         break;
       case TARGET_MIDI_CC:
         norm = 0.0f;
-        break;
-      case TARGET_MIDI_PITCHBEND:
-        norm = 0.5f;
         break;
       default:
         break;
@@ -574,16 +567,6 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       break;
     }
 
-    // --- MIDI Pitchbend: only mark dirty on value change ---
-    case TARGET_MIDI_PITCHBEND: {
-      uint16_t val = adcToRange(adc, 0, 16383);
-      if (val != _midiPitchBend) {
-        _midiPitchBend = val;
-        _midiPbDirty = true;
-      }
-      break;
-    }
-
     case TARGET_EMPTY:
     case TARGET_NONE:
       return;  // No output, no bargraph
@@ -618,10 +601,10 @@ void PotRouter::applyBinding(uint8_t potIndex) {
   _bargraphPotLevel = (uint8_t)(adc * 7.0f / 4095.0f + 0.5f);
   _bargraphCaught = true;
   _bargraphDirty = true;
-  // Only set NVS dirty for non-volatile targets (CC/PB are volatile, not saved).
+  // Only set NVS dirty for non-volatile targets (CC is volatile, not saved).
   // Split by pot family so rear-pot params (tempo / pad sens) commit on a
   // shorter debounce than right-pot params.
-  if (bind.target != TARGET_MIDI_CC && bind.target != TARGET_MIDI_PITCHBEND) {
+  if (bind.target != TARGET_MIDI_CC) {
     if (bind.potIndex == 4) _dirtyRear = true;
     else                    _dirtyRight = true;
   }
@@ -636,8 +619,6 @@ void PotRouter::resetPerBankCatch() {
       _catch[i].caught = false;
     }
   }
-  // Clear stale PB dirty flag — prevents old bank's PB firing on new channel
-  _midiPbDirty = false;
 }
 
 // =================================================================
@@ -681,7 +662,6 @@ bool PotRouter::isPerBankTarget(PotTarget t) const {
     case TARGET_BASE_VELOCITY:
     case TARGET_VELOCITY_VARIATION:
     case TARGET_MIDI_CC:          // CC is per-bank (sends on bank channel)
-    case TARGET_MIDI_PITCHBEND:   // PB is per-bank (sends on bank channel)
       return true;
     default:
       return false;
@@ -725,7 +705,7 @@ uint8_t     PotRouter::getLedBrightness() const        { return _ledBrightness; 
 uint8_t     PotRouter::getPadSensitivity() const       { return _padSensitivity; }
 
 // =================================================================
-// MIDI CC/PB consumers — returns true + fills values, clears dirty
+// MIDI CC consumer — returns true + fills values, clears dirty
 // =================================================================
 bool PotRouter::consumeCC(uint8_t& ccNumber, uint8_t& ccValue) {
   for (uint8_t s = 0; s < _ccSlotCount; s++) {
@@ -735,15 +715,6 @@ bool PotRouter::consumeCC(uint8_t& ccNumber, uint8_t& ccValue) {
       _ccDirty[s] = false;
       return true;
     }
-  }
-  return false;
-}
-
-bool PotRouter::consumePitchBend(uint16_t& pbValue) {
-  if (_midiPbDirty) {
-    pbValue = _midiPitchBend;
-    _midiPbDirty = false;
-    return true;
   }
   return false;
 }
