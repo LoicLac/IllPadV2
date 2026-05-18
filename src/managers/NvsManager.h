@@ -82,6 +82,19 @@ public:
   // Access loaded control pads (for ControlPadManager init at boot, after loadAll)
   const ControlPadStore& getLoadedControlPadStore() const;
 
+  // Access loaded LOOP pad assignment (3 control pads + 16 slot pads, Phase 1 declared)
+  const LoopPadStore& getLoadedLoopPadStore() const;
+  // Access loaded LOOP pot params per-bank (5 effects)
+  const LoopPotStore& getLoadedLoopPotParams(uint8_t bankIdx) const;
+
+  // M7 fix (audit Q5=c) : dev seed conditionnel pads 32/33/34 pour HW gates Phase 2.
+  // À appeler APRÈS loadAll() (qui peuple _loadedLoopPad et _ctrlStore).
+  // Seede pads {32, 33, 34} dans _loadedLoopPad UNIQUEMENT si :
+  //   - _loadedLoopPad.recPad == 0xFF (NVS LoopPadStore vide ou absent)
+  //   - aucune entry _ctrlStore.entries[*].padIndex ∈ {32, 33, 34}
+  // Sinon laisse en l'état (et trace serial le cas). À retirer Phase 3 quand Tool 3 b1 livre.
+  void applyDevSeedLoopPadsIfSafe();
+
   // --- Static NVS helpers (usable without instance, for setup Tools + menu) ---
   static bool loadBlob(const char* ns, const char* key,
                        uint16_t expectedMagic, uint8_t expectedVersion,
@@ -166,6 +179,10 @@ private:
 
   // Control pads (loaded at boot from NVS, consumed by ControlPadManager::applyStore)
   ControlPadStore _ctrlStore;
+
+  // LOOP pad assignment (loaded at boot from NVS, applied to LoopEngines)
+  LoopPadStore _loadedLoopPad;
+  LoopPotStore _loadedLoopPot[NUM_BANKS];  // per-bank, multi-key loop_0..loop_7
 
   // Global pot params (shape, slew, deadzone) — stored as raw values
   float       _pendingResponseShape;

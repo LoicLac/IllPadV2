@@ -158,6 +158,29 @@ NvsManager::NvsManager()
   _ctrlStore.sampleHoldMs = 15;
   _ctrlStore.releaseMs    = 50;
 
+  // LOOP pad defaults : tous 0xFF (non assignés). Phase 3 (Tool 3 b1) ou Phase 2 dev seed
+  // conditionnel (applyDevSeedLoopPadsIfSafe, appelé post-loadAll par main.cpp) les écrasera
+  // si collision Tool 4 absente.
+  _loadedLoopPad.magic       = EEPROM_MAGIC;
+  _loadedLoopPad.version     = LOOPPAD_VERSION;
+  _loadedLoopPad.reserved    = 0;
+  _loadedLoopPad.recPad      = 0xFF;
+  _loadedLoopPad.playStopPad = 0xFF;
+  _loadedLoopPad.clearPad    = 0xFF;
+  for (uint8_t i = 0; i < 16; i++) _loadedLoopPad.slotPads[i] = 0xFF;
+
+  // LOOP pot defaults per-bank (5 effects, Phase 5 will route runtime)
+  for (uint8_t b = 0; b < NUM_BANKS; b++) {
+    _loadedLoopPot[b].magic              = LOOPPOT_MAGIC;
+    _loadedLoopPot[b].version            = LOOPPOT_VERSION;
+    _loadedLoopPot[b].reserved           = 0;
+    _loadedLoopPot[b].shuffleDepthRaw    = 0;
+    _loadedLoopPot[b].shuffleTemplate    = 0;
+    _loadedLoopPot[b].chaosRaw           = 0;
+    _loadedLoopPot[b].velPattern         = 0;
+    _loadedLoopPot[b].velPatternDepthRaw = 0;
+  }
+
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     _scaleDirty[i] = false;
     _velocityDirty[i] = false;
@@ -980,6 +1003,39 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     _ctrlStore.count = 0;
   }
 
+  // === LoopPadStore (Phase 1 declared, Phase 2 loaded) ===
+  {
+    LoopPadStore tmp;
+    if (loadBlob(LOOPPAD_NVS_NAMESPACE, LOOPPAD_NVS_KEY,
+                 EEPROM_MAGIC, LOOPPAD_VERSION, &tmp, sizeof(tmp))) {
+      validateLoopPadStore(tmp);
+      _loadedLoopPad = tmp;
+      #if DEBUG_SERIAL
+      Serial.printf("[BOOT NVS] LoopPadStore loaded : rec=%u playStop=%u clear=%u\n",
+                    _loadedLoopPad.recPad, _loadedLoopPad.playStopPad, _loadedLoopPad.clearPad);
+      #endif
+    } else {
+      #if DEBUG_SERIAL
+      Serial.println("[BOOT NVS] LoopPadStore not found, using Phase 2 dev defaults (pads 32/33/34)");
+      #endif
+    }
+  }
+
+  // === LoopPotStore per-bank (multi-key loop_0..loop_7, Phase 2 loaded for future Phase 5 runtime) ===
+  {
+    char key[16];
+    for (uint8_t b = 0; b < NUM_BANKS; b++) {
+      snprintf(key, sizeof(key), "loop_%u", b);
+      LoopPotStore tmp;
+      if (loadBlob(LOOP_POT_NVS_NAMESPACE, key,
+                   EEPROM_MAGIC, LOOPPOT_VERSION, &tmp, sizeof(tmp))) {
+        validateLoopPotStore(tmp);
+        _loadedLoopPot[b] = tmp;
+      }
+      // else : keep constructor default (above)
+    }
+  }
+
   // --- Pot mapping (user-configurable pot assignments) ---
   {
     PotMappingStore pms;
@@ -1116,6 +1172,61 @@ const ColorSlotStore& NvsManager::getLoadedColorSlots() const {
 
 const ControlPadStore& NvsManager::getLoadedControlPadStore() const {
   return _ctrlStore;
+}
+
+const LoopPadStore& NvsManager::getLoadedLoopPadStore() const {
+  return _loadedLoopPad;
+}
+
+const LoopPotStore& NvsManager::getLoadedLoopPotParams(uint8_t bankIdx) const {
+  static LoopPotStore safe{
+    .magic = LOOPPOT_MAGIC,
+    .version = LOOPPOT_VERSION,
+    .reserved = 0,
+    .shuffleDepthRaw = 0,
+    .shuffleTemplate = 0,
+    .chaosRaw = 0,
+    .velPattern = 0,
+    .velPatternDepthRaw = 0,
+  };
+  if (bankIdx >= NUM_BANKS) return safe;
+  return _loadedLoopPot[bankIdx];
+}
+
+// =================================================================
+// applyDevSeedLoopPadsIfSafe — Phase 2 dev seed conditionnel (audit M7 / Q5=c)
+// =================================================================
+// Seede pads {32, 33, 34} dans _loadedLoopPad UNIQUEMENT si :
+//   - LoopPadStore vide en NVS (post-loadAll : _loadedLoopPad.recPad == 0xFF)
+//   - aucune entry ControlPadStore.entries[*].padIndex ∈ {32, 33, 34}
+// Sinon laisse en l'état + trace serial. À retirer Phase 3.
+void NvsManager::applyDevSeedLoopPadsIfSafe() {
+  // Skip si NVS a déjà des LOOP pads valides.
+  if (_loadedLoopPad.recPad != 0xFF) {
+    #if DEBUG_SERIAL
+    Serial.printf("[BOOT] LOOP dev seed skipped: NVS LoopPadStore has data (rec=%u)\n",
+                  _loadedLoopPad.recPad);
+    #endif
+    return;
+  }
+  // Check collision avec ControlPad assignments Tool 4.
+  for (uint8_t i = 0; i < _ctrlStore.count; i++) {
+    uint8_t p = _ctrlStore.entries[i].padIndex;
+    if (p == 32 || p == 33 || p == 34) {
+      #if DEBUG_SERIAL
+      Serial.printf("[BOOT] LOOP dev seed skipped: pad %u already assigned as ControlPad (Tool 4)\n", p);
+      Serial.println("[BOOT]   → REC/PLAY/CLEAR LOOP control pads will stay unassigned until Tool 3 b1 (Phase 3).");
+      #endif
+      return;
+    }
+  }
+  // Safe : seed.
+  _loadedLoopPad.recPad      = 32;
+  _loadedLoopPad.playStopPad = 33;
+  _loadedLoopPad.clearPad    = 34;
+  #if DEBUG_SERIAL
+  Serial.println("[BOOT] LOOP dev seed applied: rec=32 playStop=33 clear=34 (Phase 2 testing, remove Phase 3)");
+  #endif
 }
 
 // =================================================================

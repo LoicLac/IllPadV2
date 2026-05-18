@@ -528,7 +528,12 @@ void setup() {
     #endif
   }
 
+  // M7 fix : dev seed conditionnel pour HW gates Phase 2. Retire Phase 3 (Tool 3 b1).
+  s_nvsManager.applyDevSeedLoopPadsIfSafe();
+
   // Assign LoopEngines to BANK_LOOP banks (Phase 2 LOOP)
+  // m8 audit fix : LoopPadStore shared cross-bank (spec §5), hoist out of loop.
+  const LoopPadStore& lps = s_nvsManager.getLoadedLoopPadStore();
   {
     uint8_t loopIdx = 0;
     for (uint8_t i = 0; i < NUM_BANKS && loopIdx < MAX_LOOP_BANKS; i++) {
@@ -542,6 +547,8 @@ void setup() {
         // Quantize per-bank : LOOP interprets BankTypeStore::quantize[i] as 0..2 (Free/Beat/Bar).
         // validateBankTypeStore (KeyboardData.h:725-726) already clamps via type discrimination.
         s_loopEngines[loopIdx].setQuantize((LoopQuantize)s_nvsManager.getLoadedQuantizeMode(i));
+        // Control pads (REC/PLAY/CLEAR) — shared across all LOOP banks per spec §5
+        s_loopEngines[loopIdx].setControlPads(lps.recPad, lps.playStopPad, lps.clearPad);
         s_banks[i].loopEngine = &s_loopEngines[loopIdx];
         loopIdx++;
         #if DEBUG_SERIAL
