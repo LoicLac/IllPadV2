@@ -67,20 +67,20 @@ static const uint8_t ARPEG_PARAM_COUNT = sizeof(ARPEG_PARAMS) / sizeof(ARPEG_PAR
 // Constructor
 // =================================================================
 ToolPotMapping::ToolPotMapping()
-  : _leds(nullptr), _ui(nullptr), _potRouter(nullptr)
+  : _leds(nullptr), _ui(nullptr)
   , _contextNormal(true), _cursorRow(0), _cursorCol(0)
   , _editing(false), _poolIdx(0), _ccEditing(false), _ccNumber(0)
   , _confirmSteal(false), _stealSourceSlot(-1), _stealTarget(TARGET_EMPTY)
   , _nvsSaved(false), _poolCount(0)
 {
   memset(&_wk, 0, sizeof(_wk));
+  memset(&_wkSaved, 0, sizeof(_wkSaved));
   memset(_potBaseline, 0, sizeof(_potBaseline));
 }
 
-void ToolPotMapping::begin(LedController* leds, SetupUI* ui, PotRouter* potRouter) {
+void ToolPotMapping::begin(LedController* leds, SetupUI* ui) {
   _leds = leds;
   _ui = ui;
-  _potRouter = potRouter;
 }
 
 // =================================================================
@@ -157,7 +157,7 @@ bool ToolPotMapping::saveMapping() {
   _wk.reserved = 0;  // FIX: was uninitialized
   if (!NvsManager::saveBlob(POTMAP_NVS_NAMESPACE, POTMAP_NVS_KEY, &_wk, sizeof(_wk)))
     return false;
-  if (_potRouter) _potRouter->applyMapping(_wk);
+  memcpy(&_wkSaved, &_wk, sizeof(_wk));
   _nvsSaved = true;
   return true;
 }
@@ -518,11 +518,12 @@ void ToolPotMapping::drawScreen() {
 void ToolPotMapping::run() {
   if (!_ui || !_leds) return;
 
-  if (_potRouter) {
-    memcpy(&_wk, &_potRouter->getMapping(), sizeof(PotMappingStore));
-  } else {
+  if (!NvsManager::loadBlob(POTMAP_NVS_NAMESPACE, POTMAP_NVS_KEY,
+                            EEPROM_MAGIC, POTMAP_VERSION,
+                            &_wk, sizeof(_wk))) {
     memcpy(&_wk, &PotRouter::DEFAULT_MAPPING, sizeof(PotMappingStore));
   }
+  memcpy(&_wkSaved, &_wk, sizeof(_wk));
 
   _contextNormal = true;
   _cursorRow = 0;
@@ -678,13 +679,8 @@ void ToolPotMapping::run() {
       } else if (ev.type == NAV_QUIT) {
         _ccEditing = false;
         uint8_t slot = cursorToSlot();
-        if (_potRouter) {
-          const PotMappingStore& live = _potRouter->getMapping();
-          const PotMapping* liveMap = _contextNormal ? live.normalMap : live.arpegMap;
-          currentMap()[slot] = liveMap[slot];
-        } else {
-          currentMap()[slot] = {TARGET_EMPTY, 0};
-        }
+        const PotMapping* savedMap = _contextNormal ? _wkSaved.normalMap : _wkSaved.arpegMap;
+        currentMap()[slot] = savedMap[slot];
         // Pot disabled — pool cycling is keyboard-only
         _pots.disable(0);
         screenDirty = true;
@@ -766,12 +762,9 @@ void ToolPotMapping::run() {
         }
         screenDirty = true;
       } else if (ev.type == NAV_QUIT) {
-        if (_potRouter) {
-          const PotMappingStore& live = _potRouter->getMapping();
-          const PotMapping* liveMap = _contextNormal ? live.normalMap : live.arpegMap;
-          uint8_t slot = cursorToSlot();
-          currentMap()[slot] = liveMap[slot];
-        }
+        const PotMapping* savedMap = _contextNormal ? _wkSaved.normalMap : _wkSaved.arpegMap;
+        uint8_t slot = cursorToSlot();
+        currentMap()[slot] = savedMap[slot];
         _editing = false;
         _pots.disable(0);
         samplePotBaselines();  // Refresh baselines for NAV detect

@@ -34,7 +34,7 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _toolControlPads.begin(keyboard, leds, &_ui, nvs, banks);
   _toolBankConfig.begin(leds, nvs, &_ui, banks);
   _toolSettings.begin(keyboard, leds, &_ui);
-  _toolPotMapping.begin(leds, &_ui, potRouter);
+  _toolPotMapping.begin(leds, &_ui);
   _toolLedSettings.begin(leds, &_ui, potRouter, banks);
 }
 

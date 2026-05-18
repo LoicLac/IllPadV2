@@ -19,16 +19,18 @@ class ToolPotMapping {
 public:
   ToolPotMapping();
 
-  void begin(LedController* leds, SetupUI* ui, PotRouter* potRouter);
+  void begin(LedController* leds, SetupUI* ui);
   void run();  // Blocking
 
 private:
   LedController* _leds;
   SetupUI*       _ui;
-  PotRouter*     _potRouter;
 
-  // Working copy
+  // Working copy + mirror of last NVS-saved state (for cancel restore).
+  // Tool 7 reads/writes NVS directly, not the runtime PotRouter cache —
+  // keeps Tool 7 symmetric with Tools 4/5/6/8 (no runtime coupling).
   PotMappingStore _wk;
+  PotMappingStore _wkSaved;
 
   // UI state
   bool    _contextNormal;    // true=NORMAL, false=ARPEG
