@@ -364,15 +364,17 @@ struct ScaleConfig {
 
 // Forward declaration
 class ArpEngine;
+class LoopEngine;
 
 struct BankSlot {
   uint8_t     channel;                    // 0-7 (fixed, = bank index)
-  BankType    type;                       // NORMAL or ARPEG
+  BankType    type;                       // NORMAL / ARPEG / LOOP / ARPEG_GEN
   ScaleConfig scale;
-  ArpEngine*  arpEngine;                  // non-null if ARPEG
+  ArpEngine*  arpEngine;                  // non-null if ARPEG / ARPEG_GEN
+  LoopEngine* loopEngine;                 // non-null if LOOP
   bool        isForeground;
-  uint8_t     baseVelocity;              // 1-127, per-bank (NORMAL + ARPEG)
-  uint8_t     velocityVariation;         // 0-100%, per-bank (NORMAL + ARPEG)
+  uint8_t     baseVelocity;              // 1-127, per-bank (NORMAL + ARPEG + LOOP)
+  uint8_t     velocityVariation;         // 0-100%, per-bank (NORMAL + ARPEG + LOOP)
   uint16_t    pitchBendOffset;           // 0-16383, center=8192 (NORMAL only)
 };
 
@@ -671,7 +673,7 @@ const uint8_t MAX_ARP_OCTAVES  = 4;
 
 // LOOP bank cap. Placeholder pre-Phase 2 LOOP, reconfirmed Phase 2 selon
 // mesure SRAM reelle de LoopEngine. Cf spec Tool 5 refacto §15.
-const uint8_t MAX_LOOP_BANKS   = 2;
+const uint8_t MAX_LOOP_BANKS   = 4;
 
 // ARPEG_GEN — discrete grid positions (spec §13, retuned V4 Task 22).
 // 8 valeurs uniques seqLen : 2, 3, 4, 8, 12, 16, 32, 64 (cf TABLE_GEN_SEQ_LEN).

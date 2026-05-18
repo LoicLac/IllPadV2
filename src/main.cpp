@@ -18,6 +18,7 @@
 // Arp
 #include "arp/ArpEngine.h"
 #include "arp/ArpScheduler.h"
+#include "loop/LoopEngine.h"     // Phase 2 LOOP : s_loopEngines instances
 
 // Managers
 #include "managers/BankManager.h"
@@ -70,6 +71,7 @@ static ArpScheduler       s_arpScheduler;
 
 // Static ArpEngine pool (max 4 ARPEG banks)
 static ArpEngine s_arpEngines[4];
+static LoopEngine s_loopEngines[MAX_LOOP_BANKS];  // Phase 2 LOOP : MAX_LOOP_BANKS = 4 (KeyboardData.h:676)
 
 // Pad ordering: sequential 0..47 (Tool 2 will customize later)
 static uint8_t s_padOrder[NUM_KEYS];
@@ -347,6 +349,7 @@ void setup() {
     s_banks[i].type               = BANK_NORMAL;
     s_banks[i].scale              = {true, 2, 0};  // chromatic=true, root=C(2), mode=Ionian(0)
     s_banks[i].arpEngine          = nullptr;
+    s_banks[i].loopEngine         = nullptr;
     s_banks[i].isForeground       = false;
     s_banks[i].baseVelocity       = DEFAULT_BASE_VELOCITY;
     s_banks[i].velocityVariation  = DEFAULT_VELOCITY_VARIATION;
@@ -521,6 +524,43 @@ void setup() {
     #if DEBUG_SERIAL
     if (arpIdx == 0) {
       Serial.println("[BOOT] No ARPEG banks configured.");
+    }
+    #endif
+  }
+
+  // Assign LoopEngines to BANK_LOOP banks (Phase 2 LOOP)
+  {
+    uint8_t loopIdx = 0;
+    for (uint8_t i = 0; i < NUM_BANKS && loopIdx < MAX_LOOP_BANKS; i++) {
+      if (s_banks[i].type == BANK_LOOP) {
+        s_loopEngines[loopIdx].setChannel(i);
+        s_loopEngines[loopIdx].setPadOrder(s_padOrder);
+        s_loopEngines[loopIdx].setClockManager(&s_clockManager);
+        s_loopEngines[loopIdx].setBaseVelocity(s_banks[i].baseVelocity);
+        s_loopEngines[loopIdx].setVelocityVariation(s_banks[i].velocityVariation);
+        s_loopEngines[loopIdx].setClearLoopTimerMs(s_settings.clearLoopTimerMs);
+        // Quantize per-bank : LOOP interprets BankTypeStore::quantize[i] as 0..2 (Free/Beat/Bar).
+        // validateBankTypeStore (KeyboardData.h:725-726) already clamps via type discrimination.
+        s_loopEngines[loopIdx].setQuantize((LoopQuantize)s_nvsManager.getLoadedQuantizeMode(i));
+        s_banks[i].loopEngine = &s_loopEngines[loopIdx];
+        loopIdx++;
+        #if DEBUG_SERIAL
+        Serial.printf("[BOOT] Bank %d: LOOP, LoopEngine assigned\n", i + 1);
+        #endif
+      }
+    }
+    #if DEBUG_SERIAL
+    if (loopIdx == 0) {
+      Serial.println("[BOOT] No LOOP banks configured.");
+    }
+    // m2 fix (audit Q6) : warning explicite si NVS contient > MAX_LOOP_BANKS LOOP banks.
+    // Cas pathologique : NVS corruption ou downgrade depuis future firmware MAX>4.
+    // Tool 5 refacto enforce le cap au cycle UI, donc impossible en usage normal.
+    for (uint8_t i = 0; i < NUM_BANKS; i++) {
+      if (s_banks[i].type == BANK_LOOP && s_banks[i].loopEngine == nullptr) {
+        Serial.printf("[WARN] Bank %u BANK_LOOP exceeds MAX_LOOP_BANKS=%u, runtime disabled\n",
+                      i + 1, MAX_LOOP_BANKS);
+      }
     }
     #endif
   }
