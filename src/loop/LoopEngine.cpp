@@ -118,6 +118,9 @@ bool LoopEngine::isClearHoldFired(uint32_t nowMs) const {
 // tapRec — transport action, state machine dispatch (spec §7 §8 + Q5 §28)
 // =================================================================
 void LoopEngine::tapRec(MidiTransport& transport) {
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] tapRec ch=%u state=%u\n", _channel, (unsigned)_state);
+  #endif
   switch (_state) {
     case LoopState::EMPTY:
       startRecording(transport);
@@ -152,6 +155,9 @@ void LoopEngine::tapRec(MidiTransport& transport) {
       _state = LoopState::OVERDUBBING;
       break;
   }
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] tapRec -> state=%u\n", (unsigned)_state);
+  #endif
 }
 
 // =================================================================
@@ -160,6 +166,9 @@ void LoopEngine::tapRec(MidiTransport& transport) {
 // Param non utilisé actuellement (réservé), peut être ignoré par l'impl.
 // =================================================================
 void LoopEngine::tapPlayStop(MidiTransport& transport, const uint8_t* /*currentKeys*/) {
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] tapPlayStop ch=%u state=%u\n", _channel, (unsigned)_state);
+  #endif
   switch (_state) {
     case LoopState::EMPTY:
       // No-op : nothing to play
@@ -197,6 +206,9 @@ void LoopEngine::tapPlayStop(MidiTransport& transport, const uint8_t* /*currentK
       _state = LoopState::PLAYING;
       break;
   }
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] tapPlayStop -> state=%u\n", (unsigned)_state);
+  #endif
 }
 
 // =================================================================
@@ -205,6 +217,9 @@ void LoopEngine::tapPlayStop(MidiTransport& transport, const uint8_t* /*currentK
 // B2 fix : set _clearFired=true à la fin pour bloquer re-fires tant que CLEAR tenu.
 // =================================================================
 void LoopEngine::longPressClear(MidiTransport& transport) {
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] longPressClear ch=%u state=%u\n", _channel, (unsigned)_state);
+  #endif
   if (isLocked()) return;  // safety net (caller should not invoke when locked)
   // Wipe buffer + flush MIDI notes + state → EMPTY
   flushPendingNoteOffs(transport);
@@ -217,6 +232,9 @@ void LoopEngine::longPressClear(MidiTransport& transport) {
   // B2 fix : armé true. isClearHoldFired retourne false jusqu'au release CLEAR
   // ou nouveau press (notifyClearPressStart / End reset _clearFired).
   _clearFired = true;
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] longPressClear -> state=%u (EMPTY)\n", (unsigned)_state);
+  #endif
 }
 void LoopEngine::capturePadEvent(uint8_t, uint8_t, MidiTransport&) {}
 void LoopEngine::update(MidiTransport&) {}

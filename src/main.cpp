@@ -797,6 +797,75 @@ static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uin
   }
 }
 
+// =================================================================
+// processLoopMode — pad input handler for BANK_LOOP (Phase 2 LOOP)
+// =================================================================
+// Pad categories on a LOOP bank in foreground (musical layer, LEFT not held) :
+//   - LoopEngine.recPad      → tapRec()
+//   - LoopEngine.playStopPad → tapPlayStop()
+//   - LoopEngine.clearPad    → notifyClearPressStart/End + longPressClear when threshold
+//   - Tool 4 control pads    → handled by ControlPadManager (skip via isControlPad filter)
+//   - All other pads         → musical drums : capturePadEvent + immediate noteOn/Off
+//
+// Q1 §7 loop-buffer-invariants : LOOP layer musical indépendant. Dispatch par
+// bank type via handlePadInput — pas d'interaction avec processArpMode.
+// =================================================================
+static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, uint32_t now) {
+  LoopEngine* le = slot.loopEngine;
+  if (!le) return;
+
+  // CLEAR long-press check (state-machine driven, not edge-driven)
+  if (le->getClearPad() != 0xFF) {
+    bool clearHeld = state.keyIsPressed[le->getClearPad()];
+    if (clearHeld) {
+      le->notifyClearPressStart(now);
+      if (le->isClearHoldFired(now)) {
+        le->longPressClear(s_transport);
+        s_leds.triggerEvent(EVT_LOOP_CLEAR);
+      }
+    } else {
+      le->notifyClearPressEnd();
+    }
+  }
+
+  // Iterate musical pads (rising/falling edges)
+  for (int i = 0; i < NUM_KEYS; i++) {
+    if (i == s_holdPad) continue;
+    if (s_controlPadManager.isControlPad(i)) continue;
+    if (le->isLoopControlPad((uint8_t)i)) {
+      // REC / PLAY/STOP tap on rising edge (CLEAR already handled above)
+      if (i == le->getRecPad()) {
+        if (state.keyIsPressed[i] && !s_lastKeys[i]) {
+          le->tapRec(s_transport);
+        }
+      } else if (i == le->getPlayStopPad()) {
+        if (state.keyIsPressed[i] && !s_lastKeys[i]) {
+          le->tapPlayStop(s_transport, state.keyIsPressed);
+        }
+      }
+      // CLEAR pad : already handled by sustained-press logic above
+      continue;
+    }
+
+    // Musical pad — comportement Q1/Q8/M3/M8 actés post-audit :
+    //   - Velocity passée à capturePadEvent : slot.baseVelocity strict, SANS variation
+    //     (M3 fix Q8 : la variation s'applique seulement au playback dans update()).
+    //   - capturePadEvent émet MIDI live dans TOUS les états (Q1/M8 spec §18 "percussion fixe") :
+    //     EMPTY/STOPPED → live monitor strict, pas de capture buffer ;
+    //     RECORDING/OVERDUBBING → live monitor + capture buffer (live-sort live, M2 fix) ;
+    //     WAITING_* → live monitor strict (musique non-altérée pendant l'attente quantize).
+    bool pressed    = state.keyIsPressed[i];
+    bool wasPressed = s_lastKeys[i];
+    if (pressed && !wasPressed) {
+      // Rising edge : noteOn avec baseVelocity strict (M3 fix Q8 audit).
+      le->capturePadEvent((uint8_t)i, slot.baseVelocity, s_transport);
+    } else if (!pressed && wasPressed) {
+      // Falling edge : noteOff (velocity == 0 convention).
+      le->capturePadEvent((uint8_t)i, 0, s_transport);
+    }
+  }
+}
+
 static void handleLeftReleaseCleanup(const SharedKeyboardState& state) {
   static bool s_wasHolding = false;
   bool holdingNow = s_bankManager.isHolding() || s_scaleManager.isHolding();
@@ -831,8 +900,10 @@ static void handlePadInput(const SharedKeyboardState& state, uint32_t now) {
       case BANK_ARPEG_GEN:
         if (slot.arpEngine) processArpMode(state, slot, now);
         break;
+      case BANK_LOOP:
+        if (slot.loopEngine) processLoopMode(state, slot, now);
+        break;
       default:
-        // BANK_LOOP : Phase 1 LOOP wires processLoopMode here
         break;
     }
   }
