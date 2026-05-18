@@ -765,6 +765,13 @@ void emitArpQueueFull() {
   #endif
 }
 
+void emitLoopBufferFull(uint8_t channel, const char* which) {
+  #if DEBUG_SERIAL
+  emit(PRIO_LOW, "[LOOP_BUFFER_FULL] ch=%u which=%s\n",
+       channel + 1, which ? which : "?");
+  #endif
+}
+
 void emitGenSeed(uint16_t seqLen, uint8_t eInit, uint8_t pileCount,
                  int8_t lo, int8_t hi) {
   #if DEBUG_SERIAL

@@ -236,7 +236,88 @@ void LoopEngine::longPressClear(MidiTransport& transport) {
   Serial.printf("[LOOP] longPressClear -> state=%u (EMPTY)\n", (unsigned)_state);
   #endif
 }
-void LoopEngine::capturePadEvent(uint8_t, uint8_t, MidiTransport&) {}
+// =================================================================
+// capturePadEvent — décisions actées post-audit :
+//   M3 (Q8) : velocity stocké = baseVelocity STRICT (passé par processLoopMode).
+//             Variation appliquée uniquement au playback dans update().
+//   M2 (Q4) : insertion live-sorted dans _events[] (RECORDING) ou _overdubEvents[]
+//             (OVERDUBBING). Buffer toujours trié, mergeOverdub devient O(n+m).
+//   M8 (Q1) : MIDI live monitor émis dans TOUS les états (spec §18 "percussion fixe").
+//             EMPTY/STOPPED/WAITING_* → live monitor seul, pas de capture buffer.
+//             RECORDING/OVERDUBBING → live monitor + capture buffer.
+// velocity == 0 → noteOff event ; > 0 → noteOn event.
+// =================================================================
+void LoopEngine::capturePadEvent(uint8_t padIndex, uint8_t velocity, MidiTransport& transport) {
+  if (padIndex >= NUM_KEYS) return;
+
+  bool isNoteOn = (velocity > 0);
+  uint8_t midiNote = resolvePadToMidiNote(padIndex);
+
+  // M8 Q1 : live monitor MIDI émis dans TOUS les états (spec §18 "percussion fixe").
+  // Velocity strict baseVelocity (sans variation, M3 Q8). Pas d'aftertouch (spec §24).
+  if (isNoteOn) {
+    refCountNoteOn(transport, midiNote, velocity);
+  } else {
+    refCountNoteOff(transport, midiNote);
+  }
+
+  // Audit-fix B-N1 / B-N2 / R-N1 : tracker live press (TOUS états).
+  // Set true à chaque rising edge, false à chaque falling edge. Consommé par :
+  //   - stopRecording flushHeldPadsAsNoteOffs (fin de loop).
+  //   - mergeOverdub flush held (inject noteOff à _playPositionUs).
+  //   - onBackgroundTransition (refCountNoteOff direct au bank switch out).
+  // Invariant : _padHeldLive[pad] == true ssi pad physiquement enfoncé ET live
+  // monitor a émis noteOn (refCountNoteOn ci-dessus). Set/reset symétrique.
+  _padHeldLive[padIndex] = isNoteOn ? 1 : 0;
+
+  // Capture buffer écriture conditionnelle (RECORDING ou OVERDUBBING seuls).
+  if (_state == LoopState::RECORDING) {
+    uint32_t nowUs = micros();
+
+    // m6 Q7 : noteOff avant 1st press musical ignoré (pad tenu avant tapRec).
+    if (!_recordFirstPressDone && !isNoteOn) {
+      return;
+    }
+    // First-press latches recordStart + recordBpm (invariant §23.5)
+    if (!_recordFirstPressDone && isNoteOn) {
+      _recordStartUs = nowUs;
+      _recordBpm = _clock ? _clock->getSmoothedBPM() : 120;
+      if (_recordBpm == 0) _recordBpm = 120;
+      _recordFirstPressDone = true;
+    }
+
+    uint32_t timestampUs = nowUs - _recordStartUs;
+    // M2 live-sort : insertion triée dans _events[].
+    bool ok = insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
+                                 timestampUs, padIndex, midiNote, velocity);
+    if (!ok) {
+      // m9 telemetry : buffer plein, drop silent per spec §8 + emit viewer.
+      viewer::emitLoopBufferFull(_channel, "main");
+    }
+
+    // Audit-fix : _padHeldLive[padIndex] déjà set en haut de capturePadEvent (tracker unifié).
+    return;
+  }
+
+  if (_state == LoopState::OVERDUBBING) {
+    // B1 fix audit : utilise _playPositionUs maintenu par update() (precision ~1 ms),
+    // pas d'appel à computeLoopPositionUs (méthode supprimée).
+    uint32_t posInLoop = _playPositionUs;
+
+    // M2 live-sort : insertion triée dans _overdubEvents[].
+    bool ok = insertEventSorted(_overdubEvents, _overdubCount, MAX_LOOP_OVERDUB_EVENTS,
+                                 posInLoop, padIndex, midiNote, velocity);
+    if (!ok) {
+      // m9 telemetry overdub buffer full.
+      viewer::emitLoopBufferFull(_channel, "overdub");
+    }
+    return;
+  }
+
+  // EMPTY / STOPPED / PLAYING / WAITING_* : live monitor seul (déjà émis ci-dessus).
+  // Pas de buffer write — la musique live n'altère pas le loop sans tap REC explicite.
+  // Conformité spec §5 "Le buffer LOOP est sacré".
+}
 void LoopEngine::update(MidiTransport&) {}
 // =================================================================
 // resolvePadToMidiNote — pad → MIDI note (spec §1, no scale, no padOrder if null)
@@ -262,10 +343,145 @@ uint8_t LoopEngine::applyVelocityVariation(uint8_t baseVel) const {
   if (result > 127) result = 127;
   return (uint8_t)result;
 }
-bool LoopEngine::insertEventSorted(LoopEvent*, uint16_t&, uint16_t, uint32_t, uint8_t, uint8_t, uint8_t) { return false; }
-void LoopEngine::startRecording(MidiTransport&) {}
-void LoopEngine::stopRecording(MidiTransport&) {}
-void LoopEngine::flushHeldPadsAsNoteOffs(uint32_t) {}
+// =================================================================
+// insertEventSorted — M2 Q4 décision (live-sort) :
+// Insère un event à sa position triée (par timestampUs croissant) dans buffer[].
+// Retourne true si inséré, false si buffer plein (drop silent per spec §8).
+// Complexité : O(n) par insertion (binary search + shift).
+// =================================================================
+bool LoopEngine::insertEventSorted(LoopEvent* buffer, uint16_t& count, uint16_t cap,
+                                     uint32_t timestampUs, uint8_t padIndex,
+                                     uint8_t midiNote, uint8_t velocity) {
+  if (count >= cap) return false;  // buffer full
+  // Binary search position d'insertion (upper_bound : 1er index avec timestamp > new).
+  // Permet de garder l'ordre stable pour events au même timestamp (push back ↦ ordre d'arrivée).
+  int32_t lo = 0;
+  int32_t hi = (int32_t)count;
+  while (lo < hi) {
+    int32_t mid = (lo + hi) / 2;
+    if (buffer[mid].timestampUs <= timestampUs) lo = mid + 1;
+    else hi = mid;
+  }
+  // lo = position d'insertion (peut être == count si append en fin).
+  // Shift right.
+  for (int32_t j = (int32_t)count; j > lo; j--) {
+    buffer[j] = buffer[j - 1];
+  }
+  buffer[lo].timestampUs = timestampUs;
+  buffer[lo].padIndex    = padIndex;
+  buffer[lo].midiNote    = midiNote;
+  buffer[lo].velocity    = velocity;
+  buffer[lo].active      = true;
+  count++;
+  return true;
+}
+// =================================================================
+// startRecording — EMPTY → RECORDING. Arms capture. recordStartUs set on 1st pad press.
+// =================================================================
+void LoopEngine::startRecording(MidiTransport& transport) {
+  (void)transport;  // no MIDI flush needed here (EMPTY = nothing playing)
+  _eventCount = 0;
+  _overdubCount = 0;
+  _recordStartUs = 0;
+  _recordEndUs = 0;
+  _recordBpm = _clock ? _clock->getSmoothedBPM() : 120;
+  if (_recordBpm == 0) _recordBpm = 120;
+  _recordFirstPressDone = false;
+  memset(_padHeldLive, 0, sizeof(_padHeldLive));
+  for (uint16_t i = 0; i < MAX_LOOP_EVENTS; i++) _events[i].active = false;
+  _state = LoopState::RECORDING;
+}
+// =================================================================
+// stopRecording — close RECORDING with bar-snap (spec §7)
+// 1. Compute raw recorded duration (now - recordStartUs)
+// 2. Compute barDuration_us at recordBpm (4 beats × 60s/bpm × 1e6 = 240e6/bpm)
+// 3. Snap with deadzone 25% : if elapsed within 0.25×barDuration after a bar line, snap down
+//    else snap up. Min 1 bar, max 64 bars.
+// 4. Rescale event timestamps proportionally to fill snapped duration
+// 5. Flush pads held → noteOff events at snapped duration
+// 6. State → PLAYING (via startPlayback)
+// =================================================================
+void LoopEngine::stopRecording(MidiTransport& transport) {
+  uint32_t nowUs = micros();
+  _recordEndUs = nowUs;
+
+  if (!_recordFirstPressDone || _eventCount == 0) {
+    // No content — back to EMPTY
+    _state = LoopState::EMPTY;
+    return;
+  }
+
+  uint32_t rawDurUs = nowUs - _recordStartUs;
+  uint32_t barDurUs = (uint32_t)(240000000UL / _recordBpm);  // 240e6 / bpm = bar duration µs (4 beats)
+  if (barDurUs == 0) barDurUs = 2000000;  // safety : 120 BPM = 2s bar
+
+  // Bar-snap with 25% deadzone
+  uint32_t barsFloor = rawDurUs / barDurUs;
+  uint32_t remainder = rawDurUs - (barsFloor * barDurUs);
+  uint32_t deadzone  = barDurUs / 4;  // 25%
+
+  uint32_t snappedBars;
+  if (remainder <= deadzone) {
+    snappedBars = barsFloor;  // snap down (deadzone absorbs overshoot)
+  } else {
+    snappedBars = barsFloor + 1;  // round up
+  }
+  if (snappedBars < 1)  snappedBars = 1;
+  if (snappedBars > 64) snappedBars = 64;
+  _loopBars = (uint16_t)snappedBars;
+  uint32_t snappedDurUs = snappedBars * barDurUs;
+
+  // Rescale event timestamps proportionally
+  if (rawDurUs > 0 && snappedDurUs != rawDurUs) {
+    uint64_t scaleNum = snappedDurUs;
+    uint64_t scaleDen = rawDurUs;
+    for (uint16_t i = 0; i < _eventCount; i++) {
+      _events[i].timestampUs = (uint32_t)((uint64_t)_events[i].timestampUs * scaleNum / scaleDen);
+    }
+  }
+  _loopDurationUs = snappedDurUs;
+
+  // Flush held pads as noteOff events at snapped duration.
+  // flushHeldPadsAsNoteOffs utilise insertEventSorted (M2 live-sort) → buffer reste trié.
+  flushHeldPadsAsNoteOffs(snappedDurUs);
+
+  // M5 fix : pas de re-sort ici (live-sort dans capturePadEvent maintient l'ordre,
+  // et flushHeldPadsAsNoteOffs insert également via insertEventSorted). Le buffer
+  // est invariant sorted dès la fin du recording.
+
+  // M6 fix : validation timestamp < loopDuration (defense in depth contre rescale buggy
+  // ou edge case capture juste à rawDurUs). Clamp _loopDurationUs - 1 si dépassement.
+  uint16_t clampedCount = 0;
+  for (uint16_t i = 0; i < _eventCount; i++) {
+    if (_events[i].timestampUs >= _loopDurationUs) {
+      _events[i].timestampUs = _loopDurationUs - 1;
+      clampedCount++;
+    }
+  }
+  #if DEBUG_SERIAL
+  if (clampedCount > 0) {
+    Serial.printf("[LOOP WARN] stopRecording clamped %u events to loopDur=%lu us\n",
+                  clampedCount, (unsigned long)_loopDurationUs);
+  }
+  #endif
+
+  // Flush refcount + transition to PLAYING (B3 fix : passer nowUs capturé).
+  flushPendingNoteOffs(transport);
+  startPlayback(transport, micros());
+}
+// =================================================================
+// flushHeldPadsAsNoteOffs — inject noteOff into main buffer for pads still held at stopRecording
+// =================================================================
+// M2 fix : utilise insertEventSorted pour maintenir buffer trié (live-sort).
+void LoopEngine::flushHeldPadsAsNoteOffs(uint32_t timestampUs) {
+  for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
+    if (!_padHeldLive[pad]) continue;
+    // insertion triée (M2). insertEventSorted retourne false si buffer plein → silent drop.
+    insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
+                       timestampUs, pad, resolvePadToMidiNote(pad), /*velocity=*/0);
+    _padHeldLive[pad] = false;
+  }
+}
 void LoopEngine::startPlayback(MidiTransport&, uint32_t) {}   // B3 : signature étendue avec nowUs
 void LoopEngine::stopPlayback(MidiTransport&, bool) {}
 // computeLoopPositionUs stub supprimé (B1 fix : méthode supprimée du plan)

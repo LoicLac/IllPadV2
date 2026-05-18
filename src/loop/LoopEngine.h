@@ -203,7 +203,7 @@ private:
 
   // --- Overdub temp buffer (committed on tapRec during OVERDUBBING) ---
   LoopEvent        _overdubEvents[MAX_LOOP_OVERDUB_EVENTS];
-  uint8_t          _overdubCount;
+  uint16_t         _overdubCount;  // uint16_t pour signature insertEventSorted (cap=128, semantic OK)
 
   // --- Playback timeline (intégration incrémentale BPM, M-fix B1) ---
   // _playStartUs : conservé pour compat / debug (timestamp d'entrée en PLAYING), pas utilisé pour position.

@@ -46,6 +46,12 @@ void emitArpNoteRemove(uint8_t bankIdx, uint8_t pileCount);
 void emitArpPlay(uint8_t bankIdx, uint8_t pileCount, bool relaunchPaused);
 void emitArpStop(uint8_t bankIdx, uint8_t pileCount);
 void emitArpQueueFull();
+
+// Phase 2 LOOP : telemetry buffer full (équivalent emitArpQueueFull pour LoopEngine).
+// which : "main" (recording buffer plein) | "overdub" (overdub buffer plein) | "merge" (capacité dépassée à merge).
+// PRIO_LOW droppable — non-critique, juste diag.
+void emitLoopBufferFull(uint8_t channel, const char* which);
+
 // GEN seed (ARPEG_GEN). pileCount=1 triggers the degenerate form.
 void emitGenSeed(uint16_t seqLen, uint8_t eInit, uint8_t pileCount,
                  int8_t lo, int8_t hi);
