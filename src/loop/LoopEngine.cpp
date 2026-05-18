@@ -763,5 +763,29 @@ void LoopEngine::abandonOverdub() {
   _overdubCount = 0;
   for (uint8_t i = 0; i < MAX_LOOP_OVERDUB_EVENTS; i++) _overdubEvents[i].active = false;
 }
-uint32_t LoopEngine::computeNextBoundaryTick(LoopQuantize) const { return 0; }
-void LoopEngine::commitWaitingAction(MidiTransport&, uint32_t) {}   // B3 : signature étendue
+// =================================================================
+// computeNextBoundaryTick — return next tick that matches the quantize boundary
+// FREE : 0 (caller checks for FREE before this call)
+// BEAT : next multiple of 24 ticks
+// BAR  : next multiple of 96 ticks
+// =================================================================
+uint32_t LoopEngine::computeNextBoundaryTick(LoopQuantize q) const {
+  if (!_clock) return 0;
+  uint32_t now = _clock->getCurrentTick();
+  uint32_t mod = (q == LOOP_QUANT_BAR) ? TICKS_PER_BAR : TICKS_PER_BEAT;
+  uint32_t boundary = ((now / mod) + 1) * mod;
+  return boundary;
+}
+
+// =================================================================
+// commitWaitingAction — called by update() when waitingTargetTick reached
+// B3 audit fix : signature étendue (transport, nowUs) pour propager le timestamp
+// de update() à startPlayback (évite underflow uint32 sur enchaînement même tick).
+// =================================================================
+void LoopEngine::commitWaitingAction(MidiTransport& transport, uint32_t nowUs) {
+  if (_state == LoopState::WAITING_PLAY) {
+    startPlayback(transport, nowUs);  // → PLAYING (B3 : nowUs propagé)
+  } else if (_state == LoopState::WAITING_STOP) {
+    stopPlayback(transport, /*flushNotes=*/true);  // → STOPPED + flush
+  }
+}
