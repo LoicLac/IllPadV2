@@ -220,7 +220,12 @@ void LoopEngine::longPressClear(MidiTransport& transport) {
   #if DEBUG_SERIAL
   Serial.printf("[LOOP] longPressClear ch=%u state=%u\n", _channel, (unsigned)_state);
   #endif
-  if (isLocked()) return;  // safety net (caller should not invoke when locked)
+  // B2 fix généralisé : armer _clearFired AVANT la garde isLocked, pour bloquer
+  // les re-fires que CLEAR soit accepté (wipe) ou refusé (REC/OD). Sans cette
+  // ligne en amont, le hold CLEAR pendant RECORDING/OVERDUBBING re-fire à chaque
+  // frame (~3 ms) et flood le serial. notifyClearPressEnd reset à la release.
+  _clearFired = true;
+  if (isLocked()) return;  // refus silencieux pendant REC/OD (caller should filter aussi)
   // Wipe buffer + flush MIDI notes + state → EMPTY
   flushPendingNoteOffs(transport);
   _eventCount = 0;
@@ -229,9 +234,6 @@ void LoopEngine::longPressClear(MidiTransport& transport) {
   _loopDurationUs = 0;
   _loopBars = 0;
   _state = LoopState::EMPTY;
-  // B2 fix : armé true. isClearHoldFired retourne false jusqu'au release CLEAR
-  // ou nouveau press (notifyClearPressStart / End reset _clearFired).
-  _clearFired = true;
   #if DEBUG_SERIAL
   Serial.printf("[LOOP] longPressClear -> state=%u (EMPTY)\n", (unsigned)_state);
   #endif
@@ -318,7 +320,98 @@ void LoopEngine::capturePadEvent(uint8_t padIndex, uint8_t velocity, MidiTranspo
   // Pas de buffer write — la musique live n'altère pas le loop sans tap REC explicite.
   // Conformité spec §5 "Le buffer LOOP est sacré".
 }
-void LoopEngine::update(MidiTransport&) {}
+// =================================================================
+// update — called every main loop iteration (Phase 2 LOOP, B1+B3 fixes audit)
+// =================================================================
+// Phases :
+//   1. WAITING_PLAY / WAITING_STOP boundary check (ClockManager ticks)
+//      → commitWaitingAction(transport, nowUs) — B3 propage nowUs.
+//   2. Drain pending noteOff queue (gates, stuck-note safety).
+//   3. PLAYING / OVERDUBBING : intégration incrémentale BPM (B1) + walk events.
+//   4. Wrap detection sur _scaledElapsedUs ≥ _loopDurationUs.
+//   5. Bar crossing detection (sur _playPositionUs).
+// =================================================================
+void LoopEngine::update(MidiTransport& transport) {
+  uint32_t nowUs = micros();
+
+  // (1) WAITING_* → commit when boundary tick reached (B3 : propager nowUs)
+  if (_state == LoopState::WAITING_PLAY || _state == LoopState::WAITING_STOP) {
+    if (_clock && _clock->getCurrentTick() >= _waitingTargetTick) {
+      commitWaitingAction(transport, nowUs);
+      // Si on vient de transitioner vers PLAYING, _lastUpdateUs == nowUs (startPlayback l'a set),
+      // donc le delta de la phase (3) ci-dessous sera 0. Pas de saut.
+    }
+  }
+
+  // (2) Drain pending noteOffs (gates, etc.)
+  drainPendingNoteOffs(transport, nowUs);
+
+  // (3) Playback walk (B1 intégration incrémentale + audit-fix B1 WAITING_STOP)
+  // WAITING_STOP inclus dans la garde : spec §17 "la LOOP continue de jouer
+  // jusqu'au boundary tick commit". Sans WAITING_STOP ici, le tap PLAY/STOP en
+  // quantize Beat/Bar silencerait la LOOP instantanément (silence immédiat puis
+  // commit silencieux au boundary = quantize inaudible).
+  if (_state == LoopState::PLAYING || _state == LoopState::OVERDUBBING
+      || _state == LoopState::WAITING_STOP) {
+    if (_eventCount == 0 || _loopDurationUs == 0) {
+      _lastUpdateUs = nowUs;  // garder ancre cohérente même si rien à jouer
+      return;
+    }
+
+    // B1 : accumulate scaled delta cumulatif. uint64 anti-overflow longues sessions.
+    uint16_t liveBpm = _clock ? _clock->getSmoothedBPM() : _recordBpm;
+    if (liveBpm == 0) liveBpm = _recordBpm;
+    uint32_t deltaUs = nowUs - _lastUpdateUs;     // unsigned wraparound-safe sur micros() overflow
+    _lastUpdateUs = nowUs;
+    _scaledElapsedUs += (uint64_t)deltaUs * liveBpm / _recordBpm;
+
+    // (4) Wrap detection : while-loop pour absorber catch-up sur freeze potentiel (insertion sort).
+    while (_scaledElapsedUs >= (uint64_t)_loopDurationUs) {
+      // Fire tail events (du playNextEventIdx jusqu'à eventCount) avant de wrap.
+      while (_playNextEventIdx < _eventCount && _events[_playNextEventIdx].active) {
+        const LoopEvent& e = _events[_playNextEventIdx];
+        if (e.velocity > 0) {
+          refCountNoteOn(transport, e.midiNote, applyVelocityVariation(e.velocity));
+        } else {
+          refCountNoteOff(transport, e.midiNote);
+        }
+        _playNextEventIdx++;
+      }
+      // Wrap : soustrait loopDuration de l'accumulateur (reste borné).
+      _scaledElapsedUs -= _loopDurationUs;
+      _playNextEventIdx = 0;
+      _lastBarIndex = 0;
+      _wrapFlash = true;
+    }
+    _playPositionUs = (uint32_t)_scaledElapsedUs;
+
+    // Fire events whose timestamp <= current position
+    while (_playNextEventIdx < _eventCount
+           && _events[_playNextEventIdx].active
+           && _events[_playNextEventIdx].timestampUs <= _playPositionUs) {
+      const LoopEvent& e = _events[_playNextEventIdx];
+      if (e.velocity > 0) {
+        // M3 fix Q8 : applyVelocityVariation appliquée seulement au playback (ici).
+        refCountNoteOn(transport, e.midiNote, applyVelocityVariation(e.velocity));
+      } else {
+        refCountNoteOff(transport, e.midiNote);
+      }
+      _playNextEventIdx++;
+    }
+
+    // (5) Bar crossing detection (sur position courante)
+    uint32_t barDurUs = (_loopBars > 0) ? (_loopDurationUs / _loopBars) : _loopDurationUs;
+    uint16_t currentBarIdx = (barDurUs > 0) ? (uint16_t)(_playPositionUs / barDurUs) : 0;
+    if (currentBarIdx != _lastBarIndex) {
+      _barFlash = true;
+      _lastBarIndex = currentBarIdx;
+    }
+    return;
+  }
+
+  // États non-playback : garder _lastUpdateUs synchronisé pour éviter delta géant au prochain PLAYING.
+  _lastUpdateUs = nowUs;
+}
 // =================================================================
 // resolvePadToMidiNote — pad → MIDI note (spec §1, no scale, no padOrder if null)
 // =================================================================
@@ -482,8 +575,32 @@ void LoopEngine::flushHeldPadsAsNoteOffs(uint32_t timestampUs) {
     _padHeldLive[pad] = false;
   }
 }
-void LoopEngine::startPlayback(MidiTransport&, uint32_t) {}   // B3 : signature étendue avec nowUs
-void LoopEngine::stopPlayback(MidiTransport&, bool) {}
+// =================================================================
+// startPlayback — STOPPED/EMPTY → PLAYING (B1+B3 fixes audit)
+// nowUs param : timestamp capturé par le caller (update() phase 1 commitWaitingAction,
+// OR tapPlayStop/tapRec où micros() est safe). Évite l'underflow uint32 sur enchaînement
+// commitWaitingAction → startPlayback (B3 audit).
+// =================================================================
+void LoopEngine::startPlayback(MidiTransport& transport, uint32_t nowUs) {
+  (void)transport;
+  _playStartUs = nowUs;                  // debug / timestamp PLAYING entry
+  _scaledElapsedUs = 0;                  // B1 : reset intégration cumulative
+  _lastUpdateUs = nowUs;                 // B1 : ancrage premier delta = 0 au prochain update
+  _playPositionUs = 0;
+  _playNextEventIdx = 0;
+  _lastBarIndex = 0;
+  _state = LoopState::PLAYING;
+}
+
+// =================================================================
+// stopPlayback — PLAYING/OVERDUBBING → STOPPED. flushNotes=true emits noteOff for refcount > 0
+// =================================================================
+void LoopEngine::stopPlayback(MidiTransport& transport, bool flushNotes) {
+  if (flushNotes) {
+    flushPendingNoteOffs(transport);
+  }
+  _state = LoopState::STOPPED;
+}
 // computeLoopPositionUs stub supprimé (B1 fix : méthode supprimée du plan)
 // =================================================================
 // scheduleNoteOff — queue a future noteOff (gate length or stuck flush)

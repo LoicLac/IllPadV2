@@ -1468,6 +1468,15 @@ void loop() {
   s_arpScheduler.tick();
   s_arpScheduler.processEvents();  // Fire pending gate noteOff + shuffled noteOn
 
+  // Phase 2 LOOP : drive every LoopEngine each frame (µs-driven, no scheduler).
+  // Placement m3 audit : APRÈS arpScheduler (pas de cross-talk), AVANT
+  // midiEngine.flush (latency cohérente flush window).
+  for (uint8_t b = 0; b < NUM_BANKS; b++) {
+    if (s_banks[b].loopEngine) {
+      s_banks[b].loopEngine->update(s_transport);
+    }
+  }
+
   // --- CRITICAL PATH END ---
   s_midiEngine.flush();
 

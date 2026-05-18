@@ -258,7 +258,7 @@ private:
   // Playback / scheduler (B1 intégration incrémentale)
   // startPlayback(transport, nowUs) : signature étendue avec nowUs capturé en début d'update
   // pour éviter underflow uint32 sur enchaînement commitWaitingAction → startPlayback (B3 fix).
-  // computeLoopPositionUs SUPPRIMÉ : position maintenue par accumulation incrementale dans update() (B1).
+  // Position de playback maintenue par accumulation incrementale dans update() (B1 audit fix).
   void startPlayback(MidiTransport& transport, uint32_t nowUs);
   void stopPlayback(MidiTransport& transport, bool flushNotes);
   bool scheduleNoteOff(uint32_t fireTimeUs, uint8_t note);
