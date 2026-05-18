@@ -7,16 +7,21 @@
 // Ticks per step for each ArpDivision (24 ppqn MIDI clock)
 // =================================================================
 
+// Interleaved binary + triplet, descending ticks order (matches ArpDivision enum).
 static const uint16_t TICKS_PER_STEP[NUM_ARP_DIVISIONS] = {
-  384,  // DIV_4_1   — quadruple whole
-  192,  // DIV_2_1   — double whole
-  96,   // DIV_1_1   — whole note
-  48,   // DIV_1_2   — half note
-  24,   // DIV_1_4   — quarter note
-  12,   // DIV_1_8   — eighth note
-  6,    // DIV_1_16  — sixteenth note
-  3,    // DIV_1_32  — thirty-second note
-  2     // DIV_1_64  — sixty-fourth note (minimum 2 ticks)
+  384,  // DIV_4_1    — quadruple whole
+  192,  // DIV_2_1    — double whole
+  96,   // DIV_1_1    — whole note
+  48,   // DIV_1_2    — half note
+  32,   // DIV_1_2_T  — half triplet
+  24,   // DIV_1_4    — quarter note
+  16,   // DIV_1_4_T  — quarter triplet
+  12,   // DIV_1_8    — eighth note
+  8,    // DIV_1_8_T  — eighth triplet
+  6,    // DIV_1_16   — sixteenth note
+  4,    // DIV_1_16_T — sixteenth triplet
+  3,    // DIV_1_32   — thirty-second note
+  2     // DIV_1_64   — sixty-fourth note (minimum)
 };
 
 // =================================================================

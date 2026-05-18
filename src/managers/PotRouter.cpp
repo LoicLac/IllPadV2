@@ -149,7 +149,7 @@ void PotRouter::getRangeForTarget(PotTarget t, uint16_t& lo, uint16_t& hi) {
     case TARGET_PITCH_BEND:         lo = 0; hi = 16383; break;
     case TARGET_GATE_LENGTH:        lo = 0; hi = 4095; break;
     case TARGET_SHUFFLE_DEPTH:      lo = 0; hi = 4095; break;
-    case TARGET_DIVISION:           lo = 0; hi = 8; break;
+    case TARGET_DIVISION:           lo = 0; hi = NUM_ARP_DIVISIONS - 1; break;
     case TARGET_PATTERN:            lo = 0; hi = NUM_ARP_PATTERNS - 1; break;
     case TARGET_GEN_POSITION:       lo = 0; hi = NUM_GEN_POSITIONS - 1; break;
     case TARGET_SHUFFLE_TEMPLATE:   lo = 0; hi = NUM_SHUFFLE_TEMPLATES - 1; break;
@@ -306,10 +306,14 @@ void PotRouter::seedCatchValues(bool keepGlobalCatch) {
           norm = 0.5f + (_gateLength - 1.0f) / 7.0f * 0.5f;
         break;
       case TARGET_SHUFFLE_DEPTH:
-        norm = _shuffleDepth;
+        // Inverse of piecewise: depth 0.0-1.0 → 0-75% pot, depth 1.0-2.25 → 75-100% pot
+        if (_shuffleDepth <= 1.0f)
+          norm = _shuffleDepth * 0.75f;
+        else
+          norm = 0.75f + (_shuffleDepth - 1.0f) * 0.2f;
         break;
       case TARGET_DIVISION:
-        norm = (float)_division / 8.0f;
+        norm = (float)_division / (float)(NUM_ARP_DIVISIONS - 1);
         break;
       case TARGET_PATTERN:
         norm = (float)_pattern / (float)(NUM_ARP_PATTERNS - 1);
@@ -490,11 +494,11 @@ void PotRouter::applyBinding(uint8_t potIndex) {
       _gateLength = adcToGate(adc);
       break;
     case TARGET_SHUFFLE_DEPTH:
-      _shuffleDepth = adcToFloat(adc);
+      _shuffleDepth = adcToShuffleDepth(adc);
       break;
     case TARGET_DIVISION: {
-      uint8_t div = (uint8_t)adcToRange(adc, 0, 8);
-      if (div > 8) div = 8;
+      uint8_t div = (uint8_t)adcToRange(adc, 0, NUM_ARP_DIVISIONS - 1);
+      if (div >= NUM_ARP_DIVISIONS) div = NUM_ARP_DIVISIONS - 1;
       _division = (ArpDivision)div;
       break;
     }
@@ -648,6 +652,21 @@ float PotRouter::adcToGate(float adc) const {
     return 0.005f + norm * (0.995f / 0.5f);  // 0.005 → 1.0
   }
   return 1.0f + (norm - 0.5f) * (7.0f / 0.5f);  // 1.0 → 8.0
+}
+
+// Piecewise shuffle depth mapping :
+//   0..75% pot  → depth 0.0..1.0  (linear, usual swing range)
+//   75..100% pot → depth 1.0..2.25 (linear, extreme overlap range)
+// Depth 2.25 × template max (75) = 169% step offset → noteOn deborde sur
+// step+1 et debut step+2. Polyphonie diagonale gerée par P1 refcount.
+float PotRouter::adcToShuffleDepth(float adc) const {
+  float norm = adc / 4095.0f;
+  if (norm < 0.0f) norm = 0.0f;
+  if (norm > 1.0f) norm = 1.0f;
+  if (norm <= 0.75f) {
+    return norm / 0.75f;                            // 0.0 → 1.0
+  }
+  return 1.0f + (norm - 0.75f) * (1.25f / 0.25f);   // 1.0 → 2.25
 }
 
 bool PotRouter::isPerBankTarget(PotTarget t) const {

@@ -116,7 +116,7 @@ struct PotParamsStore {
 // =================================================================
 
 const uint16_t ARPPOT_MAGIC   = EEPROM_MAGIC;  // 0xBEEF (defined in HardwareConfig.h)
-const uint8_t  ARPPOT_VERSION = 1;             // 1 = post pattern reduction (15->6) + ARPEG_GEN cohabit
+const uint8_t  ARPPOT_VERSION = 2;             // 2 = ArpDivision interleaved binary/triplet (NVS Zero Migration: reset to defaults)
 
 // `pattern` field interpretation depends on owning bank type :
 //   - BANK_ARPEG     : ArpPattern enum index (0..NUM_ARP_PATTERNS-1 = 0..5)
@@ -128,10 +128,10 @@ struct ArpPotStore {
   uint8_t  reserved;
   uint16_t gateRaw;           // gate × 4095 (range 0-32760, i.e. 0.0-8.0; floor 0.005 on load)
   uint16_t shuffleDepthRaw;   // 0-4095 (maps to 0.0-1.0)
-  uint8_t  division;          // ArpDivision enum (0-8)
+  uint8_t  division;          // ArpDivision enum (0..NUM_ARP_DIVISIONS-1)
   uint8_t  pattern;           // ArpPattern (0-5) OR _genPosition (0-14) — see comment above
   uint8_t  octaveRange;       // 1-4 (semantically = mutationLevel for ARPEG_GEN)
-  uint8_t  shuffleTemplate;   // 0-9 (index into groove templates)
+  uint8_t  shuffleTemplate;   // 0..NUM_SHUFFLE_TEMPLATES-1 (index into groove templates)
 };
 // Total : 4 (header) + 8 = 12 octets.
 
@@ -455,17 +455,24 @@ enum ArpPattern : uint8_t {
   NUM_ARP_PATTERNS   = 6
 };
 
+// Interleaved binary + triplet, ordered by descending ticks (slow → fast).
+// Pot sweep gives a continuous deceleration → acceleration monotone, no
+// "speed jump" at the boundary. Requires NVS bump (v1 → v2) since IDs change.
 enum ArpDivision : uint8_t {
-  DIV_4_1   = 0,   // Quadruple whole
-  DIV_2_1   = 1,   // Double whole
-  DIV_1_1   = 2,   // Whole note
-  DIV_1_2   = 3,   // Half note
-  DIV_1_4   = 4,   // Quarter note
-  DIV_1_8   = 5,   // Eighth note
-  DIV_1_16  = 6,   // Sixteenth note
-  DIV_1_32  = 7,   // Thirty-second note
-  DIV_1_64  = 8,   // Sixty-fourth note
-  NUM_ARP_DIVISIONS = 9
+  DIV_4_1     = 0,   // Quadruple whole       (384 ticks)
+  DIV_2_1     = 1,   // Double whole          (192)
+  DIV_1_1     = 2,   // Whole note            (96)
+  DIV_1_2     = 3,   // Half note             (48)
+  DIV_1_2_T   = 4,   // Half triplet          (32) — 3 notes per whole
+  DIV_1_4     = 5,   // Quarter note          (24)
+  DIV_1_4_T   = 6,   // Quarter triplet       (16) — 3 notes per half
+  DIV_1_8     = 7,   // Eighth note           (12)
+  DIV_1_8_T   = 8,   // Eighth triplet        (8)  — 3 notes per quarter
+  DIV_1_16    = 9,   // Sixteenth note        (6)
+  DIV_1_16_T  = 10,  // Sixteenth triplet     (4)  — 3 notes per eighth
+  DIV_1_32    = 11,  // Thirty-second note    (3)
+  DIV_1_64    = 12,  // Sixty-fourth note     (2, minimum)
+  NUM_ARP_DIVISIONS = 13
 };
 
 // =================================================================

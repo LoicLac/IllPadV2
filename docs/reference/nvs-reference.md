@@ -69,7 +69,7 @@ Menu (`SetupUI::printMainMenu`) loops over these to check all stores in one pass
 |----------|--------|
 | `validateSettingsStore` | profile, AT rate, BLE interval, clock mode, double-tap, bargraph, panic, batADC, LOOP timers (clearLoop, slotSave, slotClear) |
 | `validateBankTypeStore` | types (max BANK_ARPEG_GEN sauf BANK_ANY), arpCount cumulé ARPEG+ARPEG_GEN (max MAX_ARP_BANKS=4) via isArpType, quantize modes, scaleGroup (max NUM_SCALE_GROUPS), bonusPilex10 [10..20] (default 15), marginWalk [3..12] (default 7) — V3 |
-| `validateArpPotStore` | pattern ≤14 (dual-semantic ArpPattern OR _genPosition), division, octaveRange [1..4] (octave range CLASSIC OR mutation level GENERATIVE), shuffleTemplate. Magic+version check at load (ARPPOT_MAGIC, ARPPOT_VERSION=1) |
+| `validateArpPotStore` | pattern ≤14 (dual-semantic ArpPattern OR _genPosition), division [0..12] (interleaved binary/triplet), octaveRange [1..4] (octave range CLASSIC OR mutation level GENERATIVE), shuffleTemplate. Magic+version check at load (ARPPOT_MAGIC, ARPPOT_VERSION=2 since interleave) |
 | `validateScalePadStore` | rootPads, modePads, chromaticPad (all < NUM_KEYS) |
 | `validateArpPadStore` | holdPad, octavePads (all < NUM_KEYS) |
 | `validateBankPadStore` | bankPads (all < NUM_KEYS) |

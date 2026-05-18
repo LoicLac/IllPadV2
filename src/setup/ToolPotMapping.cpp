@@ -255,22 +255,22 @@ void ToolPotMapping::printTargetDescription(PotTarget t) {
       _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter." VT_RESET);
       break;
     case TARGET_SHUFFLE_DEPTH:
-      _ui->drawFrameLine(VT_BRIGHT_WHITE "Shuffle Depth" VT_RESET VT_DIM "  --  Groove intensity" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "0.0 = straight timing. 1.0 = maximum groove." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Multiplies shuffle template values. Extreme = notes cross step boundaries." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter." VT_RESET);
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Shuffle Depth" VT_RESET VT_DIM "  --  Groove intensity (piecewise)" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Pot 0-75% : depth 0.0 a 1.0 (swing normal)." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Pot 75-100% : depth 1.0 a 2.25 (extreme overlap)." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter. Multiplie le template courant." VT_RESET);
       break;
     case TARGET_SHUFFLE_TEMPLATE:
-      _ui->drawFrameLine(VT_BRIGHT_WHITE "Shuffle Template" VT_RESET VT_DIM "  --  Groove shape (5 templates)" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "16-step timing offset pattern. Template x Depth = actual swing." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Each template has a distinct feel. Cycle with pot." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter." VT_RESET);
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Shuffle Template" VT_RESET VT_DIM "  --  Groove shape (8 templates)" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "0:Humanizer 1:BoomBap 2:TrapRoll 3:Halftime" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "4:Reggaeton 5:DubDrag 6:Swing50 7:Swing75" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter. Template x Depth = actual swing." VT_RESET);
       break;
     case TARGET_DIVISION:
-      _ui->drawFrameLine(VT_BRIGHT_WHITE "Division" VT_RESET VT_DIM "  --  Arp clock division" VT_RESET);
-      _ui->drawFrameLine(VT_DIM "9 values: 4/1, 2/1, 1/1, 1/2, 1/4, 1/8, 1/16, 1/32, 1/64." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Lower fraction = faster arp. Binary values mapped to pot range." VT_RESET);
-      _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter." VT_RESET);
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Division" VT_RESET VT_DIM "  --  Arp clock division (13 values, interleaved)" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "4/1 2/1 1/1 1/2 1/2T 1/4 1/4T 1/8 1/8T 1/16 1/16T 1/32 1/64" VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Triplet variants inserted between binaries by descending tick." VT_RESET);
+      _ui->drawFrameLine(VT_DIM "Per-bank ARPEG parameter. Lower fraction = faster." VT_RESET);
       break;
     case TARGET_PATTERN:
       _ui->drawFrameLine(VT_BRIGHT_WHITE "Pattern" VT_RESET VT_DIM "  --  Arp playback shape (6 patterns)" VT_RESET);

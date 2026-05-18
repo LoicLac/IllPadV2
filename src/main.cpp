@@ -1101,7 +1101,9 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
     static bool s_firstEmit = true;
     bool forceEmit = s_firstEmit || s_forceNextEmitAll.exchange(false, std::memory_order_acq_rel);
 
-    static const char* s_divNames[] = {"4/1","2/1","1/1","1/2","1/4","1/8","1/16","1/32","1/64"};
+    static const char* s_divNames[] = {"4/1","2/1","1/1","1/2","1/2T",
+                                        "1/4","1/4T","1/8","1/8T",
+                                        "1/16","1/16T","1/32","1/64"};
     static const char* s_patNames[] = {
       "Up","Down","UpDown","Order","PedalUp","Converge"
     };
@@ -1200,7 +1202,7 @@ static void debugOutput(bool leftHeld, bool rearHeld) {
       s_dbgShufDep = shufDep;
     }
     if (forceEmit || div != s_dbgDiv) {
-      const char* divStr = (div < 9) ? s_divNames[div] : "?";
+      const char* divStr = (div < NUM_ARP_DIVISIONS) ? s_divNames[div] : "?";
       viewer::emitPot(potSlotName(s_potRouter.getSlotForTarget(TARGET_DIVISION, curType)),
                       "Division", divStr, nullptr);
       s_dbgDiv = div;

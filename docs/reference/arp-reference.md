@@ -193,16 +193,36 @@ plumbing because their behavior is subsumed by GENERATIVE mode (see §13).
 
 ## 7. Division
 
-Hold-left + R1 pot, 9 **binary** values (not linear sweep) :
+Hold-left + R1 pot, 13 values total (9 binary + 4 triplets), interleaved
+by descending ticks so the pot sweep is monotone slow → fast.
 
-```
-4/1  2/1  1/1  1/2  1/4  1/8  1/16  1/32  1/64
-```
+| ID | Name | Ticks @ 24 PPQN | Note |
+|---|---|---|---|
+| 0 | 4/1 | 384 | Quadruple whole |
+| 1 | 2/1 | 192 | |
+| 2 | 1/1 | 96 | Whole |
+| 3 | 1/2 | 48 | |
+| 4 | 1/2T | 32 | Half triplet (3 per whole) |
+| 5 | 1/4 | 24 | Quarter |
+| 6 | 1/4T | 16 | Quarter triplet (3 per half) |
+| 7 | 1/8 | 12 | Eighth |
+| 8 | 1/8T | 8 | Eighth triplet (3 per quarter) |
+| 9 | 1/16 | 6 | Sixteenth |
+| 10 | 1/16T | 4 | Sixteenth triplet (3 per eighth) |
+| 11 | 1/32 | 3 | Thirty-second |
+| 12 | 1/64 | 2 | Minimum |
 
-Each halves the step duration from the previous. Default : 1/16.
+Default : 1/8 (`DIV_1_8` = ID 7). Pot sweep gives a continuous deceleration
+→ acceleration monotone — no "speed jump" boundary.
+
+**NVS bump v1 → v2** : the interleaved ordering changes the IDs of every
+division except DIV_4_1, DIV_2_1, DIV_1_1, DIV_1_2 (= 0..3 unchanged).
+Per the Zero Migration Policy, ArpPotStore v1 stores are rejected at
+load — banks reset to defaults (`DIV_1_8` etc.). User re-tunes via Tool 7
+or just by sweeping R1+hold.
 
 The scheduler's `divisor` = ticks per step, computed from division and
-24-PPQN clock.
+24-PPQN clock via `TICKS_PER_STEP[]` in `ArpScheduler.cpp`.
 
 ---
 
@@ -210,17 +230,40 @@ The scheduler's `divisor` = ticks per step, computed from division and
 
 ### Templates
 
-10 groove templates (16 steps each) in `GrooveTemplates.h` :
+8 groove templates (16 steps each) in `GrooveTemplates.h`. All values are
+**positive 0..+100** — the engine fires noteOn on tick and can only delay
+(not anticipate), so negative offsets would only shorten gate without
+moving the noteOn (cf §13 limitations).
 
-- Templates 0–4 : positive-only classic (delays alternate steps).
-- Templates 5–9 : bipolar (some early, some late).
+| ID | Name | Caractère |
+|---|---|---|
+| 0 | Humanizer | Micro-variations 1–15 %, pseudo-aléatoire fixe |
+| 1 | Boom Bap | Swing 16th asymétrique, rap 90s / Dilla |
+| 2 | Trap Roll | Ramp ascendant, build / fills |
+| 3 | Halftime | Push isolé sur beat 3 (step 8), trap kick drag |
+| 4 | Reggaeton | Tresillo 3-3-2, latin trap / dembow |
+| 5 | Dub Drag | Push beats 2 & 4 (steps 4, 12), reggae / dub |
+| 6 | Swing 50 | MPC swing 1:2 classique |
+| 7 | Swing 75 | Hard swing marqué |
 
-Template selected via hold-left + R3 pot (10 discrete values).
+Template selected via hold-left + R3 pot (8 discrete values).
 
 ### Depth
 
-`ArpPotStore.shuffleDepth` (0.0–1.0) via R3 alone (in ARPEG context). At
-extreme depth, notes can overlap across steps — handled by P1 refcount.
+`ArpPotStore.shuffleDepth` via R3 alone (in ARPEG context). Piecewise pot
+mapping for extreme overlap on top quarter of the pot stroke
+(`PotRouter::adcToShuffleDepth`) :
+
+- Pot 0–75 % → depth 0.0–1.0 (linear, usual swing).
+- Pot 75–100 % → depth 1.0–2.25 (linear, extreme overlap).
+
+At depth > 1.0, noteOn of step N overflows into step N+1 or beyond
+(template max 75 × depth 2.25 = 169 % step offset). Combined with
+gate up to 8.0, this is the "diagonal polyphony" regime. Overlap
+handled by P1 refcount, no stuck notes.
+
+NVS `shuffleDepthRaw` stays a `uint16_t` (fits up to 9214 = 2.25 × 4095).
+Old stores (raw ≤ 4095) reload as depth ≤ 1.0 — no migration needed.
 
 ### Offset formula
 

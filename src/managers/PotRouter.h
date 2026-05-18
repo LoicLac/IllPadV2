@@ -197,6 +197,7 @@ private:
   uint16_t adcToRange(float adc, uint16_t lo, uint16_t hi) const;
   float    adcToFloat(float adc) const;
   float    adcToGate(float adc) const;
+  float    adcToShuffleDepth(float adc) const;  // piecewise : 0..75% pot -> 0..1.0, 75..100% pot -> 1.0..2.25
   bool     isPerBankTarget(PotTarget t) const;
   static uint8_t getDiscreteSteps(PotTarget t);
 };

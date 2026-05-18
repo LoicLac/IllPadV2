@@ -66,7 +66,7 @@ public:
   void setDivision(ArpDivision div);
   void setGateLength(float gate);              // 0.0-1.0 (or beyond for overlap)
   void setShuffleDepth(float depth);           // 0.0-1.0
-  void setShuffleTemplate(uint8_t tmpl);       // 0-9, index into groove templates
+  void setShuffleTemplate(uint8_t tmpl);       // 0..NUM_SHUFFLE_TEMPLATES-1, index into groove templates
   void setBaseVelocity(uint8_t vel);           // 1-127
   void setVelocityVariation(uint8_t pct);      // 0-100
   void setStartMode(uint8_t mode);             // ArpStartMode (0=immediate, 1=beat)
