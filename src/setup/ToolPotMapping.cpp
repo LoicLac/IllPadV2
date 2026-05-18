@@ -330,15 +330,19 @@ void ToolPotMapping::drawTwoColumnLayout() {
     bool selAlone = (selectedSlot == slotAlone);
     bool selHold  = (selectedSlot == slotHold);
 
-    // Build value strings
+    // Build value strings. During _ccEditing the cell under the cursor must
+    // reflect the live _ccNumber, not the stale map[slot].ccNumber (which is
+    // only committed on NAV_ENTER).
     char valAlone[20], valHold[20];
     if (map[slotAlone].target == TARGET_MIDI_CC) {
-      snprintf(valAlone, sizeof(valAlone), "CC %d", map[slotAlone].ccNumber);
+      uint8_t cc = (_ccEditing && slotAlone == selectedSlot) ? _ccNumber : map[slotAlone].ccNumber;
+      snprintf(valAlone, sizeof(valAlone), "CC %d", cc);
     } else {
       snprintf(valAlone, sizeof(valAlone), "%s", targetName(map[slotAlone].target));
     }
     if (map[slotHold].target == TARGET_MIDI_CC) {
-      snprintf(valHold, sizeof(valHold), "CC %d", map[slotHold].ccNumber);
+      uint8_t cc = (_ccEditing && slotHold == selectedSlot) ? _ccNumber : map[slotHold].ccNumber;
+      snprintf(valHold, sizeof(valHold), "CC %d", cc);
     } else {
       snprintf(valHold, sizeof(valHold), "%s", targetName(map[slotHold].target));
     }
