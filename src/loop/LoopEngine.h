@@ -75,6 +75,15 @@ struct LoopPendingNoteOff {
 };
 
 // =================================================================
+// WaitingExit — one-shot signal émis par commitWaitingAction quand un transient
+// WAITING_PLAY/STOP commit (boundary tick atteint). Consommé par main.cpp pour
+// trigger EVT_PLAY/STOP qui clear l'event overlay EVT_WAITING (PTN_CROSSFADE_COLOR
+// continuous — caller must clear, cf LedController.cpp:791-796).
+// Symétrique aux flash flags consumeBarFlash/consumeWrapFlash (one-shot pattern).
+// =================================================================
+enum class WaitingExit : uint8_t { NONE = 0, TO_PLAY = 1, TO_STOP = 2 };
+
+// =================================================================
 // LoopEngine — one loop instance per BANK_LOOP slot (max MAX_LOOP_BANKS)
 // =================================================================
 class LoopEngine {
@@ -160,6 +169,11 @@ public:
   bool consumeBarFlash();
   bool consumeWrapFlash();
 
+  // --- WAITING exit signal (consumed once par main.cpp pour trigger EVT_PLAY/STOP) ---
+  // Set par commitWaitingAction quand WAITING_PLAY → PLAYING ou WAITING_STOP → STOPPED.
+  // Symétrique du EVT_WAITING émis à l'entrée du WAITING_* (clear l'event overlay).
+  WaitingExit consumeWaitingExit();
+
   // --- Control pad lookup (used by processLoopMode) ---
   bool isLoopControlPad(uint8_t padIndex) const;
   uint8_t getRecPad() const       { return _recPad; }
@@ -227,6 +241,9 @@ private:
   // --- LED flash flags ---
   bool             _barFlash;
   bool             _wrapFlash;
+
+  // --- WAITING exit signal (set par commitWaitingAction, consommé par main.cpp) ---
+  WaitingExit      _waitingExit;
 
   // --- Quantize transient ---
   uint32_t         _waitingTargetTick;   // ClockManager tick at which WAITING_PLAY/STOP commits

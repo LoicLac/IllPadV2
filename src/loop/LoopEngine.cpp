@@ -37,6 +37,7 @@ LoopEngine::LoopEngine()
   , _lastBarIndex(0)
   , _barFlash(false)
   , _wrapFlash(false)
+  , _waitingExit(WaitingExit::NONE)
   , _waitingTargetTick(0)
   , _clearPressStartMs(0)
   , _clearFired(false)
@@ -89,6 +90,12 @@ bool LoopEngine::consumeBarFlash() {
 bool LoopEngine::consumeWrapFlash() {
   bool v = _wrapFlash;
   _wrapFlash = false;
+  return v;
+}
+
+WaitingExit LoopEngine::consumeWaitingExit() {
+  WaitingExit v = _waitingExit;
+  _waitingExit = WaitingExit::NONE;
   return v;
 }
 
@@ -785,7 +792,9 @@ uint32_t LoopEngine::computeNextBoundaryTick(LoopQuantize q) const {
 void LoopEngine::commitWaitingAction(MidiTransport& transport, uint32_t nowUs) {
   if (_state == LoopState::WAITING_PLAY) {
     startPlayback(transport, nowUs);  // → PLAYING (B3 : nowUs propagé)
+    _waitingExit = WaitingExit::TO_PLAY;  // signal symétrique de EVT_WAITING (clear overlay)
   } else if (_state == LoopState::WAITING_STOP) {
     stopPlayback(transport, /*flushNotes=*/true);  // → STOPPED + flush
+    _waitingExit = WaitingExit::TO_STOP;
   }
 }

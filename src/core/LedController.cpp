@@ -2,6 +2,7 @@
 #include "HardwareConfig.h"
 #include "KeyboardData.h"
 #include "../arp/ArpEngine.h"
+#include "../loop/LoopEngine.h"
 #include <Arduino.h>
 #include <math.h>
 
@@ -506,12 +507,54 @@ void LedController::renderBankArpeg(uint8_t led, bool isFg, unsigned long now) {
 }
 
 void LedController::renderBankLoop(uint8_t led, bool isFg, unsigned long now) {
-  (void)now;  // Phase 1 stub : solid color, no time-based logic yet (Phase 2+ LoopEngine state machine)
-  // v9 : unified _fgIntensity (NORMAL/ARPEG/LOOP all share). BG = FG × bgFactor.
-  uint8_t intensity = isFg
-                      ? _fgIntensity
-                      : (uint8_t)((uint16_t)_fgIntensity * _bgFactor / 100);
-  setPixel(led, _colors[CSLOT_MODE_LOOP], intensity);
+  const BankSlot& slot = _slots[led];
+  LoopEngine* le = slot.loopEngine;
+
+  // Fallback : no engine assigned (boot defaults, ou bank > MAX_LOOP_BANKS) → solid mode color
+  if (!le) {
+    uint8_t intensity = isFg
+                        ? _fgIntensity
+                        : (uint8_t)((uint16_t)_fgIntensity * _bgFactor / 100);
+    setPixel(led, _colors[CSLOT_MODE_LOOP], intensity);
+    return;
+  }
+
+  uint8_t baseIntensity = isFg
+                          ? _fgIntensity
+                          : (uint8_t)((uint16_t)_fgIntensity * _bgFactor / 100);
+
+  // m4 audit fix : consume flash flags UNE SEULE FOIS (one-shot semantics).
+  // Phase 2 : on n'utilise qu'une seule durée tickBarDurationMs pour les deux
+  // (bar + wrap). Phase 4 polish pourra ajouter _lastFlashDurationMs pour différencier.
+  bool barFlash  = le->consumeBarFlash();
+  bool wrapFlash = le->consumeWrapFlash();
+  if (barFlash || wrapFlash) {
+    _flashStartTime[led] = now;
+  }
+
+  // State-driven foreground color
+  ColorSlotId fgColorSlot;
+  bool recording   = le->isRecording();
+  bool overdubbing = le->isOverdubbing();
+  bool playing     = le->isPlaying();
+
+  if (recording)        fgColorSlot = CSLOT_VERB_REC;
+  else if (overdubbing) fgColorSlot = CSLOT_VERB_OVERDUB;
+  else if (playing)     fgColorSlot = CSLOT_VERB_PLAY;
+  else                  fgColorSlot = CSLOT_MODE_LOOP;  // EMPTY / STOPPED / WAITING_* : just mode color
+
+  setPixel(led, _colors[fgColorSlot], baseIntensity);
+
+  // FLASH overlay on bar/wrap (duration tickBarDurationMs Phase 2 — voir m4 fix)
+  if (_flashStartTime[led] != 0) {
+    uint16_t durationMs = _tickBarDurationMs;
+    if ((now - _flashStartTime[led]) < durationMs) {
+      renderFlashOverlay(led, _colors[CSLOT_VERB_PLAY], _tickFlashFg, _tickFlashBg,
+                         _flashStartTime[led], durationMs, isFg, now);
+    } else {
+      _flashStartTime[led] = 0;
+    }
+  }
 }
 
 void LedController::renderNormalDisplay(unsigned long now) {

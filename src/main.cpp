@@ -836,11 +836,32 @@ static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, ui
       // REC / PLAY/STOP tap on rising edge (CLEAR already handled above)
       if (i == le->getRecPad()) {
         if (state.keyIsPressed[i] && !s_lastKeys[i]) {
+          LoopState before = le->getState();
           le->tapRec(s_transport);
+          LoopState after = le->getState();
+          // Emit LED event based on the transition
+          if (before == LoopState::EMPTY && after == LoopState::RECORDING) {
+            s_leds.triggerEvent(EVT_LOOP_REC);
+          } else if (after == LoopState::OVERDUBBING) {
+            s_leds.triggerEvent(EVT_LOOP_OVERDUB);
+          }
+          // RECORDING → PLAYING (stopRecording chain) : LED event PLAY
+          if (before == LoopState::RECORDING && after == LoopState::PLAYING) {
+            s_leds.triggerEvent(EVT_PLAY);
+          }
         }
       } else if (i == le->getPlayStopPad()) {
         if (state.keyIsPressed[i] && !s_lastKeys[i]) {
+          LoopState before = le->getState();
           le->tapPlayStop(s_transport, state.keyIsPressed);
+          LoopState after = le->getState();
+          if (after == LoopState::WAITING_PLAY || after == LoopState::WAITING_STOP) {
+            s_leds.triggerEvent(EVT_WAITING);
+          } else if (before == LoopState::STOPPED && after == LoopState::PLAYING) {
+            s_leds.triggerEvent(EVT_PLAY);
+          } else if (before == LoopState::PLAYING && after == LoopState::STOPPED) {
+            s_leds.triggerEvent(EVT_STOP);
+          }
         }
       }
       // CLEAR pad : already handled by sustained-press logic above
@@ -1474,6 +1495,15 @@ void loop() {
   for (uint8_t b = 0; b < NUM_BANKS; b++) {
     if (s_banks[b].loopEngine) {
       s_banks[b].loopEngine->update(s_transport);
+      // Root-cause fix EVT_WAITING : trigger EVT_PLAY/STOP au boundary commit pour
+      // clear l'overlay continuous PTN_CROSSFADE_COLOR. Signal source-emitted par
+      // commitWaitingAction, consommé ici, traduit en LED side-effect.
+      WaitingExit ex = s_banks[b].loopEngine->consumeWaitingExit();
+      if (ex == WaitingExit::TO_PLAY) {
+        s_leds.triggerEvent(EVT_PLAY, (uint8_t)(1 << b));
+      } else if (ex == WaitingExit::TO_STOP) {
+        s_leds.triggerEvent(EVT_STOP, (uint8_t)(1 << b));
+      }
     }
   }
 
