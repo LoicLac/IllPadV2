@@ -27,7 +27,9 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _ui.begin(leds);
   _toolCal.begin(keyboard, leds, &_ui);
   _toolOrdering.begin(keyboard, leds, &_ui, padOrder);
-  _toolRoles.begin(keyboard, leds, &_ui,
+  // Phase 3 — Tool 3 b1 begin signature étendue avec NvsManager* (B-N1 fix v1 + M13 v2)
+  // pour cross-store lookup LoopPadStore + ControlPadStore.
+  _toolRoles.begin(keyboard, leds, &_ui, nvs,
                    bankPads, rootPads, modePads,
                    chromaticPad, holdPad,
                    octavePads);

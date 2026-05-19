@@ -57,10 +57,13 @@ static const char* POOL_HOLD_LABELS[] = { "Hld" };
 
 ToolPadRoles::ToolPadRoles()
   : _keyboard(nullptr), _leds(nullptr), _ui(nullptr),
+    _nvs(nullptr),                     // Phase 3
     _bankPads(nullptr), _rootPads(nullptr), _modePads(nullptr),
     _chromaticPad(nullptr), _holdPad(nullptr),
     _octavePads(nullptr),
     _wkChromPad(0xFF), _wkHoldPad(0xFF),
+    _activeSubPage(SUB_NORM),          // Phase 3 — default sub-page
+    _flashExpireMs(0),                 // Phase 3 — no flash at construction
     _gridRow(0), _gridCol(0), _editing(false),
     _poolLine(0), _poolIdx(0),
     _confirmDefaults(false), _confirmClearAll(false), _nvsSaved(false)
@@ -70,22 +73,59 @@ ToolPadRoles::ToolPadRoles()
   memset(_wkModePads, 0xFF, sizeof(_wkModePads));
   memset(_wkOctavePads, 0xFF, sizeof(_wkOctavePads));
   memset(_refBaselines, 0, sizeof(_refBaselines));
+
+  // Phase 3 — _wkLoopPad init to sentinel 0xFF (will be loaded from NvsManager in begin)
+  memset(&_wkLoopPad, 0, sizeof(_wkLoopPad));
+  _wkLoopPad.magic       = EEPROM_MAGIC;
+  _wkLoopPad.version     = LOOPPAD_VERSION;
+  _wkLoopPad.recPad      = 0xFF;
+  _wkLoopPad.playStopPad = 0xFF;
+  _wkLoopPad.clearPad    = 0xFF;
+  for (uint8_t i = 0; i < 16; i++) _wkLoopPad.slotPads[i] = 0xFF;
+
+  _flashMsg[0] = '\0';
 }
 
 void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
-                          SetupUI* ui,
+                          SetupUI* ui, NvsManager* nvs,
                           uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
                           uint8_t& chromaticPad, uint8_t& holdPad,
                           uint8_t* octavePads) {
   _keyboard     = keyboard;
   _leds         = leds;
   _ui           = ui;
+  _nvs          = nvs;                 // Phase 3
   _bankPads     = bankPads;
   _rootPads     = rootPads;
   _modePads     = modePads;
   _chromaticPad = &chromaticPad;
   _holdPad      = &holdPad;
   _octavePads   = octavePads;
+
+  // Phase 3 — load LoopPadStore working copy from NvsManager cached state
+  if (_nvs) {
+    _wkLoopPad = _nvs->getLoadedLoopPadStore();
+  }
+}
+
+// =================================================================
+// Phase 3 — Flash msg infrastructure (pattern Tool 4 — ToolControlPads.cpp:854)
+// =================================================================
+
+void ToolPadRoles::_setFlash(const char* msg) {
+  strncpy(_flashMsg, msg, sizeof(_flashMsg) - 1);
+  _flashMsg[sizeof(_flashMsg) - 1] = '\0';
+  _flashExpireMs = millis() + 2500;   // 2.5s timeout (aligned Tool 4 pattern)
+}
+
+bool ToolPadRoles::_flashActive() const {
+  return _flashExpireMs > millis() && _flashMsg[0] != '\0';
+}
+
+void ToolPadRoles::_drawFlash() {
+  if (_flashActive()) {
+    _ui->drawFrameLine(VT_YELLOW "%s" VT_RESET, _flashMsg);
+  }
 }
 
 // =================================================================
@@ -115,10 +155,23 @@ const char* ToolPadRoles::poolItemLabel(uint8_t line, uint8_t index) const {
 }
 
 // =================================================================
-// buildRoleMap — scan all assignments, populate _roleMap + _roleLabels
+// buildRoleMap — Phase 3 dispatcher (m14 v2 audit indé : factorisation cible
+// buildRoleMap, pas drawGrid qui est trivial). Selon _activeSubPage, appelle
+// l'impl appropriée. Stubs ARPEG/LOOP en Phase 3.C — vraies impls Phase 3.D/3.E.
 // =================================================================
 
 void ToolPadRoles::buildRoleMap() {
+  switch (_activeSubPage) {
+    case SUB_NORM:  _buildRoleMapNorm();  break;
+    case SUB_ARPEG: _buildRoleMapArpeg(); break;
+    case SUB_LOOP:  _buildRoleMapLoop();  break;
+    default:        _buildRoleMapLegacy(); break;
+  }
+}
+
+// _buildRoleMapLegacy — body original Tool 3 (avant Phase 3 refacto).
+// Conservé pour stubs ARPEG/LOOP Phase 3.C (non-régression UX inter-phases).
+void ToolPadRoles::_buildRoleMapLegacy() {
   memset(_roleMap, ROLE_NONE, NUM_KEYS);
   for (int i = 0; i < NUM_KEYS; i++) {
     memcpy(_roleLabels[i], " -- ", 5);
@@ -145,6 +198,60 @@ void ToolPadRoles::buildRoleMap() {
   setRole(_wkHoldPad, ROLE_HOLD, GRID_HOLD_LABELS[0]);
   for (int i = 0; i < 4; i++)
     setRole(_wkOctavePads[i], ROLE_OCTAVE, GRID_OCTAVE_LABELS[i]);
+}
+
+// Phase 3.C — sous-page NORM (bank slots assignment). Comportement équivalent
+// legacy pour Phase 3.C : montre tous les rôles. Phase 3.D / 3.E ajouteront
+// le distingo visuel "active vs dim selon sous-page" (nécessite extension
+// palette SetupUI GRID_ROLES, hors-scope strict Phase 3.C).
+void ToolPadRoles::_buildRoleMapNorm() {
+  _buildRoleMapLegacy();
+}
+
+// Phase 3.D — sous-page ARPEG (root/mode/chrom/hold/octave). Stub Phase 3.C.
+void ToolPadRoles::_buildRoleMapArpeg() {
+  _buildRoleMapLegacy();
+}
+
+// Phase 3.E — sous-page LOOP (3 controls + 16 slots). Stub Phase 3.C.
+void ToolPadRoles::_buildRoleMapLoop() {
+  _buildRoleMapLegacy();
+}
+
+// =================================================================
+// Phase 3 — sub-page navigation (Tasks 9 + 10)
+// =================================================================
+
+void ToolPadRoles::_handleTab() {
+  _activeSubPage = (SubPage)((_activeSubPage + 1) % SUB_COUNT);
+  _gridRow = 0; _gridCol = 0;
+  _editing = false;
+  _poolLine = 0; _poolIdx = 0;
+  buildRoleMap();
+}
+
+// _drawSubPageHeader — affiche "Pad Roles  [NORM|ARPEG|LOOP]" avec sous-page
+// active en VT_REVERSE+VT_BOLD, autres dim. Utilise drawFrameLine + escapes
+// VT100 inline (M14 v2 audit indé : SetupUI n'a pas setInverse/moveCursor).
+void ToolPadRoles::_drawSubPageHeader() {
+  const char* labels[SUB_COUNT] = { "NORM", "ARPEG", "LOOP" };
+  char buf[128];
+  int pos = 0;
+  pos += snprintf(buf + pos, sizeof(buf) - pos, "Sub-page  [");
+  for (uint8_t i = 0; i < SUB_COUNT; i++) {
+    if (i == _activeSubPage) {
+      pos += snprintf(buf + pos, sizeof(buf) - pos,
+                       VT_REVERSE VT_BOLD "%s" VT_RESET, labels[i]);
+    } else {
+      pos += snprintf(buf + pos, sizeof(buf) - pos,
+                       VT_DIM "%s" VT_RESET, labels[i]);
+    }
+    if (i < SUB_COUNT - 1) {
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "|");
+    }
+  }
+  pos += snprintf(buf + pos, sizeof(buf) - pos, "]   " VT_DIM "[TAB] cycle" VT_RESET);
+  _ui->drawFrameLine("%s", buf);
 }
 
 // =================================================================
@@ -500,6 +607,8 @@ void ToolPadRoles::drawScreen() {
   _ui->vtFrameStart();
   _ui->drawConsoleHeader("TOOL 3: PAD ROLES", _nvsSaved);
 
+  // Phase 3 — sub-page header [NORM|ARPEG|LOOP] highlighted
+  _drawSubPageHeader();
   _ui->drawFrameEmpty();
 
   // Grid section
@@ -516,6 +625,9 @@ void ToolPadRoles::drawScreen() {
   _ui->drawSection("INFO");
   drawInfoPanel();
   _ui->drawFrameEmpty();
+
+  // Phase 3 — flash msg line (between info and control bar — m16 v2)
+  _drawFlash();
 
   // Control bar
   drawControlBar();
@@ -676,6 +788,13 @@ void ToolPadRoles::run() {
       screenDirty = true;
     }
 
+    // Phase 3 — TAB cycle sub-page (NORM -> ARPEG -> LOOP -> NORM)
+    // Only when not in pool edit mode (avoid mid-edit context switch).
+    if (ev.type == NAV_CHAR && ev.ch == '\t' && !_editing) {
+      _handleTab();
+      screenDirty = true;
+    }
+
     if (!_editing) {
       // --- Grid navigation ---
       bool arrowMoved = false;
@@ -756,19 +875,48 @@ void ToolPadRoles::run() {
           }
           screenDirty = true;
         } else {
-          // Steal silencieux : si le role est deja pris par un autre pad,
-          // on le libere directement sans demander confirmation.
-          uint8_t owner = findPadWithRole(_poolLine, _poolIdx);
-          if (owner < NUM_KEYS && owner != (uint8_t)pad) {
-            clearRole(owner);
+          // Phase 3 — Task 12 v2 : bank slot move → refus si destination occupée par
+          // rôle cross-store (LoopPadStore ou ControlPadStore), qui ne sont pas gérés
+          // par clearRole(). R1 sacré spec §5 : Bank pad ne peut pas coexister avec
+          // n'importe quel autre rôle. S'applique dans TOUTES les sous-pages (HW gate
+          // G2 fix : ancien check _activeSubPage == SUB_NORM trop restrictif).
+          // Note : ARPEG roles (root/mode/etc) sont swap-able silencieusement via
+          // clearRole(pad) ci-dessous — pas de refus pour ces cas (cohérence pattern
+          // existing "Steal silencieux", modulo M1 v1 audit flash msg ajouté plus tard
+          // Phase 3.D).
+          bool refusedCross = false;
+          if (_poolLine == 1 /* bank */ && _nvs) {
+            const LoopPadStore& lp = _nvs->getLoadedLoopPadStore();
+            if (isLoopControlPad(lp, (uint8_t)pad)) {
+              _setFlash("Pad has LOOP control - move in Tool 3 LOOP first");
+              refusedCross = true;
+            } else if (findLoopSlotIdx(lp, (uint8_t)pad) >= 0) {
+              _setFlash("Pad has LOOP slot - clear in Tool 3 LOOP first");
+              refusedCross = true;
+            } else if (findControlPadEntryIdx(_nvs->getLoadedControlPadStore(), (uint8_t)pad) >= 0) {
+              _setFlash("Pad has ControlPad - delete in Tool 4 first");
+              refusedCross = true;
+            }
           }
-          clearRole((uint8_t)pad);
-          assignRole((uint8_t)pad, _poolLine, _poolIdx);
-          if (saveAll()) {
-            _ui->flashSaved();
+
+          if (refusedCross) {
             _editing = false;
+            screenDirty = true;
+          } else {
+            // Steal silencieux : si le role est deja pris par un autre pad,
+            // on le libere directement sans demander confirmation.
+            uint8_t owner = findPadWithRole(_poolLine, _poolIdx);
+            if (owner < NUM_KEYS && owner != (uint8_t)pad) {
+              clearRole(owner);
+            }
+            clearRole((uint8_t)pad);
+            assignRole((uint8_t)pad, _poolLine, _poolIdx);
+            if (saveAll()) {
+              _ui->flashSaved();
+              _editing = false;
+            }
+            screenDirty = true;
           }
-          screenDirty = true;
         }
       }
       if (poolArrowMoved) {

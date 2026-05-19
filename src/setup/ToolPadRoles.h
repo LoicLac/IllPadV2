@@ -3,11 +3,13 @@
 
 #include <stdint.h>
 #include "../core/HardwareConfig.h"
+#include "../core/KeyboardData.h"   // Phase 3 — LoopPadStore for _wkLoopPad
 #include "InputParser.h"
 
 class CapacitiveKeyboard;
 class LedController;
 class SetupUI;
+class NvsManager;   // Phase 3 — for cross-store lookup (LoopPadStore + ControlPadStore)
 
 // Role codes for grid coloring
 enum PadRoleCode : uint8_t {
@@ -26,12 +28,21 @@ struct PadRole {
   uint8_t index;  // index within that line
 };
 
+// Phase 3 — sous-page contexte (Tool 3 b1 refactor)
+enum SubPage : uint8_t {
+  SUB_NORM  = 0,   // Bank pads assignment (the 8 bank slots)
+  SUB_ARPEG = 1,   // 20 roles : root, mode, chrom, hold, octave
+  SUB_LOOP  = 2,   // 19 roles : 3 controls (REC/PS/CLR) + 16 slots
+  SUB_COUNT = 3
+};
+
 class ToolPadRoles {
 public:
   ToolPadRoles();
 
+  // Phase 3 — `nvs` parameter added (NvsManager*) for LoopPadStore + ControlPadStore lookup.
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
-             SetupUI* ui,
+             SetupUI* ui, NvsManager* nvs,
              uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
              uint8_t& chromaticPad, uint8_t& holdPad,
              uint8_t* octavePads);
@@ -41,6 +52,7 @@ private:
   CapacitiveKeyboard* _keyboard;
   LedController*      _leds;
   SetupUI*            _ui;
+  NvsManager*         _nvs;   // Phase 3 — for cross-store lookup (LoopPadStore + ControlPadStore)
 
   // Pointers to live pad assignment arrays (owned by caller)
   uint8_t* _bankPads;      // [NUM_BANKS]
@@ -51,12 +63,18 @@ private:
   uint8_t* _octavePads;    // [4]
 
   // Working copies (edited during tool, committed on save)
-  uint8_t _wkBankPads[NUM_BANKS];
-  uint8_t _wkRootPads[7];
-  uint8_t _wkModePads[7];
-  uint8_t _wkChromPad;
-  uint8_t _wkHoldPad;
-  uint8_t _wkOctavePads[4];
+  uint8_t      _wkBankPads[NUM_BANKS];
+  uint8_t      _wkRootPads[7];
+  uint8_t      _wkModePads[7];
+  uint8_t      _wkChromPad;
+  uint8_t      _wkHoldPad;
+  uint8_t      _wkOctavePads[4];
+  LoopPadStore _wkLoopPad;            // Phase 3 — working copy for sub-page LOOP
+
+  // Phase 3 — sub-page state + flash msg infrastructure
+  SubPage      _activeSubPage;        // current sub-page (NORM/ARPEG/LOOP)
+  char         _flashMsg[80];         // flash msg buffer (pattern Tool 4)
+  uint32_t     _flashExpireMs;        // flash msg expiry timestamp
 
   // Grid state (rebuilt before each draw)
   uint8_t _roleMap[NUM_KEYS];        // PadRoleCode per pad
@@ -107,6 +125,19 @@ private:
   const char* poolItemLabel(uint8_t line, uint8_t index) const;
   void printRoleDescription(uint8_t line, uint8_t index);
   void printPadDescription(uint8_t pad);
+
+  // Phase 3 — helpers
+  void _handleTab();                  // cycle sub-page NORM -> ARPEG -> LOOP -> NORM
+  void _drawSubPageHeader();          // affiche "[NORM|ARPEG|LOOP]" highlighted
+  void _setFlash(const char* msg);    // pattern Tool 4 (ToolControlPads.cpp:854)
+  bool _flashActive() const;
+  void _drawFlash();                  // render flash line between info panel and control bar
+
+  // Phase 3 — factorisation buildRoleMap (m14 v2 : cible buildRoleMap, pas drawGrid)
+  void _buildRoleMapLegacy();         // body original extrait pour stubs ARPEG/LOOP Phase 3.C
+  void _buildRoleMapNorm();           // Phase 3.C — sous-page NORM (bank pads actifs)
+  void _buildRoleMapArpeg();          // Phase 3.D — sous-page ARPEG (vrai impl)
+  void _buildRoleMapLoop();           // Phase 3.E — sous-page LOOP (vrai impl)
 };
 
 #endif // TOOL_PAD_ROLES_H
