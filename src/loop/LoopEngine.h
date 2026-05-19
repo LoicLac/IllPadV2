@@ -101,9 +101,12 @@ public:
   void setClearLoopTimerMs(uint16_t ms);         // from SettingsStore::clearLoopTimerMs (Tool 6)
 
   // --- Transport actions (called by processLoopMode) ---
-  // Tap REC : state machine per spec §7 §8 + Q5 §28
-  //   EMPTY    → RECORDING (arms capture, _recordStartUs set on first pad press)
-  //   RECORDING→ stopRecording() (bar-snap close, → PLAYING)
+  // Tap REC : state machine per spec §7 §8 + Q5 §28 + Master Sync §3.2
+  //   EMPTY    → RECORDING (arms capture, _recordStartUs set on first pad press
+  //              avec anchor master tick selon quantize per Master Sync §3.1)
+  //   RECORDING→ FREE   : closeRecordingImmediate() (tap-to-tap, → PLAYING)
+  //              BEAT/BAR: arme PENDING_CLOSE, capture continue jusqu'au master
+  //              boundary tick, puis commitRecordingClose() (→ PLAYING)
   //   PLAYING  → OVERDUBBING (start overdub buffer)
   //   STOPPED  → PLAYING + OVERDUBBING simultaneously (Q5 — reprise + arm)
   //   OVERDUB  → mergeOverdub() (commit overdub into main buffer)
@@ -207,7 +210,7 @@ private:
   uint16_t         _recordBpm;         // latched at first pad press (invariant §23.5)
   bool             _recordFirstPressDone;  // false until first capturePadEvent in RECORDING
 
-  // --- Loop structure (set at stopRecording) ---
+  // --- Loop structure (set at commitRecordingClose / closeRecordingImmediate) ---
   uint32_t         _loopDurationUs;    // bar-snapped duration (after deadzone snap + rescale)
   uint16_t         _loopBars;          // 1..64 (post snap)
 
@@ -256,16 +259,28 @@ private:
   // Set true à chaque live monitor noteOn (peu importe le state : EMPTY / STOPPED /
   // PLAYING / RECORDING / OVERDUBBING / WAITING_*). Reset au falling edge.
   // Trois consumers :
-  //   - stopRecording → flushHeldPadsAsNoteOffs(snappedDurUs) : inject noteOff fin de loop.
+  //   - commitRecordingClose / closeRecordingImmediate → flushHeldPadsAsNoteOffs : inject noteOff fin de loop.
   //   - mergeOverdub → inject noteOff dans _events à _playPositionUs (B-N2 fix).
   //   - onBackgroundTransition → refCountNoteOff direct + reset flag (B-N1 fix).
   // Remplace l'ancien _padHeldLive[] qui ne couvrait que RECORDING (insuffisant).
   bool             _padHeldLive[NUM_KEYS];
 
+  // --- Auto-Stop PENDING_CLOSE (spec Illpad_Master_Sync.md §3.2) ---
+  // Set true par tapRec sur RECORDING quand quantize != FREE.
+  // Consommé par update() phase 0 au boundary tick → commitRecordingClose.
+  // L'état reste RECORDING pendant la fenêtre (LED Coral solide, capture continue α).
+  bool             _recordingPendingClose;
+  uint32_t         _recordingPendingCloseTick;   // tick master cible (boundary)
+
   // --- Helpers ---
-  // Recording
+  // Recording (Master Sync spec Illpad_Master_Sync.md §3.2 + §3.3)
   void startRecording(MidiTransport& transport);
-  void stopRecording(MidiTransport& transport);  // bar-snap + rescale + → PLAYING
+  // BEAT/BAR quantize : tapRec REC sur RECORDING set _recordingPendingClose,
+  // update() phase 0 commit au boundary tick via commitRecordingClose.
+  void commitRecordingClose(MidiTransport& transport);
+  // FREE quantize : tapRec REC sur RECORDING close immédiat tap-to-tap.
+  // Aussi fallback safety si !_clock dans commitRecordingClose.
+  void closeRecordingImmediate(MidiTransport& transport);
   void flushHeldPadsAsNoteOffs(uint32_t timestampUs);
   // Live-sort insertion (M2 décision Q4) — buffer maintenu trié à l'insertion.
   // Retourne true si inséré, false si buffer plein (drop silent per spec §8).

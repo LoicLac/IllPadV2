@@ -41,6 +41,8 @@ LoopEngine::LoopEngine()
   , _waitingTargetTick(0)
   , _clearPressStartMs(0)
   , _clearFired(false)
+  , _recordingPendingClose(false)
+  , _recordingPendingCloseTick(0)
 {
   for (uint16_t i = 0; i < MAX_LOOP_EVENTS; i++) {
     _events[i].active = false;
@@ -133,7 +135,18 @@ void LoopEngine::tapRec(MidiTransport& transport) {
       startRecording(transport);
       break;
     case LoopState::RECORDING:
-      stopRecording(transport);  // bar-snap + → PLAYING via startPlayback interne
+      // Master Sync (spec §3.2) : Auto-Stop dispatch selon quantize.
+      // FREE → close immédiat tap-to-tap (closeRecordingImmediate).
+      // BEAT/BAR → arme PENDING_CLOSE, capture continue jusqu'au boundary,
+      //            update() phase 0 commitera via commitRecordingClose.
+      if (_quantize == LOOP_QUANT_FREE) {
+        closeRecordingImmediate(transport);
+      } else {
+        // BS-9 : 2e tap REC pendant PENDING_CLOSE déjà actif → ignoré (commit ferme).
+        if (_recordingPendingClose) break;
+        _recordingPendingCloseTick = computeNextBoundaryTick(_quantize);
+        _recordingPendingClose = true;
+      }
       break;
     case LoopState::PLAYING:
       // Enter OVERDUBBING — main buffer continues playback, overdub captures additions
@@ -272,7 +285,7 @@ void LoopEngine::capturePadEvent(uint8_t padIndex, uint8_t velocity, MidiTranspo
 
   // Audit-fix B-N1 / B-N2 / R-N1 : tracker live press (TOUS états).
   // Set true à chaque rising edge, false à chaque falling edge. Consommé par :
-  //   - stopRecording flushHeldPadsAsNoteOffs (fin de loop).
+  //   - commitRecordingClose / closeRecordingImmediate flushHeldPadsAsNoteOffs (fin de loop, Master Sync §3.2 / §3.3).
   //   - mergeOverdub flush held (inject noteOff à _playPositionUs).
   //   - onBackgroundTransition (refCountNoteOff direct au bank switch out).
   // Invariant : _padHeldLive[pad] == true ssi pad physiquement enfoncé ET live
@@ -287,9 +300,19 @@ void LoopEngine::capturePadEvent(uint8_t padIndex, uint8_t velocity, MidiTranspo
     if (!_recordFirstPressDone && !isNoteOn) {
       return;
     }
-    // First-press latches recordStart + recordBpm (invariant §23.5)
+    // First-press latches recordStart + recordBpm (invariant §23.5).
+    // Master Sync (spec Illpad_Master_Sync.md §3.1) : _recordStartUs ancré
+    // selon quantize sur la grille master tick. Effet : event[0] reçoit
+    // timestamp = phase Δ du hit dans son beat/bar courant. Loop wraps
+    // tomberont sur master ticks (cf §4.4 démo BPM scaling cohérente).
     if (!_recordFirstPressDone && isNoteOn) {
-      _recordStartUs = nowUs;
+      if (_quantize == LOOP_QUANT_FREE || !_clock) {
+        _recordStartUs = nowUs;                              // tap-to-tap, hors grille
+      } else if (_quantize == LOOP_QUANT_BEAT) {
+        _recordStartUs = _clock->getLastBeatWallTimeUs();    // anchor master beat
+      } else {  // LOOP_QUANT_BAR
+        _recordStartUs = _clock->getLastBarWallTimeUs();     // anchor master bar
+      }
       _recordBpm = _clock ? _clock->getSmoothedBPM() : 120;
       if (_recordBpm == 0) _recordBpm = 120;
       _recordFirstPressDone = true;
@@ -340,6 +363,20 @@ void LoopEngine::capturePadEvent(uint8_t padIndex, uint8_t velocity, MidiTranspo
 // =================================================================
 void LoopEngine::update(MidiTransport& transport) {
   uint32_t nowUs = micros();
+
+  // (0) Master Sync : commit PENDING_CLOSE au boundary tick (spec Illpad_Master_Sync.md §3.2).
+  // RECORDING + flag pending → close + startPlayback au tick master boundary.
+  // Doit s'exécuter avant phase (1) pour que la transition vers PLAYING soit
+  // visible avant tout WAITING_* check (cohérence état machine).
+  if (_state == LoopState::RECORDING && _recordingPendingClose) {
+    if (_clock && _clock->getCurrentTick() >= _recordingPendingCloseTick) {
+      commitRecordingClose(transport);
+      // commitRecordingClose set _state = PLAYING via startPlayback.
+      // _lastUpdateUs ancré au boundary wall time. Phase (3) ci-dessous
+      // tournera avec deltaUs = nowUs - boundaryWallTime, position avance
+      // normalement à partir du boundary.
+    }
+  }
 
   // (1) WAITING_* → commit when boundary tick reached (B3 : propager nowUs)
   if (_state == LoopState::WAITING_PLAY || _state == LoopState::WAITING_STOP) {
@@ -492,86 +529,131 @@ void LoopEngine::startRecording(MidiTransport& transport) {
   _state = LoopState::RECORDING;
 }
 // =================================================================
-// stopRecording — close RECORDING with bar-snap (spec §7)
-// 1. Compute raw recorded duration (now - recordStartUs)
-// 2. Compute barDuration_us at recordBpm (4 beats × 60s/bpm × 1e6 = 240e6/bpm)
-// 3. Snap with deadzone 25% : if elapsed within 0.25×barDuration after a bar line, snap down
-//    else snap up. Min 1 bar, max 64 bars.
-// 4. Rescale event timestamps proportionally to fill snapped duration
-// 5. Flush pads held → noteOff events at snapped duration
-// 6. State → PLAYING (via startPlayback)
+// commitRecordingClose — Master Sync Auto-Stop boundary commit
+//                       (spec Illpad_Master_Sync.md §3.2)
 // =================================================================
-void LoopEngine::stopRecording(MidiTransport& transport) {
-  uint32_t nowUs = micros();
-  _recordEndUs = nowUs;
+// Appelé par update() phase 0 quand _recordingPendingCloseTick atteint.
+// Calcule loopDur depuis le master tick boundary (multiple entier de
+// quantize unit par construction), flush held pads, startPlayback ancré
+// au boundary wall time exact (→ position 0 du loop = master tick).
+// =================================================================
+void LoopEngine::commitRecordingClose(MidiTransport& transport) {
+  if (!_clock) {
+    // Safety fallback : pas de clock → close tap-to-tap (path FREE).
+    closeRecordingImmediate(transport);
+    return;
+  }
 
   if (!_recordFirstPressDone || _eventCount == 0) {
-    // No content — back to EMPTY
+    // Buffer vide (cas pathologique : PENDING_CLOSE armé sans 1er pad press)
+    // → revert EMPTY, reset flag pending.
+    _recordingPendingClose = false;
+    _recordingPendingCloseTick = 0;
     _state = LoopState::EMPTY;
     return;
   }
 
-  uint32_t rawDurUs = nowUs - _recordStartUs;
-  uint32_t barDurUs = (uint32_t)(240000000UL / _recordBpm);  // 240e6 / bpm = bar duration µs (4 beats)
-  if (barDurUs == 0) barDurUs = 2000000;  // safety : 120 BPM = 2s bar
+  // 1. Calculer le wall time exact du boundary tick (spec §3.4.1 catch-up).
+  uint32_t currentTick = _clock->getCurrentTick();
+  uint32_t diff = currentTick - _recordingPendingCloseTick;   // 0 si pile, > 0 si catch-up tick
+  float    tickInterval = _clock->getTickIntervalUs();
+  uint32_t boundaryWallTime = _clock->getLastTickWallTimeUs()
+                              - (uint32_t)((float)diff * tickInterval);
 
-  // Bar-snap with 25% deadzone
-  uint32_t barsFloor = rawDurUs / barDurUs;
-  uint32_t remainder = rawDurUs - (barsFloor * barDurUs);
-  uint32_t deadzone  = barDurUs / 4;  // 25%
+  // 2. Loop length = boundary - anchor.
+  // Par construction multiple entier de quantize unit ticks au recordBpm.
+  _loopDurationUs = boundaryWallTime - _recordStartUs;
 
-  uint32_t snappedBars;
-  if (remainder <= deadzone) {
-    snappedBars = barsFloor;  // snap down (deadzone absorbs overshoot)
-  } else {
-    snappedBars = barsFloor + 1;  // round up
+  // _loopBars : nombre d'unités quantize (beats pour BEAT, bars pour BAR).
+  // Conservé pour bar-crossing detection dans update() phase 3.
+  uint32_t snapUnitTicks = (_quantize == LOOP_QUANT_BAR) ? TICKS_PER_BAR : TICKS_PER_BEAT;
+  uint32_t snapUnitUs = (uint32_t)((float)snapUnitTicks * tickInterval);
+  _loopBars = (snapUnitUs > 0) ? (uint16_t)(_loopDurationUs / snapUnitUs) : 1;
+  if (_loopBars < 1) _loopBars = 1;
+
+  // 3. Flush held pads → noteOff inject à _loopDurationUs - 1.
+  if (_loopDurationUs > 0) {
+    flushHeldPadsAsNoteOffs(_loopDurationUs - 1);
   }
-  if (snappedBars < 1)  snappedBars = 1;
-  if (snappedBars > 64) snappedBars = 64;
-  _loopBars = (uint16_t)snappedBars;
-  uint32_t snappedDurUs = snappedBars * barDurUs;
 
-  // Rescale event timestamps proportionally
-  if (rawDurUs > 0 && snappedDurUs != rawDurUs) {
-    uint64_t scaleNum = snappedDurUs;
-    uint64_t scaleDen = rawDurUs;
-    for (uint16_t i = 0; i < _eventCount; i++) {
-      _events[i].timestampUs = (uint32_t)((uint64_t)_events[i].timestampUs * scaleNum / scaleDen);
-    }
-  }
-  _loopDurationUs = snappedDurUs;
-
-  // Flush held pads as noteOff events at snapped duration.
-  // flushHeldPadsAsNoteOffs utilise insertEventSorted (M2 live-sort) → buffer reste trié.
-  flushHeldPadsAsNoteOffs(snappedDurUs);
-
-  // M5 fix : pas de re-sort ici (live-sort dans capturePadEvent maintient l'ordre,
-  // et flushHeldPadsAsNoteOffs insert également via insertEventSorted). Le buffer
-  // est invariant sorted dès la fin du recording.
-
-  // M6 fix : validation timestamp < loopDuration (defense in depth contre rescale buggy
-  // ou edge case capture juste à rawDurUs). Clamp _loopDurationUs - 1 si dépassement.
+  // 4. M6 clamp defense in depth : tout event >= _loopDurationUs ramené.
   uint16_t clampedCount = 0;
   for (uint16_t i = 0; i < _eventCount; i++) {
     if (_events[i].timestampUs >= _loopDurationUs) {
-      _events[i].timestampUs = _loopDurationUs - 1;
+      _events[i].timestampUs = _loopDurationUs > 0 ? _loopDurationUs - 1 : 0;
       clampedCount++;
     }
   }
   #if DEBUG_SERIAL
   if (clampedCount > 0) {
-    Serial.printf("[LOOP WARN] stopRecording clamped %u events to loopDur=%lu us\n",
+    Serial.printf("[LOOP WARN] commitRecordingClose clamped %u events to loopDur=%lu us\n",
                   clampedCount, (unsigned long)_loopDurationUs);
   }
   #endif
 
-  // Flush refcount + transition to PLAYING (B3 fix : passer nowUs capturé).
+  // 5. Reset pending close flag.
+  _recordingPendingClose = false;
+  _recordingPendingCloseTick = 0;
+
+  // 6. Flush refcount + startPlayback ancré au boundary wall time exact.
+  flushPendingNoteOffs(transport);
+  startPlayback(transport, boundaryWallTime);
+
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] commitRecordingClose ch=%u loopDur=%lu us bars=%u events=%u\n",
+                _channel, (unsigned long)_loopDurationUs, _loopBars, _eventCount);
+  #endif
+}
+
+// =================================================================
+// closeRecordingImmediate — Master Sync FREE path
+//                          (spec Illpad_Master_Sync.md §3.3)
+// =================================================================
+// Path FREE strict tap-to-tap : pas de boundary, pas de PENDING_CLOSE.
+// loopDur = rawDur exact, events conservés tels quels. Aucun snap, aucun
+// rescale. startPlayback immédiat ancré sur nowUs (hors grille master).
+// Aussi safety fallback de commitRecordingClose si !_clock.
+// =================================================================
+void LoopEngine::closeRecordingImmediate(MidiTransport& transport) {
+  uint32_t nowUs = micros();
+  _recordEndUs = nowUs;
+
+  if (!_recordFirstPressDone || _eventCount == 0) {
+    // No content — revert EMPTY.
+    _state = LoopState::EMPTY;
+    return;
+  }
+
+  // 1. Loop length = rawDur exact (pas de snap, pas de rescale).
+  _loopDurationUs = nowUs - _recordStartUs;
+  _loopBars = 1;   // sémantique FREE : pas de bar logique, structure-only.
+
+  // 2. Flush held pads → noteOff inject à _loopDurationUs - 1.
+  if (_loopDurationUs > 0) {
+    flushHeldPadsAsNoteOffs(_loopDurationUs - 1);
+  }
+
+  // 3. M6 clamp defense in depth.
+  for (uint16_t i = 0; i < _eventCount; i++) {
+    if (_events[i].timestampUs >= _loopDurationUs) {
+      _events[i].timestampUs = _loopDurationUs > 0 ? _loopDurationUs - 1 : 0;
+    }
+  }
+
+  // 4. Flush refcount + startPlayback. Pas d'ancrage master tick (FREE = hors grille).
   flushPendingNoteOffs(transport);
   startPlayback(transport, micros());
+
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] closeRecordingImmediate (FREE) ch=%u loopDur=%lu us events=%u\n",
+                _channel, (unsigned long)_loopDurationUs, _eventCount);
+  #endif
 }
 // =================================================================
-// flushHeldPadsAsNoteOffs — inject noteOff into main buffer for pads still held at stopRecording
+// flushHeldPadsAsNoteOffs — inject noteOff dans main buffer pour pads encore tenus
 // =================================================================
+// Appelé par commitRecordingClose (BEAT/BAR) et closeRecordingImmediate (FREE)
+// à la fermeture du recording, avec timestamp = _loopDurationUs - 1.
 // M2 fix : utilise insertEventSorted pour maintenir buffer trié (live-sort).
 void LoopEngine::flushHeldPadsAsNoteOffs(uint32_t timestampUs) {
   for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
@@ -699,7 +781,7 @@ void LoopEngine::onBackgroundTransition(MidiTransport& transport) {
 // et MIDI noteOn est ré-émis → panic inefficace. Engine self-stop ferme l'invariant
 // "flush = stop" par construction.
 // Callers cross-check (tous neutres ou voulus) :
-//   - stopRecording   : flush → STOPPED, puis startPlayback → PLAYING. Net = PLAYING.
+//   - commitRecordingClose / closeRecordingImmediate : flush → STOPPED, puis startPlayback → PLAYING. Net = PLAYING.
 //   - longPressClear  : flush → STOPPED, puis _state = EMPTY en fin. Net = EMPTY.
 //   - stopPlayback(_,true) : flush → STOPPED, puis set STOPPED. Net = STOPPED (idempotent).
 //   - midiPanic       : flush → STOPPED. Net = STOPPED (cible voulue, plus de resume audio).

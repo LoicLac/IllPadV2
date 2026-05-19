@@ -851,7 +851,10 @@ static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, ui
           } else if (after == LoopState::OVERDUBBING) {
             s_leds.triggerEvent(EVT_LOOP_OVERDUB);
           }
-          // RECORDING → PLAYING (stopRecording chain) : LED event PLAY
+          // RECORDING → PLAYING (closeRecordingImmediate FREE path synchrone) : LED event PLAY.
+          // BEAT/BAR path : transition async via commitRecordingClose en update() phase 0
+          //                 (Master Sync §3.2) ; LED bascule state-driven Coral → Green
+          //                 naturellement à la frame suivante. Pas de EVT_PLAY ici.
           if (before == LoopState::RECORDING && after == LoopState::PLAYING) {
             s_leds.triggerEvent(EVT_PLAY);
           }
