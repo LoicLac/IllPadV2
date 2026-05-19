@@ -150,10 +150,16 @@ static void sensingTask(void* param) {
 // in the DAW regardless of internal tracking state.
 
 static void midiPanic() {
-  // Phase 1: flush all arp engines (pending events + refcounts)
+  // Phase 1a: flush all arp engines (pending events + refcounts)
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     if (isArpType(s_banks[i].type) && s_banks[i].arpEngine) {
       s_banks[i].arpEngine->flushPendingNoteOffs(s_transport);
+    }
+  }
+  // Phase 1b: flush all loop engines (pending noteOffs + refcounts + state STOPPED)
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (s_banks[i].type == BANK_LOOP && s_banks[i].loopEngine) {
+      s_banks[i].loopEngine->flushPendingNoteOffs(s_transport);
     }
   }
   // Phase 2: clear MidiEngine tracked notes (NORMAL mode)
@@ -959,11 +965,20 @@ static void reloadPerBankParams(BankSlot& newSlot) {
 // --- Manager updates: bank/scale switch, flag consumption, clock ---
 static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld) {
   // Managers (both use left button — single-layer control)
+  // Audit-fix B-N1/R-N1 : snapshot la bank courante AVANT le switch pour pouvoir
+  // appeler onBackgroundTransition sur l'ancien LoopEngine si nécessaire.
+  uint8_t prevBank = s_bankManager.getCurrentBank();
   bool bankSwitched = s_bankManager.update(state.keyIsPressed, leftHeld);
   s_scaleManager.update(state.keyIsPressed, leftHeld, s_bankManager.getCurrentSlot());
 
   // On bank switch: reload per-bank pot values from the new bank, then reset catch.
   if (bankSwitched) {
+    // Audit-fix B-N1/R-N1 : si l'ancienne bank était LOOP, flushe son live press
+    // refCount + reset CLEAR tracker. Évite stuck note au DAW (invariant §23.1)
+    // et wipe instantané au retour FG (spec §9).
+    if (s_banks[prevBank].type == BANK_LOOP && s_banks[prevBank].loopEngine) {
+      s_banks[prevBank].loopEngine->onBackgroundTransition(s_transport);
+    }
     s_nvsManager.queueBankWrite(s_bankManager.getCurrentBank());
     reloadPerBankParams(s_bankManager.getCurrentSlot());
   }
@@ -1030,8 +1045,10 @@ static bool handleManagerUpdates(const SharedKeyboardState& state, bool leftHeld
 // - Toutes en Stop avec paused pile non vide → Play sur toutes (relaunch).
 // - Sinon (toutes vides ou Stop sans paused) → no-op silencieux.
 // LED : EVT_PLAY ou EVT_STOP avec mask multi-bank (1 trigger pour toutes).
-// Futur LOOP : étendre la boucle pour inclure isLoopType + LoopEngine.
-static void toggleAllArps() {
+// loop-buffer-invariants §6 : extension inclut LOOP banks. Géométrie symétrique :
+//   - Au moins une bank en Play (ARPEG capturé OU LOOP playing) → Stop sur tous
+//   - Sinon, Play sur ce qui peut repartir (ARPEG paused-with-notes, LOOP STOPPED-with-content)
+static void toggleAllArpsAndLoops() {
   bool anyPlaying = false;
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
     if (isArpType(s_banks[i].type) && s_banks[i].arpEngine
@@ -1039,19 +1056,37 @@ static void toggleAllArps() {
       anyPlaying = true;
       break;
     }
+    if (s_banks[i].type == BANK_LOOP && s_banks[i].loopEngine
+        && s_banks[i].loopEngine->isPlaying()) {
+      anyPlaying = true;
+      break;
+    }
   }
   uint8_t mask = 0;
   for (uint8_t i = 0; i < NUM_BANKS; i++) {
-    if (!isArpType(s_banks[i].type) || !s_banks[i].arpEngine) continue;
-    if (anyPlaying && s_banks[i].arpEngine->isCaptured()) {
-      // Stop : nullptr → branche "no fingers" → pile préservée (Q3)
-      s_banks[i].arpEngine->setCaptured(false, s_transport, nullptr, s_holdPad);
-      mask |= (uint8_t)(1 << i);
-    } else if (!anyPlaying && s_banks[i].arpEngine->isPaused()
-                              && s_banks[i].arpEngine->hasNotes()) {
-      // Play : relaunch chaque paused pile non vide
-      s_banks[i].arpEngine->setCaptured(true, s_transport, nullptr, s_holdPad);
-      mask |= (uint8_t)(1 << i);
+    // ARPEG / ARPEG_GEN banks
+    if (isArpType(s_banks[i].type) && s_banks[i].arpEngine) {
+      if (anyPlaying && s_banks[i].arpEngine->isCaptured()) {
+        // Stop : nullptr → branche "no fingers" → pile préservée (Q3)
+        s_banks[i].arpEngine->setCaptured(false, s_transport, nullptr, s_holdPad);
+        mask |= (uint8_t)(1 << i);
+      } else if (!anyPlaying && s_banks[i].arpEngine->isPaused()
+                                && s_banks[i].arpEngine->hasNotes()) {
+        // Play : relaunch chaque paused pile non vide
+        s_banks[i].arpEngine->setCaptured(true, s_transport, nullptr, s_holdPad);
+        mask |= (uint8_t)(1 << i);
+      }
+    }
+    // LOOP banks (loop-buffer-invariants §6)
+    else if (s_banks[i].type == BANK_LOOP && s_banks[i].loopEngine) {
+      LoopEngine* le = s_banks[i].loopEngine;
+      if (anyPlaying && le->isPlaying()) {
+        le->tapPlayStop(s_transport, nullptr);  // BG context (no fingers off-FG)
+        mask |= (uint8_t)(1 << i);
+      } else if (!anyPlaying && le->getState() == LoopState::STOPPED && le->hasContent()) {
+        le->tapPlayStop(s_transport, nullptr);
+        mask |= (uint8_t)(1 << i);
+      }
     }
   }
   if (mask != 0) s_leds.triggerEvent(anyPlaying ? EVT_STOP : EVT_PLAY, mask);
@@ -1059,7 +1094,7 @@ static void toggleAllArps() {
 
 // --- Hold pad edge detection (ARPEG OFF/ON switch, always exposed) ---
 // Sans LEFT : toggle FG bank (comportement classique).
-// Avec LEFT : toggle global toutes banks (cf toggleAllArps).
+// Avec LEFT : toggle global toutes banks ARPEG + LOOP (cf toggleAllArpsAndLoops).
 static void handleHoldPad(const SharedKeyboardState& state, bool leftHeld) {
   static bool s_lastHoldPadState = false;
   if (s_holdPad >= NUM_KEYS) { s_lastHoldPadState = false; return; }
@@ -1070,8 +1105,8 @@ static void handleHoldPad(const SharedKeyboardState& state, bool leftHeld) {
   if (!risingEdge) return;
 
   if (leftHeld) {
-    // LEFT + hold pad = scope étendu (toutes banks)
-    toggleAllArps();
+    // LEFT + hold pad = scope étendu (toutes banks ARPEG + LOOP)
+    toggleAllArpsAndLoops();
     return;
   }
 

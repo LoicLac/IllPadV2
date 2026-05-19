@@ -659,6 +659,39 @@ void LoopEngine::refCountNoteOff(MidiTransport& transport, uint8_t note) {
 }
 
 // =================================================================
+// onBackgroundTransition — appelé au bank switch quand cette bank passe FG → BG
+// =================================================================
+// Audit-fix B-N1 / R-N1 (audit adversarial 2026-05-18) :
+//   B-N1 : pads physiquement tenus (live press refCount > 0) ne reçoivent
+//          jamais de noteOff naturel parce que processLoopMode n'est plus appelé
+//          pour cette bank en BG. Stuck note au DAW. Solution : refCountNoteOff
+//          direct pour chaque pad du tracker _padHeldLive[].
+//   R-N1 : _clearPressStartMs stale (figé à la valeur du moment où la bank était
+//          FG). Au retour FG, isClearHoldFired retourne true instantanément si
+//          assez de temps a passé en BG → wipe sans seuil 500 ms. Solution :
+//          notifyClearPressEnd() reset le tracker (et _clearFired).
+// IMPORTANT : ne PAS changer `_state`. La bank LOOP en BG doit pouvoir continuer
+// à jouer son buffer normalement (spec §14 multi-bank LOOP).
+// =================================================================
+void LoopEngine::onBackgroundTransition(MidiTransport& transport) {
+  // Phase 1 (B-N1) : flush live press refCount pour chaque pad encore physiquement tenu.
+  // refCountNoteOff décrémente uniquement la contribution live press ; si le buffer
+  // playback avait aussi incrémenté la même note (refCount = 2), le noteOff MIDI
+  // ne fire pas ici (1→1, return early sur 0→0), mais le buffer fire naturellement
+  // son noteOff matching plus tard → MIDI noteOff cohérent au DAW.
+  for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
+    if (_padHeldLive[pad]) {
+      refCountNoteOff(transport, resolvePadToMidiNote(pad));
+      _padHeldLive[pad] = 0;
+    }
+  }
+  // Phase 2 (R-N1) : reset CLEAR press tracker. Au retour FG, notifyClearPressStart
+  // détectera la nouvelle frame avec _clearPressStartMs == 0 et armera le timer
+  // fresh (500ms à attendre depuis le retour, pas depuis le press d'origine).
+  notifyClearPressEnd();
+}
+
+// =================================================================
 // flushPendingNoteOffs — emergency silence + state → STOPPED.
 // Symetric ArpEngine::flushPendingNoteOffs (ArpEngine.cpp:864 fait `_playing = false`).
 // Audit-fix B2 : sans la transition d'état, midiPanic() laisse les LOOP banks en

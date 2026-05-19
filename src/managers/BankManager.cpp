@@ -3,6 +3,7 @@
 #include "../core/MidiTransport.h"
 #include "../core/LedController.h"
 #include "../arp/ArpEngine.h"
+#include "../loop/LoopEngine.h"
 #include "../viewer/ViewerSerial.h"
 #include <Arduino.h>
 #include <string.h>
@@ -98,12 +99,34 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
         continue;  // never fall through — 2nd tap on ARPEG/ARPEG_GEN is always consumed
       }
 
-      // --- Double-tap on LOOP bank pad : consume silently for now ---
-      // Spec LOOP §19 : LEFT+double-tap → LoopEngine.toggle() (Phase 2+).
-      // Without a LoopEngine the 2nd tap is consumed to prevent a bank-switch
-      // parasite. PLAY/STOP LOOP will also be reachable via the dedicated
-      // control pad on the musical layer (Phase 2 handleLoopControls).
+      // --- Double-tap on LOOP bank pad : toggle PLAY/STOP via LoopEngine ---
+      // Spec LOOP §19 : LEFT+double-tap = PLAY/STOP toggle, FG ou BG.
+      // BG context : keys = nullptr (no fingers possible off-foreground).
+      // Audit-fix R2 : dispatch LED event aligné sur processLoopMode Task 29 —
+      // isPlaying() retourne false en WAITING_PLAY/STOP, donc le test naïf
+      // `isPlaying() ? EVT_PLAY : EVT_STOP` émettrait EVT_STOP sur entrée en
+      // WAITING_PLAY (alors que la LOOP va démarrer au prochain boundary !).
+      // Check WAITING_* d'abord, puis transitions STOPPED↔PLAYING.
       else if (wasRecent && _banks[b].type == BANK_LOOP) {
+        if (_banks[b].loopEngine && _transport) {
+          const uint8_t* keys = (b == _currentBank) ? keyIsPressed : nullptr;
+          LoopState before = _banks[b].loopEngine->getState();
+          _banks[b].loopEngine->tapPlayStop(*_transport, keys);
+          LoopState after = _banks[b].loopEngine->getState();
+          if (_leds) {
+            EventId evt;
+            if (after == LoopState::WAITING_PLAY || after == LoopState::WAITING_STOP) {
+              evt = EVT_WAITING;
+            } else if (before == LoopState::STOPPED && after == LoopState::PLAYING) {
+              evt = EVT_PLAY;
+            } else if (before == LoopState::PLAYING && after == LoopState::STOPPED) {
+              evt = EVT_STOP;
+            } else {
+              evt = _banks[b].loopEngine->isPlaying() ? EVT_PLAY : EVT_STOP;  // fallback
+            }
+            _leds->triggerEvent(evt, (uint8_t)(1 << b));
+          }
+        }
         _lastBankPadPressTime[b] = 0;
         _pendingSwitchBank = -1;
         continue;
@@ -136,9 +159,17 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
     uint8_t target = (uint8_t)_pendingSwitchBank;
     _pendingSwitchBank = -1;
     if (target != _currentBank) {
-      switchToBank(target);
-      if (btnLeftHeld) _switchedDuringHold = true;
-      switched = true;
+      // Spec §23.2 + invariant 11 : bank switch refusé pendant LOOP RECORDING/OVERDUBBING
+      // de la bank courante. Silent deny (pas de LED feedback per §23.2).
+      BankSlot& current = _banks[_currentBank];
+      bool currentLocked = (current.type == BANK_LOOP && current.loopEngine
+                            && current.loopEngine->isLocked());
+      if (!currentLocked) {
+        switchToBank(target);
+        if (btnLeftHeld) _switchedDuringHold = true;
+        switched = true;
+      }
+      // else : silent deny (current LOOP in REC/OD)
     }
   }
 
@@ -149,9 +180,17 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
       uint8_t target = (uint8_t)_pendingSwitchBank;
       _pendingSwitchBank = -1;
       if (target != _currentBank) {
-        switchToBank(target);
-        _switchedDuringHold = true;
-        switched = true;
+        // M9 audit fix : même guard que pending-timeout path.
+        // Spec §23.2 silent deny si LOOP courante en REC/OD.
+        BankSlot& current = _banks[_currentBank];
+        bool currentLocked = (current.type == BANK_LOOP && current.loopEngine
+                              && current.loopEngine->isLocked());
+        if (!currentLocked) {
+          switchToBank(target);
+          _switchedDuringHold = true;
+          switched = true;
+        }
+        // else : silent deny
       }
     }
     if (_switchedDuringHold && _lastKeys) {
