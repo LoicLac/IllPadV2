@@ -43,9 +43,14 @@ LoopEngine::LoopEngine()
   , _clearFired(false)
   , _recordingPendingClose(false)
   , _recordingPendingCloseTick(0)
+  , _eventsAlternateCount(0)
+  , _alternateValid(false)
 {
   for (uint16_t i = 0; i < MAX_LOOP_EVENTS; i++) {
     _events[i].active = false;
+  }
+  for (uint16_t i = 0; i < MAX_LOOP_EVENTS; i++) {
+    _eventsAlternate[i].active = false;
   }
   for (uint8_t i = 0; i < MAX_LOOP_OVERDUB_EVENTS; i++) {
     _overdubEvents[i].active = false;
@@ -912,4 +917,38 @@ void LoopEngine::commitWaitingAction(MidiTransport& transport, uint32_t nowUs) {
     stopPlayback(transport, /*flushNotes=*/true);  // → STOPPED + flush
     _waitingExit = WaitingExit::TO_STOP;
   }
+}
+
+// =================================================================
+// OD-Sync helpers (spec Illpad_OD_Sync.md §6.3)
+// =================================================================
+// isNoteOnAt — état "on" d'une note à position pos dans un buffer trié.
+// Walk les events ≤ pos en suivant les transitions noteOn (vel > 0) /
+// noteOff (vel == 0). Le dernier event matching détermine l'état audible.
+// Coût : O(count). Utilisé au swap (Cancel / Undo / Redo), geste rare.
+// =================================================================
+bool LoopEngine::isNoteOnAt(LoopEvent* buf, uint16_t count, uint8_t note, uint32_t pos) const {
+  bool on = false;
+  for (uint16_t i = 0; i < count; i++) {
+    if (!buf[i].active) break;
+    if (buf[i].timestampUs > pos) break;       // events triés, on dépasse
+    if (buf[i].midiNote != note) continue;
+    on = (buf[i].velocity > 0);                // dernier event matching avant pos
+  }
+  return on;
+}
+
+// =================================================================
+// findLatestVelAt — velocity du dernier noteOn matching note ≤ pos.
+// Fallback DEFAULT_BASE_VELOCITY si aucun event matching trouvé.
+// =================================================================
+uint8_t LoopEngine::findLatestVelAt(LoopEvent* buf, uint16_t count, uint8_t note, uint32_t pos) const {
+  uint8_t vel = DEFAULT_BASE_VELOCITY;
+  for (uint16_t i = 0; i < count; i++) {
+    if (!buf[i].active) break;
+    if (buf[i].timestampUs > pos) break;
+    if (buf[i].midiNote != note) continue;
+    if (buf[i].velocity > 0) vel = buf[i].velocity;
+  }
+  return vel;
 }

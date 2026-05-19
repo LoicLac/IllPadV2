@@ -272,6 +272,16 @@ private:
   bool             _recordingPendingClose;
   uint32_t         _recordingPendingCloseTick;   // tick master cible (boundary)
 
+  // --- OD-Sync : snapshot 1-level Undo/Redo toggle (spec Illpad_OD_Sync.md §2) ---
+  // _eventsAlternate : "l'autre version" du buffer pour swap Undo/Redo.
+  // - Au tap REC sur PLAYING/STOPPED/WAITING_STOP → snapshot du pré-OD content.
+  // - Au swap (Cancel pendant OD via CLEAR, ou Undo/Redo court CLEAR en PLAYING/STOPPED) :
+  //   échange _events ↔ _eventsAlternate avec diff musical par note (§6).
+  // _alternateValid : gating — false si aucun OD ne s'est produit depuis wipe/boot.
+  LoopEvent        _eventsAlternate[MAX_LOOP_EVENTS];
+  uint16_t         _eventsAlternateCount;
+  bool             _alternateValid;
+
   // --- Helpers ---
   // Recording (Master Sync spec Illpad_Master_Sync.md §3.2 + §3.3)
   void startRecording(MidiTransport& transport);
@@ -314,6 +324,15 @@ private:
   // Velocity randomization (symmetric processNormalMode main.cpp:676-680).
   // Appliquée uniquement au playback dans update() (M3 décision Q8 : pas au capture).
   uint8_t applyVelocityVariation(uint8_t baseVel) const;
+
+  // --- OD-Sync helpers (spec Illpad_OD_Sync.md §6.3) ---
+  // isNoteOnAt : état "audible" d'une note à position pos dans un buffer trié.
+  // Walk les events ≤ pos, suit les transitions noteOn (vel > 0) / noteOff (vel == 0).
+  // Le dernier event matching détermine l'état audible à pos.
+  bool isNoteOnAt(LoopEvent* buf, uint16_t count, uint8_t note, uint32_t pos) const;
+  // findLatestVelAt : velocity du dernier noteOn matching note ≤ pos.
+  // Fallback DEFAULT_BASE_VELOCITY si aucun event matching.
+  uint8_t findLatestVelAt(LoopEvent* buf, uint16_t count, uint8_t note, uint32_t pos) const;
 };
 
 #endif // LOOP_ENGINE_H
