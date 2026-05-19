@@ -14,6 +14,8 @@
 - Phase 2 LOOP commits `6c0b4d8` → `284bec4` (close 2026-05-19, dev seed M7 = `applyDevSeedLoopPadsIfSafe`)
 - Code actuel : `src/setup/ToolPadRoles.{h,cpp}` (788 lignes cpp), `src/setup/ToolControlPads.{h,cpp}` (863 lignes cpp), `src/core/KeyboardData.h` (LoopPadStore §545, ControlPadStore §410, ScalePadStore §511, ArpPadStore §525)
 
+**Audit adversarial** : [`2026-05-19-loop-phase-3-plan_AUDIT.md`](2026-05-19-loop-phase-3-plan_AUDIT.md) — 19 findings (1 B-N + 7 M + 11 m). **Fix critiques B-N1 + M1-M5 intégrés** dans les tasks ci-dessous (cf addendum "Audit-fix integration" en fin de plan). M6-M7 et mineurs documentés comme actions doc-sync.
+
 ---
 
 ## Scope Phase 3 — inclus / exclus
@@ -2040,6 +2042,409 @@ Attendre **« ok commit »** explicite.
 - 7 docs reference + spec syncés.
 
 **Phase suivante** : Phase 4 LOOP (PotRouter 3 contexts + Tool 7 refacto + LED wiring complet + EVT_LOOP_* patterns).
+
+---
+
+## Addendum — Audit-fix integration (2026-05-19)
+
+Issu de l'[audit adversarial](2026-05-19-loop-phase-3-plan_AUDIT.md). 6 fix critiques intégrés comme **overrides** des tasks originales.
+
+### B-N1 override — Task 8 Step 2 : précisions call site `begin()`
+
+Le call site **unique** est `src/setup/SetupManager.cpp:30` :
+```cpp
+_toolRoles.begin(keyboard, leds, &_ui, ...);
+```
+
+Variable **nommée `_toolRoles`** (pas `_padRolesTool` comme le plan le suppose).
+
+Action Task 8 Step 2 :
+1. Read `src/setup/SetupManager.cpp` lignes 1-50 + ligne 30.
+2. Étendre signature `begin()` : ajouter `NvsManager* nvs` en 4ème position (après `&_ui`).
+3. Modifier le call site SetupManager.cpp:30 : ajouter `&_nvsManager` (ou pointer équivalent à l'instance NvsManager visible dans SetupManager — vérifier le nom dans `SetupManager.h:9-50`).
+
+Pas de scan multi-fichier nécessaire — 1 seul call site confirmé.
+
+### M1 override — Task 15 reformulation : flash sur steal existing
+
+Le code Tool 3 actuel **fait déjà le swap-to-pool** silencieusement (`ToolPadRoles.cpp:759-766`, commentaire « Steal silencieux »). Task 15 n'introduit pas le mécanisme — elle ajoute juste un **flash msg cosmétique**.
+
+Action Task 15 reformulée :
+
+- [ ] **Step 1: Lire `ToolPadRoles.cpp` lignes 748-775**
+
+Identifier le bloc `NAV_ENTER` qui fait le steal silencieux.
+
+- [ ] **Step 2: Ajouter flash sur le steal pour ARPEG roles**
+
+Modifier le bloc lignes 759-766 :
+
+```cpp
+} else {
+  // Phase 3 : flash on steal (was: silent steal).
+  uint8_t owner = findPadWithRole(_poolLine, _poolIdx);
+  if (owner < NUM_KEYS && owner != (uint8_t)pad) {
+    clearRole(owner);
+    _setFlash("Previous role returned to pool.");   // <-- NEW Phase 3
+  }
+  clearRole((uint8_t)pad);
+  assignRole((uint8_t)pad, _poolLine, _poolIdx);
+  if (saveAll()) {
+    _ui->flashSaved();
+    _editing = false;
+  }
+  screenDirty = true;
+}
+```
+
+Pas d'autre changement métier. Le pattern de swap reste identique, juste flash visible.
+
+**Note** : ce changement « silent → flash » s'applique à **tous** les rôles via ce dispatcher (bank, root, mode, octave, hold, et plus tard LOOP via M4). Affecte aussi NORM bank moves (Task 12) — cohérent avec D5 spec.
+
+### M2 override — Add Task 11.5 : `_setFlash` infrastructure Tool 3
+
+**Nouvelle task à insérer entre Task 11 et Task 12** :
+
+#### Task 11.5 — Add `_setFlash` infrastructure to ToolPadRoles
+
+**Files** : `src/setup/ToolPadRoles.h`, `src/setup/ToolPadRoles.cpp`
+
+- [ ] **Step 1: Add members + helper declarations to .h**
+
+Dans `ToolPadRoles.h`, section private :
+```cpp
+// Phase 3 — flash msg infrastructure (pattern aligned with ToolControlPads.h:58-59)
+char     _flashMsg[80];
+uint32_t _flashExpireMs;
+
+void _setFlash(const char* msg);
+bool _flashActive() const;
+```
+
+- [ ] **Step 2: Init in constructor**
+
+Dans `ToolPadRoles::ToolPadRoles()` body :
+```cpp
+_flashMsg[0] = '\0';
+_flashExpireMs = 0;
+```
+
+- [ ] **Step 3: Implement helpers in .cpp**
+
+```cpp
+void ToolPadRoles::_setFlash(const char* msg) {
+  strncpy(_flashMsg, msg, sizeof(_flashMsg) - 1);
+  _flashMsg[sizeof(_flashMsg) - 1] = '\0';
+  _flashExpireMs = millis() + 2500;  // 2.5s timeout, aligned with Tool 4
+}
+
+bool ToolPadRoles::_flashActive() const {
+  return _flashExpireMs > millis() && _flashMsg[0] != '\0';
+}
+```
+
+- [ ] **Step 4: Render flash in drawScreen or drawControlBar**
+
+Pattern à choisir selon layout disponible. Reco : intégrer dans `drawControlBar` :
+```cpp
+void ToolPadRoles::drawControlBar() {
+  if (_flashActive()) {
+    _ui->moveCursor(ROW_FLASH, 1);
+    _ui->setColor(COLOR_FLASH);
+    _ui->print(_flashMsg);
+    _ui->resetColor();
+  } else {
+    // existing control bar render
+    _ui->print("TAB=sub-page  ARROWS=nav  ENTER=assign  CLEAR=reset  ESC=exit");
+  }
+}
+```
+
+- [ ] **Step 5: Build**
+
+```bash
+~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1
+```
+
+- [ ] **Step 6: No commit yet** — wait for Phase 3.C bundle.
+
+### M3 override — Task 11 Step 2 : Option A `_drawGridLegacy()` extracté
+
+Task 11 Step 2 doit explicitement choisir **Option A** (stub non-destructive).
+
+Action :
+
+1. Avant de réécrire `drawGrid`, **extraire le body monolithique existant** dans une nouvelle méthode privée `_drawGridLegacy()` :
+
+```cpp
+// In ToolPadRoles.cpp
+void ToolPadRoles::_drawGridLegacy() {
+  // Body original du drawGrid (lignes 314-326 actuelles, ou plus selon l'extraction).
+  // Inchangé fonctionnellement.
+  // À utiliser comme fallback pendant Phase 3.C tant que _drawGridArpeg/_drawGridLoop
+  // ne sont pas encore implémentés (Tasks 13 et 18).
+  ...
+}
+```
+
+2. Réécrire `drawGrid()` en dispatcher :
+
+```cpp
+void ToolPadRoles::drawGrid() {
+  switch (_activeSubPage) {
+    case SUB_NORM:  _drawGridNorm(); break;
+    case SUB_ARPEG: _drawGridArpeg(); break;
+    case SUB_LOOP:  _drawGridLoop(); break;
+  }
+}
+```
+
+3. Stubs initiaux :
+
+```cpp
+void ToolPadRoles::_drawGridArpeg() {
+  _drawGridLegacy();   // stub Phase 3.C ; Task 13 remplacera par vrai impl ARPEG
+}
+
+void ToolPadRoles::_drawGridLoop() {
+  _drawGridLegacy();   // stub Phase 3.C ; Task 18 remplacera par vrai impl LOOP
+}
+```
+
+Idem pour `drawPool` → `_drawPoolLegacy()` extracté + stubs `_drawPoolArpeg/_drawPoolLoop` → `_drawPoolLegacy()`.
+
+**Conséquence** : pendant Phase 3.C HW gate G2, sous-page NORM affiche le nouveau rendu, sous-pages ARPEG et LOOP affichent l'ancien rendu monolithique (qui montre tous les rôles tous-en-un comme aujourd'hui). Pas de regression visible. Tasks 13 et 18 remplaceront proprement.
+
+### M4 override — Add Task 17.5 : Extend pool dispatcher for LOOP lines
+
+**Nouvelle task à insérer entre Task 17 et Task 18** :
+
+#### Task 17.5 — Extend pool dispatcher (POOL_LINE_COUNT, poolLineSize, poolItemLabel, findPadWithRole, assignRole, clearRole) for LOOP lines 6 (controls) + 7 (slots)
+
+**Files** : `src/setup/ToolPadRoles.h`, `src/setup/ToolPadRoles.cpp`
+
+- [ ] **Step 1: Extend constants in ToolPadRoles.h**
+
+```cpp
+// ToolPadRoles.h — bump POOL_LINE_COUNT + add new sizes
+static const uint8_t POOL_LOOP_CTRL_COUNT  = 3;    // REC, PS, CLR
+static const uint8_t POOL_LOOP_SLOT_COUNT  = 16;   // slots 0..15
+static const uint8_t POOL_LINE_COUNT       = 8;    // 0=clear, 1=bank, 2=root, 3=mode, 4=octave, 5=hold, 6=loop-ctrl, 7=loop-slot
+
+// Pool labels LOOP
+static const char* POOL_LOOP_CTRL_LABELS[3];
+static const char* POOL_LOOP_SLOT_LABELS[16];
+```
+
+- [ ] **Step 2: Define labels in .cpp**
+
+```cpp
+// ToolPadRoles.cpp
+const char* ToolPadRoles::POOL_LOOP_CTRL_LABELS[3] = { "REC", "PS_", "CLR" };
+const char* ToolPadRoles::POOL_LOOP_SLOT_LABELS[16] = {
+  "S00","S01","S02","S03","S04","S05","S06","S07",
+  "S08","S09","S10","S11","S12","S13","S14","S15"
+};
+```
+
+- [ ] **Step 3: Extend poolLineSize switch**
+
+```cpp
+uint8_t ToolPadRoles::poolLineSize(uint8_t line) const {
+  switch (line) {
+    case 1: return POOL_BANK_COUNT;
+    case 2: return POOL_ROOT_COUNT;
+    case 3: return POOL_MODE_COUNT;
+    case 4: return POOL_OCTAVE_COUNT;
+    case 5: return POOL_HOLD_COUNT;
+    case 6: return POOL_LOOP_CTRL_COUNT;    // NEW Phase 3
+    case 7: return POOL_LOOP_SLOT_COUNT;    // NEW Phase 3
+    default: return 0;
+  }
+}
+```
+
+- [ ] **Step 4: Extend poolItemLabel switch**
+
+```cpp
+const char* ToolPadRoles::poolItemLabel(uint8_t line, uint8_t index) const {
+  switch (line) {
+    case 1: return (index < POOL_BANK_COUNT)   ? POOL_BANK_LABELS[index]   : "";
+    case 2: return (index < POOL_ROOT_COUNT)   ? POOL_ROOT_LABELS[index]   : "";
+    case 3: return (index < POOL_MODE_COUNT)   ? POOL_MODE_LABELS[index]   : "";
+    case 4: return (index < POOL_OCTAVE_COUNT) ? POOL_OCTAVE_LABELS[index] : "";
+    case 5: return (index < POOL_HOLD_COUNT)   ? POOL_HOLD_LABELS[index]   : "";
+    case 6: return (index < POOL_LOOP_CTRL_COUNT) ? POOL_LOOP_CTRL_LABELS[index] : "";  // NEW
+    case 7: return (index < POOL_LOOP_SLOT_COUNT) ? POOL_LOOP_SLOT_LABELS[index] : "";  // NEW
+    default: return "";
+  }
+}
+```
+
+- [ ] **Step 5: Extend findPadWithRole for LOOP lines**
+
+```cpp
+uint8_t ToolPadRoles::findPadWithRole(uint8_t line, uint8_t index) const {
+  switch (line) {
+    case 1: return (index < NUM_BANKS) ? _wkBankPads[index] : 0xFF;
+    case 2: return (index < 7) ? _wkRootPads[index] : 0xFF;
+    case 3:
+      if (index < 7) return _wkModePads[index];
+      if (index == 7) return _wkChromPad;
+      return 0xFF;
+    case 4: return (index < 4) ? _wkOctavePads[index] : 0xFF;
+    case 5: return (index == 0) ? _wkHoldPad : 0xFF;
+    // NEW Phase 3 : LOOP controls
+    case 6:
+      if (index == 0) return _wkLoopPad.recPad;
+      if (index == 1) return _wkLoopPad.playStopPad;
+      if (index == 2) return _wkLoopPad.clearPad;
+      return 0xFF;
+    // NEW Phase 3 : LOOP slots
+    case 7: return (index < 16) ? _wkLoopPad.slotPads[index] : 0xFF;
+    default: return 0xFF;
+  }
+}
+```
+
+- [ ] **Step 6: Extend assignRole for LOOP lines**
+
+```cpp
+void ToolPadRoles::assignRole(uint8_t pad, uint8_t line, uint8_t index) {
+  if (line == 1) {
+    if (index < NUM_BANKS) _wkBankPads[index] = pad;
+  } else if (line == 2) {
+    if (index < 7) _wkRootPads[index] = pad;
+  } else if (line == 3) {
+    if (index < 7) _wkModePads[index] = pad;
+    else if (index == 7) _wkChromPad = pad;
+  } else if (line == 4) {
+    if (index < 4) _wkOctavePads[index] = pad;
+  } else if (line == 5) {
+    if (index == 0) _wkHoldPad = pad;
+  // NEW Phase 3
+  } else if (line == 6) {
+    // LOOP control : route to assignLoopRole (handles R2 + carriesConfig refus + hard-constraint)
+    assignLoopRole(pad, line, index);
+  } else if (line == 7) {
+    // LOOP slot : route to assignLoopRole (handles R3 swap-to-pool)
+    assignLoopRole(pad, line, index);
+  }
+}
+```
+
+- [ ] **Step 7: Extend clearRole for LOOP lines**
+
+```cpp
+void ToolPadRoles::clearRole(uint8_t pad) {
+  // ... existing clears for bank/root/mode/chrom/hold/octave ...
+
+  // NEW Phase 3 : LOOP slots (slot pads tolerate 0xFF)
+  for (uint8_t i = 0; i < 16; i++) {
+    if (_wkLoopPad.slotPads[i] == pad) _wkLoopPad.slotPads[i] = 0xFF;
+  }
+
+  // NEW Phase 3 : LOOP controls — hard-constraint, do not clear
+  // (REC/PS/CLR cannot become 0xFF — invariant 12 spec design Phase 3)
+  // clearLoopRole flash msg is handled there
+  if (pad == _wkLoopPad.recPad || pad == _wkLoopPad.playStopPad || pad == _wkLoopPad.clearPad) {
+    clearLoopRole(pad);  // delegates to LOOP-specific handler with flash
+  }
+}
+```
+
+- [ ] **Step 8: Build**
+
+```bash
+~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1
+```
+
+- [ ] **Step 9: Auto-review grep**
+
+```bash
+grep -c "case 6:\|case 7:" src/setup/ToolPadRoles.cpp
+# Expected : >= 4 (poolLineSize + poolItemLabel + findPadWithRole + assignRole)
+```
+
+- [ ] **Step 10: No commit yet** — Phase 3.E bundle.
+
+### M5 override — Task 17 Step 3 : emplacement validator wire
+
+Spécifier exactement où ajouter `validateLoopPadStore()` dans `NvsManager.cpp::loadAll()` :
+
+Action Task 17 Step 3 reformulée :
+
+1. Lire `NvsManager.cpp::loadAll()` zone autour du load LoopPadStore. Identifier le pattern existing :
+```cpp
+// Probable pattern (à confirmer en lecture) :
+if (prefs.begin(LOOPPAD_NVS_NAMESPACE, true)) {
+  size_t sz = prefs.getBytes(LOOPPAD_NVS_KEY, &_loadedLoopPad, sizeof(LoopPadStore));
+  if (sz != sizeof(LoopPadStore) || _loadedLoopPad.magic != EEPROM_MAGIC ||
+      _loadedLoopPad.version != LOOPPAD_VERSION) {
+    memset(&_loadedLoopPad, 0xFF, sizeof(LoopPadStore));
+    _loadedLoopPad.magic = EEPROM_MAGIC;
+    _loadedLoopPad.version = LOOPPAD_VERSION;
+  }
+  prefs.end();
+}
+```
+
+2. Ajouter **immédiatement après** ce bloc :
+```cpp
+validateLoopPadStore(_loadedLoopPad);   // Phase 3 : applies defaults 30/31/32 if controls == 0xFF
+```
+
+3. Auto-review grep :
+```bash
+grep -c "validateLoopPadStore" src/managers/NvsManager.cpp
+# Expected : 1 (call site dans loadAll)
+grep -c "validateLoopPadStore" src/core/KeyboardData.h
+# Expected : 1 (définition)
+```
+
+### M6 — Note : Task 26 collision check emplacement
+
+Décision tranchée par audit : **dans `NvsManager::loadAll()` à la fin**, juste avant la fin de la méthode. Cohérent avec les autres validates + warning Serial format `[BOOT]`.
+
+Task 26 Step 6 mise à jour avec cette précision.
+
+### M7 — Note : changement « silent steal → flash steal »
+
+Documenter dans spec design Phase 3 (§14 lifecycle) + commit messages Phase 3.D et 3.E :
+```
+NOTE comportement : Phase 3 introduit un flash msg sur swap-to-pool. Le pattern
+silencieux d'origine (commentaire "Steal silencieux" ToolPadRoles.cpp:759) est
+remplacé pour améliorer la lisibilité UX. Affecte bank, scale, arp, et LOOP roles.
+```
+
+### Mineurs m1-m11
+
+Non-bloquants. Liste actions doc-sync Phase 3.H :
+- m1-m3 : précisions Tasks 1-3 (cf audit doc).
+- m4 : Task 5 marquée explicitement no-op après audit (laisser le commentaire defensive).
+- m5-m7 : précisions Tasks 6, 9, 10 (lire le code existant + adapter).
+- m8-m9 : ASCII fallback `.` (decision : utiliser ASCII pour cohérence terminal Python).
+- m10 : dispatch `assignLoopRole` documenté dans M4 override (Task 17.5 Step 6).
+- m11 : Pattern P15 décision pré-exécution = **OUI ajouter** (Tool 7 Phase 4 utilisera le même pattern TAB).
+
+---
+
+## Recap revised — Phase 3 tasks count
+
+Après intégration audit-fix :
+
+| Sous-phase | Tasks | Δ vs initial |
+|---|---|---|
+| 3.A | 1, 2, 3 | inchangé |
+| 3.B | 4, 5, 6 | inchangé |
+| 3.C | 7, 8, 9, 10, 11, **11.5**, 12 | +1 (Task 11.5 = `_setFlash` infrastructure) |
+| 3.D | 13, 14, 15, 16 | inchangé (Task 15 reformulée) |
+| 3.E | 17, **17.5**, 18, 19, 20, 21, 22 | +1 (Task 17.5 = pool dispatcher extension) |
+| 3.F | 23, 24, 25 | inchangé |
+| 3.G | 26 | inchangé |
+| 3.H | 27 | inchangé |
+
+**Total** : 29 tasks (vs 27 initial). 6 HW gates G1-G6, 8 commits, unchanged.
 
 ---
 
