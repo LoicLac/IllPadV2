@@ -335,4 +335,123 @@ All lock-free. No mutex anywhere in runtime code.
 |-------|------|----------|----------|-------------------|
 | Aftertouch ring | 64 entries | `updateAftertouch()` | `flush()` (16/frame max) | Silent drop. **Capacity math**: at default 25 ms rate, N pads generate N events/25 ms. flush drains 16/frame × ~40 frames/25 ms = 640 drain capacity. Safe up to ~48 pads. At minimum rate (10 ms): N events/10 ms vs 16×10=160 drain → safe up to ~40 pads. Real-world : ≤10 fingers, never saturates. |
 | Arp events | 64 per engine | `tick()` (noteOn/Off pairs) | `processEvents()` every frame | noteOff fail → skip entire step (safe); noteOn fail → cancel orphaned noteOff (safe) |
+| LOOP main buffer | 1024 events × 8 B per engine | `LoopEngine::capturePadEvent` (REC/OD) live-sort O(log n + n) | `LoopEngine::update` walks events sorted, fire via refcount | `insertEventSorted` retourne false → silent drop + `viewer::emitLoopBufferFull(ch, "main")` (m9 telemetry) |
+| LOOP overdub buffer | 128 events × 8 B per engine | `LoopEngine::capturePadEvent` (OVERDUBBING) | `LoopEngine::mergeOverdub` au tap REC | Atomic abandon si dépassement capacité main + overdub (M4 audit fix), telemetry `viewer::emitLoopBufferFull(ch, "merge")` |
+| LOOP pending noteOffs | 64 per engine | `scheduleNoteOff` (gates ou stuck flush) | `drainPendingNoteOffs` chaque frame | Silent drop if queue full — fallback via `flushPendingNoteOffs` |
 | NVS writes | per-field dirty flags | Main loop | Background FreeRTOS task | Coalesced (latest wins) |
+
+---
+
+## LOOP runtime flow (Phase 2)
+
+Phase 2 LOOP (commits `6c0b4d8` → `284bec4`, 2026-05-19) ajoute un sous-système runtime parallèle à ARPEG : classe `LoopEngine` dans `src/loop/`, assignée à toute bank de type `BANK_LOOP` via pool statique `s_loopEngines[MAX_LOOP_BANKS=4]`. Plan référence : [`docs/superpowers/plans/2026-05-18-loop-phase-2-plan.md`](../superpowers/plans/2026-05-18-loop-phase-2-plan.md).
+
+### 1. Pad touch → LOOP MIDI
+
+```
+Pad press
+  ↓
+Core 0 sense → SharedKeyboardState
+  ↓
+Core 1 handlePadInput → switch(slot.type)
+  ↓ case BANK_LOOP
+processLoopMode(state, slot, now)
+  ↓
+  ├─ CLEAR pad held → notifyClearPressStart + isClearHoldFired → longPressClear
+  ├─ REC pad rising edge → loopEngine->tapRec → state machine dispatch
+  ├─ PLAY/STOP pad rising edge → loopEngine->tapPlayStop → state machine
+  │   (FREE = immediate startPlayback/stopPlayback ; BEAT/BAR = WAITING_* + commitWaitingAction)
+  └─ Musical pad edge → loopEngine->capturePadEvent
+       ↓
+       ├─ M8 live monitor (TOUS états) : refCountNoteOn / refCountNoteOff → MidiTransport
+       ├─ M3 velocity strict baseVelocity (variation au playback seulement)
+       ├─ _padHeldLive[pad] tracker set/reset (consommé par stopRecording/mergeOverdub/onBackgroundTransition)
+       └─ Buffer write conditionnel :
+            • RECORDING → insertEventSorted live-sort dans _events[] (M2)
+            • OVERDUBBING → insertEventSorted live-sort dans _overdubEvents[]
+            • Autres états → live monitor seul, pas de buffer write
+```
+
+### 2. LoopEngine::update tick → playback BPM-scaled
+
+`update()` est appelé pour chaque LoopEngine assigné à chaque itération main loop (placement m3 audit : APRÈS `s_arpScheduler.processEvents`, AVANT `s_midiEngine.flush`, dans le critical path) :
+
+```
+LoopEngine::update(transport) chaque frame
+  ↓
+nowUs = micros()
+  ↓
+(1) WAITING_* boundary check :
+    if _clock->getCurrentTick() >= _waitingTargetTick
+      commitWaitingAction(transport, nowUs)
+        ↓ WAITING_PLAY → startPlayback(transport, nowUs)  [B3 nowUs propagé]
+        ↓ WAITING_STOP → stopPlayback(transport, true)
+        ↓ set _waitingExit signal (consommé par main → triggerEvent EVT_PLAY/STOP clear overlay)
+  ↓
+(2) Drain pending noteOffs (gates, stuck-note safety)
+  ↓
+(3) Si PLAYING/OVERDUBBING/WAITING_STOP :
+    B1 audit fix intégration incrémentale :
+      delta = nowUs - _lastUpdateUs
+      _scaledElapsedUs += delta × liveBpm / recordBpm
+      _lastUpdateUs = nowUs
+    ↓
+    Wrap detection : while _scaledElapsedUs >= _loopDurationUs
+      Fire tail events + soustraire _loopDurationUs + _wrapFlash=true + reset _playNextEventIdx
+    ↓
+    Fire events whose _events[idx].timestampUs <= _playPositionUs
+      refCountNoteOn(transport, midiNote, applyVelocityVariation(velocity))  [M3 variation au playback]
+      refCountNoteOff(transport, midiNote)
+    ↓
+    Bar crossing detection : _barFlash = true on bar index change
+  ↓
+(4) Sinon : garder _lastUpdateUs synchronisé (évite delta géant au prochain PLAYING)
+```
+
+### 3. Recording flow + bar-snap
+
+```
+tap REC depuis EMPTY → tapRec → startRecording
+  ↓ state = RECORDING
+  ↓ _eventCount = 0, _recordFirstPressDone = false, _recordBpm latché au 1er press
+  ↓
+musical pad press → capturePadEvent
+  ↓ 1er noteOn : _recordStartUs = micros(), _recordBpm = getSmoothedBPM(), _recordFirstPressDone = true
+  ↓ live monitor MIDI (M8) + insertEventSorted live-sort buffer (M2)
+  ↓
+tap REC depuis RECORDING → tapRec → stopRecording
+  ↓ rawDurUs = nowUs - _recordStartUs
+  ↓ barDurUs = 240e6 / _recordBpm
+  ↓ bar-snap 25 % deadzone : if remainder ≤ 0.25 × barDurUs snap down, else round up
+  ↓ clamp 1..64 bars, _loopDurationUs = snappedBars × barDurUs
+  ↓ rescale event timestamps proportionnellement
+  ↓ flushHeldPadsAsNoteOffs(snappedDurUs) inject noteOff fin de loop pour pads tenus (B-N1/B-N2 tracker)
+  ↓ M6 validation timestamp < _loopDurationUs + clamp si dépassement
+  ↓ flushPendingNoteOffs (B2 self-stop → STOPPED)
+  ↓ startPlayback(transport, micros()) → state = PLAYING
+```
+
+### 4. Bank switch + multi-bank LOOP
+
+```
+LEFT + tap bank pad → BankManager::update
+  ↓ M9 audit guard : check current.loopEngine->isLocked() (RECORDING/OVERDUBBING)
+  │  → silent deny si locked (spec §23.2, invariant 11)
+  ↓ switchToBank(target)
+  ↓
+main.cpp handleManagerUpdates (post bankSwitched=true) :
+  ↓ Audit fix B-N1/R-N1 : if (s_banks[prevBank].type == BANK_LOOP)
+  │    s_banks[prevBank].loopEngine->onBackgroundTransition(s_transport)
+  │      ↓ Phase 1 : flush live press refcount via _padHeldLive[]
+  │      ↓ Phase 2 : notifyClearPressEnd() reset CLEAR tracker
+  │      ↓ NE CHANGE PAS _state (BG continue playback)
+  ↓
+LEFT + double-tap bank LOOP pad → BankManager LOOP branch
+  ↓ loopEngine->tapPlayStop(transport, keys) — FG ou BG
+  ↓ LED triggerEvent aligned (WAITING_* / EVT_PLAY / EVT_STOP)
+```
+
+### 5. Panic + global toggle
+
+- `midiPanic()` Phase 1b : flush all LoopEngines via `flushPendingNoteOffs` (B2 self-stop → STOPPED), avant `MidiEngine::allNotesOff()` + CC 123 multi-channel.
+- LEFT + hold pad simple tap → `toggleAllArpsAndLoops()` (rename Phase 2.J) : itère ARPEG + LOOP, toggle play/stop multi-bank, single LED `triggerEvent` avec bitmask.

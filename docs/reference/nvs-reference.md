@@ -105,7 +105,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `ControlPadStore` | `illpad_ctrl` | `pads` | 0xBEEF | 2 | 82B | 12 sparse entries + 3 global DSP params (v2) for Tool 4 Control Pads. Globals : `smoothMs` (EMA tau, CONTINUOUS pressed), `sampleHoldMs` (ring-buffer look-back for HOLD_LAST capture), `releaseMs` (linear fade-out duration for RETURN_TO_ZERO). Each entry : padIndex, ccNumber, channel, mode, deadzone, releaseMode. Validator : `validateControlPadStore()` clamps globals + entries + enforces LATCH-requires-fixed-channel invariant. |
 | `ArpPadStore` | `illpad_apad` | `pads` | 0xBEEF | 2 | 12B | 2 separate keys (hold_pad, oct_pads) — v2 drops legacy play/stop pad |
 | `BankTypeStore` | `illpad_btype` | `config` | 0xBEEF | 3 | 44B | raw types[8] + qmode[8] (2 blobs, desync risk). v2 adds `scaleGroup[8]` (0=none, 1..4=A..D) for inter-bank scale linking. v3 adds `bonusPilex10[8]` [10..20=1.0..2.0] + `marginWalk[8]` [3..12] for ARPEG_GEN per-bank walk tuning |
-| `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 23B | **DECLARED Phase 1** — 3 controls (REC/PS/CLR) + 16 slots, strict packed. Descriptor index 12, hors range Tool 3 (Phase 3 wirera Tool 3 b1 + writer + extend TOOL_NVS_LAST[2]) |
+| `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 23B | **DECLARED Phase 1 + LOADED Phase 2** (commit `fd25a4b`) — 3 controls (REC/PS/CLR) + 16 slots, strict packed. Descriptor index 12. Accessor `NvsManager::getLoadedLoopPadStore()` + helper `applyDevSeedLoopPadsIfSafe()` (audit fix M7 — seed pads 32/33/34 si NVS vide ET pas de collision Tool 4 ControlPad, à retirer Phase 3 quand Tool 3 b1 livre writer/UI). Pas de writer Phase 2 (Phase 3 = Tool 3 b1 + extend TOOL_NVS_LAST[2]). |
 
 ### Non-Blob Namespaces (scalar values, not Store structs)
 
@@ -116,7 +116,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `illpad_bvel` | `vel_0`..`vel_7`, `var_0`..`var_7` | velocity params per bank | NvsManager (runtime) |
 | `illpad_pbnd` | `pb_0`..`pb_7` | pitch bend offset per bank | NvsManager (runtime) |
 | `illpad_apot` | `arp_0`..`arp_7` | ArpPotStore per bank (12B each, v1 = magic+ver+reserved + 8B payload). `pattern` field dual-semantic : ArpPattern enum OR _genPosition (0..14) selon BankType. `octaveRange` dual-semantic : octave range OR mutation level. | NvsManager (runtime) |
-| `illpad_lpot` | `loop_0`..`loop_7` | LoopPotStore per bank (12B each, packed): shuffleDepthRaw u16 + shuffleTemplate u8 + chaosRaw u16 + velPattern u8 + velPatternDepthRaw u16. Base velocity + variation restent shared via `illpad_bvel`. | **DECLARED Phase 1** — struct + validator + namespace en code, no writer Phase 1 (Phase 5 wires PotRouter targets) |
+| `illpad_lpot` | `loop_0`..`loop_7` | LoopPotStore per bank (12B each, packed): shuffleDepthRaw u16 + shuffleTemplate u8 + chaosRaw u16 + velPattern u8 + velPatternDepthRaw u16. Base velocity + variation restent shared via `illpad_bvel`. | **DECLARED Phase 1 + LOADED Phase 2** (commit `fd25a4b`) — struct + validator + namespace en code. Accessor `NvsManager::getLoadedLoopPotParams(bankIdx)` retourne const ref ; safe fallback static instance si bankIdx out of range. No writer Phase 2 (Phase 5 wires PotRouter targets + runtime effets shuffle/chaos/velPattern). |
 | `illpad_tempo` | `bpm` | uint16_t tempo BPM | NvsManager (runtime) |
 | `illpad_led` | `brightness` | uint8_t LED brightness | NvsManager (runtime) |
 | `illpad_sens` | `sensitivity` | uint8_t pad sensitivity | NvsManager (runtime) |

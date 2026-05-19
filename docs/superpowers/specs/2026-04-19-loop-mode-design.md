@@ -64,7 +64,7 @@ Le **LOOP core** est le moteur d'enregistrement et de playback. Il vit dans chaq
 
 Le moteur est **éphémère par défaut** : le contenu d'une boucle est perdu au reboot si elle n'a pas été sauvegardée dans un slot du drive. Les **paramètres d'effets** (shuffle, chaos, velocity pattern) sont en revanche persistants per-bank, stockés en NVS — ils survivent au reboot même sans slot save. Les slots embarquent aussi ces params dans leur fichier, ce qui crée une redondance assumée : sans slot chargé, la bank mémorise ses réglages NVS ; au load d'un slot, les params du slot écrasent le state courant.
 
-Le LOOP core est conçu pour **tourner en fond** : une boucle lancée sur une bank LOOP continue à jouer quand l'utilisateur change de bank. Comme les arpèges, il n'existe **jamais** de "mise en sommeil" d'un engine — toute bank LOOP existe en RAM et sa boucle joue ou ne joue pas selon son état. **Nombre max de banks LOOP simultanées** : à figer en Phase 2 selon mesure réelle SRAM de `LoopEngine` (la spec d'origine proposait 2 ; le plan Phase 2 actera la valeur définitive — constante `MAX_LOOP_BANKS` à introduire dans `HardwareConfig.h`).
+Le LOOP core est conçu pour **tourner en fond** : une boucle lancée sur une bank LOOP continue à jouer quand l'utilisateur change de bank. Comme les arpèges, il n'existe **jamais** de "mise en sommeil" d'un engine — toute bank LOOP existe en RAM et sa boucle joue ou ne joue pas selon son état. **Nombre max de banks LOOP simultanées** : **MAX_LOOP_BANKS = 4** (acté Phase 2, commit `6c0b4d8`). Mesure réelle SRAM : ~9.7 KB par engine × 4 = ~38.8 KB sur 320 KB disponibles (12 %). Constante définie dans `src/core/KeyboardData.h:676`.
 
 Trois pads de contrôle dédiés pilotent l'engine : **REC**, **PLAY/STOP**, **CLEAR**. Ces trois pads ne sont actifs que sur une bank LOOP en foreground. Sur une bank NORMAL ou ARPEG, les mêmes pads physiques jouent comme des pads musicaux ordinaires.
 
@@ -512,15 +512,15 @@ Volontairement hors du mode LOOP, y compris pour des versions futures :
 
 | Ressource | Utilisation LOOP | Note |
 |---|---|---|
-| **SRAM** | ~18.8 KB (2 banks × 9.4 KB) | sur 320 KB disponibles |
-| **Flash (LittleFS)** | 512 KB partition dédiée | 16 slots × 8 KB = 128 KB occupés max |
+| **SRAM** | ~38.8 KB (4 banks × ~9.7 KB) | sur 320 KB disponibles. MAX_LOOP_BANKS=4 acté Phase 2 (commit `6c0b4d8`). Build actuel post-Phase 2 : RAM 29.1 % total (95.4 KB / 327 KB). |
+| **Flash (LittleFS)** | 512 KB partition dédiée | 16 slots × 8 KB = 128 KB occupés max (Phase 6) |
 | **Core 1 CPU** | ~1 float mult + div par tick par bank | négligeable |
-| **LittleFS write** | 80-160 ms bloquant Core 1 | accepté sous hold-left (musique gelée) |
-| **LittleFS read** | 20-40 ms | accepté idem |
-| **Buffer sérialisation** | 8224 octets static (SRAM ou PSRAM) | alloué une fois |
+| **LittleFS write** | 80-160 ms bloquant Core 1 | accepté sous hold-left (musique gelée), Phase 6 |
+| **LittleFS read** | 20-40 ms | accepté idem, Phase 6 |
+| **Buffer sérialisation** | 8224 octets static (SRAM ou PSRAM) | alloué une fois, Phase 6 |
 | **BLE bandwidth** | impact similaire à ARPEG | aftertouch n'existe pas, bandwidth moindre que NORMAL |
 
-Budget confortable partout. La contrainte tangible est la SRAM pour 2 banks (18.8 KB), pas la flash.
+Budget confortable partout. La contrainte tangible est la SRAM pour 4 banks (~38.8 KB), pas la flash.
 
 ---
 
@@ -598,9 +598,23 @@ Ce document sert de **référence de haut niveau** pour les plans d'implémentat
    - ~~**Step LED prep** : rename `LedSettingsStore::fgArpPlayMax` → `fgPlayMax`...~~ **CADUQUE post-v9** : LedSettingsStore v9 (commit `3b85011`) a fusionné les 4 fields FG en `_fgIntensity` unique, Tool 8 expose 1 slider en section GLOBAL. Décision Q4 §28 sans objet.
    - ✅ **Step LED WAITING BG-aware** : implémenté commit `48b96fb` post-v9 — hardcode `colorB = _colors[CSLOT_CONFIRM_OK]` pour `PTN_CROSSFADE_COLOR`, `fgPct = _fgIntensity` (au lieu de `_fgArpStopMax` proposé Q3 originale), scaling `× bgFactor` pour LEDs non-FG dans `renderPattern` CROSSFADE_COLOR. Décision Q3 §28 respectée modulo terminologie v9.
    - Aucune nouvelle feature visible pour le musicien. **Phase 1 close 2026-05-17**.
-2. **Phase 2** — LoopEngine core + main wiring : classe `LoopEngine` (state machine EMPTY / RECORDING / PLAYING / OVERDUBBING / STOPPED + WAITING_* transitoires), recording avec timestamps µs, playback scalé proportionnellement, refcount noteOn/noteOff, `processLoopMode` dans main.cpp, `renderBankLoop` dans LedController (câble `EVT_LOOP_*` overrides dans `EVENT_RENDER_DEFAULT`, consomme `tickBeat/Bar/WrapDurationMs` via flags à définir). Test mode activable via `ENABLE_LOOP_MODE`.
-   - **Précondition** : `PendingEvent` struct dupliqué entre ArpEngine et LoopEngine — pas de factorisation préparatoire (décision Q2, §28). LoopEngine définit son propre buffer + logique refcount, indépendant de ArpScheduler.
-   - Transition **STOPPED-loaded → tap REC = PLAYING + OVERDUBBING simultanés** (décision Q5, §28) : documenter dans la state machine LoopEngine.
+2. **Phase 2 — CLOSE** (commits `6c0b4d8` → `284bec4`, HW gates G1-G9 validés 2026-05-19) — LoopEngine core + main wiring + LED + multi-bank protections :
+   - ✅ Classe `LoopEngine` (state machine 7 états EMPTY / RECORDING / PLAYING / OVERDUBBING / STOPPED + WAITING_PLAY / WAITING_STOP transitoires), buffer 1024 events 8 B (`LoopEvent` static_assert m1), recording timestamps µs, `_recordBpm` latché au 1er pad press (invariant §23.5), bar-snap 25 % deadzone à `stopRecording`, M6 timestamp clamp validation.
+   - ✅ Playback **BPM-scaled intégration incrémentale** (audit fix B1 — `_scaledElapsedUs += delta × liveBpm / recordBpm` cumulatif, pas re-calc depuis `_playStartUs`, élimine sauts sur tempo live).
+   - ✅ Refcount noteOn/noteOff **dupliqué** entre ArpEngine et LoopEngine (décision Q2 §28), MAX_LOOP_PENDING_NOTEOFFS=64. `flushPendingNoteOffs` self-stop (audit fix B2 — state → STOPPED).
+   - ✅ `processLoopMode` dans `main.cpp` : dispatch BANK_LOOP, REC/PLAY/CLEAR control pads, musical pads vers `capturePadEvent` (M8 live drumming spec §18 — MIDI émis dans **tous** états).
+   - ✅ `renderBankLoop` complet : state-driven FG color (EMPTY/STOPPED/WAITING_* → Gold, RECORDING → Coral, OVERDUBBING → Amber, PLAYING → Green), FLASH overlay bar/wrap via `consumeBarFlash`/`consumeWrapFlash` (m4 one-shot semantics), BG = FG × bgFactor (v9 unified).
+   - ✅ EVT_LOOP_* triggers depuis processLoopMode + BankManager + WaitingExit signal (root-cause fix : PTN_CROSSFADE_COLOR continuous, `commitWaitingAction` set `_waitingExit` flag, main consume → `triggerEvent(EVT_PLAY/STOP)` clear overlay).
+   - ✅ Overdub merge **atomique** (audit fix M4 — pre-check capacité, abandon silent si dépassement, jamais de paires noteOn/Off cassées). Merge O(n+m) de 2 arrays pré-triés (M2 live-sort dans `capturePadEvent`).
+   - ✅ Q5 STOPPED-loaded REC = PLAYING + OVERDUBBING simultanés (décision Q5 §28) — câblé dans `tapRec` state machine.
+   - ✅ Quantize WAITING_PLAY/STOP : `computeNextBoundaryTick(24 BEAT / 96 BAR)` via `ClockManager::getCurrentTick()`, `commitWaitingAction(transport, nowUs)` propage `nowUs` (audit fix B3 — évite underflow uint32 sur enchaînement). FREE quantize = action immédiate.
+   - ✅ NvsManager charge `LoopPadStore` (descriptor index 12) + `LoopPotStore` per-bank (multi-key `loop_0..loop_7`) au boot. Helper `applyDevSeedLoopPadsIfSafe` (audit fix M7) seed pads 32/33/34 si NVS vide ET pas de collision Tool 4 — à retirer Phase 3 quand Tool 3 b1 livre l'UI propre.
+   - ✅ BankManager double-tap LOOP → `loopEngine->tapPlayStop()` (FG ou BG, audit fix R2 LED event aligné processLoopMode). `toggleAllArps` → `toggleAllArpsAndLoops` étend LEFT+hold_pad aux LOOP banks (loop-buffer-invariants §6).
+   - ✅ `midiPanic` flush all LoopEngines (Phase 1b avant MidiEngine.allNotesOff).
+   - ✅ Bank switch guard pendant LOOP REC/OD (audit fix M9, **2 paths patchés** : pending-timeout + LEFT-release fast-forward — silent deny per spec §23.2 + invariant 11).
+   - ✅ `LoopEngine::onBackgroundTransition` (audit fix B-N1/R-N1) — flush live press refcount via `_padHeldLive[]` + reset CLEAR press tracker au bank switch out. Tracker `_padHeldLive[NUM_KEYS]` unifié set par `capturePadEvent` dans tous états, consommé par `stopRecording` + `mergeOverdub` (B-N2) + `onBackgroundTransition` (B-N1).
+   - **Décision actée Phase 2** : `PendingEvent` struct dupliqué (Q2 §28), `MAX_LOOP_BANKS = 4` (D1 acté, 38.8 KB SRAM), live-sort buffer M2 (Q4), velocity strict capture M3 (Q8), MIDI live monitor tous états M8 (Q1).
+   - ★ **Premier son MIDI LOOP audible HW** commit `d345f01` (gate G5 milestone Phase 2). HW gate G9 procédure 11 steps incluant audit-fix B-N1/B-N2/R-N1.
 3. **Phase 3** — Setup tools :
    - Refactor **Tool 3 vers b1 contextuel** (3 sous-pages Banks / ARPEG / LOOP). Miroir de la règle collision §5 rule 2 : refus d'assigner LOOP REC/PS/CLEAR sur un pad déjà ControlPad.
    - ~~Extension **Tool 5**~~ → **absorbé dans refacto Tool 5 dédié pré-Phase 2** (Option A actée 2026-05-17, cf §6 footnote + spec [`2026-05-17-tool5-bank-config-refactor-design.md`](2026-05-17-tool5-bank-config-refactor-design.md)). Phase 3 LOOP ne touche plus au Tool 5.

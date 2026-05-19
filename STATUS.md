@@ -1,8 +1,8 @@
 # ILLPAD V2 — Status
 
-_Sync : 2026-05-17. Lu en début de session, gardé à jour au fil de l'eau._
+_Sync : 2026-05-19. Lu en début de session, gardé à jour au fil de l'eau._
 
-**Focus courant** : Refacto Tool 5 **CLOSE**. LOOP Phase 1 **CLOSE**. ARPEG_GEN feature complete. Viewer serial Phase 1 **CLOSE**. **Viewer bidirectionnel Phase 2 firmware CODE COMPLETE — HW gates G2-G7 en attente du viewer-juce Phase 2 codé** (14 commits firmware sur `main`, build clean RAM 16.9% / Flash 21.9%, HW gates Phase 2.A + G1 validés). **Prochaine étape immédiate : impl spec viewer Phase 2** sur branche `viewer-juce` (parser `[BANK_SETTINGS]` + `[ERROR] cmd=`, `CommandSender`, UI toggle ClockMode + 4 sliders ARPEG_GEN + error toast + lock indicator). Reprise firmware = HW gates G2-G7 via terminal serial OU viewer Phase 2 fonctionnel. Phase 2 LOOP en file d'attente après.
+**Focus courant** : ★ **LOOP Phase 2 CLOSE** (1er son MIDI LOOP audible HW commit `d345f01`, gate G5 milestone validé ; 10 commits Phase 2.A → 2.J + Task 36 doc-sync, HW gates G1-G9 tous validés 2026-05-19). Build clean RAM 29.1 % / Flash 22.1 %, +40 KB pour 4× LoopEngine (MAX_LOOP_BANKS bumped 2→4). Refacto Tool 5 + LOOP Phase 1 + ARPEG_GEN + Viewer serial Phase 1 toujours CLOSE. Viewer bidirectionnel Phase 2 firmware reste en attente du viewer-juce Phase 2 codé. **Prochaine étape LOOP : Phase 3** (Tool 3 b1 refactor 3 sous-pages Banks/ARPEG/LOOP + Tool 4 ext refus ControlPad sur pad LOOP control). Le dev seed conditionnel pads 32/33/34 (M7 audit fix) sera retiré quand Tool 3 b1 livrera l'UI propre.
 
 ## ARPEG_GEN — historique commits
 
@@ -16,6 +16,28 @@ _Sync : 2026-05-17. Lu en début de session, gardé à jour au fil de l'eau._
 | 7 | 16-18 | `43f6a57` | Tool 5 4-fields field-focus + 2-line layout + INFO panel |
 | 8 | 20-21 | `c766b24` | LED finitions read-back + docs arp/nvs/patterns refs |
 | Extension | 22 | `332a75f` | proximity_factor + ecart per-bank Tool 5 (BankTypeStore v4, 6-fields cycle, 3-lignes layout, TABLE retune 8 valeurs {2,3,4,8,12,16,32,64}) |
+
+## LOOP Phase 2 — historique commits (2026-05-19)
+
+10 commits sur `main` exécutés single session avec workflow par phases (2.A → 2.J + doc-sync), 9 HW gates G1-G9 validés HW Loïc, 5 audit-fix B-N1/B-N2/R-N1/M-fix B1/B2/B3/M2/M3/M4/M6/M7/M8/M9/m1/m2/m4/m6/m9/m10/m11 + bonus B2 généralisé (longPressClear refus silencieux). Plan référence : [`docs/superpowers/plans/2026-05-18-loop-phase-2-plan.md`](docs/superpowers/plans/2026-05-18-loop-phase-2-plan.md).
+
+| Phase | Tasks | Commit | HW Gate | Description |
+|---|---|---|---|---|
+| 2.A + 2.B | 1-7 | `6c0b4d8` | G1 ✓ | LoopEngine skeleton 7 états + buffer caps + BankSlot extension + boot wiring (s_loopEngines pool 4) |
+| 2.C | 9-11 | `fd25a4b` | G2 ✓ | NvsManager load LoopPadStore + LoopPotStore + accessors + dev seed M7 (pads 32/33/34 si NVS vide + pas de collision Tool 4) |
+| 2.D | 13-15 | `655d2a4` | G3 ✓ | processLoopMode dispatch + REC/PLAY/CLEAR pad detection + CLEAR long-press tracker + DEBUG_SERIAL traces |
+| 2.E | 16.5-18 | `af86b65` | G4 ✓ | Recording µs + capturePadEvent live-sort M2 + stopRecording bar-snap 25 % deadzone + M6 timestamp clamp + ViewerSerial emitLoopBufferFull m9 |
+| **2.F ★** | 20-22 | **`d345f01`** | **G5 ✓** | **★ PREMIER SON MIDI LOOP AUDIBLE — playback BPM-scaled intégration incrémentale B1 + wrap/bar flash + update() main loop wiring** |
+| 2.G | 24 | `b940529` | G6 ✓ | Overdub merge O(n+m) atomique M4 + Q5 STOPPED-loaded REC = PLAYING+OVERDUB + abandonOverdub + B-N2 flush held pads |
+| 2.H | 26 | `63b147e` | G7 ✓ | Quantize WAITING_PLAY/STOP : computeNextBoundaryTick (24/96 ticks) + commitWaitingAction (B3 nowUs propagé) — résoud bug PLAY/STOP en quantize BAR |
+| 2.I | 28-29 | `578f47d` | G8 ✓ | LedController renderBankLoop state-driven (Gold/Coral/Amber/Green) + FLASH bar/wrap consume one-shot m4 + EVT_LOOP_* triggers + WaitingExit root-cause fix (PTN_CROSSFADE_COLOR continuous nécessite caller-clear) |
+| 2.J | 31-34.5 | `284bec4` | G9 ✓ (11 steps) | BankManager double-tap LOOP + toggleAllArpsAndLoops + midiPanic flush LoopEngines + M9 bank switch guard (pending-timeout + LEFT-release fast-forward) + onBackgroundTransition (audit-fix B-N1/R-N1 : flush live press refcount + reset CLEAR tracker) |
+
+**HW Checkpoint global** validé 2026-05-19 : 1er son MIDI LOOP au DAW, wrap propre BPM-scaled, overdub merge audible, quantize Beat/Bar aligned, LED states cohérents, multi-bank toggle + panic + bank switch guard tous OK, 3 scenarios audit-fix B-N1/B-N2/R-N1 validés.
+
+**Décisions techniques actées** : MAX_LOOP_BANKS bumped 2→4 (38.8 KB SRAM / 320 KB total). LoopEvent 8 B static_assert. _padHeldLive[NUM_KEYS] unifié pour tracker live press (consumé par stopRecording flush + mergeOverdub flush + onBackgroundTransition flush). M3 velocity strict au capture (variation 1× au playback seul). M8 live drumming spec §18 — MIDI émis dans tous états (EMPTY/STOPPED/PLAYING/REC/OD/WAITING). PendingEvent non factorisé avec ArpEngine (Q2 §28).
+
+**Dev seed M7 à retirer Phase 3** : `applyDevSeedLoopPadsIfSafe()` seede REC=32/PLAY=33/CLEAR=34 si LoopPadStore vide ET pas de ControlPad Tool 4 sur ces pads. Phase 3 Tool 3 b1 livrera l'UI propre — supprimer ce helper alors.
 
 ## LOOP Phase 1 — historique commits
 
