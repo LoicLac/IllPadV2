@@ -408,28 +408,56 @@ nowUs = micros()
 (4) Sinon : garder _lastUpdateUs synchronisé (évite delta géant au prochain PLAYING)
 ```
 
-### 3. Recording flow + bar-snap
+### 3. Recording flow — Auto-Stop + master grid anchor
+
+**Pivot 2026-05-19** (commits `89f6c11` + `edbdd2b`) : remplace bar-snap+rescale par **Auto-Stop** boundary-aware + master grid anchor. Cf [`docs/superpowers/specs/Illpad_Master_Sync.md`](../superpowers/specs/Illpad_Master_Sync.md).
 
 ```
 tap REC depuis EMPTY → tapRec → startRecording
   ↓ state = RECORDING
-  ↓ _eventCount = 0, _recordFirstPressDone = false, _recordBpm latché au 1er press
+  ↓ _eventCount = 0, _recordFirstPressDone = false
   ↓
 musical pad press → capturePadEvent
-  ↓ 1er noteOn : _recordStartUs = micros(), _recordBpm = getSmoothedBPM(), _recordFirstPressDone = true
+  ↓ 1er noteOn : Master Sync anchor selon _quantize :
+  │    FREE → _recordStartUs = micros() (tap-to-tap, hors grille)
+  │    BEAT → _recordStartUs = _clock->getLastBeatWallTimeUs()
+  │    BAR  → _recordStartUs = _clock->getLastBarWallTimeUs()
+  ↓ _recordBpm = getSmoothedBPM() latché (invariant §23.5)
+  ↓ _recordFirstPressDone = true
   ↓ live monitor MIDI (M8) + insertEventSorted live-sort buffer (M2)
   ↓
-tap REC depuis RECORDING → tapRec → stopRecording
-  ↓ rawDurUs = nowUs - _recordStartUs
-  ↓ barDurUs = 240e6 / _recordBpm
-  ↓ bar-snap 25 % deadzone : if remainder ≤ 0.25 × barDurUs snap down, else round up
-  ↓ clamp 1..64 bars, _loopDurationUs = snappedBars × barDurUs
-  ↓ rescale event timestamps proportionnellement
-  ↓ flushHeldPadsAsNoteOffs(snappedDurUs) inject noteOff fin de loop pour pads tenus (B-N1/B-N2 tracker)
-  ↓ M6 validation timestamp < _loopDurationUs + clamp si dépassement
-  ↓ flushPendingNoteOffs (B2 self-stop → STOPPED)
-  ↓ startPlayback(transport, micros()) → state = PLAYING
+tap REC depuis RECORDING → tapRec :
+  ├─ Si _quantize == FREE :
+  │   ↓ closeRecordingImmediate
+  │   ↓ _loopDurationUs = rawDurUs (pas de snap)
+  │   ↓ flushHeldPadsAsNoteOffs(_loopDurationUs - 1)
+  │   ↓ M6 clamp defense in depth
+  │   ↓ flushPendingNoteOffs (B2 self-stop → STOPPED)
+  │   ↓ startPlayback(transport, micros()) → state = PLAYING
+  │
+  └─ Si _quantize == BEAT/BAR :
+      ↓ _recordingPendingCloseTick = computeNextBoundaryTick(_quantize)
+      ↓ _recordingPendingClose = true   ← flag sur RECORDING (état machine inchangé)
+      ↓ état reste RECORDING, capture continue (α decision BS-2)
+      ↓
+update() phase 0 (à chaque frame) :
+  ↓ if (RECORDING && _recordingPendingClose && currentTick >= boundary tick) :
+  │   commitRecordingClose
+  │     ↓ boundaryWallTime = lastTickWallTimeUs - catchUpDiff × tickIntervalUs (sub-tick precision)
+  │     ↓ _loopDurationUs = boundaryWallTime - _recordStartUs
+  │     │   = multiple entier de quantize unit (BEAT=24t, BAR=96t) par construction
+  │     ↓ flushHeldPadsAsNoteOffs(_loopDurationUs - 1)
+  │     ↓ M6 clamp
+  │     ↓ flushPendingNoteOffs (B2)
+  │     ↓ startPlayback(transport, boundaryWallTime) → state = PLAYING
+  │         _lastUpdateUs = boundaryWallTime → loop position 0 ancré au master tick
 ```
+
+**Garantie cohérence math** : `loopDur = N × beatDur_recordBpm` → `wrapWallTime_liveBpm = N × beatDur_liveBpm` → wrap toujours sur master tick boundary. Loops ARP + LOOP + LOOP multi-bank phase-aligned via cette grille.
+
+**FREE explicitement hors grille** : recordStart non-ancré, loop wraps dérivent vs master clock. Comportement intentionnel pour mode "free run".
+
+**Gestes pendant PENDING_CLOSE** (BS-6 à BS-9) : capture continue, autres ignorés/refusés (PLAY/STOP ignoré, 2e tap REC ignoré, CLEAR refus `isLocked()`, bank switch silent deny).
 
 ### 4. Bank switch + multi-bank LOOP
 

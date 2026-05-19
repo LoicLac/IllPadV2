@@ -148,18 +148,44 @@ Au retour en mode jeu, la bank LOOP est prête. Son LED affiche le fond jaune so
 
 ### §7 — Enregistrer un premier loop
 
+> **⚠ MAJ 2026-05-19 — Master Sync pivot** : cette section a été réécrite suite au pivot algorithmique Auto-Stop + master grid anchor (commits `89f6c11` + `edbdd2b`). **Le bar-snap+rescale décrit dans la version antérieure est supprimé du code.** Source de vérité : [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md).
+
 Le musicien est sur la bank LOOP. Le LED jaune est solide dim (EMPTY). Il tape sur le pad **REC** — le LED garde le fond jaune solide mais ajoute un flash rouge à chaque bar (pattern RECORDING, voir LED spec §17), l'engine entre en état **RECORDING**. Mais rien n'est encore capturé : le moteur attend le premier coup.
 
-Le musicien frappe son premier pad. L'horloge d'enregistrement démarre à cet instant précis (pas au tap REC, pour ne pas enregistrer une anacrouse parasite). Ce premier coup devient l'**offset 0** du loop. Les coups suivants sont enregistrés avec leur décalage temporel en microsecondes par rapport à ce point zéro.
+Le musicien frappe son premier pad. L'horloge d'enregistrement démarre à cet instant précis (pas au tap REC, pour ne pas enregistrer une anacrouse parasite). Selon le `loopQuantize` per-bank, le `_recordStartUs` est **ancré sur la grille master** :
+- **FREE** : ancré sur `micros()` (tap-to-tap, hors grille master).
+- **BEAT** : ancré sur `lastBeatWallTime` (= dernier master beat boundary). Event[0] reçoit timestamp = phase Δ du hit dans son beat.
+- **BAR** : ancré sur `lastBarWallTime` (= dernier master bar boundary). Event[0] reçoit timestamp = phase Δ dans son bar.
 
-Le musicien joue son motif. Tous les frappes et relâchés sont capturés, avec leur timing exact — **pas de quantization à l'enregistrement**, le groove humain est préservé. Le tempo en cours est utilisé comme référence (BPM "recording timebase") mais n'est pas verrouillé : il peut changer pendant que la boucle joue, voir §16.
+Les coups suivants sont enregistrés avec leur décalage temporel en microsecondes par rapport à ce point zéro. **Pas de quantize à l'enregistrement, le micro-timing du groove humain est préservé** — relativement à la grille master pour BEAT/BAR, ou absolu pour FREE.
 
-Quand le motif est complet, le musicien tape à nouveau **REC**. Trois choses se passent :
-1. **Bar-snap avec deadzone** : la durée enregistrée est arrondie à la mesure entière **suivante**, mais avec une deadzone de tolérance pour absorber le retard naturel de réaction (tap typiquement 20-80 ms après la bar line visée). Règle : si `elapsed` est à moins de `0.25 × barDuration` après une bar line, snap à cette bar (arrondi bas) ; sinon, round up. Threshold **25 %** acté (= si elapsed = 3.2 bars, snap à 3 ; si 3.3 bars, snap à 4). Min 1 bar, max 64. Les offsets des events sont rescalés proportionnellement pour remplir exactement la nouvelle durée.
-2. **Flush des pads tenus** : si un doigt est encore appuyé sur un pad au moment du tap REC, un noteOff implicite est injecté à la position courante pour éviter les notes bloquées.
-3. **Transition vers PLAYING** : la boucle redémarre immédiatement (quantize No quantize forcé à la clôture), le LED garde le fond jaune solide et ajoute un flash vert à chaque wrap de la boucle (pattern PLAYING, voir LED spec §17).
+Quand le motif est complet, le musicien tape à nouveau **REC**. Le comportement dépend du `loopQuantize` per-bank :
 
-> **Pourquoi pas un ceil strict** : sans deadzone, un tap REC 30 ms après la bar line (réaction humaine normale) produit 4 bars alors que le musicien voulait 3. La deadzone absorbe cet overshoot naturel.
+#### Cas FREE (hors grille)
+`closeRecordingImmediate` synchrone :
+1. `_loopDurationUs = rawDur` exact (pas de snap, pas de rescale).
+2. **Flush des pads tenus** : noteOff implicite injecté à `_loopDurationUs - 1` dans le buffer pour pads encore tenus.
+3. **Transition immédiate vers PLAYING** : la boucle redémarre.
+
+#### Cas BEAT / BAR (Auto-Stop, sur grille master)
+Le tap REC final ne ferme PAS la loop immédiatement. Il **arme** un commit au prochain master tick boundary :
+1. `_recordingPendingClose = true`, `_recordingPendingCloseTick = computeNextBoundaryTick(quantize)` (next multiple de 24 ticks pour BEAT, 96 pour BAR).
+2. **L'état reste RECORDING**, capture continue (le musicien peut continuer à jouer jusqu'au boundary — décision BS-2 "α capture continue").
+3. Au boundary tick atteint (`update()` phase 0), `commitRecordingClose` :
+   - `_loopDurationUs = boundaryWallTime - _recordStartUs` (multiple entier de quantize unit par construction).
+   - Flush des pads tenus à `_loopDurationUs - 1`.
+   - `startPlayback` ancré au boundary tick wall time exact. Loop position 0 coïncide avec le master tick.
+
+**Conséquence musicale** : ARP Beat + LOOP BEAT/BAR + LOOP autres banks partagent la grille master clock. Les wraps de loop tombent sur des master tick boundaries. Les wraps multi-loop coïncident.
+
+#### Gestes pendant la fenêtre PENDING_CLOSE (BEAT/BAR uniquement)
+- Tap PLAY/STOP : ignoré (no-op).
+- 2e tap REC : ignoré (commit ferme, pas d'undo — décision BS-9).
+- Long-press CLEAR : refusé (`isLocked()` retourne true).
+- Bank switch : silent deny (invariant §23.2 préservé).
+- Pad presses musicaux : capturés normalement (α).
+
+> **Pourquoi cette refonte (Master Sync 2026-05-19)** : la version antérieure (bar-snap 25 % deadzone + rescale proportionnel des event timestamps) introduisait des shifts de micro-timing jusqu'à ×1.6 sur loops courts à la frontière de deadzone. Aucun looper de référence (Boss/Mobius/Sooperlooper/EHX/Loopy Pro) ne rescale ses event timestamps stockés au close-record — tous font soit Auto-Stop (attend boundary) soit Round-off (trim/extend silent). ILLPAD V2 a adopté Auto-Stop pour la cohérence avec le principe "all beat in sync" (cf [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) §1 et recherche industrie 2026-05-19).
 
 Le loop tourne. Le musicien peut maintenant soit le laisser tourner, soit jouer par-dessus (§13), soit ajouter une couche (§8), soit le couper (§9), soit le sauver dans un slot (§11).
 
@@ -318,17 +344,21 @@ Cette approche évite les problèmes de PPQN (24 ticks par noire) qui limiteraie
 
 **Slave mode** : l'ILLPAD reçoit l'horloge d'un DAW ou d'un séquenceur externe. Le pot tempo est neutralisé musicalement mais affiche quand même un bargraph quand on le touche (un futur polish pourra le masquer, voir §20).
 
-### §17 — Quantization (Play, Stop, Load)
+### §17 — Quantization (Play, Stop, Load, Record close)
 
-Le mode LOOP applique un quantize **uniforme** à tous les démarrages et arrêts musicaux : Play, Stop, et Load pendant PLAYING. La valeur `loopQuantize` est paramétrée par bank en Tool 5 et prend une des trois valeurs :
+> **MAJ 2026-05-19** : le scope de `loopQuantize` a été **étendu au close-record** suite au pivot Master Sync (cf [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md)). Le paramètre per-bank gouverne maintenant deux comportements parallèles : transport (PLAY/STOP/LOAD existant) ET fermeture de recording (Auto-Stop nouveau).
 
-| Valeur | Signification |
-|---|---|
-| **No quantize** | Aucun quantize. L'action fire à la microseconde du tap. |
-| **Beat** | L'action attend le prochain 1/4 de note (24 ticks à 24 PPQN). |
-| **Bar** | L'action attend la prochaine mesure (96 ticks). |
+Le mode LOOP applique un quantize **uniforme** à tous les démarrages et arrêts musicaux : Play, Stop, Load pendant PLAYING, ET fermeture de RECORDING. La valeur `loopQuantize` est paramétrée par bank en Tool 5 et prend une des trois valeurs :
+
+| Valeur | Transport (PLAY/STOP/LOAD) | Record close (Auto-Stop) |
+|---|---|---|
+| **FREE / No quantize** | Aucun quantize. Action fire à la microseconde du tap. | Tap REC final = close immédiat, loop length = rawDur exact. Hors grille master. |
+| **Beat** | Action attend le prochain 1/4 de note (24 ticks). | Tap REC final = entrée PENDING_CLOSE, capture continue jusqu'au prochain master beat boundary, puis close + startPlayback ancré sur ce tick. Loop length = multiple entier de 24 ticks au record BPM. Sur grille master. |
+| **Bar** | Action attend la prochaine mesure (96 ticks). | Idem Beat mais unité = bar (96 ticks). Loop length = multiple entier de 96 ticks. Sur grille master. |
 
 **Défaut : Bar** à la création d'une bank LOOP.
+
+**Principe directeur** ([`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) §1) : le master clock fournit LA grille temporelle commune à tout ce qui est quantizé sur l'ILLPAD. ARP Beat + LOOP BEAT/BAR + LOOP cross-bank partagent la grille. FREE = explicitement hors grille (par design, dérive intentionnelle).
 
 **Modèle PLAY/STOP** :
 
@@ -483,7 +513,7 @@ Ces règles doivent être vraies tout au long de l'exécution. Toute modificatio
 2. **Bank switch refusé pendant RECORDING / OVERDUBBING**. Silent deny.
 3. **Slot save / load / delete refusés pendant RECORDING / OVERDUBBING**. Le hold-left sous ces états skip entièrement le handler slot.
 4. **Pas d'écrasement implicite d'un slot**. Save sur slot occupé = refus. L'utilisateur doit delete d'abord.
-5. **Pas de mélange d'horloges par event**. Le recordBpm d'une boucle est immutable jusqu'au prochain stopRecording. Les events ne sont jamais réécrits par un changement de tempo.
+5. **Pas de mélange d'horloges par event**. Le recordBpm d'une boucle est immutable jusqu'au prochain close-record (commitRecordingClose ou closeRecordingImmediate). Les events ne sont jamais réécrits par un changement de tempo, ni par un changement de loop length (Master Sync pivot 2026-05-19 supprime le rescale silencieux).
 6. **Pas de scale sur une bank LOOP**. Les pads scale/root/mode/chrom sont no-op en contexte LOOP. Le scaleGroup est ignoré.
 7. **Le catch system est ré-armé à chaque changement de contexte**. Bank switch, load slot, reconfig Tool 7 — tous triggent une re-seed.
 8. **Setup/Runtime 4-link chain**. Tout paramètre persisté a son Store, son Tool UI, son chemin de load au boot, son chemin de save au runtime. Un Store sans Tool UI ou un Tool case sans consommateur runtime est un bug.
@@ -502,7 +532,8 @@ Volontairement hors du mode LOOP, y compris pour des versions futures :
 - **Pas de count-in** — le recording démarre au premier coup
 - **Pas d'armement** ("arm to record") — tap REC = entrée directe en RECORDING
 - **Pas de mute/unmute** — la vélocité de base (pot) fait office de contrôle de volume
-- **Pas de quantize à l'enregistrement** — le groove humain est préservé, la quantization existe uniquement au playback
+- **Pas de quantize per-event à l'enregistrement** — le groove humain (micro-timing relatif au master beat/bar pour BEAT/BAR, ou absolu pour FREE) est préservé. Le close-record est quantizé sur la grille master via Auto-Stop (cf §17 + [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md)), mais les events stockés ne sont JAMAIS shiftés dans le temps.
+- **Pas de rescale silencieux des timestamps stockés** — interdit de modifier le temps d'un event après capture (anti-pattern bar-snap rescale Phase 2 supprimé 2026-05-19, cf [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) §0 contexte).
 - **Pas de scroll / shift / reverse** — la boucle est jouée telle qu'enregistrée
 - **Pas d'undo / redo** — le CLEAR long-press est la seule sortie d'une boucle non désirée, les slots sont la seule persistance
 - **Pas de gestion de fichiers du Slot Drive** — pas de rename, pas de copie, pas d'export. Tout passe par les gestes hardware.
@@ -646,6 +677,7 @@ Suite à l'audit de cohérence `docs/archive/rapport_audit_loop_spec.md` (archiv
 | Q6 | Tool 5 refactor "présentation en colonnes" | ~~Phase 3 minimal, refactor deferred~~ **INVERSÉE 2026-05-17** — audit Tool 5 a montré que la structure actuelle (cycle linéaire 5 états + multi-lignes ARPEG_GEN) ne supporte pas élégamment l'ajout LOOP. Refacto **dédié pré-Phase 2** validé via spec [`2026-05-17-tool5-bank-config-refactor-design.md`](2026-05-17-tool5-bank-config-refactor-design.md). Tableau matriciel banks×params, nav 2D, INFO auto-update, validator `quantize` discriminé par type. Pas de bump NVS. | §6, §27 |
 | Q7 | Tool 4 extension (refus ControlPad sur pad LOOP control) | **Phase 3 bundle** avec Tool 3 b1. Validation bi-directionnelle (Tool 3 et Tool 4 se connaissent mutuellement via helper `LoopPadStore::isLoopControlPad`). Pas de pré-wiring Phase 1/2 (pas de chemin de création du conflit avant Phase 3). | §27 Phase 3 |
 | Q8 | Max 1 bank LOOP en REC/OD à un instant t ? | **Oui, expliciter comme invariant 11 §23**. Conséquence combinée des invariants 2 (bank switch refusé pendant REC/OD) et §18 (pads REC/PS/CLEAR sur FG layer musical uniquement). Coût : 1 ligne spec, permet LoopEngine + `renderBankLoop` de faire des hypothèses explicites sans code défensif. Aligne spec LOOP avec LED spec §17 table ("BG RECORDING/OVERDUBBING : impossible"). | §23 |
+| **Master Sync** | Pivot algorithmique close-record (post-audit musical 2026-05-19) | **Auto-Stop + master grid anchor**. Remplace bar-snap+rescale destructeur par Auto-Stop boundary-aware. ARP+LOOP+LOOP cross-bank désormais sur la grille master clock. FREE = explicitement hors grille. 9 sous-décisions BS-1 à BS-9 actées (cf [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) §6). Commits `89f6c11` (ClockManager getters) + `edbdd2b` (LoopEngine atomic). HW gates G1-G9 validés. | §7, §17, §24, [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) |
 
 ### §29 — Drifts spec↔code résolus via ces décisions
 
