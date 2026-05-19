@@ -28,7 +28,6 @@ LoopEngine::LoopEngine()
   , _loopDurationUs(0)
   , _loopBars(0)
   , _eventCount(0)
-  , _overdubCount(0)
   , _playStartUs(0)
   , _scaledElapsedUs(0)        // B1: cumulative scaled position (uint64)
   , _lastUpdateUs(0)            // B1: previous update() tick timestamp
@@ -51,9 +50,6 @@ LoopEngine::LoopEngine()
   }
   for (uint16_t i = 0; i < MAX_LOOP_EVENTS; i++) {
     _eventsAlternate[i].active = false;
-  }
-  for (uint8_t i = 0; i < MAX_LOOP_OVERDUB_EVENTS; i++) {
-    _overdubEvents[i].active = false;
   }
   for (uint8_t i = 0; i < MAX_LOOP_PENDING_NOTEOFFS; i++) {
     _pendingNoteOffs[i].active = false;
@@ -154,20 +150,25 @@ void LoopEngine::tapRec(MidiTransport& transport) {
       }
       break;
     case LoopState::PLAYING:
-      // Enter OVERDUBBING — main buffer continues playback, overdub captures additions
-      _overdubCount = 0;
+      // OD-Sync (spec Illpad_OD_Sync.md §3.1) : snapshot _events → _eventsAlternate.
+      // Sera utilisé pour Cancel (CLEAR pendant OD) ou Undo/Redo (CLEAR court post-exit).
+      memcpy(_eventsAlternate, _events, sizeof(_events));
+      _eventsAlternateCount = _eventCount;
+      _alternateValid = true;
       _state = LoopState::OVERDUBBING;
       break;
     case LoopState::OVERDUBBING:
-      // M2 / M4 : mergeOverdub retourne false si capacité dépassée → abandon atomique silent.
-      // Si OK : main buffer merged, → PLAYING. Si échec : overdub déjà reset, stay PLAYING.
-      mergeOverdub();
-      _state = LoopState::PLAYING;
+      // OD-Sync (spec §3.3) : exit commit. Held pads inject (B-N2 réincarnée).
+      // _eventsAlternate préservé pour post-Undo via CLEAR court PLAYING.
+      commitOverdubExit(transport);
       break;
     case LoopState::STOPPED:
       // Q5 §28 : tap REC on STOPPED-loaded → PLAYING + OVERDUBBING simultaneously
+      // OD-Sync : snapshot avant startPlayback (capture l'état figé pré-reprise).
+      memcpy(_eventsAlternate, _events, sizeof(_events));
+      _eventsAlternateCount = _eventCount;
+      _alternateValid = true;
       startPlayback(transport, micros());   // B3 : nowUs capturé localement
-      _overdubCount = 0;
       _state = LoopState::OVERDUBBING;
       break;
     case LoopState::WAITING_PLAY:
@@ -176,7 +177,11 @@ void LoopEngine::tapRec(MidiTransport& transport) {
     case LoopState::WAITING_STOP:
       // Spec §17 : REC during WAITING_STOP cancels stop and enters OVERDUBBING.
       // M1 fix : pas de double-assignment _state ici, directement OVERDUBBING.
-      _overdubCount = 0;
+      // OD-Sync (B2 fix post-review) : snapshot identique aux autres entry points.
+      // Sans ça : _eventsAlternate stale → Undo/Redo après ce chemin = undefined.
+      memcpy(_eventsAlternate, _events, sizeof(_events));
+      _eventsAlternateCount = _eventCount;
+      _alternateValid = true;
       _state = LoopState::OVERDUBBING;
       break;
   }
@@ -215,9 +220,9 @@ void LoopEngine::tapPlayStop(MidiTransport& transport, const uint8_t* /*currentK
       }
       break;
     case LoopState::OVERDUBBING:
-      // Spec §8 : abandon overdub, stay PLAYING. A second tap then stops normally.
-      abandonOverdub();
-      _state = LoopState::PLAYING;
+      // OD-Sync (décision OD-3 spec §3, §5) : tap PLAY/STOP pendant OD est no-op.
+      // L'abandon se fait désormais via tap CLEAR (cancelOverdub, cf C3).
+      // Cf BS-6 analogue Master Sync PENDING_CLOSE no-op.
       break;
     case LoopState::RECORDING:
       // No-op : PLAY/STOP during RECORDING ignored (REC is the only way out)
@@ -255,10 +260,12 @@ void LoopEngine::longPressClear(MidiTransport& transport) {
   flushPendingNoteOffs(transport);
   _eventCount = 0;
   for (uint16_t i = 0; i < MAX_LOOP_EVENTS; i++) _events[i].active = false;
-  _overdubCount = 0;
   _loopDurationUs = 0;
   _loopBars = 0;
   _state = LoopState::EMPTY;
+  // OD-Sync (spec §4.2) : wipe reset aussi _eventsAlternate + invalide.
+  // Note : ce reset est ajouté en C3 (le wipe étendu), pas en C2.
+  // En C2 on retire juste l'ancien `_overdubCount = 0`.
   #if DEBUG_SERIAL
   Serial.printf("[LOOP] longPressClear -> state=%u (EMPTY)\n", (unsigned)_state);
   #endif
@@ -267,8 +274,8 @@ void LoopEngine::longPressClear(MidiTransport& transport) {
 // capturePadEvent — décisions actées post-audit :
 //   M3 (Q8) : velocity stocké = baseVelocity STRICT (passé par processLoopMode).
 //             Variation appliquée uniquement au playback dans update().
-//   M2 (Q4) : insertion live-sorted dans _events[] (RECORDING) ou _overdubEvents[]
-//             (OVERDUBBING). Buffer toujours trié, mergeOverdub devient O(n+m).
+//   M2 (Q4) : insertion live-sorted dans _events[] (RECORDING ET OVERDUBBING
+//             post OD-Sync immediate-merge). Buffer toujours trié.
 //   M8 (Q1) : MIDI live monitor émis dans TOUS les états (spec §18 "percussion fixe").
 //             EMPTY/STOPPED/WAITING_* → live monitor seul, pas de capture buffer.
 //             RECORDING/OVERDUBBING → live monitor + capture buffer.
@@ -291,7 +298,7 @@ void LoopEngine::capturePadEvent(uint8_t padIndex, uint8_t velocity, MidiTranspo
   // Audit-fix B-N1 / B-N2 / R-N1 : tracker live press (TOUS états).
   // Set true à chaque rising edge, false à chaque falling edge. Consommé par :
   //   - commitRecordingClose / closeRecordingImmediate flushHeldPadsAsNoteOffs (fin de loop, Master Sync §3.2 / §3.3).
-  //   - mergeOverdub flush held (inject noteOff à _playPositionUs).
+  //   - commitOverdubExit (B-N2 réincarnée OD-Sync §3.3 : inject noteOff à _playPositionUs).
   //   - onBackgroundTransition (refCountNoteOff direct au bank switch out).
   // Invariant : _padHeldLive[pad] == true ssi pad physiquement enfoncé ET live
   // monitor a émis noteOn (refCountNoteOn ci-dessus). Set/reset symétrique.
@@ -337,17 +344,31 @@ void LoopEngine::capturePadEvent(uint8_t padIndex, uint8_t velocity, MidiTranspo
   }
 
   if (_state == LoopState::OVERDUBBING) {
-    // B1 fix audit : utilise _playPositionUs maintenu par update() (precision ~1 ms),
-    // pas d'appel à computeLoopPositionUs (méthode supprimée).
+    // OD-Sync (spec Illpad_OD_Sync.md §3.2) : immediate-merge.
+    // Insert direct dans _events[] (pas de buffer temp). L'event sera audible
+    // au prochain wrap → "live loop growth" caractéristique du modèle.
     uint32_t posInLoop = _playPositionUs;
 
-    // M2 live-sort : insertion triée dans _overdubEvents[].
-    bool ok = insertEventSorted(_overdubEvents, _overdubCount, MAX_LOOP_OVERDUB_EVENTS,
+    bool ok = insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
                                  posInLoop, padIndex, midiNote, velocity);
     if (!ok) {
-      // m9 telemetry overdub buffer full.
-      viewer::emitLoopBufferFull(_channel, "overdub");
+      // m9 telemetry main buffer full.
+      viewer::emitLoopBufferFull(_channel, "main");
+      return;
     }
+
+    // _playNextEventIdx adjustment : binary search depuis _playPositionUs.
+    // Le M8 live monitor a déjà émis le noteOn live ; on ne veut pas que le
+    // walk fire loop re-déclenche cet event ce cycle. Le binary search avance
+    // _playNextEventIdx APRÈS l'event inséré (premier idx avec timestamp > pos).
+    int32_t lo = 0;
+    int32_t hi = (int32_t)_eventCount;
+    while (lo < hi) {
+      int32_t mid = (lo + hi) / 2;
+      if (_events[mid].timestampUs <= _playPositionUs) lo = mid + 1;
+      else hi = mid;
+    }
+    _playNextEventIdx = (uint16_t)lo;
     return;
   }
 
@@ -523,7 +544,6 @@ bool LoopEngine::insertEventSorted(LoopEvent* buffer, uint16_t& count, uint16_t 
 void LoopEngine::startRecording(MidiTransport& transport) {
   (void)transport;  // no MIDI flush needed here (EMPTY = nothing playing)
   _eventCount = 0;
-  _overdubCount = 0;
   _recordStartUs = 0;
   _recordEndUs = 0;
   _recordBpm = _clock ? _clock->getSmoothedBPM() : 120;
@@ -807,70 +827,33 @@ void LoopEngine::flushPendingNoteOffs(MidiTransport& transport) {
   _state = LoopState::STOPPED;
 }
 // =================================================================
-// mergeOverdub — commit overdub buffer into main buffer chronologiquement (M2+M4 audit fixes)
+// commitOverdubExit — OD-Sync exit commit (spec Illpad_OD_Sync.md §3.3)
 // =================================================================
-// M2 (Q4 décision) : buffers déjà triés à l'insertion via insertEventSorted (live-sort
-//   dans capturePadEvent). Merge = O(n+m) walk de 2 arrays pré-triés (pas d'insertion sort
-//   O(n²) sur 1024 events).
-// M4 (audit fix) : pré-check capacité. Si _eventCount + _overdubCount > MAX_LOOP_EVENTS,
-//   abandon ATOMIQUE silent (per spec §8) — pas de drop partiel qui casserait
-//   les paires noteOn/noteOff orphelines.
-// m9 (audit fix) : telemetry viewer si abandon (buffer full).
-// Retourne true si merge OK, false si abandon atomique.
-bool LoopEngine::mergeOverdub() {
-  // (1) M4 pré-check atomique
-  if ((uint32_t)_eventCount + (uint32_t)_overdubCount > (uint32_t)MAX_LOOP_EVENTS) {
-    // Buffer full. Abandon atomique : pas de partial merge, pas de paires cassées.
-    abandonOverdub();
-    viewer::emitLoopBufferFull(_channel, "merge");
-    return false;
-  }
-  if (_overdubCount == 0) return true;   // rien à merger, no-op
+// Appelé par tapRec sur OVERDUBBING. Held pads injection (B-N2 réincarnée de
+// l'ancienne mergeOverdub supprimée par OD-Sync C2) : pour chaque pad encore
+// tenu physiquement, inject noteOff dans _events à _playPositionUs.
+// Sans ça : noteOn capturé pendant OD sans noteOff matching → refcount
+// grows unbounded au wrap si user release après exit OD.
+// État → PLAYING. _eventsAlternate intact (pour post-Undo via CLEAR court).
+// =================================================================
+void LoopEngine::commitOverdubExit(MidiTransport& transport) {
+  (void)transport;  // pas de MIDI émis ici, juste buffer manipulation + state
 
-  // (2) M2 merge O(n+m) de deux arrays pré-triés.
-  // Insère chaque event overdub à sa position triée dans main buffer.
-  // _overdubEvents[] et _events[] sont triés invariant grâce à insertEventSorted.
-  for (uint16_t i = 0; i < _overdubCount; i++) {
-    const LoopEvent& e = _overdubEvents[i];
-    insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
-                       e.timestampUs, e.padIndex, e.midiNote, e.velocity);
-    // insertEventSorted ne devrait jamais retourner false ici (pré-check Step 1 garantit la capacité).
-  }
-
-  // (2.5) Audit-fix B-N2 : flush held pads (spec §8 "les pads tenus sont flushés
-  //       comme à la clôture d'un RECORDING initial").
-  // Pour chaque pad encore physiquement enfoncé pendant le merge, inject noteOff
-  // dans _events[] à _playPositionUs courant (= position au moment du tap REC).
-  // Sans ça, le noteOn de l'overdub mergé n'a pas de noteOff matching → refcount
-  // accumule cycle après cycle → stuck note au DAW (cf audit Bloquant B-N2).
-  //
-  // Position choisie : _playPositionUs (= "position courante" au moment du merge).
-  // Sémantique : la note jouée dure du press jusqu'au merge, ce qui correspond
-  // à la durée pendant laquelle le user a physiquement tenu le pad en OD.
-  //
-  // IMPORTANT : ne PAS reset _padHeldLive[pad] ici. Le pad est encore physiquement
-  // enfoncé — le tracker doit refléter l'état réel. Reset au falling edge naturel
-  // dans capturePadEvent (rising → set, falling → reset), ou via onBackgroundTransition
-  // si bank switch out avant release.
+  // (1) Held pads inject (B-N2 logic, déplacée de mergeOverdub).
+  // IMPORTANT : ne PAS reset _padHeldLive ici. Pad encore physiquement tenu —
+  // le release naturel (capturePadEvent en PLAYING) appellera refCountNoteOff.
   for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
     if (!_padHeldLive[pad]) continue;
-    bool flushOk = insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
-                                      _playPositionUs, pad,
-                                      resolvePadToMidiNote(pad), /*velocity=*/0);
-    if (!flushOk) {
-      // Buffer full au flush (pré-check (1) passait sans compter ces N noteOffs).
-      // Best-effort + telemetry. Live press refcount sera silencé au release naturel.
-      viewer::emitLoopBufferFull(_channel, "merge_flush");
+    bool ok = insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
+                                 _playPositionUs, pad, resolvePadToMidiNote(pad), /*velocity=*/0);
+    if (!ok) {
+      // B4 fix post-review : préserver télémétrie comme mergeOverdub actuel.
+      // Live press refcount silencera la note au release naturel via M8 refCountNoteOff.
+      viewer::emitLoopBufferFull(_channel, "od_exit_flush");
     }
   }
 
-  // (3) Reset overdub buffer
-  _overdubCount = 0;
-  for (uint8_t i = 0; i < MAX_LOOP_OVERDUB_EVENTS; i++) _overdubEvents[i].active = false;
-
-  // (4) Update _playNextEventIdx : recompute against current _playPositionUs (B1 cumul).
-  // Binary search le 1er event avec timestamp > _playPositionUs (events à fire au reste du cycle).
-  _playNextEventIdx = 0;
+  // (2) Recompute _playNextEventIdx après les injects (binary search depuis _playPositionUs).
   int32_t lo = 0;
   int32_t hi = (int32_t)_eventCount;
   while (lo < hi) {
@@ -879,16 +862,13 @@ bool LoopEngine::mergeOverdub() {
     else hi = mid;
   }
   _playNextEventIdx = (uint16_t)lo;
-  return true;
-}
 
-// =================================================================
-// abandonOverdub — wipe overdub buffer, state stays PLAYING (caller transitions)
-// Idempotent : safe à appeler même si _overdubCount == 0.
-// =================================================================
-void LoopEngine::abandonOverdub() {
-  _overdubCount = 0;
-  for (uint8_t i = 0; i < MAX_LOOP_OVERDUB_EVENTS; i++) _overdubEvents[i].active = false;
+  _state = LoopState::PLAYING;
+
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] commitOverdubExit ch=%u eventCount=%u alternateCount=%u\n",
+                _channel, _eventCount, _eventsAlternateCount);
+  #endif
 }
 // =================================================================
 // computeNextBoundaryTick — return next tick that matches the quantize boundary

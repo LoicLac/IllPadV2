@@ -49,7 +49,7 @@ static const uint32_t TICKS_PER_BAR  = 96;
 // =================================================================
 // LoopEvent — single captured pad action (noteOn or noteOff)
 // =================================================================
-// Stored in _events[] (main buffer) and _overdubEvents[] (overdub temp).
+// Stored in _events[] (main buffer) and _eventsAlternate[] (OD-Sync 1-level snapshot).
 // Layout naturel ARM 32-bit : 8 B (uint32 timestampUs + 4× uint8). Live-sorted
 // dans capturePadEvent (M2 décision Q4) — pas de compaction nécessaire.
 // `velocity` strict baseVelocity au capture (M3 décision Q8), randomisation
@@ -107,9 +107,11 @@ public:
   //   RECORDING→ FREE   : closeRecordingImmediate() (tap-to-tap, → PLAYING)
   //              BEAT/BAR: arme PENDING_CLOSE, capture continue jusqu'au master
   //              boundary tick, puis commitRecordingClose() (→ PLAYING)
-  //   PLAYING  → OVERDUBBING (start overdub buffer)
-  //   STOPPED  → PLAYING + OVERDUBBING simultaneously (Q5 — reprise + arm)
-  //   OVERDUB  → mergeOverdub() (commit overdub into main buffer)
+  //   PLAYING  → OVERDUBBING (snapshot _eventsAlternate + immediate-merge capture
+  //              direct dans _events[], cf Illpad_OD_Sync.md §3)
+  //   STOPPED  → PLAYING + OVERDUBBING simultaneously (Q5 — reprise + arm + snapshot)
+  //   OVERDUB  → commitOverdubExit (B-N2 held pads inject, _eventsAlternate
+  //              préservé pour Undo)
   void tapRec(MidiTransport& transport);
 
   // Tap PLAY/STOP : state machine per spec §9 §17
@@ -218,10 +220,6 @@ private:
   LoopEvent        _events[MAX_LOOP_EVENTS];
   uint16_t         _eventCount;        // number of active events (compacted, contiguous 0.._eventCount-1)
 
-  // --- Overdub temp buffer (committed on tapRec during OVERDUBBING) ---
-  LoopEvent        _overdubEvents[MAX_LOOP_OVERDUB_EVENTS];
-  uint16_t         _overdubCount;  // uint16_t pour signature insertEventSorted (cap=128, semantic OK)
-
   // --- Playback timeline (intégration incrémentale BPM, M-fix B1) ---
   // _playStartUs : conservé pour compat / debug (timestamp d'entrée en PLAYING), pas utilisé pour position.
   // _scaledElapsedUs : position cumulative en µs scalée par BPM ratio. Pas modulée.
@@ -260,7 +258,7 @@ private:
   // PLAYING / RECORDING / OVERDUBBING / WAITING_*). Reset au falling edge.
   // Trois consumers :
   //   - commitRecordingClose / closeRecordingImmediate → flushHeldPadsAsNoteOffs : inject noteOff fin de loop.
-  //   - mergeOverdub → inject noteOff dans _events à _playPositionUs (B-N2 fix).
+  //   - commitOverdubExit → inject noteOff dans _events à _playPositionUs (B-N2 fix, déplacée de mergeOverdub).
   //   - onBackgroundTransition → refCountNoteOff direct + reset flag (B-N1 fix).
   // Remplace l'ancien _padHeldLive[] qui ne couvrait que RECORDING (insuffisant).
   bool             _padHeldLive[NUM_KEYS];
@@ -308,10 +306,11 @@ private:
   void refCountNoteOn(MidiTransport& transport, uint8_t note, uint8_t velocity);
   void refCountNoteOff(MidiTransport& transport, uint8_t note);
 
-  // Overdub (M2 décision Q4 : merge O(n+m) de 2 arrays pré-triés ; M4 fix : pré-check capacité)
-  // Retourne true si merge OK, false si capacité dépassée → abandon atomique silent (spec §8).
-  bool mergeOverdub();   // M2: O(n+m) merge ; M4: pre-check + atomic abandon
-  void abandonOverdub(); // wipe overdub buffer, state stays PLAYING (spec §8)
+  // OD-Sync (spec Illpad_OD_Sync.md §3.3) : exit commit (tap REC pendant OVERDUBPER).
+  // Held pads → noteOff inject dans _events à _playPositionUs (B-N2 déplacée de
+  // l'ancienne mergeOverdub). _eventsAlternate préservé pour post-Undo via CLEAR
+  // court en PLAYING/STOPPED. État → PLAYING.
+  void commitOverdubExit(MidiTransport& transport);
 
   // Quantize boundary detection
   uint32_t computeNextBoundaryTick(LoopQuantize q) const;  // ClockManager tick of next boundary
