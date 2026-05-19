@@ -29,6 +29,14 @@ public:
   bool     isExternalSync() const;
   const char* getActiveSourceLabel() const;
 
+  // Master grid wall times — used by LoopEngine to anchor recording / playback
+  // start on master tick boundaries. Dérivés de _lastTickTimeUs et de la phase
+  // courante dans le beat / bar. Cf docs/superpowers/specs/Illpad_Master_Sync.md §2.3.
+  uint32_t getLastTickWallTimeUs() const;  // wall time du dernier tick fired
+  uint32_t getLastBeatWallTimeUs() const;  // wall time du dernier beat boundary (mod 24)
+  uint32_t getLastBarWallTimeUs() const;   // wall time du dernier bar boundary (mod 96)
+  float    getTickIntervalUs() const;      // intervalle µs entre 2 ticks (PLL courant)
+
 private:
   enum ClockSource : uint8_t {
     SRC_INTERNAL,

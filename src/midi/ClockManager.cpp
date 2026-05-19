@@ -275,3 +275,29 @@ const char* ClockManager::getActiveSourceLabel() const {
     default:             return "internal";
   }
 }
+
+// =================================================================
+// Master grid wall times (spec Illpad_Master_Sync.md §2.3)
+// =================================================================
+// Dérivés de _lastTickTimeUs (wall time du dernier tick fired) et de la phase
+// courante dans le beat / bar. Permettent à LoopEngine d'ancrer ses µs internes
+// sur la grille master pour alignement ARP+LOOP+LOOP cross-bank.
+// =================================================================
+
+uint32_t ClockManager::getLastTickWallTimeUs() const {
+  return _lastTickTimeUs;
+}
+
+uint32_t ClockManager::getLastBeatWallTimeUs() const {
+  uint32_t phase = _currentTick % 24;
+  return _lastTickTimeUs - (uint32_t)(phase * _pllTickInterval);
+}
+
+uint32_t ClockManager::getLastBarWallTimeUs() const {
+  uint32_t phase = _currentTick % 96;
+  return _lastTickTimeUs - (uint32_t)(phase * _pllTickInterval);
+}
+
+float ClockManager::getTickIntervalUs() const {
+  return _pllTickInterval;
+}
