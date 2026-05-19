@@ -1,10 +1,12 @@
 # Manifeste de session — Exécution Phase 3 LOOP
 
-**Plan référence** : [`2026-05-19-loop-phase-3-plan.md`](2026-05-19-loop-phase-3-plan.md) (2100 lignes + addendum audit-fix)
+**Plan référence** : [`2026-05-19-loop-phase-3-plan.md`](2026-05-19-loop-phase-3-plan.md) (2900+ lignes + addendums v1 audit-fix + v2 refondation indépendante)
 
-**Spec source** : [`../specs/2026-05-19-loop-phase-3-design.md`](../specs/2026-05-19-loop-phase-3-design.md)
+**Spec source** : [`../specs/2026-05-19-loop-phase-3-design.md`](../specs/2026-05-19-loop-phase-3-design.md) (refondue §13 + §22 + §2 post audit indépendant 2026-05-19)
 
-**Audit source** : [`2026-05-19-loop-phase-3-plan_AUDIT.md`](2026-05-19-loop-phase-3-plan_AUDIT.md) (1 B-N + 7 M + 11 m). Fix critiques B-N1 + M1-M5 intégrés dans le plan.
+**Audit auto (v1)** : [`2026-05-19-loop-phase-3-plan_AUDIT.md`](2026-05-19-loop-phase-3-plan_AUDIT.md) (1 B-N + 7 M + 11 m). Fix critiques B-N1 + M1-M5 intégrés dans le plan via addendum v1.
+
+**Audit indépendant (v2)** : [`2026-05-19-loop-phase-3-plan_AUDIT_independent.md`](2026-05-19-loop-phase-3-plan_AUDIT_independent.md) (2 B-N + 7 M + 6 m supplémentaires, dont B-N2, B-N3, M8, M14 critiques). Fix intégrés dans le plan via addendum v2 (refondation (c)).
 
 **Session protocole** : [`../SESSION_PROTOCOL.md`](../SESSION_PROTOCOL.md) (9 règles + 5 templates + 7 anti-patterns).
 
@@ -143,18 +145,36 @@ Interdits :
 
 Le plan a été spécifiquement rigidifié à ces endroits. Si tu y arrives, applique la vigilance maximale :
 
+### Zones identifiées par audit v1 (auto-révision)
+
 | Zone | Risque identifié | Protection ajoutée |
 |---|---|---|
-| Task 8 Step 2 | Mauvais nom variable (`_padRolesTool` vs `_toolRoles`) → call site `begin()` non trouvé | B-N1 fix : nom + ligne exact SetupManager.cpp:30 |
-| Task 11 | Refacto monolithique 788 lignes : régression UX possible sous-page ARPEG / LOOP pendant Phase 3.C | M3 fix : Option A `_drawGridLegacy()` extracté en stub |
-| Tasks 12, 15, 20, 24, 25 | Dépendent toutes de `_setFlash` Tool 3 (infrastructure manquante) | M2 fix : Task 11.5 explicite ajoute infrastructure |
-| Task 15 | Risque de dupliquer le swap-to-pool ARPEG (existe déjà silencieusement) | M1 fix : reformulation « flash sur steal existing » |
-| Tasks 18-20 | Pool LOOP lines 6+7 non gérées par dispatcher actuel (POOL_LINE_COUNT=6) | M4 fix : Task 17.5 explicite étend dispatcher |
-| Task 17 Step 3 | Validator wire dans loadAll() non précisé | M5 fix : emplacement exact spécifié |
-| Task 26 | Collision check post-loadAll emplacement vague | M6 fix : tranché NvsManager::loadAll() à la fin |
+| Task 8 Step 2 | Mauvais nom variable (`_padRolesTool` vs `_toolRoles`) → call site `begin()` non trouvé | B-N1 fix v1 : nom + ligne exact SetupManager.cpp:30 (étendu par audit indépendant — cf zones v2) |
+| Task 11 | Refacto monolithique 788 lignes : régression UX possible sous-page ARPEG / LOOP pendant Phase 3.C | M3 fix v1 : Option A `_drawGridLegacy()` extracté en stub (downgrade par audit indépendant — voir m14 v2) |
+| Tasks 12, 15, 20, 24, 25 | Dépendent toutes de `_setFlash` Tool 3 (infrastructure manquante) | M2 fix v1 : Task 11.5 explicite ajoute infrastructure |
+| Task 15 | Risque de dupliquer le swap-to-pool ARPEG (existe déjà silencieusement) | M1 fix v1 : reformulation « flash sur steal existing » |
+| Tasks 18-20 | Pool LOOP lines 6+7 non gérées par dispatcher actuel (POOL_LINE_COUNT=6) | M4 fix v1 : Task 17.5 explicite étend dispatcher |
+| Task 17 Step 3 | Validator wire dans loadAll() non précisé | M5 fix v1 : emplacement exact spécifié (upgrade B-N3 par audit indépendant — voir zones v2) |
+| Task 26 | Collision check post-loadAll emplacement vague | M6 fix v1 : tranché NvsManager::loadAll() à la fin |
 | Task 25 (HW G5) | EC9 boot collision pas testé en G5 (placé en G6) | Documenté + accepté |
 | Task 27 doc-sync | Drift Tool 7 spec §27 P3 ligne 621 | Action explicit Step 7 |
-| Tasks 13/18 dim markers | UTF-8 `·` peut casser le rendu terminal | m9 : fallback ASCII `.` documenté |
+| Tasks 13/18 dim markers | UTF-8 `·` peut casser le rendu terminal | m9 v1 : fallback ASCII `.` documenté |
+
+### Zones additionnelles identifiées par audit indépendant (v2 refondation)
+
+| Zone | Risque identifié | Protection ajoutée |
+|---|---|---|
+| Tasks 1, 2 | Signature `findBankIdxForPad(const BankSlot*, ...)` **fausse** — `BankSlot::pad` n'existe pas | **B-N2 fix v2** : signature `(const uint8_t* bankPads, uint8_t pad)`, inline dans KeyboardData.h, Task 2 supprimée |
+| Task 17, Task 26 | Validator non appelé sur branche else NVS vide → invariant 12 cassé après retrait dev seed | **B-N3 fix v2** : pré-init 0xFF + validator hors du if (verbatim dans addendum v2 plan) |
+| Tasks 11, 13, 18, 20, 23 | Helpers `scaleRoleAtPad(const ScalePadStore&)` et `arpRoleAtPad(const ArpPadStore&)` réfèrent à caches NvsManager **inexistants** | **M8 fix v2** : signatures refondues (helpers prennent arrays main.cpp par référence) — voir spec design §13 refondé |
+| Task 8 | B-N1 v1 incomplet — manque 4 dérivés (member `_nvs`, init list, begin assign, SetupManager vérif) | **M13 fix v2** : verbatim étendu dans addendum v2 plan |
+| Task 10 | API SetupUI `setInverse` / `moveCursor` **inexistante** → build break | **M14 fix v2** : refonte avec `drawFrameLine` + VT100 escapes inline (verbatim dans addendum v2 plan) |
+| Tasks 17 / 26 | Coexistence transitoire dev seed Phase 2 (32/33/34) ↔ defaults Phase 3 (30/31/32) | **M9 fix v2** : commentaire transitoire dans Task 17 |
+| Task 17.5 (addendum v1) | Dispatch `assignRole → assignLoopRole` brise pattern existing ARPEG swap | **M10 fix v2** : `assignLoopRole` SOLE responsible swap intra-LOOP, caller `run()` skip clearRole pour line 6/7 |
+| Task 21 | `saveAll` partial-fail non spécifié (bank OK + loop fail = état NVS incohérent) | **M11 fix v2** : log warning, accepte best-effort |
+| Task 20 / `clearAllRoles` | `clearAllRoles()` reset les 3 LOOP controls → invariant 12 cassé transitoirement | **M12 fix v2** : préserver REC/PS/CLEAR, seul slotPads reset |
+| Task 11 (addendum v1 M3) | Factorisation `drawGrid` mal ciblée — `drawGrid()` Tool 3 est 3 lignes triviales | **m14 fix v2** : factorisation cible `buildRoleMap()` (pas `drawGrid`), nouveaux `_buildRoleMapNorm/Arpeg/Loop` |
+| Labels grid Tasks 13, 18 | Labels 3-char (`"REC"`, `"S00"`, `"Hd"`) au lieu de 4-char (` REC`, ` S00`, ` Hld`) | **m12 fix v2** : leading space pour alignement 5-char cells |
 
 ---
 

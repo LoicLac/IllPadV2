@@ -48,6 +48,14 @@ Trois livrables, à exécuter dans un même bundle Phase 3 :
   (brainstorm 2026-05-19). Approche minimaliste : helpers cross-store + inline
   checks dans Tool 3 / Tool 4. Si une 3e consommateur émerge en Phase 4+ ou si
   les règles passent de 5 à 10+, refactor possible plus tard. Pattern YAGNI.
+- **Cache NvsManager pour Scale/Arp/Bank pads** — refusé après audit indépendant
+  2026-05-19 (refondation (c)). L'architecture existing maintient ces arrays
+  comme variables locales `main.cpp` (`bankPads[NUM_BANKS]`, `rootPads[7]`,
+  `modePads[7]`, `chromaticPad`, `holdPad`, `octavePads[4]`) passées par référence
+  aux managers. NvsManager fait juste `loadBlob` / `saveBlob`, ne cache pas.
+  Phase 3 respecte ce design : les helpers §13 prennent les arrays par référence
+  pour ces catégories. Seuls `_loadedLoopPad` (Phase 2) et `_ctrlStore` (existing)
+  sont cachés NvsManager — ils gardent l'API getter.
 
 ### §3 — Convention de nommage : code vs UI
 
@@ -257,8 +265,19 @@ Quand pad a déjà rôle **X** et user veut placer rôle **Y** :
 5 helpers exposés dans `KeyboardData.h` à côté des structs concernées. Pas de
 module dédié. ~50 lignes total.
 
+> **Note architecturale** (post audit indépendant 2026-05-19, refondation (c))
+> : seuls `LoopPadStore` et `ControlPadStore` sont **cachés** dans NvsManager
+> (`_loadedLoopPad` Phase 2 + `_ctrlStore` existing). Les Scale/Arp/Bank pads
+> sont **des arrays propriétaires de `main.cpp`** (variables locales `bankPads[NUM_BANKS]`
+> `rootPads[7]`, `modePads[7]`, `chromaticPad`, `holdPad`, `octavePads[4]`)
+> passés par référence à `NvsManager.loadAll(...)` et aux managers
+> (`BankManager.setBankPads`, `ScaleManager.setRootPads`, etc.). NvsManager
+> fait juste le `loadBlob` / `saveBlob` ; **pas de cache redondant**. Les
+> helpers ci-dessous reflètent cette architecture : signatures **prennent les
+> arrays par référence** quand applicable.
+
 ```cpp
-// LoopPadStore (existing struct, Phase 1)
+// LoopPadStore (cached in NvsManager._loadedLoopPad — Phase 2)
 inline bool isLoopControlPad(const LoopPadStore& s, uint8_t pad) {
   return s.recPad == pad || s.playStopPad == pad || s.clearPad == pad;
 }
@@ -268,45 +287,66 @@ inline int8_t findLoopSlotIdx(const LoopPadStore& s, uint8_t pad) {
   return -1;
 }
 
-// ControlPadStore (existing struct)
+// ControlPadStore (cached in NvsManager._ctrlStore — existing)
 inline int8_t findControlPadEntryIdx(const ControlPadStore& s, uint8_t pad) {
   for (uint8_t i = 0; i < s.count; i++)
     if (s.entries[i].padIndex == pad) return (int8_t)i;
   return -1;
 }
 
-// ScalePadStore (existing struct)
+// Scale roles — owned by main.cpp (rootPads[7], modePads[7], chromaticPad).
+// Signature prend les arrays + pad chromatique en paramètres.
 enum class ScaleRoleKind : uint8_t { NONE, ROOT, MODE, CHROM };
 struct ScaleRoleResult { ScaleRoleKind kind; uint8_t idx; };
-inline ScaleRoleResult scaleRoleAtPad(const ScalePadStore& s, uint8_t pad) {
+
+inline ScaleRoleResult scaleRoleAtPad(const uint8_t* rootPads,
+                                       const uint8_t* modePads,
+                                       uint8_t chromaticPad,
+                                       uint8_t pad) {
   for (uint8_t i = 0; i < 7; i++) {
-    if (s.rootPads[i] == pad) return {ScaleRoleKind::ROOT, i};
-    if (s.modePads[i] == pad) return {ScaleRoleKind::MODE, i};
+    if (rootPads[i] == pad) return ScaleRoleResult{ScaleRoleKind::ROOT, i};
+    if (modePads[i] == pad) return ScaleRoleResult{ScaleRoleKind::MODE, i};
   }
-  if (s.chromaticPad == pad) return {ScaleRoleKind::CHROM, 0};
-  return {ScaleRoleKind::NONE, 0};
+  if (chromaticPad == pad) return ScaleRoleResult{ScaleRoleKind::CHROM, 0};
+  return ScaleRoleResult{ScaleRoleKind::NONE, 0};
 }
 
-// ArpPadStore (existing struct)
+// Arp roles — owned by main.cpp (holdPad scalar, octavePads[4]).
 enum class ArpRoleKind : uint8_t { NONE, HOLD, OCTAVE };
 struct ArpRoleResult { ArpRoleKind kind; uint8_t idx; };
-inline ArpRoleResult arpRoleAtPad(const ArpPadStore& s, uint8_t pad) {
-  if (s.holdPad == pad) return {ArpRoleKind::HOLD, 0};
-  for (uint8_t i = 0; i < 4; i++)
-    if (s.octavePads[i] == pad) return {ArpRoleKind::OCTAVE, i};
-  return {ArpRoleKind::NONE, 0};
+
+inline ArpRoleResult arpRoleAtPad(uint8_t holdPad,
+                                   const uint8_t* octavePads,
+                                   uint8_t pad) {
+  if (holdPad == pad) return ArpRoleResult{ArpRoleKind::HOLD, 0};
+  for (uint8_t i = 0; i < 4; i++) {
+    if (octavePads[i] == pad) return ArpRoleResult{ArpRoleKind::OCTAVE, i};
+  }
+  return ArpRoleResult{ArpRoleKind::NONE, 0};
 }
 
-// BankSlot[] (existing array, ownership BankManager / NvsManager)
-inline int8_t findBankIdxForPad(const BankSlot* slots, uint8_t pad) {
-  for (uint8_t i = 0; i < NUM_BANKS; i++)
-    if (slots[i].pad == pad) return (int8_t)i;
+// Bank assignment — owned by main.cpp (bankPads[NUM_BANKS]).
+// Note : struct BankSlot (KeyboardData.h:369) ne contient PAS de champ `pad`
+// (le mapping bank→pad vit dans `bankPads[]`, pas dans `BankSlot::*`).
+inline int8_t findBankIdxForPad(const uint8_t* bankPads, uint8_t pad) {
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (bankPads[i] == pad) return (int8_t)i;
+  }
   return -1;
 }
 ```
 
-**Usage** : Tool 3 et Tool 4 importent ces helpers + appellent inline avant chaque
-assignement et lors du build du `_roleMap[NUM_KEYS]` pour le grid render.
+**Usage** :
+- Tool 3 (`ToolPadRoles`) a déjà les pointeurs `_bankPads`, `_rootPads`, `_modePads`,
+  `_chromaticPad`, `_holdPad`, `_octavePads` comme members (cf `ToolPadRoles.h:46-51`,
+  passés via `begin()`). Aucun changement de signature `begin()` requis pour les
+  arrays Scale/Arp/Bank. Tool 3 appelle les helpers inline avec ses members.
+- Tool 3 a aussi besoin d'un nouveau member `NvsManager* _nvs` Phase 3 pour
+  accéder à `getLoadedLoopPadStore()` et `getLoadedControlPadStore()` — c'est le
+  seul changement de signature `begin()` (ajouter `NvsManager* nvs` en param).
+- Tool 4 (`ToolControlPads`) a déjà `_nvs` (cf `ToolControlPads.h:27`) et peut
+  appeler `isLoopControlPad(_nvs->getLoadedLoopPadStore(), pad)` sans extension
+  de signature.
 
 ---
 
@@ -534,7 +574,12 @@ musical + 1 HL ARPEG + 1 HL LOOP, OU 1 Bank seul. Garanti par les 5 règles §10
 **Invariant 14 (nouveau)** : Les helpers cross-store §13 sont la **source unique**
 de vérité de la présence d'un rôle sur un pad. Tout consommateur (Tool 3, Tool 4,
 runtime LoopEngine, futurs tools) appelle ces helpers — pas de scan ad-hoc des
-stores.
+stores. **Les helpers prennent en paramètre soit le store NvsManager (LoopPadStore,
+ControlPadStore — cachés `_loadedLoopPad`, `_ctrlStore`) soit les arrays managers
+(`bankPads`, `rootPads`, `modePads`, `chromaticPad`, `holdPad`, `octavePads` —
+propriétés de `main.cpp`, partagées via références non-owning).** Pas de cache
+redondant pour les arrays managers — l'architecture existing les considère comme
+source de vérité unique.
 
 ### §23 — Budget ressources
 

@@ -409,3 +409,36 @@ Et en header de ce doc audit, reprendre le pattern symétrique (déjà présent 
 
 **Audit complet 2026-05-19**. Pas de complaisance, 19 findings identifiés. Posture critique maintenue.
 **Next** : intégrer fix B-N1 + M1-M5 dans le plan + manifeste session.
+
+---
+
+## Post-audit indépendant (2026-05-19)
+
+Un **audit indépendant** ([_AUDIT_independent.md](2026-05-19-loop-phase-3-plan_AUDIT_independent.md)) a été lancé après la rédaction de cet audit. Il a trouvé **17 findings additionnels** et challengé certaines conclusions. Mise à jour de la calibration des findings :
+
+| Finding original | Action post-audit indépendant |
+|---|---|
+| B-N1 | **Conservé, étendu** : audit indépendant a ajouté 4 dérivés (member `_nvs`, init list, begin assign, SetupManager vérif). Cf addendum v2 plan B-N1 override étendu. |
+| M1 | **Conservé** : flash on silent steal — bien calibré. |
+| M2 | **Conservé** + précision render emplacement m16 audit indépendant. |
+| M3 | **DOWNGRADE + reformulé** : factorisation doit cibler `buildRoleMap` (pas `drawGrid` qui est 3 lignes). Cf m14 audit indépendant + addendum v2 plan. |
+| M4 | **Conservé** + ajustement M10 audit indépendant : dispatch `assignRole → assignLoopRole` brise pattern existing ARPEG swap. Solution : `assignLoopRole` SOLE responsible du swap intra-LOOP. |
+| **M5 → UPGRADE B-N3** | **Pas juste « préciser emplacement »**, le validator ne s'applique PAS du tout sur la branche else NVS vide. Bloquant après retrait dev seed Task 26. Fix verbatim dans addendum v2 plan. |
+| M6 | **Conservé** : NvsManager::loadAll() à la fin. |
+| M7 | **Merger dans M1** : doublon. |
+| m1, m2 | **Conservés** mais B-N2 (audit indépendant) plus important : signature `findBankIdxForPad(const BankSlot* slots, ...)` est fausse — `BankSlot::pad` n'existe pas. Signature correcte : `(const uint8_t* bankPads, uint8_t pad)`. Fix verbatim dans addendum v2 plan. |
+| **m3 → UPGRADE M8** | Pas juste « audit getters + add missing ». L'audit indépendant a confirmé que `_loadedScalePad` et `_loadedArpPad` n'existent pas en cache NvsManager — par design intentionnel. Refondation §13 spec : helpers prennent arrays main.cpp par référence, pas stores cachés. |
+| m4, m5, m6, m8, m9, m10, m11 | **Conservés**. m8-m9 trancher ASCII `.` (pas UTF-8 `·`). |
+| **m7 → UPGRADE M14** | Pas juste « API à vérifier ». L'audit indépendant a confirmé que `setInverse` / `moveCursor` n'existent pas dans SetupUI. API existing : `drawFrameLine` + `drawCellGrid` + VT100 escapes inline. Fix verbatim dans addendum v2 plan. |
+
+**Synthèse post-audit indépendant** :
+
+| Sévérité | Audit v1 (self) | Audit indépendant ajouts | Total après refondation |
+|---|---|---|---|
+| B-N | 1 (B-N1) | +2 (B-N2, B-N3 = ex-M5 upgrade) | 3 |
+| M | 7 (M1-M7) | +7 (M8-M14, dont M8 = ex-m3 upgrade, M14 = ex-m7 upgrade) | 14 (7 originaux + 7 ajouts) |
+| m | 11 (m1-m11) | +6 (m12-m17) | 17 |
+
+**Bilan posture** : audit v1 a couvert ce qui était proche du plan (drift entre claims et code), mais **biais d'auto-révision** a manqué les vrais bugs cross-fichiers (`BankSlot::pad` inexistant, validator branche else, SetupUI API). L'audit indépendant a corrigé cette zone d'aveuglement.
+
+**Conclusion** : audit v1 conservé pour traçabilité. Audit indépendant + refondation (c) plan addendum v2 sont la **source de vérité** pour exécution Phase 3.

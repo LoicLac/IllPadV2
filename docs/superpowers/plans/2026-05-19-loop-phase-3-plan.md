@@ -2503,3 +2503,383 @@ Aucun "TBD", "TODO", "implement later" dans le plan. Verbatim code fourni pour h
 ---
 
 **Plan complet — prêt pour audit adversarial.**
+
+---
+
+## Addendum v2 — Audit indépendant fix (2026-05-19, refondation (c))
+
+Suite à l'[audit indépendant](2026-05-19-loop-phase-3-plan_AUDIT_independent.md) (sub-agent contradictoire, 17 findings additionnels), **3 bloquants** confirmés empiriquement + **6 majeurs** intégrés via cette refondation (c).
+
+**Cet addendum v2 override l'addendum v1** sur les points concernés. Pour les autres aspects (Tasks 11.5 + 17.5 ajoutées, pattern flash, etc.), l'addendum v1 reste applicable.
+
+### B-N2 override — Task 1 step 2 + Task 2 : signature `findBankIdxForPad` corrigée
+
+**Constat empirique** : `struct BankSlot` (KeyboardData.h:369-379) ne contient PAS de champ `pad` (9 champs : channel, type, scale, arpEngine, loopEngine, isForeground, baseVelocity, velocityVariation, pitchBendOffset). Le mapping bank→pad vit dans `bankPads[NUM_BANKS]` variable locale `main.cpp:352`.
+
+**Action Task 1 step 2 — refondre les helpers cross-store** :
+
+```cpp
+// =================================================================
+// Cross-store role lookup helpers (Phase 3 — spec §13 refondée 2026-05-19)
+// =================================================================
+// Source unique de vérité pour la présence d'un rôle sur un pad.
+// Consommés inline par Tool 3 (ToolPadRoles), Tool 4 (ToolControlPads).
+// Pas de module centralisé (refusé YAGNI). Pas de cache redondant pour
+// Scale/Arp/Bank arrays (refusé refondation (c) — l'architecture existing
+// maintient ces arrays comme variables locales main.cpp).
+
+// --- LoopPadStore : cached in NvsManager._loadedLoopPad ---
+
+inline bool isLoopControlPad(const LoopPadStore& s, uint8_t pad) {
+  return s.recPad == pad || s.playStopPad == pad || s.clearPad == pad;
+}
+
+inline int8_t findLoopSlotIdx(const LoopPadStore& s, uint8_t pad) {
+  for (uint8_t i = 0; i < 16; i++) {
+    if (s.slotPads[i] == pad) return (int8_t)i;
+  }
+  return -1;
+}
+
+// --- ControlPadStore : cached in NvsManager._ctrlStore ---
+
+inline int8_t findControlPadEntryIdx(const ControlPadStore& s, uint8_t pad) {
+  for (uint8_t i = 0; i < s.count; i++) {
+    if (s.entries[i].padIndex == pad) return (int8_t)i;
+  }
+  return -1;
+}
+
+// --- Scale roles : owned by main.cpp (rootPads[7], modePads[7], chromaticPad) ---
+
+enum class ScaleRoleKind : uint8_t { NONE, ROOT, MODE, CHROM };
+struct ScaleRoleResult { ScaleRoleKind kind; uint8_t idx; };
+
+inline ScaleRoleResult scaleRoleAtPad(const uint8_t* rootPads,
+                                       const uint8_t* modePads,
+                                       uint8_t chromaticPad,
+                                       uint8_t pad) {
+  for (uint8_t i = 0; i < 7; i++) {
+    if (rootPads[i] == pad) return ScaleRoleResult{ScaleRoleKind::ROOT, i};
+    if (modePads[i] == pad) return ScaleRoleResult{ScaleRoleKind::MODE, i};
+  }
+  if (chromaticPad == pad) return ScaleRoleResult{ScaleRoleKind::CHROM, 0};
+  return ScaleRoleResult{ScaleRoleKind::NONE, 0};
+}
+
+// --- Arp roles : owned by main.cpp (holdPad, octavePads[4]) ---
+
+enum class ArpRoleKind : uint8_t { NONE, HOLD, OCTAVE };
+struct ArpRoleResult { ArpRoleKind kind; uint8_t idx; };
+
+inline ArpRoleResult arpRoleAtPad(uint8_t holdPad,
+                                   const uint8_t* octavePads,
+                                   uint8_t pad) {
+  if (holdPad == pad) return ArpRoleResult{ArpRoleKind::HOLD, 0};
+  for (uint8_t i = 0; i < 4; i++) {
+    if (octavePads[i] == pad) return ArpRoleResult{ArpRoleKind::OCTAVE, i};
+  }
+  return ArpRoleResult{ArpRoleKind::NONE, 0};
+}
+
+// --- Bank assignment : owned by main.cpp (bankPads[NUM_BANKS]) ---
+// Note : struct BankSlot ne contient PAS de champ `pad` — le mapping vit dans
+// bankPads[]. Helper inline OK (pas besoin d'externalisation NvsManager.cpp).
+
+inline int8_t findBankIdxForPad(const uint8_t* bankPads, uint8_t pad) {
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (bankPads[i] == pad) return (int8_t)i;
+  }
+  return -1;
+}
+```
+
+**Action Task 2** : **annulée**. Plus besoin d'externalisation dans NvsManager.cpp — `findBankIdxForPad` est inline dans KeyboardData.h. Renumérotation : Task 2 supprimée, Task 3 (getters audit) renommée Task 2.
+
+### B-N3 override — Task 17 step 3 : validator dans les deux branches (pré-init 0xFF)
+
+**Constat empirique** : `NvsManager.cpp:1006-1022` montre validator dans la branche IF uniquement. Branche ELSE (NVS empty) couverte par dev seed M7 (à retirer Task 26). Sans fix, retrait dev seed = recPad/PS/CLEAR jamais initialisés = invariant 12 cassé.
+
+**Action Task 17 step 3 — wire validator dans les deux branches** :
+
+Remplacer le bloc actuel `NvsManager.cpp:1006-1022` par :
+
+```cpp
+// === LoopPadStore (Phase 1 declared, Phase 2 loaded, Phase 3 defaults) ===
+{
+  LoopPadStore tmp;
+  // Phase 3 : pré-init aux sentinels 0xFF pour que validator puisse appliquer
+  // defaults sur la branche else (NVS empty). Magic/version cohérents.
+  memset(&tmp, 0xFF, sizeof(tmp));
+  tmp.magic    = EEPROM_MAGIC;
+  tmp.version  = LOOPPAD_VERSION;
+  tmp.reserved = 0;
+
+  bool loaded = loadBlob(LOOPPAD_NVS_NAMESPACE, LOOPPAD_NVS_KEY,
+                          EEPROM_MAGIC, LOOPPAD_VERSION, &tmp, sizeof(tmp));
+  validateLoopPadStore(tmp);   // Phase 3 : appliqué TOUJOURS (hors du if)
+  _loadedLoopPad = tmp;
+
+  #if DEBUG_SERIAL
+  if (loaded) {
+    Serial.printf("[BOOT NVS] LoopPadStore loaded : rec=%u playStop=%u clear=%u\n",
+                  _loadedLoopPad.recPad, _loadedLoopPad.playStopPad, _loadedLoopPad.clearPad);
+  } else {
+    Serial.printf("[BOOT NVS] LoopPadStore empty, Phase 3 defaults applied : rec=%u playStop=%u clear=%u\n",
+                  _loadedLoopPad.recPad, _loadedLoopPad.playStopPad, _loadedLoopPad.clearPad);
+  }
+  #endif
+}
+```
+
+**Hard-assert** Task 17 step 3 : `grep -A 5 "validateLoopPadStore" src/managers/NvsManager.cpp | grep -c "outside if"` ou check manuel — confirmer validator hors du if.
+
+### M8 override — Task 3 (anciennement Task 3 = audit getters NvsManager)
+
+**Constat empirique** : `_loadedScalePad` et `_loadedArpPad` n'existent pas dans NvsManager. Pas de cache. Les arrays vivent dans main.cpp.
+
+**Action Task 3 reformulée** :
+- **Aucun getter Scale/Arp à ajouter** dans NvsManager. Refacto annulé.
+- **Vérifier** existence de `getLoadedLoopPadStore()` (Phase 2) et `getLoadedControlPadStore()` / `getCtrlStore()` ou équivalent (existing).
+- Si `setLoadedLoopPad(const LoopPadStore&)` + `saveLoopPad()` n'existent pas, les **ajouter** (Task 21 dépend). Pattern Preferences existing comme `saveBank()`.
+
+**Renumérotation après suppression de l'ancienne Task 2** :
+- Ancien Task 1 = nouveau Task 1 (helpers cross-store inline §B-N2).
+- Ancien Task 2 (`findBankIdxForPad` impl NvsManager.cpp) = **supprimé** (inline maintenant).
+- Ancien Task 3 = nouveau Task 2 (getters NvsManager — désormais juste vérification + ajout `setLoadedLoopPad` + `saveLoopPad` si manquants).
+- Tasks suivantes 4-27 inchangées en numéro.
+
+**Conséquence Tasks 11, 13, 18, 20, 23** : les appels aux helpers doivent utiliser les members `_rootPads`, `_modePads`, `_chromaticPad`, `_holdPad`, `_octavePads`, `_bankPads` (Tool 3) ou les pointers via NvsManager.getLoadedLoopPadStore() (uniquement LOOP / CP). Verbatim corrigé :
+
+```cpp
+// Dans _drawGridNorm/Arpeg/Loop, scan cross-context :
+ScaleRoleResult sr = scaleRoleAtPad(_rootPads, _modePads, *_chromaticPad, pad);
+// (note : _chromaticPad est uint8_t* member, donc déréf)
+
+ArpRoleResult ar = arpRoleAtPad(*_holdPad, _octavePads, pad);
+// (note : _holdPad est uint8_t* member, donc déréf)
+
+int8_t bankIdx = findBankIdxForPad(_bankPads, pad);
+
+int8_t cpIdx = findControlPadEntryIdx(_nvs->getLoadedControlPadStore(), pad);
+// (member `_nvs` ajouté Phase 3 via B-N1)
+
+bool loopCtrl = isLoopControlPad(_wkLoopPad, pad);  // ou _nvs->getLoadedLoopPadStore() selon contexte
+```
+
+### B-N1 override étendu — Task 8 step 2 : 4 dérivés explicites
+
+**Action Task 8 step 2 étendue** (au-delà du nom variable `_toolRoles`) :
+
+1. **`ToolPadRoles.h`** : ajouter member privé :
+```cpp
+private:
+  // ... existing members ...
+  NvsManager* _nvs;   // Phase 3 — pour LoopPadStore + ControlPadStore lookup
+```
+
+2. **`ToolPadRoles::ToolPadRoles()`** : ajouter dans init list :
+```cpp
+ToolPadRoles::ToolPadRoles()
+  : _keyboard(nullptr), _leds(nullptr), _ui(nullptr),
+    _nvs(nullptr),   // <-- Phase 3
+    // ... existing inits ...
+```
+
+3. **`ToolPadRoles::begin()`** : étendre signature + assignement :
+```cpp
+void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
+                          SetupUI* ui, NvsManager* nvs,   // <-- Phase 3 nvs added
+                          uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
+                          uint8_t& chromaticPad, uint8_t& holdPad,
+                          uint8_t* octavePads) {
+  _keyboard     = keyboard;
+  _leds         = leds;
+  _ui           = ui;
+  _nvs          = nvs;   // <-- Phase 3
+  // ... existing assignments ...
+  // Phase 3 — load LoopPadStore working copy from cached state
+  _wkLoopPad = nvs->getLoadedLoopPadStore();
+}
+```
+
+4. **`SetupManager.cpp:30`** : étendre call site :
+```cpp
+// AVANT :
+_toolRoles.begin(keyboard, leds, &_ui, bankPads, rootPads, modePads,
+                  chromaticPad, holdPad, octavePads);
+
+// APRÈS (Phase 3) :
+_toolRoles.begin(keyboard, leds, &_ui, &_nvsManager,   // <-- &_nvsManager added
+                  bankPads, rootPads, modePads,
+                  chromaticPad, holdPad, octavePads);
+```
+
+**Vérifier** que `SetupManager` a un member `_nvsManager` accessible — `grep "_nvsManager\|NvsManager" src/setup/SetupManager.h` pour confirmer. Si nom différent, adapter.
+
+### M14 override — Task 10 step 2 : SetupUI API `drawFrameLine` + VT100 escapes
+
+**Constat empirique** : `SetupUI.h:147,165` montre `drawFrameLine` et `drawCellGrid`. Pas de `moveCursor` ni `setInverse`. Le pattern Tool 3 existing utilise inline VT100 escapes (cf `ToolPadRoles.cpp:339` : `VT_CYAN VT_BOLD "> " VT_RESET`).
+
+**Action Task 10 step 2 reformulée** — verbatim corrigé :
+
+```cpp
+void ToolPadRoles::_drawSubPageHeader() {
+  const char* labels[SUB_COUNT] = { "NORM", "ARPEG", "LOOP" };
+  char buf[128];
+  int pos = 0;
+  pos += snprintf(buf + pos, sizeof(buf) - pos, "Pad Roles  [");
+  for (uint8_t i = 0; i < SUB_COUNT; i++) {
+    if (i == _activeSubPage) {
+      // Active subpage : reverse + bold via VT100 escapes
+      pos += snprintf(buf + pos, sizeof(buf) - pos,
+                       VT_REVERSE VT_BOLD "%s" VT_RESET, labels[i]);
+    } else {
+      // Inactive : dim
+      pos += snprintf(buf + pos, sizeof(buf) - pos,
+                       VT_DIM "%s" VT_RESET, labels[i]);
+    }
+    if (i < SUB_COUNT - 1) {
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "|");
+    }
+  }
+  pos += snprintf(buf + pos, sizeof(buf) - pos, "]");
+  _ui->drawFrameLine("%s", buf);
+}
+```
+
+**Vérifier** que `VT_REVERSE`, `VT_BOLD`, `VT_DIM`, `VT_RESET` sont définis dans `SetupCommon.h` ou un header VT100 commun. Si manquants, soit les ajouter, soit utiliser les escapes ANSI bruts (`"\e[7m"` pour reverse, `"\e[1m"` bold, `"\e[2m"` dim, `"\e[0m"` reset).
+
+### M9 — Task 17 : note transitoire dev seed
+
+**Action** : ajouter commentaire dans Task 17 :
+```cpp
+// Phase 3 defaults 30/31/32 + Phase 2 dev seed (32/33/34) coexistent transitoirement
+// entre Task 17 (3.E) et Task 26 (3.G). Cosmetic only — validator ne ré-applique
+// pas defaults si recPad != 0xFF. Task 26 retire le dev seed après G6 validation.
+```
+
+### M10 — addendum v1 M4 override : unifier swap-to-pool intra-LOOP
+
+**Action** : Task 17.5 step 6 (addendum v1) → modifier le dispatch :
+
+```cpp
+void ToolPadRoles::assignRole(uint8_t pad, uint8_t line, uint8_t index) {
+  // ... existing ARPEG/NORM assignements (line 1-5, le `run()` ligne 759-766
+  // fait déjà le swap-to-pool silencieux via clearRole(owner) avant cet appel) ...
+
+  // Phase 3 — LOOP : assignLoopRole responsible du swap-to-pool intra-LOOP.
+  // Le caller `run()` NE doit PAS clearRole(owner) pour line 6/7 — laisser
+  // assignLoopRole gérer (sinon double-clear).
+  } else if (line == 6 || line == 7) {
+    assignLoopRole(pad, line, index);
+  }
+}
+```
+
+**Adaptation `run()` lignes 759-766** : ajouter check pour skip le clearRole(owner) pre-call si line == 6 || line == 7 :
+
+```cpp
+} else {
+  // Steal silencieux : pour ARPEG (line 2-5), le caller libère owner.
+  // Phase 3 : pour LOOP (line 6-7), assignLoopRole gère le swap internement.
+  if (_poolLine < 6) {
+    uint8_t owner = findPadWithRole(_poolLine, _poolIdx);
+    if (owner < NUM_KEYS && owner != (uint8_t)pad) {
+      clearRole(owner);
+      _setFlash("Previous role returned to pool.");   // M1 audit v1 — flash
+    }
+    clearRole((uint8_t)pad);
+  }
+  assignRole((uint8_t)pad, _poolLine, _poolIdx);
+  if (saveAll()) {
+    _ui->flashSaved();
+    _editing = false;
+  }
+  screenDirty = true;
+}
+```
+
+### M11 — Task 21 : comportement partial-fail `saveAll`
+
+**Action** : ajouter dans Task 21 step 2 un commentaire de comportement :
+
+```cpp
+bool ToolPadRoles::saveAll() {
+  bool ok = true;
+  // ... existing saves (bank, scale, arp) ...
+  // Each save returns bool ; on partial fail, log warning but continue.
+
+  // Phase 3 — save LoopPadStore working copy
+  if (_nvs) {
+    _nvs->setLoadedLoopPad(_wkLoopPad);
+    if (!_nvs->saveLoopPad()) {
+      #if DEBUG_SERIAL
+      Serial.println("[Tool 3] WARN: saveLoopPad failed, NVS may be inconsistent.");
+      #endif
+      ok = false;
+    }
+  }
+
+  return ok;
+}
+```
+
+Setup mode = rare-action ; NVS sain en pratique. Warning suffit, pas de rollback. Documenter dans commit message Phase 3.E.
+
+### M12 — Task 20 : préserver LOOP controls dans `clearAllRoles`
+
+**Action** : ajouter dans Task 20 un step explicite :
+
+```cpp
+void ToolPadRoles::clearAllRoles() {
+  memset(_wkBankPads, 0xFF, sizeof(_wkBankPads));
+  memset(_wkRootPads, 0xFF, sizeof(_wkRootPads));
+  memset(_wkModePads, 0xFF, sizeof(_wkModePads));
+  _wkChromPad = 0xFF;
+  _wkHoldPad = 0xFF;
+  memset(_wkOctavePads, 0xFF, sizeof(_wkOctavePads));
+
+  // Phase 3 — invariant 12 : LOOP controls NEVER cleared.
+  // Slots OK to clear (tolerate 0xFF).
+  memset(_wkLoopPad.slotPads, 0xFF, sizeof(_wkLoopPad.slotPads));
+  // _wkLoopPad.recPad / playStopPad / clearPad PRESERVED.
+}
+```
+
+### Mineurs m12-m17 — actions ponctuelles
+
+- **m12** : labels alignement 4-char width. Utiliser ` REC`, ` PS_`, ` CLR`, ` S00..S15` (leading space). Idem ` Hd`, ` Oc` deviennent réutilisations de `GRID_HOLD_LABELS[0]` et `GRID_OCTAVE_LABELS[i]`.
+- **m13** : réutiliser constants `GRID_*_LABELS` existants (Tasks 13, 18).
+- **m14** : factorisation `buildRoleMap` (pas `drawGrid`). Override M3 addendum v1 :
+  - Au lieu de `_drawGridLegacy()` extraction, factoriser dans `_buildRoleMapLegacy()`.
+  - `drawGrid()` Tool 3 reste 3 lignes (dispatch `_roleMap` via `_ui->drawCellGrid`).
+  - Nouveaux `_buildRoleMapNorm/_buildRoleMapArpeg/_buildRoleMapLoop` construisent `_roleMap[NUM_KEYS]` + `_roleLabels[NUM_KEYS][6]` selon `_activeSubPage`.
+- **m15** : trancher **ASCII `.`** pour cross-context dim marker (pas UTF-8 `·`).
+- **m16** : flash render entre `drawInfoPanel()` et `drawControlBar()` (pas overwrite control bar).
+- **m17** : Task 22 HW gate G4 — documenter test hard-constraint exit comme défense en profondeur (avec defaults validator, unreachable en pratique).
+
+---
+
+## Recap revised v2 — Phase 3 tasks count
+
+Après refondation (c) :
+
+| Sous-phase | Tasks | Δ vs v1 | Δ vs initial |
+|---|---|---|---|
+| 3.A | **1, 2** (ex-3) | -1 (Task 2 ancien `findBankIdxForPad` impl supprimée, inline) | -1 |
+| 3.B | 4, 5, 6 | inchangé | inchangé |
+| 3.C | 7, 8, 9, 10, 11, 11.5, 12 | inchangé | +1 |
+| 3.D | 13, 14, 15, 16 | inchangé | inchangé |
+| 3.E | 17, 17.5, 18, 19, 20, 21, 22 | inchangé | +1 |
+| 3.F | 23, 24, 25 | inchangé | inchangé |
+| 3.G | 26 | inchangé | inchangé |
+| 3.H | 27 | inchangé | inchangé |
+
+**Total v2** : 28 tasks (vs 29 v1 vs 27 initial). 6 HW gates G1-G6 inchangé, 8 commits.
+
+---
+
+**Plan v2 — refondation (c) intégrée. Prêt pour session EXEC.**
+
+Lecture obligatoire EXEC : ce plan + audit v1 + audit indépendant + manifeste + spec design (refondue §13 + §22 + §2).

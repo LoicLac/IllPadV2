@@ -18,24 +18,32 @@ LECTURE OBLIGATOIRE AVANT TOUTE ACTION (dans cet ordre)
 ═══════════════════════════════════════════════════════════════════════════
 
 1. docs/superpowers/plans/2026-05-19-loop-phase-3-session-manifest.md
-   → règles strictes 9 + zones de survol + une chose importante
+   → règles strictes 9 + zones de survol v1 + v2 + une chose importante
 2. docs/superpowers/plans/2026-05-19-loop-phase-3-plan.md
-   → 29 tasks (Tasks 1-27 + 11.5 + 17.5), 6 HW gates G1-G6, 8 commits
-   → ADDENDUM en fin de plan : audit-fix integration B-N1 + M1-M5 (CRITIQUE)
-3. docs/superpowers/plans/2026-05-19-loop-phase-3-plan_AUDIT.md
-   → 19 findings (1 B-N + 7 M + 11 m), section "Findings à intégrer"
-4. docs/superpowers/specs/2026-05-19-loop-phase-3-design.md
-   → spec design (référence si doute sur les 5 règles collision + EC1-EC9)
-5. .claude/CLAUDE.md (auto-loadé) + ~/.claude/CLAUDE.md (auto-loadé)
-6. docs/superpowers/SESSION_PROTOCOL.md (référence patterns + templates)
+   → 28 tasks (Tasks 1-27 + 11.5 + 17.5, ancienne Task 2 supprimée par v2),
+     6 HW gates G1-G6, 8 commits
+   → ADDENDUM v1 (audit-fix B-N1 + M1-M5) en fin de plan
+   → ADDENDUM v2 (refondation (c) post audit indépendant : B-N2 + B-N3 + M8-M14)
+     en fin de plan — **OVERRIDE v1 sur les points concernés**
+3. docs/superpowers/plans/2026-05-19-loop-phase-3-plan_AUDIT_independent.md
+   → audit contradictoire 17 findings additionnels (2 B-N + 7 M + 6 m)
+   → **Source de vérité critique** pour signatures helpers + validator branche else
+4. docs/superpowers/plans/2026-05-19-loop-phase-3-plan_AUDIT.md
+   → audit auto v1 19 findings (1 B-N + 7 M + 11 m) — challenges en post-section
+5. docs/superpowers/specs/2026-05-19-loop-phase-3-design.md
+   → spec design (refondue §13 + §22 + §2 post audit indépendant)
+6. .claude/CLAUDE.md (auto-loadé) + ~/.claude/CLAUDE.md (auto-loadé)
+7. docs/superpowers/SESSION_PROTOCOL.md (référence patterns + templates)
 
 ═══════════════════════════════════════════════════════════════════════════
 ÉTAT COURANT DU REPO
 ═══════════════════════════════════════════════════════════════════════════
 
 - Branche : main
-- HEAD : 7aec5b6 (audit-fix integration, après commits spec design 6768189 +
-  plan 2ea9da9 + audit 7aec5b6)
+- HEAD : (à vérifier au début de session — chercher le dernier commit
+  "refondation (c)" qui suit b4285f6). Si HEAD diffère, vérifier que la
+  chaîne spec design + plan + audit v1 + audit indépendant + manifeste +
+  prompt EXEC est complète.
 - État NVS connu de Loïc : LoopPadStore avec dev seed M7 actif (recPad=32,
   playStopPad=33, clearPad=34 si dev seed appliqué Phase 2). Sera remplacé
   par defaults 30/31/32 en Task 17 (validator) + Task 26 (retrait dev seed).
@@ -57,8 +65,15 @@ R5. Instruction trompeuse / contradictoire → STOP, demander à Loïc.
 R6. TodoWrite : 29 tasks + 6 HW gates, 1 in_progress max, completed
     immédiatement après commit gate validé.
 R7. Checkpoint inter-phases : annonce + "GO" explicite avant 1er Edit.
-R8. Audit-fix Phase 3 : Tasks 11.5 et 17.5 SONT dans le plan (cf addendum).
+R8. Audit-fix Phase 3 : Tasks 11.5 et 17.5 SONT dans le plan (cf addendum v1).
     Comportement "silent steal → flash steal" (M1/M7).
+    **Addendum v2** (refondation (c) post audit indépendant) override v1 sur :
+    - signature helpers (arrays au lieu de stores — voir spec §13 refondé)
+    - validator branche else (B-N3)
+    - Task 2 ancien `findBankIdxForPad` impl supprimée (inline maintenant)
+    - SetupUI API drawFrameLine + VT_REVERSE (M14)
+    - assignLoopRole SOLE responsible swap intra-LOOP (M10)
+    - clearAllRoles préserve REC/PS/CLEAR (M12)
 R9. Standard de qualité : pas de TODO/FIXME, pas de traces temporaires
     oubliées, pas de workaround HW non documenté.
 
@@ -88,7 +103,7 @@ PHASES PRÉVUES (recap)
 
 | Sous-phase | Tasks | HW Gate | Commit |
 |---|---|---|---|
-| 3.A — Helpers cross-store + getters NvsManager | 1-3 | — | 1 |
+| 3.A — Helpers cross-store inline + NvsManager getters/setters vérif | 1, 2 (ex-3 v1) | — | 1 |
 | 3.B — Tool 4 ext (refus ControlPad sur LOOP control) | 4-6 | G1 | 1 |
 | 3.C — Tool 3 refacto nav TAB + _setFlash infra + NORM | 7-12 (+ 11.5) | G2 | 1 |
 | 3.D — Tool 3 sous-page ARPEG | 13-16 | G3 | 1 |
@@ -97,7 +112,8 @@ PHASES PRÉVUES (recap)
 | 3.G — Retrait dev seed M7 + collision check post-loadAll | 26 | G6 | 1 |
 | 3.H — Doc-sync 7 fichiers | 27 | — | 1 |
 
-Total : 29 tasks, 6 HW gates, 8 commits.
+Total : **28 tasks** (ancienne Task 2 supprimée par addendum v2 — helper inline),
+6 HW gates G1-G6, 8 commits.
 
 ═══════════════════════════════════════════════════════════════════════════
 PREMIÈRE ACTION
