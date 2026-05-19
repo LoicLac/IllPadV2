@@ -133,7 +133,7 @@ Actions :
 ### 3.4 Exit cancel (tap CLEAR sur OVERDUBPER) — rising edge
 
 ```
-État avant : OVERDUBBING
+État avant : OVERDUBBING (peut venir de PLAYING ou STOPPED-Q5)
 Geste     : tap CLEAR (any duration, rising edge déclenche directement)
 
 Actions :
@@ -141,14 +141,22 @@ Actions :
      - Pour chaque note N (0..127) : compute before (dans _events)
        vs after (dans _eventsAlternate) à _playPositionUs.
      - Si change ET pas live-press : MIDI noteOff/noteOn ciblé.
-  2. swap(_events, _eventsAlternate) — pointer swap si feasible, sinon memcpy.
+  2. swap(_events, _eventsAlternate) via static global temp buffer (cf §6.2).
      swap(_eventCount, _eventsAlternateCount)
   3. _alternateValid reste true (Redo possible juste après).
   4. Recompute _noteRefCount depuis nouveau _events à _playPositionUs +
      live press contribution depuis _padHeldLive.
   5. Recompute _playNextEventIdx par binary search.
-  6. État → PLAYING.
-  7. EVT_LOOP_CLEAR trigger (LED cyan, sémantique rollback — Option β).
+  6. **État → PLAYING** (toujours, décision OD-16 α post-review 2026-05-19) :
+     - Si pré-OD state était PLAYING : retour cohérent.
+     - Si pré-OD state était STOPPED (chemin Q5 OD-from-STOPPED) :
+       **asymétrie acceptée** — Cancel ne restore PAS STOPPED, ramène PLAYING.
+       Le startPlayback du Q5 reste effectif. Pour stopper, user retap PLAY/STOP.
+       Justification : simplicité code (pas de tracker pre-OD state), cohérence
+       mentale "Cancel = annuler les events OD, pas annuler tout le geste tap REC".
+  7. EVT_LOOP_CLEAR trigger (state-driven LED Amber → Green ; PTN_NONE
+     actuellement, pas de flash overlay tant que Phase 4 LOOP n'a pas
+     finalisé la grammar — cf §8).
 ```
 
 Conséquence musicale : la couche OD disparait proprement. Couche base + live press préservées. K+SN audibles continus, HH (couche OD) muté.
@@ -250,7 +258,19 @@ Au moment du swap (Cancel ou Undo/Redo toggle), le buffer `_events[]` change de 
 
 ### 6.2 Algorithme
 
+**Note implémentation post-review 2026-05-19** : le swap des buffers utilise
+un **static global temp buffer** `g_swapTemp[MAX_LOOP_EVENTS]` (8 KB SRAM
+permanent) au lieu d'allocation stack. Raison : default Arduino-ESP32
+main loop stack = 8 KB ; allouer un `LoopEvent temp[1024]` (8 KB) sur stack
+provoque overflow. Coût SRAM total OD-Sync révisé : +8 KB alternate buffer
++ +8 KB swap temp = **+16 KB par engine × 4 banks = +64 KB net** (vs +32 KB
+initialement estimé). Budget large (~225 KB libres avant OD-Sync).
+
 ```cpp
+// Static global, partagé entre tous les LoopEngine (un seul swap actif à la fois
+// par invariant 11 ≤ 1 LOOP en REC/OD).
+static LoopEvent g_swapTemp[MAX_LOOP_EVENTS];
+
 void LoopEngine::swapForUndoRedo(MidiTransport& transport) {
   // Étape 1 : compute states "before" (dans _events) et "after" (dans _eventsAlternate).
   bool before[128], after[128];
@@ -445,6 +465,7 @@ Phase 4 LOOP (`docs/superpowers/specs/2026-04-19-loop-mode-design.md` §27 P4) a
 | OD-13 | LED trigger Undo (couche retirée) | **Réutiliser `EVT_STOP`** (coral FADE) — Option β |
 | OD-14 | LED trigger Redo (couche réintégrée) | **Réutiliser `EVT_PLAY`** (green FADE) — Option β |
 | OD-15 | Events LED dédiés (EVT_LOOP_OD_*) | **Différé Phase 4** (LED wiring complet) |
+| **OD-16** | **Cancel from STOPPED-Q5 (OD-from-STOPPED) ramène à STOPPED ou PLAYING ?** | **α — toujours PLAYING.** Asymétrie acceptée. Pas de tracker pre-OD state. Justification : simplicité + cohérence "Cancel = annuler events OD, pas annuler le geste tap REC". Locké post-review 2026-05-19. |
 
 ---
 
@@ -547,7 +568,9 @@ Ajouter ligne traçabilité OD-Sync (renvoi vers §9 de cette spec pour les 15 d
 ### G2 — OD Cancel pendant OD (tap CLEAR)
 1. État OVERDUBBING avec HH ajouté.
 2. Tap CLEAR pendant OD.
-3. **Vérifier** : LED bascule Amber → Green (state PLAYING) + flash cyan brief (EVT_LOOP_CLEAR).
+3. **Vérifier** : LED bascule Amber → Green (state PLAYING) state-driven.
+   EVT_LOOP_CLEAR est trigger mais grammar PTN_NONE par défaut = pas de flash
+   overlay visible (différé Phase 4 LED finalisation).
 4. Cycles suivants : K+SN audibles continus, **HH disparaît proprement** à la prochaine position où il jouait.
 5. Vérifier au DAW : pas de glitch sur K ni SN au moment du swap.
 
@@ -602,6 +625,51 @@ Ajouter ligne traçabilité OD-Sync (renvoi vers §9 de cette spec pour les 15 d
 ### G10 — Tap PLAY/STOP pendant OD = no-op (OD-3)
 1. OVERDUBBING. Tap PLAY/STOP.
 2. **Vérifier** : OD continue, état inchangé, aucun MIDI parasite, aucune transition LED.
+
+### G11 — Cancel pendant OD puis re-OD immédiat (added post-review 2026-05-19)
+1. Loop K+SN. Tap REC → OD HH ajouté.
+2. Tap CLEAR (Cancel). State PLAYING, _events = K+SN, _eventsAlternate = K+SN+HH.
+3. Tap REC immédiatement à nouveau (re-entrée OD).
+4. **Vérifier** : `memcpy(_eventsAlternate, _events, ...)` écrase _eventsAlternate
+   = K+SN (snapshot frais). Le K+SN+HH précédent est perdu (cohérent 1-level).
+5. Press HH à position 0.4.
+6. Tap REC → exit commit. State PLAYING avec K+SN+HH (nouveau HH à 0.4).
+7. Tap CLEAR court (Undo) → revient à K+SN seul. ✓
+
+### G12 — OD-from-STOPPED Q5 Cancel ramène à PLAYING (OD-16, asymétrie locké α)
+1. Loop K+SN, état PLAYING.
+2. Tap PLAY/STOP → STOPPED.
+3. Tap REC depuis STOPPED → Q5 PLAYING + OD simultanés.
+4. Press HH à position 0.3.
+5. Tap CLEAR (Cancel).
+6. **Vérifier** : état → **PLAYING** (pas STOPPED). Loop K+SN tourne, HH disparu.
+7. Pour stopper, user retap PLAY/STOP. Asymétrie documentée OD-16.
+
+### G13 — tapRec WAITING_STOP → OD avec snapshot (added post-review, B2 fix)
+1. Loop K+SN, état PLAYING.
+2. Quantize Beat ou Bar. Tap PLAY/STOP → WAITING_STOP (attend boundary).
+3. Avant le boundary, tap REC.
+4. **Vérifier** : transition WAITING_STOP → OVERDUBBING. _eventsAlternate snapshotté
+   = K+SN (état pré-OD). _alternateValid = true.
+5. Press HH à position courante.
+6. Tap REC exit. State PLAYING. K+SN+HH joue.
+7. Tap CLEAR court (Undo) → K+SN seul. ✓ Snapshot était correct.
+
+### G14 — Wipe puis tap CLEAR court (no-op safe avec _alternateValid=false)
+1. Loop K+SN+HH (snapshot valide K+SN).
+2. Long-press CLEAR (≥500 ms) → wipe + state EMPTY + `_alternateValid = false`.
+3. Tap CLEAR court juste après.
+4. **Vérifier** : `swapForUndoRedo` early-return sur `!_alternateValid`. Aucun MIDI,
+   aucune transition LED. Safe no-op.
+
+### G15 — Buffer full au B-N2 inject à OD exit (telemetry edge case)
+1. Loop dense (proche de 1024 events après plusieurs OD).
+2. Tap REC → OD. Hold pad #4.
+3. Inject events pendant OD pour saturer le buffer.
+4. Tap REC exit. `commitOverdubExit` tente d'injecter noteOff pour pad #4 tenu.
+5. **Vérifier** trace serial : si `insertEventSorted` retourne false, émission
+   `viewer::emitLoopBufferFull(ch, "od_exit_flush")`. Pas de crash. Live press
+   refcount silencera la note au release naturel.
 
 ---
 

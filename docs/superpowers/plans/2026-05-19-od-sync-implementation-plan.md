@@ -336,6 +336,38 @@ case LoopState::STOPPED:
   break;
 ```
 
+#### `tapRec` WAITING_STOP branche — snapshot idem (added post-review 2026-05-19, B2 fix)
+
+Ligne 170-176 actuelle :
+
+```cpp
+case LoopState::WAITING_STOP:
+  // Spec §17 : REC during WAITING_STOP cancels stop and enters OVERDUBBING.
+  // M1 fix : pas de double-assignment _state ici, directement OVERDUBBING.
+  _overdubCount = 0;
+  _state = LoopState::OVERDUBBING;
+  break;
+```
+
+Remplacer par :
+
+```cpp
+case LoopState::WAITING_STOP:
+  // Spec §17 : REC during WAITING_STOP cancels stop and enters OVERDUBBING.
+  // M1 fix : pas de double-assignment _state ici, directement OVERDUBBING.
+  // OD-Sync : snapshot identique aux autres branches d'entrée OD (B2 fix
+  // post-review 2026-05-19, sinon _eventsAlternate stale ou _alternateValid
+  // stale → Undo/Redo après ce chemin = undefined behavior).
+  memcpy(_eventsAlternate, _events, sizeof(_events));
+  _eventsAlternateCount = _eventCount;
+  _alternateValid = true;
+  _state = LoopState::OVERDUBBING;
+  break;
+```
+
+**Note** : la branche WAITING_PLAY ne fait pas d'entrée OD (REC ignoré pendant
+WAITING_PLAY per spec §17). Pas de patch requis sur WAITING_PLAY.
+
 #### `tapRec` OVERDUBBING branche — commitOverdubExit
 
 Ligne 155-160 actuelle :
@@ -400,10 +432,14 @@ void LoopEngine::commitOverdubExit(MidiTransport& transport) {
   // le release naturel (capturePadEvent en PLAYING) appellera refCountNoteOff.
   for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
     if (!_padHeldLive[pad]) continue;
-    insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
-                       _playPositionUs, pad, resolvePadToMidiNote(pad), /*velocity=*/0);
-    // Si insertEventSorted retourne false (buffer full) : best-effort, refcount sera
-    // silencé au release naturel via M8 refCountNoteOff. Acceptable edge.
+    bool ok = insertEventSorted(_events, _eventCount, MAX_LOOP_EVENTS,
+                                 _playPositionUs, pad, resolvePadToMidiNote(pad), /*velocity=*/0);
+    if (!ok) {
+      // B4 fix post-review : préserver télémétrie comme mergeOverdub actuel
+      // (buffer plein au held pad inject). Live press refcount silencera la
+      // note au release naturel via M8 refCountNoteOff. Best-effort + diag.
+      viewer::emitLoopBufferFull(_channel, "od_exit_flush");
+    }
   }
 
   // Recompute _playNextEventIdx après les insertions (logique identique à C2 capturePadEvent).
@@ -599,16 +635,14 @@ void LoopEngine::swapForUndoRedo(MidiTransport& transport) {
     }
   }
 
-  // Étape 3 : swap buffers via memcpy via stack (LoopEvent[1024] = 8 KB, OK sur stack ESP32-S3 8 KB main task).
-  // Alternative pour économiser stack : swap par pointer logique (mais struct member, pas faisable simplement).
-  // Solution simple : memcpy in-place via std::swap_ranges or sequential swap.
-  // Ici : approche brute via temporary via memcpy en blocs (32B chunks pour limiter stack).
-  // Plus simple : juste memcpy via _events temp dans flash (declared static). À voir si gain stack utile.
-  // Pour la v1 : memcpy via buffer temp local. Si stack overflow, refactor.
-  LoopEvent temp[MAX_LOOP_EVENTS];  // 8 KB stack — vérifier task stack ≥ 16 KB
-  memcpy(temp,              _events,          sizeof(_events));
+  // Étape 3 : swap buffers via static global temp (B1 fix post-review 2026-05-19).
+  // Default Arduino-ESP32 main loop stack = 8 KB. Allouer LoopEvent temp[1024]
+  // = 8 KB sur stack provoque overflow. Solution : static global g_swapTemp,
+  // +8 KB SRAM permanent. Invariant 11 garantit qu'un seul swap est actif à la
+  // fois (≤ 1 LOOP en REC/OD), donc le static global est safe single-bank-usage.
+  memcpy(g_swapTemp,        _events,          sizeof(_events));
   memcpy(_events,           _eventsAlternate, sizeof(_eventsAlternate));
-  memcpy(_eventsAlternate,  temp,             sizeof(temp));
+  memcpy(_eventsAlternate,  g_swapTemp,       sizeof(g_swapTemp));
   uint16_t tempCount = _eventCount;
   _eventCount = _eventsAlternateCount;
   _eventsAlternateCount = tempCount;
@@ -657,7 +691,18 @@ void LoopEngine::cancelOverdub(MidiTransport& transport) {
 }
 ```
 
-**Note stack** : `LoopEvent temp[MAX_LOOP_EVENTS]` = 8 KB sur la stack. Vérifier que le task main a >= 16 KB stack. Si problème, alternative : `static LoopEvent g_swapTemp[MAX_LOOP_EVENTS]` global (mais coût SRAM +8 KB permanent). Démarrer en stack, refactor si overflow détecté en HW gate.
+**Déclaration `g_swapTemp` (en haut de LoopEngine.cpp, hors classe)** :
+
+```cpp
+// OD-Sync swap temp buffer (B1 fix post-review 2026-05-19).
+// Static global plutôt que stack alloc (8 KB > default Arduino-ESP32 main stack
+// 8 KB = overflow). Invariant 11 (≤ 1 LOOP en REC/OD) garantit single-usage.
+static LoopEvent g_swapTemp[MAX_LOOP_EVENTS];
+```
+
+**Coût SRAM révisé** : +8 KB par bank pour `_eventsAlternate` + 8 KB global pour
+`g_swapTemp` (shared) = **+40 KB total OD-Sync** (vs +32 KB initialement estimé).
+Budget restant ~185 KB. Toujours confortable.
 
 #### Modification `longPressClear` — wipe étendu (reset alternate)
 
@@ -810,8 +855,9 @@ grep -n "_alternateValid = false" src/loop/LoopEngine.cpp
 **G2** — Cancel pendant OD :
 1. Loop K+SN. OD HH ajouté à position 0.3.
 2. Tap CLEAR pendant OD. **Vérifier** :
-   - LED Amber → Green (state PLAYING).
-   - Flash cyan brief (EVT_LOOP_CLEAR).
+   - LED Amber → Green (state PLAYING, state-driven `renderBankLoop`).
+   - EVT_LOOP_CLEAR trigger mais grammar PTN_NONE par défaut = **pas de flash overlay
+     visible** (différé Phase 4 LED finalisation). Cohérent avec OD-15.
    - Cycle suivant : K+SN audibles continus, **HH disparaît proprement**.
    - Pas de glitch sur K ni SN.
 
@@ -850,6 +896,39 @@ grep -n "_alternateValid = false" src/loop/LoopEngine.cpp
 **G10** — Tap PLAY/STOP pendant OD = no-op (OD-3) :
 1. OVERDUBBING. Tap PLAY/STOP pad.
 2. **Vérifier** : aucun MIDI parasite, aucune transition LED, OD continue normalement.
+
+**G11** — Cancel pendant OD puis re-OD immédiat (added post-review B2/D1) :
+1. Loop K+SN. Tap REC → OD HH ajouté.
+2. Tap CLEAR (Cancel). _eventsAlternate écrasé = K+SN+HH précédent.
+3. Tap REC immédiatement → re-entrée OD. _eventsAlternate écrasé à nouveau = K+SN (snapshot frais).
+4. Press HH différent à 0.4. Tap REC exit. K+SN+HH(0.4) tourne.
+5. **Vérifier** : Undo court CLEAR ramène à K+SN seul (pas au K+SN+HH original).
+
+**G12** — OD-from-STOPPED Q5 Cancel → PLAYING (OD-16 α) :
+1. Loop K+SN PLAYING. Tap PLAY/STOP → STOPPED.
+2. Tap REC depuis STOPPED → Q5 PLAYING + OD simultanés.
+3. Press HH. Tap CLEAR (Cancel).
+4. **Vérifier** : état → **PLAYING** (asymétrie OD-16, pas de retour à STOPPED).
+
+**G13** — tapRec WAITING_STOP → OD avec snapshot (B2 fix critique) :
+1. Loop K+SN PLAYING. Quantize Bar. Tap PLAY/STOP → WAITING_STOP.
+2. Avant boundary, tap REC. État → OVERDUBBING.
+3. **Vérifier trace serial** : _eventsAlternate snapshotté, _alternateValid = true.
+4. Press HH. Tap REC exit → PLAYING.
+5. Tap CLEAR court (Undo) → revient à K+SN seul. ✓ Snapshot WAITING_STOP correct.
+
+**G14** — Wipe puis tap CLEAR court no-op safe :
+1. Loop K+SN+HH (snapshot valide K+SN).
+2. Long-press CLEAR (≥500 ms) → wipe + EMPTY + `_alternateValid = false`.
+3. Tap CLEAR court juste après.
+4. **Vérifier** : swapForUndoRedo early-return sur `!_alternateValid`. Aucun MIDI, aucune LED.
+
+**G15** — Buffer full au B-N2 inject (telemetry edge B4) :
+1. Loop dense (~1000 events). Tap REC → OD. Hold pad #4 à différents positions.
+2. Inject events pendant OD pour atteindre 1023+ events.
+3. Tap REC exit. `commitOverdubExit` tente held pad noteOff inject.
+4. Si buffer plein (1024 reached) : `viewer::emitLoopBufferFull(ch, "od_exit_flush")` trace serial.
+5. **Vérifier** : pas de crash. Pad release ultérieur → noteOff via refcount live press. Pas de stuck note.
 
 ### Commit message
 
@@ -896,10 +975,77 @@ Synchroniser la doc-écosystème post-implémentation. Pas de code touché.
 
 | Fichier | Modification |
 |---|---|
-| `docs/superpowers/specs/2026-04-19-loop-mode-design.md` | §8 réécrite (immediate-merge + snapshot), §9 ajout §9.1 CLEAR contextuel, §21 note Option β, §27 ligne OD-Sync, §28 ligne traçabilité |
+| `docs/superpowers/specs/2026-04-19-loop-mode-design.md` | §8 réécrite (cf draft ci-dessous), §9 ajout §9.1 CLEAR contextuel, §21 note Option β, §24 amender "Pas d'undo/redo" (G1 fix), Partie 7 / §28 ligne OD-Sync (G2 fix — pas de §27, structure est "Partie 7 — Suite"), §28 ligne traçabilité |
 | `STATUS.md` | Focus courant : OD-Sync CLOSE. Phase 3 prochaine. |
 | `docs/superpowers/LOOP_PROGRESS.md` | Tableau : ligne OD-Sync (entre Master Sync et Phase 3) avec commits + cross-refs |
 | `docs/reference/runtime-flows.md` | Ajout §4 (ou similaire) "Overdub flow — immediate-merge + Undo/Redo toggle" |
+| `docs/reference/led-reference.md` | Note "OD-Sync utilise Option β EVT_LOOP_CLEAR/STOP/PLAY existants. EVT_LOOP_OD_* dédiés différés Phase 4" |
+| `docs/reference/patterns-catalog.md` | Nouveau pattern P15 (ou index suivant) : "Snapshot 1-level + diff swap" |
+| `docs/reference/architecture-briefing.md` | §0 Scope Triage : router LOOP OD scenario vers `Illpad_OD_Sync.md` |
+
+### Draft §8 réécrit (G3 fix)
+
+À insérer dans `2026-04-19-loop-mode-design.md` §8 en remplacement intégral
+du paragraphe central (le bandeau note 2026-05-19 OD-Sync en tête) :
+
+```markdown
+### §8 — Overdub
+
+> **⚠ MAJ 2026-05-19 — OD-Sync pivot** : cette section a été réécrite suite au
+> pivot algorithmique immediate-merge + snapshot 1-level Undo/Redo toggle
+> (commits XXX). **Le modèle deferred-merge avec buffer temporaire décrit dans
+> la version antérieure est supprimé du code.** Source de vérité :
+> [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md).
+
+Pendant qu'un loop joue, taper **REC** une seconde fois fait entrer l'engine en
+**OVERDUBBING**. Depuis un **STOPPED-loaded** (boucle chargée, en pause), tap
+REC produit la transition équivalente Q5 — l'engine repart en **PLAYING +
+OVERDUBBING simultanés** (reprise position 0 + armement overdub).
+
+À l'entrée OD, un **snapshot** du buffer pré-OD est pris dans `_eventsAlternate`.
+Le LED garde le fond jaune solide et bascule à Amber `CSLOT_VERB_OVERDUB`.
+
+**Immediate-merge** : chaque pad press pendant OD est inséré **directement**
+dans le buffer principal `_events[]` à la position courante. La loop "grows live"
+— le hit ajouté au cycle N rejoue audible au cycle N+1 sans attente d'exit.
+
+**Trois sorties possibles** :
+
+- **Tap REC** → `commitOverdubExit` : exit + commit. Held pads injectent un
+  noteOff implicite à `_playPositionUs` (réincarnation B-N2 fix). État → PLAYING.
+  Le snapshot `_eventsAlternate` reste valide pour permettre un Undo
+  post-exit via CLEAR court.
+- **Tap CLEAR (any duration)** → Cancel mid-OD : swap musical par note
+  (cf [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md) §6) qui ne touche que les notes
+  affectées par la couche OD — couche base et live press préservées audibles
+  continues. État → PLAYING.
+- **Tap PLAY/STOP** → no-op (OD-3 décision). Pour stopper la loop, exit OD
+  via REC ou Cancel via CLEAR d'abord.
+
+**Undo/Redo post-exit** : tap CLEAR court (release < `clearLoopTimerMs`)
+sur PLAYING ou STOPPED déclenche un toggle Undo/Redo. Mêmes mécanique swap
+musical. Trigger LED EVT_STOP (couche retirée) ou EVT_PLAY (couche réintégrée).
+Permet le geste live "mute la couche HH pour un breakdown puis la ramener".
+
+**Deux contraintes à connaître** :
+- **Bank switch refusé** pendant OVERDUBBING (invariant §23.2 + §11). Le
+  musicien doit clore avant de changer de bank.
+- **Buffer principal plein** (`MAX_LOOP_EVENTS = 1024`) → les events en surplus
+  sont droppés silencieusement avec télémétrie viewer (`emitLoopBufferFull`).
+
+**Suppression du modèle deferred-merge** : le buffer temporaire `_overdubEvents`,
+les méthodes `mergeOverdub` et `abandonOverdub` ont été supprimés. Le geste
+abandon (jadis tap PLAY/STOP) est remplacé par le Cancel via CLEAR (plus
+ergonomique car asymétrique avec tap REC commit).
+```
+
+### Amendement §24 Non-goals (G1 fix)
+
+Modifier la ligne "Pas d'undo / redo" pour qualifier l'exception OD-Sync :
+
+```markdown
+- ~~**Pas d'undo / redo** — le CLEAR long-press est la seule sortie d'une boucle non désirée, les slots sont la seule persistance~~ **MAJ 2026-05-19** : **toggle Undo/Redo 1-level** introduit par OD-Sync (cf [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md) §4) — couche OD la plus récente peut être annulée/restaurée via tap CLEAR court en PLAYING/STOPPED. Multi-level undo (N couches) reste hors-goals.
+```
 
 ### Build gate
 
