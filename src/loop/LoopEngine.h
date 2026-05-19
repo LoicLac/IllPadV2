@@ -190,6 +190,19 @@ public:
   void notifyClearPressEnd();                   // falling edge (cancels timer)
   bool isClearHoldFired(uint32_t nowMs) const;  // true once threshold passed
 
+  // --- OD-Sync getters (used by processLoopMode CLEAR dispatch, spec §4.1) ---
+  // Pour distinguer tap court (Undo/Redo) vs long-press (wipe) au falling edge.
+  uint32_t getClearPressStartMs() const { return _clearPressStartMs; }
+  uint16_t getClearLoopTimerMs() const  { return _clearLoopTimerMs; }
+  bool     wasClearFired() const        { return _clearFired; }
+  bool     hasAlternate() const         { return _alternateValid; }
+
+  // --- OD-Sync transport (called by processLoopMode CLEAR dispatch, spec §3.4 + §4.1) ---
+  // cancelOverdub : rising edge CLEAR pendant OVERDUBBING → swap + state PLAYING.
+  // swapForUndoRedo : falling edge CLEAR court pendant PLAYING/STOPPED → toggle.
+  void cancelOverdub(MidiTransport& transport);
+  void swapForUndoRedo(MidiTransport& transport);
+
 private:
   // --- Configuration ---
   uint8_t          _channel;

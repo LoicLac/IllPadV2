@@ -7,6 +7,18 @@
 #include <string.h>
 
 // =================================================================
+// OD-Sync swap temp buffer (spec Illpad_OD_Sync.md §6.2, B1 fix post-review)
+// =================================================================
+// Static global shared par tous les LoopEngine plutôt que stack alloc.
+// Default Arduino-ESP32 main loop stack = 8 KB ; un LoopEvent temp[1024] (8 KB)
+// sur stack provoquerait overflow. Invariant 11 (≤ 1 LOOP en REC/OD à instant t)
+// + execution single-threaded main loop garantissent qu'un seul swap est actif
+// à la fois, donc le static global est safe single-usage.
+// Coût : +8 KB SRAM permanent (vs +8 KB par engine si static membre).
+// =================================================================
+static LoopEvent g_swapTemp[MAX_LOOP_EVENTS];
+
+// =================================================================
 // Constructor
 // =================================================================
 LoopEngine::LoopEngine()
@@ -264,8 +276,11 @@ void LoopEngine::longPressClear(MidiTransport& transport) {
   _loopBars = 0;
   _state = LoopState::EMPTY;
   // OD-Sync (spec §4.2) : wipe reset aussi _eventsAlternate + invalide.
-  // Note : ce reset est ajouté en C3 (le wipe étendu), pas en C2.
-  // En C2 on retire juste l'ancien `_overdubCount = 0`.
+  // Snapshot précédent (s'il y en avait un) perdu. _alternateValid = false
+  // garantit que swapForUndoRedo retournera early sans toucher au buffer.
+  _eventsAlternateCount = 0;
+  for (uint16_t i = 0; i < MAX_LOOP_EVENTS; i++) _eventsAlternate[i].active = false;
+  _alternateValid = false;
   #if DEBUG_SERIAL
   Serial.printf("[LOOP] longPressClear -> state=%u (EMPTY)\n", (unsigned)_state);
   #endif
@@ -931,4 +946,103 @@ uint8_t LoopEngine::findLatestVelAt(LoopEvent* buf, uint16_t count, uint8_t note
     if (buf[i].velocity > 0) vel = buf[i].velocity;
   }
   return vel;
+}
+
+// =================================================================
+// swapForUndoRedo — OD-Sync diff swap musical (spec Illpad_OD_Sync.md §6.2)
+// =================================================================
+// Échange _events ↔ _eventsAlternate avec MIDI ciblé : seules les notes dont
+// l'état audible change firent/coupent. Couche base et live press préservées
+// par construction (cf §6.4 scénario K+SN+HH).
+//
+// Appelé par cancelOverdub (CLEAR pendant OD, rising edge) et par
+// processLoopMode CLEAR falling-edge-short-tap (PLAYING/STOPPED).
+// =================================================================
+void LoopEngine::swapForUndoRedo(MidiTransport& transport) {
+  if (!_alternateValid) return;   // pas de snapshot, no-op safe
+
+  // Étape 1 : compute states "before" (dans _events) et "after" (dans _eventsAlternate).
+  bool before[128], after[128];
+  for (uint8_t n = 0; n < 128; n++) {
+    before[n] = isNoteOnAt(_events,          _eventCount,          n, _playPositionUs);
+    after[n]  = isNoteOnAt(_eventsAlternate, _eventsAlternateCount, n, _playPositionUs);
+  }
+
+  // Étape 2 : MIDI ciblé pour notes où l'état change, sauf si live press tient.
+  for (uint8_t n = 0; n < 128; n++) {
+    if (before[n] == after[n]) continue;   // pas de change → couche base préservée
+
+    // Live press protection : check si un pad mappant vers cette note est tenu.
+    bool liveOn = false;
+    for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
+      if (_padHeldLive[pad] && resolvePadToMidiNote(pad) == n) {
+        liveOn = true;
+        break;
+      }
+    }
+
+    if (before[n] && !after[n]) {
+      // Note disparait après swap. NoteOff seulement si pas live-press.
+      if (!liveOn) transport.sendNoteOn(_channel, n, 0);   // vel 0 = noteOff
+    } else {
+      // !before && after : note apparait après swap.
+      if (!liveOn) {
+        uint8_t vel = findLatestVelAt(_eventsAlternate, _eventsAlternateCount, n, _playPositionUs);
+        transport.sendNoteOn(_channel, n, vel);
+      }
+    }
+  }
+
+  // Étape 3 : swap buffers via g_swapTemp static global (B1 fix : pas stack 8 KB).
+  memcpy(g_swapTemp,        _events,          sizeof(_events));
+  memcpy(_events,           _eventsAlternate, sizeof(_eventsAlternate));
+  memcpy(_eventsAlternate,  g_swapTemp,       sizeof(g_swapTemp));
+  uint16_t tempCount = _eventCount;
+  _eventCount = _eventsAlternateCount;
+  _eventsAlternateCount = tempCount;
+
+  // Étape 4 : recompute _noteRefCount depuis nouveau _events à _playPositionUs + live press.
+  // after[] représente le nouvel état attendu (post-swap).
+  memset(_noteRefCount, 0, sizeof(_noteRefCount));
+  for (uint8_t n = 0; n < 128; n++) {
+    if (after[n]) _noteRefCount[n] = 1;   // buffer attendu on
+  }
+  for (uint8_t pad = 0; pad < NUM_KEYS; pad++) {
+    if (_padHeldLive[pad]) {
+      uint8_t note = resolvePadToMidiNote(pad);
+      if (_noteRefCount[note] < 255) _noteRefCount[note]++;   // live press contribution
+    }
+  }
+
+  // Étape 5 : recompute _playNextEventIdx par binary search (events à fire au reste du cycle).
+  int32_t lo = 0;
+  int32_t hi = (int32_t)_eventCount;
+  while (lo < hi) {
+    int32_t mid = (lo + hi) / 2;
+    if (_events[mid].timestampUs <= _playPositionUs) lo = mid + 1;
+    else hi = mid;
+  }
+  _playNextEventIdx = (uint16_t)lo;
+
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] swapForUndoRedo ch=%u eventCount=%u alternateCount=%u\n",
+                _channel, _eventCount, _eventsAlternateCount);
+  #endif
+}
+
+// =================================================================
+// cancelOverdub — OD-Sync Cancel pendant OD (spec Illpad_OD_Sync.md §3.4)
+// =================================================================
+// Rising edge CLEAR pendant OVERDUBBING : swap diff musical + state → PLAYING.
+// _alternateValid reste true (Redo possible juste après le retour PLAYING).
+// Décision OD-16 : toujours retour à PLAYING, même si pré-OD state était
+// STOPPED (chemin Q5). Asymétrie acceptée.
+// =================================================================
+void LoopEngine::cancelOverdub(MidiTransport& transport) {
+  if (_state != LoopState::OVERDUBBING) return;   // safety
+  swapForUndoRedo(transport);
+  _state = LoopState::PLAYING;   // OD-16 : toujours PLAYING (pas de tracker pre-OD state)
+  #if DEBUG_SERIAL
+  Serial.printf("[LOOP] cancelOverdub ch=%u → PLAYING\n", _channel);
+  #endif
 }

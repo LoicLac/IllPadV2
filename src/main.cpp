@@ -820,16 +820,64 @@ static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, ui
   LoopEngine* le = slot.loopEngine;
   if (!le) return;
 
-  // CLEAR long-press check (state-machine driven, not edge-driven)
+  // OD-Sync CLEAR dispatch state-aware (spec Illpad_OD_Sync.md §3.4 + §4.1 + §4.2)
+  //   OVERDUBBING + rising edge CLEAR    → cancelOverdub (swap + state PLAYING) + EVT_LOOP_CLEAR
+  //   PLAYING/STOPPED + long hold CLEAR  → longPressClear wipe (comportement Phase 2) + EVT_LOOP_CLEAR
+  //   PLAYING/STOPPED + short release    → swapForUndoRedo Undo/Redo toggle (LED Option β EVT_STOP/EVT_PLAY)
+  //   EMPTY / RECORDING / WAITING_* + tap CLEAR : ignoré (state ne supporte pas)
   if (le->getClearPad() != 0xFF) {
-    bool clearHeld = state.keyIsPressed[le->getClearPad()];
-    if (clearHeld) {
-      le->notifyClearPressStart(now);
-      if (le->isClearHoldFired(now)) {
-        le->longPressClear(s_transport);
+    uint8_t clearPadIdx = le->getClearPad();
+    bool clearHeld = state.keyIsPressed[clearPadIdx];
+    bool clearWasHeld = s_lastKeys[clearPadIdx];
+    LoopState curState = le->getState();
+
+    // Rising edge sur CLEAR
+    if (clearHeld && !clearWasHeld) {
+      if (curState == LoopState::OVERDUBBING) {
+        // OD-Sync §3.4 : Cancel mid-OD. Trigger immédiat (pas de timer).
+        le->cancelOverdub(s_transport);
         s_leds.triggerEvent(EVT_LOOP_CLEAR);
+      } else {
+        // PLAYING / STOPPED / EMPTY / autres : démarrer timer long-press.
+        // (notifyClearPressStart est idempotent, OK même en EMPTY.)
+        le->notifyClearPressStart(now);
       }
-    } else {
+    }
+
+    // Hold (sustained)
+    if (clearHeld) {
+      if (curState != LoopState::OVERDUBBING) {
+        // Check long-press wipe fire (Phase 2 existing behavior + OD-Sync wipe étendu).
+        if (le->isClearHoldFired(now)) {
+          le->longPressClear(s_transport);
+          s_leds.triggerEvent(EVT_LOOP_CLEAR);
+        }
+      }
+      // OVERDUBBING : pas de timer (rising edge a déjà fait cancelOverdub).
+    }
+
+    // Falling edge sur CLEAR
+    if (!clearHeld && clearWasHeld) {
+      // OD-Sync §4.1 : check short-tap pour Undo/Redo (PLAYING / STOPPED uniquement).
+      if (curState == LoopState::PLAYING || curState == LoopState::STOPPED) {
+        uint32_t pressStart = le->getClearPressStartMs();
+        bool wasShortTap = (pressStart != 0)
+                        && ((now - pressStart) < le->getClearLoopTimerMs())
+                        && !le->wasClearFired()
+                        && le->hasAlternate();   // pas de no-op si _alternateValid=false (G14)
+        if (wasShortTap) {
+          // Détection sens Undo vs Redo par diff eventCount avant/après.
+          uint16_t countBefore = le->getEventCount();
+          le->swapForUndoRedo(s_transport);
+          uint16_t countAfter = le->getEventCount();
+          if (countAfter < countBefore) {
+            s_leds.triggerEvent(EVT_STOP);     // Option β : couche retirée
+          } else if (countAfter > countBefore) {
+            s_leds.triggerEvent(EVT_PLAY);     // Option β : couche réintégrée
+          }
+          // Si countAfter == countBefore : swap mais same content (rare). No LED trigger.
+        }
+      }
       le->notifyClearPressEnd();
     }
   }
