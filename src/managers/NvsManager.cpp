@@ -1241,6 +1241,16 @@ void NvsManager::saveBank() {
   }
 }
 
+// Phase 3 — sync save LoopPadStore (called from Tool 3 b1 saveAll on setup exit).
+// Setup mode est bloquant, sync write OK (pas de runtime contention).
+bool NvsManager::saveLoopPad() {
+  Preferences prefs;
+  if (!prefs.begin(LOOPPAD_NVS_NAMESPACE, false)) return false;
+  size_t written = prefs.putBytes(LOOPPAD_NVS_KEY, &_loadedLoopPad, sizeof(LoopPadStore));
+  prefs.end();
+  return written == sizeof(LoopPadStore);
+}
+
 void NvsManager::savePotParams() {
   Preferences prefs;
   if (prefs.begin(POT_PARAMS_NVS_NAMESPACE, false)) {

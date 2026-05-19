@@ -84,6 +84,9 @@ public:
 
   // Access loaded LOOP pad assignment (3 control pads + 16 slot pads, Phase 1 declared)
   const LoopPadStore& getLoadedLoopPadStore() const;
+  // Phase 3 — setter cache + sync save (used by Tool 3 b1 saveAll on setup exit)
+  void setLoadedLoopPad(const LoopPadStore& s) { _loadedLoopPad = s; }
+  bool saveLoopPad();
   // Access loaded LOOP pot params per-bank (5 effects)
   const LoopPotStore& getLoadedLoopPotParams(uint8_t bankIdx) const;
 

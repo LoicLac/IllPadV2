@@ -554,6 +554,84 @@ struct __attribute__((packed)) LoopPadStore {
 static_assert(sizeof(LoopPadStore) == 23, "LoopPadStore must be exactly 23 B (Q1 §28 spec LOOP)");
 static_assert(sizeof(LoopPadStore) <= NVS_BLOB_MAX_SIZE, "LoopPadStore exceeds NVS blob max");
 
+// =================================================================
+// Cross-store role lookup helpers (Phase 3 — spec §13 refondée 2026-05-19)
+// =================================================================
+// Source unique de vérité pour la présence d'un rôle sur un pad.
+// Consommés inline par Tool 3 (ToolPadRoles), Tool 4 (ToolControlPads).
+// Pas de module centralisé (refusé YAGNI Phase 3). Pas de cache redondant pour
+// Scale/Arp/Bank arrays (refusé refondation (c) — l'architecture existing
+// maintient ces arrays comme variables locales main.cpp, passées par
+// référence aux managers). Seuls LoopPadStore et ControlPadStore sont cachés
+// dans NvsManager (_loadedLoopPad + _ctrlStore).
+//
+// Invariant 14 : tout consommateur appelle ces helpers, pas de scan ad-hoc.
+
+// --- LoopPadStore : cached in NvsManager._loadedLoopPad (Phase 2) ---
+
+inline bool isLoopControlPad(const LoopPadStore& s, uint8_t pad) {
+  return s.recPad == pad || s.playStopPad == pad || s.clearPad == pad;
+}
+
+inline int8_t findLoopSlotIdx(const LoopPadStore& s, uint8_t pad) {
+  for (uint8_t i = 0; i < 16; i++) {
+    if (s.slotPads[i] == pad) return (int8_t)i;
+  }
+  return -1;
+}
+
+// --- ControlPadStore : cached in NvsManager._ctrlStore (existing) ---
+
+inline int8_t findControlPadEntryIdx(const ControlPadStore& s, uint8_t pad) {
+  for (uint8_t i = 0; i < s.count; i++) {
+    if (s.entries[i].padIndex == pad) return (int8_t)i;
+  }
+  return -1;
+}
+
+// --- Scale roles : owned by main.cpp (rootPads[7], modePads[7], chromaticPad) ---
+
+enum class ScaleRoleKind : uint8_t { NONE, ROOT, MODE, CHROM };
+struct ScaleRoleResult { ScaleRoleKind kind; uint8_t idx; };
+
+inline ScaleRoleResult scaleRoleAtPad(const uint8_t* rootPads,
+                                       const uint8_t* modePads,
+                                       uint8_t chromaticPad,
+                                       uint8_t pad) {
+  for (uint8_t i = 0; i < 7; i++) {
+    if (rootPads[i] == pad) return ScaleRoleResult{ScaleRoleKind::ROOT, i};
+    if (modePads[i] == pad) return ScaleRoleResult{ScaleRoleKind::MODE, i};
+  }
+  if (chromaticPad == pad) return ScaleRoleResult{ScaleRoleKind::CHROM, 0};
+  return ScaleRoleResult{ScaleRoleKind::NONE, 0};
+}
+
+// --- Arp roles : owned by main.cpp (holdPad scalar, octavePads[4]) ---
+
+enum class ArpRoleKind : uint8_t { NONE, HOLD, OCTAVE };
+struct ArpRoleResult { ArpRoleKind kind; uint8_t idx; };
+
+inline ArpRoleResult arpRoleAtPad(uint8_t holdPad,
+                                   const uint8_t* octavePads,
+                                   uint8_t pad) {
+  if (holdPad == pad) return ArpRoleResult{ArpRoleKind::HOLD, 0};
+  for (uint8_t i = 0; i < 4; i++) {
+    if (octavePads[i] == pad) return ArpRoleResult{ArpRoleKind::OCTAVE, i};
+  }
+  return ArpRoleResult{ArpRoleKind::NONE, 0};
+}
+
+// --- Bank assignment : owned by main.cpp (bankPads[NUM_BANKS]) ---
+// Note : struct BankSlot (KeyboardData.h:369) ne contient PAS de champ `pad`
+// (le mapping bank→pad vit dans `bankPads[]`, pas dans `BankSlot::*`).
+
+inline int8_t findBankIdxForPad(const uint8_t* bankPads, uint8_t pad) {
+  for (uint8_t i = 0; i < NUM_BANKS; i++) {
+    if (bankPads[i] == pad) return (int8_t)i;
+  }
+  return -1;
+}
+
 #define BANKTYPE_NVS_KEY_V2  "config"
 #define BANKTYPE_VERSION     4   // 3->4 : ajout proximityFactorx10[] + ecart[] (ARPEG_GEN walk tuning)
 
