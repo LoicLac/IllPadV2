@@ -403,6 +403,12 @@ void setup() {
                         rootPads, modePads, chromaticPad, holdPad,
                         octavePads, s_potRouter, s_settings);
 
+  // M7 dev seed (Phase 2 testing, retiré Phase 3.G) — DOIT être appelé AVANT setup gate.
+  // setupManager.run() never returns ; si dev seed reste après le gate (anciennement ligne 538),
+  // setup mode entry empêche son exécution → Tool 4 / Tool 3 voient _loadedLoopPad à 0xFF
+  // (bug Phase 2 ordering, découvert HW gate G1 Phase 3.B 2026-05-19).
+  s_nvsManager.applyDevSeedLoopPadsIfSafe();
+
   // =================================================================
   // Setup Mode Detection (hold rear button 3s at boot)
   // Must happen BEFORE sensing task starts (needs direct keyboard access)
@@ -534,8 +540,9 @@ void setup() {
     #endif
   }
 
-  // M7 fix : dev seed conditionnel pour HW gates Phase 2. Retire Phase 3 (Tool 3 b1).
-  s_nvsManager.applyDevSeedLoopPadsIfSafe();
+  // M7 dev seed déplacé AVANT setup gate (post-loadAll) — cf Phase 3.B fix 2026-05-19.
+  // Ancien call ligne 538 retiré : setupManager.run() never returns, donc dev seed
+  // n'était jamais appliqué si user entrait setup mode → Tool 4 / Tool 3 voyaient 0xFF.
 
   // Assign LoopEngines to BANK_LOOP banks (Phase 2 LOOP)
   // m8 audit fix : LoopPadStore shared cross-bank (spec §5), hoist out of loop.

@@ -149,6 +149,17 @@ void ToolControlPads::_handleModePick(const NavEvent& ev) {
 
       // Create slot if needed
       if (s < 0) {
+        // Phase 3 — R2 collision check (spec §5) : refuse if pad is LOOP control
+        // (REC/PS/CLEAR). Helper isLoopControlPad in KeyboardData.h.
+        // Note Task 5 : padIndex non éditable post-add dans Tool 4 (audit v1 m4
+        // confirmé par lecture _handleValueEdit + _adjustField — fieldIdx 0..4 =
+        // CC/Channel/Mode/Deadzone/Release uniquement). Donc protection mono-point ici.
+        if (isLoopControlPad(_nvs->getLoadedLoopPadStore(), _cursorPad)) {
+          _setFlash("Pad is LOOP REC/PS/CLR - move in Tool 3 first");
+          _uiMode = UI_GRID_NAV;
+          _screenDirty = true;
+          break;
+        }
         if (!_addSlot(_cursorPad)) {
           _setFlash("Cap reached (12/12). Remove a pad first.");
           _uiMode = UI_GRID_NAV;
@@ -528,7 +539,23 @@ void ToolControlPads::_drawGrid() {
   uint8_t map[NUM_KEYS];
   memset(map, 0, sizeof(map));
 
+  // Phase 3 — LOOP controls (REC/PS/CLEAR) visible labelisés, non-éditables (R2 spec §5).
+  // Map = 0 (couleur unassigned par défaut, faute de couleur "locked-red" dédiée
+  // dans GRID_CONTROLPAD palette — l'affichage label suffit pour signaler à l'user
+  // que ces pads sont déjà utilisés. HW gate G1 confirmera UX.
+  const LoopPadStore& lp = _nvs->getLoadedLoopPadStore();
+
   for (uint8_t i = 0; i < NUM_KEYS; i++) {
+    if (isLoopControlPad(lp, i)) {
+      const char* lbl = (i == lp.recPad)      ? " R "
+                      : (i == lp.playStopPad) ? " P "
+                                              : " C ";
+      strncpy(labels[i], lbl, 5);
+      labels[i][5] = '\0';
+      map[i] = 0;
+      continue;
+    }
+
     int8_t s = _findSlot(i);
     if (s < 0) {
       strncpy(labels[i], "---", 5);
@@ -728,6 +755,18 @@ void ToolControlPads::_drawInfo() {
     }
     _ui->drawFrameLine(VT_DIM "%s" VT_RESET, desc);
     _ui->drawFrameEmpty();
+    return;
+  }
+
+  // Phase 3 — Cursor sur pad LOOP control : info immédiate, pas attendre tentative add.
+  const LoopPadStore& lp = _nvs->getLoadedLoopPadStore();
+  if (isLoopControlPad(lp, _cursorPad)) {
+    const char* role = (_cursorPad == lp.recPad)      ? "REC"
+                     : (_cursorPad == lp.playStopPad) ? "PLAY/STOP"
+                                                      : "CLEAR";
+    _ui->drawFrameLine(VT_YELLOW "Pad #%d : LOOP %s (Tool 3 b1) - cannot assign CC here." VT_RESET,
+                       (int)_cursorPad + 1, role);
+    _ui->drawFrameLine(VT_DIM "Move LOOP %s in Tool 3 first to free this pad." VT_RESET, role);
     return;
   }
 
