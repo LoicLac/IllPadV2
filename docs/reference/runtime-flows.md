@@ -335,8 +335,9 @@ All lock-free. No mutex anywhere in runtime code.
 |-------|------|----------|----------|-------------------|
 | Aftertouch ring | 64 entries | `updateAftertouch()` | `flush()` (16/frame max) | Silent drop. **Capacity math**: at default 25 ms rate, N pads generate N events/25 ms. flush drains 16/frame × ~40 frames/25 ms = 640 drain capacity. Safe up to ~48 pads. At minimum rate (10 ms): N events/10 ms vs 16×10=160 drain → safe up to ~40 pads. Real-world : ≤10 fingers, never saturates. |
 | Arp events | 64 per engine | `tick()` (noteOn/Off pairs) | `processEvents()` every frame | noteOff fail → skip entire step (safe); noteOn fail → cancel orphaned noteOff (safe) |
-| LOOP main buffer | 1024 events × 8 B per engine | `LoopEngine::capturePadEvent` (REC/OD) live-sort O(log n + n) | `LoopEngine::update` walks events sorted, fire via refcount | `insertEventSorted` retourne false → silent drop + `viewer::emitLoopBufferFull(ch, "main")` (m9 telemetry) |
-| LOOP overdub buffer | 128 events × 8 B per engine | `LoopEngine::capturePadEvent` (OVERDUBBING) | `LoopEngine::mergeOverdub` au tap REC | Atomic abandon si dépassement capacité main + overdub (M4 audit fix), telemetry `viewer::emitLoopBufferFull(ch, "merge")` |
+| LOOP main buffer | 1024 events × 8 B per engine | `LoopEngine::capturePadEvent` (RECORDING **et** OVERDUBBING post OD-Sync immediate-merge) live-sort O(log n + n) | `LoopEngine::update` walks events sorted, fire via refcount | `insertEventSorted` retourne false → silent drop + `viewer::emitLoopBufferFull(ch, "main")` (m9 telemetry) |
+| LOOP alternate buffer (OD-Sync) | 1024 events × 8 B per engine | `tapRec` snapshot à l'entrée OD (memcpy `_events` → `_eventsAlternate`) | `swapForUndoRedo` (Cancel mid-OD ou Undo/Redo toggle PLAYING/STOPPED) via diff swap par note | Reset à wipe (longPressClear) → `_alternateValid = false`. Cf [`Illpad_OD_Sync.md`](../superpowers/specs/Illpad_OD_Sync.md) §2 + §6.2. |
+| LOOP swap temp global | 1024 events × 8 B (shared) | `g_swapTemp` static global dans LoopEngine.cpp | Utilisé temporairement par `swapForUndoRedo` pour 3-way memcpy swap | Invariant 11 (≤ 1 LOOP en REC/OD) garantit single-usage. Coût SRAM permanent 8 KB. |
 | LOOP pending noteOffs | 64 per engine | `scheduleNoteOff` (gates ou stuck flush) | `drainPendingNoteOffs` chaque frame | Silent drop if queue full — fallback via `flushPendingNoteOffs` |
 | NVS writes | per-field dirty flags | Main loop | Background FreeRTOS task | Coalesced (latest wins) |
 
@@ -344,7 +345,7 @@ All lock-free. No mutex anywhere in runtime code.
 
 ## LOOP runtime flow (Phase 2)
 
-Phase 2 LOOP (commits `6c0b4d8` → `284bec4`, 2026-05-19) ajoute un sous-système runtime parallèle à ARPEG : classe `LoopEngine` dans `src/loop/`, assignée à toute bank de type `BANK_LOOP` via pool statique `s_loopEngines[MAX_LOOP_BANKS=4]`. Plan référence : [`docs/superpowers/plans/2026-05-18-loop-phase-2-plan.md`](../superpowers/plans/2026-05-18-loop-phase-2-plan.md).
+Phase 2 LOOP (commits `6c0b4d8` → `284bec4`, 2026-05-19) ajoute un sous-système runtime parallèle à ARPEG : classe `LoopEngine` dans `src/loop/`, assignée à toute bank de type `BANK_LOOP` via pool statique `s_loopEngines[MAX_LOOP_BANKS=4]`. Plan archivé : [`docs/archive/2026-05-18-loop-phase-2-plan.md`](../archive/2026-05-18-loop-phase-2-plan.md).
 
 ### 1. Pad touch → LOOP MIDI
 
@@ -365,10 +366,10 @@ processLoopMode(state, slot, now)
        ↓
        ├─ M8 live monitor (TOUS états) : refCountNoteOn / refCountNoteOff → MidiTransport
        ├─ M3 velocity strict baseVelocity (variation au playback seulement)
-       ├─ _padHeldLive[pad] tracker set/reset (consommé par stopRecording/mergeOverdub/onBackgroundTransition)
+       ├─ _padHeldLive[pad] tracker set/reset (consommé par commitRecordingClose / closeRecordingImmediate / commitOverdubExit / onBackgroundTransition)
        └─ Buffer write conditionnel :
             • RECORDING → insertEventSorted live-sort dans _events[] (M2)
-            • OVERDUBBING → insertEventSorted live-sort dans _overdubEvents[]
+            • OVERDUBBING → insertEventSorted live-sort dans _events[] direct (OD-Sync immediate-merge post 2026-05-19 ; _overdubEvents supprimé) + _playNextEventIdx recompute pour éviter double-fire
             • Autres états → live monitor seul, pas de buffer write
 ```
 
@@ -483,3 +484,76 @@ LEFT + double-tap bank LOOP pad → BankManager LOOP branch
 
 - `midiPanic()` Phase 1b : flush all LoopEngines via `flushPendingNoteOffs` (B2 self-stop → STOPPED), avant `MidiEngine::allNotesOff()` + CC 123 multi-channel.
 - LEFT + hold pad simple tap → `toggleAllArpsAndLoops()` (rename Phase 2.J) : itère ARPEG + LOOP, toggle play/stop multi-bank, single LED `triggerEvent` avec bitmask.
+
+### 6. Overdub flow — immediate-merge + 1-level Undo/Redo toggle
+
+**Pivot 2026-05-19** (commits `eaf5674` C1 + `fc2ff9b` C2 + `33149b8` C3) : remplace deferred-merge avec buffer temporaire par immediate-merge + snapshot 1-level. Cf [`docs/superpowers/specs/Illpad_OD_Sync.md`](../superpowers/specs/Illpad_OD_Sync.md).
+
+```
+Entrée OD :
+  tap REC depuis PLAYING/STOPPED/WAITING_STOP → tapRec :
+    ↓ memcpy(_eventsAlternate, _events, sizeof(_events))  // snapshot pré-OD
+    ↓ _eventsAlternateCount = _eventCount
+    ↓ _alternateValid = true
+    ↓ state = OVERDUBBING (state machine inchangée vs Phase 2)
+    ↓ EVT_LOOP_OVERDUB trigger (LED Amber state-driven)
+
+Capture pendant OD (immediate-merge) :
+  pad press musical → capturePadEvent
+    ↓ M8 live monitor refCountNoteOn (audible immédiat)
+    ↓ _padHeldLive[pad] = true
+    ↓ insertEventSorted DIRECT dans _events[] à _playPositionUs (pas de temp buffer)
+    ↓ _playNextEventIdx recompute par binary search (évite double-fire ce cycle ;
+      le M8 live monitor l'a déjà émis, l'event firera au cycle suivant via le walk)
+
+  pad release → capturePadEvent velocity=0
+    ↓ M8 live monitor refCountNoteOff
+    ↓ _padHeldLive[pad] = false
+    ↓ insertEventSorted noteOff dans _events[] (même mécanique)
+
+Exit commit (tap REC) :
+  tapRec depuis OVERDUBBING → commitOverdubExit :
+    ↓ flushHeldPadsAsNoteOffs(_playPositionUs)  // B-N2 réincarnée
+    │    pour chaque _padHeldLive[pad]==true : insert noteOff @ _playPositionUs
+    │    (sans ça : noteOn capturé sans noteOff matching → refcount grows unbounded
+    │     si user release après exit OD ; télémétrie viewer::emitLoopBufferFull
+    │     "od_exit_flush" si buffer plein au flush)
+    ↓ _playNextEventIdx recompute
+    ↓ state = PLAYING (_eventsAlternate intact pour post-Undo)
+    ↓ LED state-driven Amber → Green
+
+Exit Cancel (tap CLEAR rising edge pendant OD) :
+  processLoopMode CLEAR dispatch state-aware → cancelOverdub :
+    ↓ swapForUndoRedo (cf §6.2 spec OD-Sync) :
+    │    compute states "before" (_events) vs "after" (_eventsAlternate) à _playPositionUs
+    │       pour chaque note N (0..127) via isNoteOnAt walk O(count)
+    │    MIDI ciblé : noteOff/noteOn seulement si état change ET pas live-press
+    │       (préserve couche base + live press par construction ; cf scénario K+SN+HH G3)
+    │    swap _events ↔ _eventsAlternate via g_swapTemp static global 3-way memcpy
+    │    swap _eventCount ↔ _eventsAlternateCount
+    │    recompute _noteRefCount from new _events + _padHeldLive contribution
+    │    recompute _playNextEventIdx par binary search
+    ↓ state = PLAYING (OD-16 α : toujours PLAYING même depuis STOPPED-Q5)
+    ↓ EVT_LOOP_CLEAR trigger (LED Option β cyan, PTN_NONE actuellement)
+
+Undo/Redo post-exit (tap CLEAR court PLAYING/STOPPED) :
+  falling edge CLEAR, release < clearLoopTimerMs, !_clearFired, _alternateValid :
+    ↓ swapForUndoRedo (même mécanique que Cancel)
+    ↓ Détection sens via diff _eventCount avant/après swap :
+    │    countAfter < countBefore → couche retirée → EVT_STOP trigger (coral FADE Option β)
+    │    countAfter > countBefore → couche réintégrée → EVT_PLAY trigger (green FADE Option β)
+    ↓ state inchangé (reste PLAYING ou STOPPED)
+
+Wipe étendu (long-press CLEAR PLAYING/STOPPED) :
+  longPressClear :
+    ↓ flushPendingNoteOffs (B2 self-stop)
+    ↓ _eventCount = 0, _events slots active=false
+    ↓ _eventsAlternateCount = 0, _eventsAlternate slots active=false
+    ↓ _alternateValid = false (Undo no-op safe après wipe)
+    ↓ state = EMPTY
+    ↓ EVT_LOOP_CLEAR trigger
+```
+
+**Conséquence musicale** : live loop growth audible (chaque press OD rejoue au cycle suivant), Cancel mid-OD préserve K+SN si tu cancel la couche HH, Undo/Redo toggle permet le geste signature "mute HH pour breakdown puis ramener".
+
+**Suppression Phase 2** : `_overdubEvents[128]`, `_overdubCount`, `mergeOverdub`, `abandonOverdub` supprimés. B-N2 logic réincarnée dans `commitOverdubExit`. Live press protection via `_padHeldLive` étendue au swap musical (cf §6.2 spec OD-Sync).

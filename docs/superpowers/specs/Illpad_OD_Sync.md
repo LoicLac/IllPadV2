@@ -7,7 +7,7 @@
 **Cross-refs** :
 - Spec parent LOOP : [`2026-04-19-loop-mode-design.md`](2026-04-19-loop-mode-design.md) (sections impactées §8 overdub, §17 quantize, §21 LED, §27 phases)
 - Spec sœur Master Sync : [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) (close-record paquet précédent, base architecturale)
-- Design pivot d'origine : [`../designs/2026-05-19-loop-algo-pivot-design.md`](../designs/2026-05-19-loop-algo-pivot-design.md) (mentionnait OD comme out-of-scope Paquet A — cette spec adresse la suite)
+- Design pivot d'origine (archivé) : [`docs/archive/2026-05-19-loop-algo-pivot-design.md`](../../archive/2026-05-19-loop-algo-pivot-design.md) (mentionnait OD comme out-of-scope Paquet A — cette spec adresse la suite)
 - Code actuel : [`src/loop/LoopEngine.{h,cpp}`](../../../src/loop/LoopEngine.h), [`src/main.cpp::processLoopMode`](../../../src/main.cpp), [`src/core/LedGrammar.cpp`](../../../src/core/LedGrammar.cpp)
 - LED grammar : [`2026-04-19-led-feedback-unified-design.md`](2026-04-19-led-feedback-unified-design.md)
 
@@ -705,7 +705,7 @@ Ajouter ligne traçabilité OD-Sync (renvoi vers §9 de cette spec pour les 15 d
 
 1. **Ce doc validé** par Loïc. ✓ post brainstorm + audit feasibility 2026-05-19.
 2. **Patch parent spec** `2026-04-19-loop-mode-design.md` §8, §9, §21, §27, §28. Cross-refs vers cette spec.
-3. **Mini-plan dédié** `plans/2026-05-19-od-sync-implementation-plan.md` style Master Sync (3-4 commits + HW gates G1-G10).
+3. **Mini-plan dédié** (archivé post-exécution dans [`docs/archive/2026-05-19-od-sync-implementation-plan.md`](../../archive/2026-05-19-od-sync-implementation-plan.md)) style Master Sync — 4 commits + HW gates G1-G15.
 4. **Code** : 3-4 commits ciblés.
    - **C1** : Removal `_overdubEvents` / `mergeOverdub` / `abandonOverdub` + ajout `_eventsAlternate` declarations + constructor init. Inerte (pas encore wired). ~50 LOC.
    - **C2** : Activation immediate-merge dans `capturePadEvent` OVERDUBBING + snapshot dans `tapRec` PLAYING/STOPPED entry + `commitOverdubExit` à `tapRec` OVERDUBBING. Held pads B-N2 déplacée. ~60 LOC. HW gates G1, G5, G6.

@@ -182,11 +182,11 @@ change.
 | Scale pads (7 root + 7 mode + 1 chrom) | `ScalePadStore` | Tool 3 | `illpad_spad` / `pads` | Extend category → Tool 3 grid + ScaleManager |
 | Control pad assignments + 3 global DSP params | `ControlPadStore` v2 | Tool 4 | `illpad_ctrl` / `pads` | Add entry : new slot + Tool 4 edit ; globals via 'g' key. Consumed at boot via `ControlPadManager::applyStore` |
 | Arp pads (1 hold + 4 octave) | `ArpPadStore` | Tool 3 | `illpad_apad` / `pads` | New ARPEG control pad → Tool 3 + `main.cpp::handleHoldPad` + ScaleManager |
-| Bank types + quantize + scaleGroup | `BankTypeStore` | Tool 5 | `illpad_btype` / `config` | New `BankType` → Tool 5 PARAM_TABLE entry + ArpEngine assignment + LED state machine + validator. Tool 5 refacto livré 2026-05-17 (tableau matriciel banks×params, nav 2D, validator quantize contextuel — LOOP intégré côté UI). `BANK_LOOP` runtime livré Phase 2 LOOP (commits `6c0b4d8`→`284bec4`, 2026-05-19) : `LoopEngine` class assigned via `s_loopEngines[MAX_LOOP_BANKS=4]` pool au boot (cf §0 routing : LOOP subsystem = `src/loop/` + processLoopMode dispatch dans main.cpp + renderBankLoop state-driven dans LedController + onBackgroundTransition au bank switch). Pas de bump NVS (reste v4). |
+| Bank types + quantize + scaleGroup | `BankTypeStore` | Tool 5 | `illpad_btype` / `config` | New `BankType` → Tool 5 PARAM_TABLE entry + ArpEngine assignment + LED state machine + validator. Tool 5 refacto livré 2026-05-17 (tableau matriciel banks×params, nav 2D, validator quantize contextuel — LOOP intégré côté UI). `BANK_LOOP` runtime livré Phase 2 LOOP (commits `6c0b4d8`→`284bec4`, 2026-05-19) : `LoopEngine` class assigned via `s_loopEngines[MAX_LOOP_BANKS=4]` pool au boot. **Pivots musicaux 2026-05-19** : Master Sync (commits `89f6c11`→`a7a461a`, spec [`Illpad_Master_Sync.md`](../superpowers/specs/Illpad_Master_Sync.md)) + OD-Sync (commits `eaf5674`→`33149b8`, spec [`Illpad_OD_Sync.md`](../superpowers/specs/Illpad_OD_Sync.md)). Pas de bump NVS (reste v4). |
 | Global settings | `SettingsStore` | Tool 6 | `illpad_set` / `settings` | New field → Tool 6 case + validator + bump version + apply in `main.cpp` setup |
 | Pot bindings (user-configurable) | `PotMappingStore` | Tool 7 | `illpad_pmap` / `mapping` | New `PotTarget` → pool line, label+color, `getDiscreteSteps()`, `isPerBankTarget()`, `applyBinding` case |
 | Pot filter tuning | `PotFilterStore` | none (descriptor slot reserved "Monitor in T7", unimplemented) | `illpad_pflt` / `cfg` | **Friction zone** : only editable via code + flash. |
-| LED pattern globals + event overrides + gamma | `LedSettingsStore` v8 | Tool 8 | `illpad_lset` / `ledsettings` | New event → `EventId` + `EVENT_RENDER_DEFAULT[]` + optional Tool 8 line ; new global → Store field + line + apply in renderPattern |
+| LED pattern globals + event overrides + gamma | `LedSettingsStore` v9 | Tool 8 | `illpad_lset` / `ledsettings` | New event → `EventId` + `EVENT_RENDER_DEFAULT[]` + optional Tool 8 line ; new global → Store field + line + apply in renderPattern |
 | Color slots (14 preset + hue, 16 slot IDs) | `ColorSlotStore` v5 | Tool 8 | `illpad_lset` / `ledcolors` | Add slot → `COLOR_SLOT_COUNT` + Tool 8 LineId + `resolveColorSlot()` + default in NvsManager.cpp |
 
 ### Table 2 — Runtime-managed persisted state (no Setup Tool)
@@ -224,7 +224,7 @@ to skip, what existing system to read as reference.
 |---|---|---|---|
 | **New mode of play** (loop, beat, sequencer, drum pad) | Clock, BankType, state machine, scheduling, pile, LED, PotMapping, Tool 4, NVS | Pressure pipeline, ScaleResolver (unless notes), Battery, BLE detail | ArpEngine + ArpScheduler (complete pattern) + BankManager |
 | **New pad role category** (loop controls, macro pads) | Tool 3 collision check, new runtime manager, LED state, NVS new Store, main.cpp dispatch | ArpEngine internals, MIDI transport, Clock | ScaleManager (role-based template) + BankManager (pad-detection template) + Tool 3 |
-| **Rethink visual feedback** (new pattern, animation, priority) | LedController (pattern engine + renderFlashOverlay + renderPreviewPattern), LedGrammar (PatternId/EventId/defaults), LedSettingsStore v8, ColorSlotStore v5 (16 slots), Tool 8 + ToolLedPreview, all `triggerEvent()` callsites | Runtime metier (consumes API but not animation) | `LedController::update()` + renderPattern + Tool 8 LineId enum + ToolLedPreview |
+| **Rethink visual feedback** (new pattern, animation, priority) | LedController (pattern engine + renderFlashOverlay + renderPreviewPattern), LedGrammar (PatternId/EventId/defaults), LedSettingsStore v9, ColorSlotStore v5 (16 slots), Tool 8 + ToolLedPreview, all `triggerEvent()` callsites | Runtime metier (consumes API but not animation) | `LedController::update()` + renderPattern + Tool 8 LineId enum + ToolLedPreview |
 | **New MIDI output class** (MPE, MCU, program change) | MidiTransport, MidiEngine, PotRouter (if trigger), setup Tool 5 (if user-config) | Arp internals, LED, Battery | `MidiTransport::sendCC` / `sendPitchBend` / `sendPolyAftertouch` |
 | **Redesign clock/tempo** (tap tempo, per-bank tempo, global swing) | ClockManager, ArpScheduler tick loop, PotRouter tempo target, setup Tool 5 | Pressure, Battery, LED | ClockManager + every consumer of `getCurrentTick()` / `getSmoothedBPM()` |
 | **Refactor pot/catch system** | PotFilter, PotRouter (rebuild + catch + bargraph), main.cpp handlePotPipeline, Tool 7 | Everything else | `PotRouter::applyBinding` full |
@@ -283,6 +283,7 @@ only if the task spans multiple files.
 | **Control pads** | `ControlPadManager::update` | Edge detection + per-mode CC emission + gate-vs-setter handoff + CONTINUOUS DSP pipeline |
 | **Arpeggiator core** | `ArpEngine::tick` [536-566] → `executeStep` [572-654] | State dispatch + note scheduling. Details : [`arp-reference.md`](arp-reference.md) |
 | **Arp scheduling** | `ArpScheduler::tick` [98-131] + `processEvents` [140-146] | Per-engine tick accumulator + event dispatch |
+| **LOOP core** | `LoopEngine::tapRec` / `tapPlayStop` / `update` (phase 0 PENDING_CLOSE commit, phase 3 BPM-scaled playback) + `commitRecordingClose` (Master Sync Auto-Stop) / `closeRecordingImmediate` (FREE) + `commitOverdubExit` (OD-Sync immediate-merge exit) + `swapForUndoRedo` / `cancelOverdub` (OD-Sync diff swap) | 7 états state machine + recording µs Master-anchored + immediate-merge overdub + 1-level Undo/Redo. Details : [`Illpad_Master_Sync.md`](../superpowers/specs/Illpad_Master_Sync.md) + [`Illpad_OD_Sync.md`](../superpowers/specs/Illpad_OD_Sync.md) + spec parent [`2026-04-19-loop-mode-design.md`](../superpowers/specs/2026-04-19-loop-mode-design.md) |
 | **Clock/PLL** | `ClockManager::update` [45-63] → `processIncomingTicks` [66-116], `generateTicks` [181-203] | Source cascade + PLL smoothing |
 | **Pot → parameter** | `PotRouter::applyBinding` [386-546] | Catch + value conversion + dirty flags. Details : [`pot-reference.md`](pot-reference.md) |
 | **LEDs** | `LedController::update` | 9-level priority ladder + event overlay. Details : [`led-reference.md`](led-reference.md) |
@@ -298,11 +299,15 @@ only if the task spans multiple files.
 | Looking for | Ref |
 |---|---|
 | Invariants (7 absolutes) | `CLAUDE.md` |
-| 5 runtime data flows (detailed) | [`runtime-flows.md`](runtime-flows.md) |
+| 5 runtime data flows + 6 LOOP flow (detailed) | [`runtime-flows.md`](runtime-flows.md) |
 | Reusable patterns P1–P14 | [`patterns-catalog.md`](patterns-catalog.md) |
 | NVS API + stores + namespaces | [`nvs-reference.md`](nvs-reference.md) |
 | LED display + grammar + bugs | [`led-reference.md`](led-reference.md) |
 | Arp pile + Play/Stop + shuffle + bugs | [`arp-reference.md`](arp-reference.md) |
+| LOOP buffer invariants (anti-patterns ARPEG→LOOP, OD-Sync swap) | [`loop-buffer-invariants.md`](loop-buffer-invariants.md) |
+| LOOP design haut niveau + Phases | [`../superpowers/specs/2026-04-19-loop-mode-design.md`](../superpowers/specs/2026-04-19-loop-mode-design.md) |
+| LOOP Master Sync (Auto-Stop close-record + grille master) | [`../superpowers/specs/Illpad_Master_Sync.md`](../superpowers/specs/Illpad_Master_Sync.md) |
+| LOOP OD-Sync (immediate-merge + 1-level Undo/Redo) | [`../superpowers/specs/Illpad_OD_Sync.md`](../superpowers/specs/Illpad_OD_Sync.md) |
 | Pot pipeline (MCP3208) + catch + bugs | [`pot-reference.md`](pot-reference.md) |
 | Hardware wiring + pins + MCP3208 | [`hardware-connections.md`](hardware-connections.md) |
 | Boot sequence + failure modes | [`boot-sequence.md`](boot-sequence.md) |

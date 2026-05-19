@@ -16,7 +16,7 @@ spec séparée côté worktree `viewer-juce` (voir §17).
 - Phase 1 viewer serial centralization : spec
   [`2026-05-17-viewer-serial-centralization-design.md`](2026-05-17-viewer-serial-centralization-design.md)
   §19-21 (hooks Phase 2 prévus).
-- Handoff session [`HANDOFF-phase2-viewer-bidirectional.md`](../HANDOFF-phase2-viewer-bidirectional.md).
+- ~~Handoff session HANDOFF-phase2-viewer-bidirectional.md~~ **supprimé 2026-05-19** (nettoyage doc-hygiene OD-Sync C4 doc-sync, handoff terminé).
 - Brainstorm session 2026-05-17 (cette session) : décisions Q1-Q7
   consolidées ci-dessous.
 - État `main` au 2026-05-17 (commits jusqu'à `91408ca`).

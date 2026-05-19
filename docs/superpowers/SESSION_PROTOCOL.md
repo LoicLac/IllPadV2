@@ -631,10 +631,10 @@ le cœur réutilisable.
 
 ## Références
 
-- **Manifeste Phase 2 LOOP** (référence concrète d'application) :
-  [`plans/2026-05-18-loop-phase-2-session-manifest.md`](plans/2026-05-18-loop-phase-2-session-manifest.md)
-- **Plan Phase 2 LOOP** (référence concrète) :
-  [`plans/2026-05-18-loop-phase-2-plan.md`](plans/2026-05-18-loop-phase-2-plan.md)
+- **Manifeste Phase 2 LOOP** (archivé post-exécution, référence concrète d'application) :
+  [`../archive/2026-05-18-loop-phase-2-session-manifest.md`](../archive/2026-05-18-loop-phase-2-session-manifest.md)
+- **Plan Phase 2 LOOP** (archivé post-exécution, référence concrète) :
+  [`../archive/2026-05-18-loop-phase-2-plan.md`](../archive/2026-05-18-loop-phase-2-plan.md)
 - **Project CLAUDE.md** (invariants projet) : [`.claude/CLAUDE.md`](../../.claude/CLAUDE.md)
 - **Global CLAUDE.md** (préférences user) : `~/.claude/CLAUDE.md`
 - **LOOP_PROGRESS.md** (jalons restants) : [`LOOP_PROGRESS.md`](LOOP_PROGRESS.md)

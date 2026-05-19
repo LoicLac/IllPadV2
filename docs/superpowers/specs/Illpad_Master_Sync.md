@@ -5,7 +5,7 @@
 **Self-sufficient** : ce doc peut être lu seul. Les cross-refs vers la spec parent LOOP sont fournies en pointeur uniquement, pas en pré-requis de lecture.
 
 **Cross-refs** :
-- Design doc déclencheur : [`docs/superpowers/designs/2026-05-19-loop-algo-pivot-design.md`](../designs/2026-05-19-loop-algo-pivot-design.md)
+- Design doc déclencheur (archivé) : [`docs/archive/2026-05-19-loop-algo-pivot-design.md`](../../archive/2026-05-19-loop-algo-pivot-design.md)
 - Spec parent LOOP (à amender post-implémentation) : [`docs/superpowers/specs/2026-04-19-loop-mode-design.md`](2026-04-19-loop-mode-design.md) §7, §17, §24
 - Code actuel : [`src/loop/LoopEngine.{h,cpp}`](../../../src/loop/LoopEngine.h), [`src/midi/ClockManager.{h,cpp}`](../../../src/midi/ClockManager.h), [`src/main.cpp`](../../../src/main.cpp)
 
@@ -517,7 +517,7 @@ Idem G1 mais avec quantize BAR. Loop length = N bars (entiers). Anchor = `lastBa
 2. **Patch parent spec** [`2026-04-19-loop-mode-design.md`](2026-04-19-loop-mode-design.md) : §7, §17, §24 amendés. Cross-ref vers ce doc.
 3. **Décider commit direct ou mini-plan** :
    - LOC estimé : ~30 nets. Sous le seuil "commit direct" habituel.
-   - Mais le refacto touche plusieurs fichiers (ClockManager + LoopEngine), donc un mini-plan `plans/2026-05-19-master-sync-implementation-plan.md` est probablement souhaitable pour découper en gates de validation HW intermédiaires.
+   - Mais le refacto touche plusieurs fichiers (ClockManager + LoopEngine), donc un mini-plan dédié (archivé post-exécution dans [`docs/archive/2026-05-19-master-sync-implementation-plan.md`](../../archive/2026-05-19-master-sync-implementation-plan.md)) a été utilisé pour découper en gates de validation HW intermédiaires.
    - À trancher avec Loïc post-validation de cette spec.
 4. **Code** : 3-4 commits ciblés.
    - Commit 1 : ClockManager getters (`getLastTickWallTimeUs`, `getLastBeatWallTimeUs`, `getLastBarWallTimeUs`, `getTickIntervalUs`).

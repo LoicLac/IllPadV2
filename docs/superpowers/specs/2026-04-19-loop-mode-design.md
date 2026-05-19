@@ -7,6 +7,18 @@
 > - Plan Phase 2 à rédiger from scratch depuis cette spec + code main
 >   (l'ancien plan archive-based jeté, cf [STATUS.md](../../../STATUS.md)).
 > - Invariants buffer LOOP : [docs/reference/loop-buffer-invariants.md](../../reference/loop-buffer-invariants.md).
+>
+> **MAJ 2026-05-19 (post Master Sync + OD-Sync pivots)** — Spec amendée pour refléter :
+> - **Master Sync** : pivot algorithmique close-record vers Auto-Stop boundary-aware
+>   + master grid anchor (§7 réécrit, §17 étendu, §23.5 invariant amendé, §24
+>   non-goal "pas de rescale silencieux" ajouté, §28 ligne Master Sync). Cf
+>   [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) self-suffisante.
+> - **OD-Sync** : pivot algorithmique overdub vers immediate-merge + snapshot
+>   1-level Undo/Redo toggle (§8 réécrit, §9 CLEAR contextuel ajouté, §24
+>   "Pas d'undo/redo" qualifié 1-level, §28 ligne OD-Sync). Cf
+>   [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md) self-suffisante.
+> - Commits livrés 2026-05-19 : `89f6c11` → `33149b8` + doc-sync. HW gates
+>   G1-G9 (Master Sync) + G1-G15 (OD-Sync) validés.
 
 **Date** : 2026-04-19 (créé) — **révisé 2026-04-20** post Phase 0.1
 **Statut** : **VALIDÉ** pour plan d'implémentation LOOP Phase 1→6. Pré-requis Phase 0 LED + Phase 0.1 Tool 8 respec **DONE** (commits `cad7530`, `39d2deb`, `290839d`, `cc379f5`, `6ac9ff3` sur `main`).
@@ -134,7 +146,7 @@ Le Tool 3 est réorganisé en **trois sous-pages** navigables : Banks / ARPEG / 
 
 Tout commence en mode setup (boot + appui long sur le bouton arrière). Trois tools sont impliqués :
 
-1. **Tool 5 — Bank Config** : le musicien cycle le type de la bank voulue. L'ordre est NORMAL → ARPEG → LOOP → NORMAL. Maximum 2 banks en LOOP (le tool refuse au-delà). Pour chaque bank LOOP, un **mode de quantization** (No quantize / Beat / Bar, **défaut Bar**) est paramétrable pour piloter le comportement play/stop et load — détail en §17.
+1. **Tool 5 — Bank Config** : le musicien cycle le type de la bank voulue. L'ordre est NORMAL → ARPEG → LOOP → NORMAL. Maximum `MAX_LOOP_BANKS = 4` banks en LOOP (le tool refuse au-delà — acté Phase 2, cf §3 + `KeyboardData.h:676`). Pour chaque bank LOOP, un **mode de quantization** (No quantize / Beat / Bar, **défaut Bar**) est paramétrable pour piloter le comportement play/stop, load, **et close-record** (cf §17 et Master Sync §3).
 
    > **Refactor Tool 5 — validé et tranché 2026-05-17** : audit confirme que la structure actuelle (cycle linéaire 5 états + multi-lignes ARPEG_GEN) ne supporte pas élégamment l'ajout LOOP. Refacto traité dans spec dédiée [`2026-05-17-tool5-bank-config-refactor-design.md`](2026-05-17-tool5-bank-config-refactor-design.md) — vue tableau matriciel banks×params, nav 2D, INFO auto-update, validator `quantize` discriminé par type. **Refacto exécuté pré-Phase 2 LOOP** (Option A — bank LOOP créable via UI avant LoopEngine runtime). Q6 §28 originale (refactor "deferred") **inversée**.
 
@@ -191,15 +203,58 @@ Le loop tourne. Le musicien peut maintenant soit le laisser tourner, soit jouer 
 
 ### §8 — Overdub
 
-Pendant qu'un loop joue, taper **REC** une seconde fois fait entrer l'engine en **OVERDUBBING**. Depuis un **STOPPED-loaded** (boucle chargée, en pause), tap REC produit la transition équivalente : l'engine repart en **PLAYING + OVERDUBBING simultanés** (reprise de la lecture à la position 0 + armement overdub). Le musicien reprend le jeu sans avoir à faire PLAY explicite. Décision Q5 pré-plan Phase 1 — voir §28. Le LED garde le fond jaune solide et passe du flash vert (PLAYING) au flash orange (OVERDUBBING) à chaque wrap (voir LED spec §17). Le loop continue de jouer. Tout ce que le musicien frappe est capturé dans un buffer temporaire d'overdub, avec la même résolution microseconde.
+> **⚠ MAJ 2026-05-19 — OD-Sync pivot** : cette section a été réécrite suite au
+> pivot algorithmique immediate-merge + snapshot 1-level Undo/Redo toggle
+> (commits `eaf5674` → `33149b8`). **Le modèle deferred-merge avec buffer
+> temporaire décrit dans la version antérieure est supprimé du code.** Source
+> de vérité : [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md).
 
-Deux sorties possibles :
-- **Tap REC** → l'overdub est **mergé** dans la boucle principale. Les events sont fusionnés par ordre temporel, les pads tenus sont flushés (comme à la clôture d'un RECORDING initial). La boucle repart en PLAYING avec son nouveau contenu.
-- **Tap PLAY/STOP** → l'overdub est **abandonné**. Le buffer temporaire est jeté, la boucle d'origine reste intacte, **l'engine reste en PLAYING**. Pour stopper ensuite la boucle, un second tap PLAY/STOP est nécessaire (transition PLAYING → STOPPED normale, quantisée ou non selon §17).
+Pendant qu'un loop joue, taper **REC** une seconde fois fait entrer l'engine en
+**OVERDUBBING**. Depuis un **STOPPED-loaded** (boucle chargée, en pause), tap
+REC produit la transition équivalente Q5 — l'engine repart en **PLAYING +
+OVERDUBBING simultanés** (reprise position 0 + armement overdub). Décision Q5
+pré-plan Phase 1 — voir §28.
 
-Deux contraintes à connaître :
-- **Bank switch refusé** pendant RECORDING et OVERDUBBING. Le musicien doit clore avant de changer de bank. Cette contrainte protège de l'ambiguïté "est-ce que l'enregistrement continue en fond quand je passe ailleurs ?". Réponse : non, parce qu'on ne peut pas partir.
-- **Buffer d'overdub plein** (~128 events max) ou **buffer principal plein** après merge (1024 events max) → les events en surplus sont droppés silencieusement. Pas de signal d'erreur visible. Le musicien entend que ses dernières frappes ne sont pas capturées, mais la boucle reste cohérente.
+À l'entrée OD, un **snapshot** du buffer pré-OD est pris dans `_eventsAlternate`
+(coût 8 KB SRAM par bank ; cf [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md) §2). Le
+LED garde le fond jaune solide et bascule à Amber `CSLOT_VERB_OVERDUB`.
+
+**Immediate-merge** : chaque pad press pendant OD est inséré **directement**
+dans le buffer principal `_events[]` à la position courante. La loop "grows
+live" — le hit ajouté au cycle N rejoue audible au cycle N+1 sans attente
+d'exit. Plus de buffer temporaire `_overdubEvents`, plus de `mergeOverdub`.
+
+**Trois sorties possibles** :
+
+- **Tap REC** → `commitOverdubExit` : exit + commit. Held pads injectent un
+  noteOff implicite à `_playPositionUs` (réincarnation B-N2 fix de l'ancienne
+  `mergeOverdub`). État → PLAYING. Le snapshot `_eventsAlternate` reste valide
+  pour permettre un Undo post-exit via CLEAR court.
+- **Tap CLEAR (any duration, rising edge)** → Cancel mid-OD : swap musical
+  par note (cf [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md) §6) qui ne touche
+  que les notes affectées par la couche OD — couche base et live press
+  préservées audibles continues. État → PLAYING (toujours, OD-16 asymétrie
+  acceptée depuis STOPPED-Q5).
+- **Tap PLAY/STOP** → **no-op** (OD-3 décision). Pour stopper la loop, exit
+  OD via REC ou Cancel via CLEAR d'abord.
+
+**Undo/Redo post-exit** : tap CLEAR court (release < `clearLoopTimerMs`) sur
+PLAYING ou STOPPED déclenche un toggle Undo/Redo. Même mécanique swap musical.
+Trigger LED Option β : EVT_STOP (couche retirée) ou EVT_PLAY (couche
+réintégrée) selon diff `_eventCount`. Permet le geste live signature "mute la
+couche HH pour un breakdown puis la ramener" (cf G3 HW gate validation).
+
+**Contraintes** :
+- **Bank switch refusé** pendant RECORDING et OVERDUBBING. Le musicien doit
+  clore avant de changer de bank (invariant §23.2 + §11).
+- **Buffer principal plein** (`MAX_LOOP_EVENTS = 1024`) → les events en
+  surplus sont droppés silencieusement avec télémétrie viewer
+  (`emitLoopBufferFull`). Pas de signal d'erreur visible musicien.
+
+**Suppression du modèle deferred-merge** : le buffer temporaire
+`_overdubEvents`, les méthodes `mergeOverdub` et `abandonOverdub` ont été
+supprimés. Le geste abandon (jadis tap PLAY/STOP) est remplacé par le Cancel
+via CLEAR (plus ergonomique car asymétrique avec tap REC commit).
 
 ### §9 — Play / Stop / Clear
 
@@ -207,11 +262,22 @@ Ces trois actions pilotent la vie de la boucle une fois qu'elle existe.
 
 **PLAY/STOP** alterne entre PLAYING et STOPPED. La détection du tap est instantanée, mais l'**action musicale** (démarrage ou arrêt) suit **strictement** le mode de quantization per-bank (`loopQuantize`) — voir §17. Tap PLAY/STOP déclenche l'action quantisée si `loopQuantize` est Beat ou Bar, ou immédiate si No quantize. **Pas de bypass quantize** : pour un stop instantané en live, configurer la bank en No quantize. En cas de stop immédiat (No quantize ou à boundary Beat/Bar), un **flush de toutes les notes en cours** est émis (refcount → 0, CC123 All Notes Off en sécurité) pour éviter les notes bloquées.
 
-Sur un OVERDUBBING, PLAY/STOP abandonne l'overdub et laisse l'engine en PLAYING (voir §8).
+Sur un OVERDUBBING, PLAY/STOP est **no-op** (OD-3 décision OD-Sync ; cf §8). L'abandon mid-OD se fait via tap CLEAR (cf §9.1).
 
-**CLEAR** est destructif : il vide le buffer d'events et repasse l'engine en EMPTY. L'action n'est pas immédiate — il faut **maintenir le pad CLEAR** pendant la durée `clearLoopTimerMs` (default 500 ms, paramétrable en Tool 6, voir §20). Pendant ce hold, le LED de la bank courante affiche une rampe de progression (pattern `RAMP_HOLD` de la grammaire LED, couleur cyan `CSLOT_VERB_CLEAR_LOOP` — voir LED spec §12). Un relâché anticipé annule. À la complétion, la boucle est effacée et un SPARK blanc confirme.
+#### §9.1 — CLEAR contextuel (3 sens selon état, OD-Sync 2026-05-19)
 
-Ce garde-fou long-press est délibéré. Une boucle perdue est perdue (sauf si elle était stockée dans un slot), et les pads capacitifs sont trop faciles à activer par erreur pour qu'un tap court puisse effacer. La rampe visuelle laisse le temps au musicien de comprendre ce qui va se passer et d'interrompre.
+Le geste CLEAR a maintenant trois sémantiques distinctes selon l'état du LoopEngine :
+
+| État du LoopEngine | Geste CLEAR | Action |
+|---|---|---|
+| **OVERDUBBING** | tap CLEAR (any duration, rising edge) | **Cancel mid-OD** : `cancelOverdub` ; swap musical par note `_events ↔ _eventsAlternate` (préserve couche base + live press) ; état → PLAYING ; EVT_LOOP_CLEAR trigger (Option β LED). |
+| **PLAYING / STOPPED** | tap CLEAR **court** (release < `clearLoopTimerMs`, default 500 ms) | **Toggle Undo/Redo** : `swapForUndoRedo` ; swap la dernière couche OD en mémoire ; LED Option β trigger EVT_STOP (couche retirée) ou EVT_PLAY (couche réintégrée) selon diff `_eventCount`. No-op safe si `_alternateValid == false` (aucun OD n'a eu lieu depuis wipe/boot). |
+| **PLAYING / STOPPED** | long-press CLEAR (≥ `clearLoopTimerMs`) | **Wipe destructif** : `longPressClear` ; buffer effacé + `_eventsAlternate` reset + `_alternateValid = false` ; état → EMPTY ; EVT_LOOP_CLEAR trigger. |
+| RECORDING / WAITING_* | tap CLEAR | **Refusé** (`isLocked()` true ou contexte transitoire). |
+
+Détails complets : cf [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md) §3.4 + §4.
+
+Le wipe long-press reste destructif **et garde-fou** : une boucle perdue est perdue (sauf si stockée dans un slot), et les pads capacitifs sont trop faciles à activer par erreur pour qu'un tap court puisse effacer. La rampe visuelle laisse le temps au musicien de comprendre ce qui va se passer et d'interrompre.
 
 **Autre geste équivalent à PLAY/STOP** : `LEFT + double-tap sur le bank pad` de la bank LOOP (détail en §19). Ce geste cible aussi bien la bank FG que les banks BG, ce qui en fait l'accès le plus rapide pour contrôler plusieurs loops en parallèle sans changer de bank.
 
@@ -420,7 +486,15 @@ La validation Tool 3 doit assurer qu'aucune collision réelle n'est possible, en
 
 Sur une bank ARPEG, le geste déclenche `ArpEngine::setCaptured()` — toggle play/stop du pile arp. Sur une bank LOOP, il déclenche de manière analogue le toggle PLAY/STOP du LoopEngine. La cible peut être la bank FG ou une bank BG (keys pointer = nullptr pour BG).
 
-> **État Phase 1 (commit `2624b12`)** : la branche `else if (... type == BANK_LOOP)` dans `BankManager::update` consomme le 2ème tap silencieusement (`_lastBankPadPressTime[b] = 0; _pendingSwitchBank = -1; continue;`) pour éviter un bank-switch parasite. Le toggle réel `LoopEngine.toggle()` sera câblé en Phase 2+ quand `LoopEngine` existera (cf. [docs/reference/loop-buffer-invariants.md §3](../../reference/loop-buffer-invariants.md)).
+> **État Phase 2 LOOP (commits `6c0b4d8` → `284bec4`)** : la branche
+> `else if (... type == BANK_LOOP)` dans `BankManager::update` est désormais
+> **câblée** ([BankManager.cpp:110-133](../../../src/managers/BankManager.cpp))
+> et appelle `loopEngine->tapPlayStop(transport, keys)` avec dispatch LED
+> EVT_WAITING / EVT_PLAY / EVT_STOP aligné sur les transitions effectives
+> (audit fix R2). Tap simple sur LOOP bank pad reste un bank switch
+> standard ; double-tap = play/stop toggle FG ou BG. Cf
+> [docs/reference/loop-buffer-invariants.md §3](../../reference/loop-buffer-invariants.md)
+> pour les invariants du buffer.
 
 Conséquences :
 - Sur la bank LOOP FG, LEFT + double-tap est **équivalent** au tap PLAY/STOP (mais plus rapide à atteindre si on est déjà en hold-left pour autre chose)
@@ -535,7 +609,7 @@ Volontairement hors du mode LOOP, y compris pour des versions futures :
 - **Pas de quantize per-event à l'enregistrement** — le groove humain (micro-timing relatif au master beat/bar pour BEAT/BAR, ou absolu pour FREE) est préservé. Le close-record est quantizé sur la grille master via Auto-Stop (cf §17 + [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md)), mais les events stockés ne sont JAMAIS shiftés dans le temps.
 - **Pas de rescale silencieux des timestamps stockés** — interdit de modifier le temps d'un event après capture (anti-pattern bar-snap rescale Phase 2 supprimé 2026-05-19, cf [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) §0 contexte).
 - **Pas de scroll / shift / reverse** — la boucle est jouée telle qu'enregistrée
-- **Pas d'undo / redo** — le CLEAR long-press est la seule sortie d'une boucle non désirée, les slots sont la seule persistance
+- ~~**Pas d'undo / redo**~~ **MAJ 2026-05-19 — qualifiée par OD-Sync** : un **toggle Undo/Redo 1-level** sur la dernière couche OD est introduit via tap CLEAR court en PLAYING/STOPPED (cf [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md) §4). Permet le geste musical live "mute la couche HH pour un breakdown puis la ramener". **Multi-level undo (N couches en arrière) reste hors-goals**. Le CLEAR long-press reste la seule sortie **destructive** d'une boucle non désirée ; les slots sont la seule persistance.
 - **Pas de gestion de fichiers du Slot Drive** — pas de rename, pas de copie, pas d'export. Tout passe par les gestes hardware.
 - **Pas de preview d'un slot avant load** — le load EST la preview
 
@@ -543,7 +617,7 @@ Volontairement hors du mode LOOP, y compris pour des versions futures :
 
 | Ressource | Utilisation LOOP | Note |
 |---|---|---|
-| **SRAM** | ~38.8 KB (4 banks × ~9.7 KB) | sur 320 KB disponibles. MAX_LOOP_BANKS=4 acté Phase 2 (commit `6c0b4d8`). Build actuel post-Phase 2 : RAM 29.1 % total (95.4 KB / 327 KB). |
+| **SRAM** | ~74.8 KB (Phase 2 base 38.8 KB + OD-Sync alt buffers 32 KB + g_swapTemp 8 KB - overdub buffers supprimés 4 KB) | sur 320 KB disponibles. MAX_LOOP_BANKS=4 acté Phase 2 (commit `6c0b4d8`). Build actuel post-OD-Sync C3 : RAM 40.4 % total (~132 KB / 327 KB). |
 | **Flash (LittleFS)** | 512 KB partition dédiée | 16 slots × 8 KB = 128 KB occupés max (Phase 6) |
 | **Core 1 CPU** | ~1 float mult + div par tick par bank | négligeable |
 | **LittleFS write** | 80-160 ms bloquant Core 1 | accepté sous hold-left (musique gelée), Phase 6 |
@@ -677,7 +751,8 @@ Suite à l'audit de cohérence `docs/archive/rapport_audit_loop_spec.md` (archiv
 | Q6 | Tool 5 refactor "présentation en colonnes" | ~~Phase 3 minimal, refactor deferred~~ **INVERSÉE 2026-05-17** — audit Tool 5 a montré que la structure actuelle (cycle linéaire 5 états + multi-lignes ARPEG_GEN) ne supporte pas élégamment l'ajout LOOP. Refacto **dédié pré-Phase 2** validé via spec [`2026-05-17-tool5-bank-config-refactor-design.md`](2026-05-17-tool5-bank-config-refactor-design.md). Tableau matriciel banks×params, nav 2D, INFO auto-update, validator `quantize` discriminé par type. Pas de bump NVS. | §6, §27 |
 | Q7 | Tool 4 extension (refus ControlPad sur pad LOOP control) | **Phase 3 bundle** avec Tool 3 b1. Validation bi-directionnelle (Tool 3 et Tool 4 se connaissent mutuellement via helper `LoopPadStore::isLoopControlPad`). Pas de pré-wiring Phase 1/2 (pas de chemin de création du conflit avant Phase 3). | §27 Phase 3 |
 | Q8 | Max 1 bank LOOP en REC/OD à un instant t ? | **Oui, expliciter comme invariant 11 §23**. Conséquence combinée des invariants 2 (bank switch refusé pendant REC/OD) et §18 (pads REC/PS/CLEAR sur FG layer musical uniquement). Coût : 1 ligne spec, permet LoopEngine + `renderBankLoop` de faire des hypothèses explicites sans code défensif. Aligne spec LOOP avec LED spec §17 table ("BG RECORDING/OVERDUBBING : impossible"). | §23 |
-| **Master Sync** | Pivot algorithmique close-record (post-audit musical 2026-05-19) | **Auto-Stop + master grid anchor**. Remplace bar-snap+rescale destructeur par Auto-Stop boundary-aware. ARP+LOOP+LOOP cross-bank désormais sur la grille master clock. FREE = explicitement hors grille. 9 sous-décisions BS-1 à BS-9 actées (cf [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) §6). Commits `89f6c11` (ClockManager getters) + `edbdd2b` (LoopEngine atomic). HW gates G1-G9 validés. | §7, §17, §24, [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) |
+| **Master Sync** | Pivot algorithmique close-record (post-audit musical 2026-05-19) | **Auto-Stop + master grid anchor**. Remplace bar-snap+rescale destructeur par Auto-Stop boundary-aware. ARP+LOOP+LOOP cross-bank désormais sur la grille master clock. FREE = explicitement hors grille. 9 sous-décisions BS-1 à BS-9 actées (cf [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) §6). Commits `89f6c11` (ClockManager getters) + `edbdd2b` (LoopEngine atomic) + `a7a461a` (doc-sync). HW gates G1-G9 validés. | §7, §17, §24, [`Illpad_Master_Sync.md`](Illpad_Master_Sync.md) |
+| **OD-Sync** | Pivot algorithmique overdub (post-audit musical 2026-05-19, complément Master Sync) | **Immediate-merge + snapshot 1-level Undo/Redo toggle**. Remplace deferred-merge avec buffer temporaire par insertion directe dans `_events[]` pendant OD (live loop growth audible immédiatement). Snapshot `_eventsAlternate` pris à l'entrée OD pour permettre Cancel mid-OD (CLEAR pendant OD) et Undo/Redo post-exit (CLEAR court PLAYING/STOPPED). Diff swap musical par note préserve couche base + live press. LED Option β = réutilisation events existants (EVT_LOOP_CLEAR / EVT_STOP / EVT_PLAY). 16 sous-décisions OD-1 à OD-16 actées (cf [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md) §9). Commits `eaf5674` (C1 buffers/helpers) + `fc2ff9b` (C2 immediate-merge + B-N2 déplacée) + `33149b8` (C3 diff swap + CLEAR dispatch + LED). HW gates G1-G15 validés. | §8, §9, §24, [`Illpad_OD_Sync.md`](Illpad_OD_Sync.md) |
 
 ### §29 — Drifts spec↔code résolus via ces décisions
 

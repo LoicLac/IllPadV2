@@ -66,6 +66,8 @@ document.
 > du `LoopEngine`. Le buffer est uniquement modifié par des actions
 > utilisateur explicites listées en §5.
 
+**MAJ 2026-05-19** : avec **OD-Sync** (cf [`docs/superpowers/specs/Illpad_OD_Sync.md`](../superpowers/specs/Illpad_OD_Sync.md)), `_events` peut aussi être atomically swappé avec `_eventsAlternate` lors des gestes Cancel (CLEAR pendant OD) / Undo / Redo (CLEAR court PLAYING/STOPPED). Ces swaps sont des **actions utilisateur explicites** au sens §5 — le contenu *audible* change mais aucune corruption muette. Le diff swap par note préserve la couche de base et la live press (cf spec OD-Sync §6.2).
+
 ---
 
 ## §4 — Anti-patterns ARPEG → LOOP à NE PAS reproduire
@@ -81,24 +83,45 @@ document.
 
 ## §5 — Liste exhaustive des actions qui modifient le buffer LOOP
 
-D'après spec LOOP §3, §11, §12, §13 et §17, **et uniquement ces actions** :
+D'après spec LOOP §3, §11, §12, §13, §17 + Master Sync §3 + OD-Sync §3–§4,
+**et uniquement ces actions** :
 
-1. **REC press** → enregistre les events suivants dans le buffer (overdub si
-   déjà PLAYING, sinon enregistrement initial).
-2. **REC tap en OVERDUBBING + PLAY/STOP tap** → annule l'overdub (revert au
-   buffer pré-overdub) — pas un wipe, un revert.
-3. **CLEAR long-press** (durée `clearLoopTimerMs`) → wipe buffer entier, état
-   → EMPTY.
-4. **Load slot short-press** (300-1000 ms sous LEFT) → replace buffer par le
-   slot chargé.
-5. **PLAY/STOP double-tap bypass quantize** → flush MIDI notes en cours,
-   **mais préserve le buffer** (spec LOOP §17).
-6. **WAITING_LOAD + bank switch** → commit load avant switch, donc replace
-   buffer (action explicite par le load déjà déclenché).
+1. **REC press en EMPTY** → arme RECORDING ; les pad presses suivants sont
+   enregistrés dans le buffer principal `_events` avec timestamp µs ancré
+   selon quantize (cf Master Sync §3.1).
+2. **REC press en PLAYING/STOPPED** → entre OVERDUBBING ; les pad presses
+   suivants sont insérés **directement dans `_events`** (immediate-merge,
+   OD-Sync §3.2). Un snapshot `_eventsAlternate` du contenu pré-OD est pris
+   à l'entrée pour permettre Cancel/Undo/Redo ultérieurs.
+3. **REC press en OVERDUBBING** → `commitOverdubExit` ; held pads injectent
+   noteOff (B-N2 logic), état → PLAYING ; `_eventsAlternate` préservé pour
+   post-Undo (OD-Sync §3.3).
+4. **REC press en RECORDING (FREE)** → `closeRecordingImmediate` : tap-to-tap,
+   pas de bar-snap (Master Sync §3.3).
+5. **REC press en RECORDING (BEAT/BAR)** → arme PENDING_CLOSE, capture
+   continue ; commit au prochain master tick boundary via
+   `commitRecordingClose` (Master Sync §3.2).
+6. **CLEAR tap pendant OVERDUBBING** → `cancelOverdub` : swap musical
+   `_events ↔ _eventsAlternate` (diff par note, préserve couche base + live
+   press), état → PLAYING (OD-Sync §3.4 + §6.2).
+7. **CLEAR tap court pendant PLAYING/STOPPED** → `swapForUndoRedo` : toggle
+   Undo/Redo sur la dernière couche OD (OD-Sync §4.1).
+8. **CLEAR long-press** (≥ `clearLoopTimerMs`) pendant PLAYING/STOPPED →
+   wipe buffer entier + reset `_eventsAlternate` + `_alternateValid = false`,
+   état → EMPTY (OD-Sync §4.2).
+9. **Load slot short-press** (300-1000 ms sous LEFT) → replace buffer par
+   le slot chargé (Phase 6, non implémenté actuellement).
+10. **WAITING_LOAD + bank switch** → commit load avant switch (Phase 6).
 
-**Toute autre interaction** (LEFT press/release, hold pad, bank switch sans
-WAITING_LOAD, scale change, pot move, pad release, etc.) doit laisser le
-buffer **strictement intact**.
+**Toute autre interaction** (LEFT press/release seul, hold pad, bank switch
+sans WAITING_LOAD, scale change, pot move, tap PLAY/STOP pendant OD per
+OD-3 décision, etc.) doit laisser le buffer **strictement intact**.
+
+**Note 2026-05-19** : l'ancienne entrée "PLAY/STOP double-tap bypass quantize"
+est **supprimée** par Master Sync (plus de bypass quantize, cf spec §17).
+L'ancienne entrée "REC tap en OVERDUBBING + PLAY/STOP tap annule l'overdub"
+est **supprimée** par OD-Sync (PLAY/STOP pendant OD est no-op per OD-3 ;
+abandon se fait via CLEAR maintenant).
 
 ---
 
@@ -130,6 +153,9 @@ feedback (à coordonner avec rendu `renderBankLoop` complet).
 
 ## §7 — Décisions à valider lors de l'implémentation LOOP P2
 
+**Statut 2026-05-19** : **Phase 2 RÉSOLUE**, ces 4 décisions sont actées au commit
+`284bec4`. Section conservée pour traçabilité historique :
+
 À trancher au moment de la rédaction du plan Phase 2 :
 
 | Question | Options |
@@ -142,6 +168,11 @@ feedback (à coordonner avec rendu `renderBankLoop` complet).
 ---
 
 ## §8 — Checklist pré-implémentation LOOP P2
+
+**Statut 2026-05-19** : **Phase 2 RÉSOLUE**, checklist validée au commit
+`284bec4` + HW gates G1-G9. Master Sync (commits `89f6c11` → `a7a461a`) et
+OD-Sync (commits `eaf5674` → `33149b8`) ajoutent leurs propres checklists
+dans leurs specs dédiées. Section conservée pour traçabilité historique :
 
 Avant d'écrire la première ligne de `LoopEngine.cpp`, le reviewer doit
 confirmer point par point :

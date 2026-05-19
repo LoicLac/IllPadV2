@@ -2,7 +2,7 @@
 
 _Sync : 2026-05-19. Lu en début de session, gardé à jour au fil de l'eau._
 
-**Focus courant** : ★ **LOOP Master Sync CLOSE** (commits `89f6c11` ClockManager getters + `edbdd2b` LoopEngine Auto-Stop atomique, HW gates G1-G9 validés 2026-05-19). Pivot algorithmique vers standard industrie : remplace le bar-snap+rescale destructeur par Auto-Stop boundary-aware + master grid anchor. ARP+LOOP+LOOP cross-bank désormais sur la même grille master. FREE = explicitement hors grille. Spec [`Illpad_Master_Sync.md`](docs/superpowers/specs/Illpad_Master_Sync.md), plan [`2026-05-19-master-sync-implementation-plan.md`](docs/superpowers/plans/2026-05-19-master-sync-implementation-plan.md). LOOP Phase 2 CLOSE (commits Phase 2.A → 2.J validés 2026-05-19) reste base. Refacto Tool 5 + LOOP Phase 1 + ARPEG_GEN + Viewer serial Phase 1 toujours CLOSE. Build clean RAM 29.1 % / Flash 22.1 % (+592 B post Master Sync, négligeable). **Prochaine étape LOOP** : Phase 3 (Tool 3 b1 refactor 3 sous-pages Banks/ARPEG/LOOP + Tool 4 ext refus ControlPad sur pad LOOP control) en prep + Paquet OD-Sync (immediate-merge simple) à brainstormer. Le dev seed conditionnel pads 32/33/34 (M7 audit fix) sera retiré quand Tool 3 b1 livrera l'UI propre. **Caveat connu** : ARP behaviour desync sur changement de division mid-playback (existant Phase 2, non régression Master Sync) — fix futur Paquet ARP-DivSync hors scope immédiat.
+**Focus courant** : ★ **LOOP Master Sync + OD-Sync CLOSE** (Master Sync : commits `89f6c11` + `edbdd2b` + `a7a461a`, HW gates G1-G9 ; OD-Sync : commits `eaf5674` C1 + `fc2ff9b` C2 + `33149b8` C3, HW gates G1-G15 validés 2026-05-19). **Master Sync** : pivot algorithmique vers standard industrie — remplace le bar-snap+rescale destructeur par Auto-Stop boundary-aware + master grid anchor (ARP+LOOP+LOOP cross-bank sur la même grille master clock, FREE = hors grille). **OD-Sync** : immediate-merge overdub + snapshot 1-level toggle avec diff swap musical par note (live loop growth audible immédiatement, Cancel mid-OD via CLEAR, Undo/Redo toggle via CLEAR court PLAYING/STOPPED, préserve couche base + live press par construction). Specs [`Illpad_Master_Sync.md`](docs/superpowers/specs/Illpad_Master_Sync.md) + [`Illpad_OD_Sync.md`](docs/superpowers/specs/Illpad_OD_Sync.md). LOOP Phase 2 CLOSE reste base. Refacto Tool 5 + LOOP Phase 1 + ARPEG_GEN + Viewer serial Phase 1 toujours CLOSE. Build clean RAM 40.4 % / Flash 22.1 % (+36 KB net OD-Sync = +32 KB `_eventsAlternate` 4 banks + 8 KB `g_swapTemp` global - 4 KB `_overdubEvents` supprimés). **Prochaine étape LOOP** : Phase 3 (Tool 3 b1 refactor 3 sous-pages Banks/ARPEG/LOOP + Tool 4 ext refus ControlPad sur pad LOOP control) en prep par Loïc. Le dev seed conditionnel pads 32/33/34 (M7 audit fix) sera retiré quand Tool 3 b1 livrera l'UI propre. **Caveat connu** : ARP behaviour desync sur changement de division mid-playback (existant Phase 2, non régression Master Sync/OD-Sync) — fix futur Paquet ARP-DivSync hors scope immédiat.
 
 ## ARPEG_GEN — historique commits
 
@@ -19,7 +19,7 @@ _Sync : 2026-05-19. Lu en début de session, gardé à jour au fil de l'eau._
 
 ## LOOP Phase 2 — historique commits (2026-05-19)
 
-10 commits sur `main` exécutés single session avec workflow par phases (2.A → 2.J + doc-sync), 9 HW gates G1-G9 validés HW Loïc, 5 audit-fix B-N1/B-N2/R-N1/M-fix B1/B2/B3/M2/M3/M4/M6/M7/M8/M9/m1/m2/m4/m6/m9/m10/m11 + bonus B2 généralisé (longPressClear refus silencieux). Plan référence : [`docs/superpowers/plans/2026-05-18-loop-phase-2-plan.md`](docs/superpowers/plans/2026-05-18-loop-phase-2-plan.md).
+10 commits sur `main` exécutés single session avec workflow par phases (2.A → 2.J + doc-sync), 9 HW gates G1-G9 validés HW Loïc, 5 audit-fix B-N1/B-N2/R-N1/M-fix B1/B2/B3/M2/M3/M4/M6/M7/M8/M9/m1/m2/m4/m6/m9/m10/m11 + bonus B2 généralisé (longPressClear refus silencieux). Plan référence (archivé) : [`docs/archive/2026-05-18-loop-phase-2-plan.md`](docs/archive/2026-05-18-loop-phase-2-plan.md).
 
 | Phase | Tasks | Commit | HW Gate | Description |
 |---|---|---|---|---|
@@ -170,12 +170,14 @@ Spec viewer parallèle (`viewer-juce`) : `../ILLPAD_V2-viewer/docs/2026-05-17-vi
 - **Viewer Phase 2 impl** : à coder sur branche `viewer-juce` selon la spec déjà validée. ~150 lignes JUCE (parser + Model + CommandSender + UI). Estimation 4-6h dev incluant tests Catch2.
 - **HW gates G2-G7 firmware** : à exécuter post-viewer Phase 2 OU manuellement via terminal serial pour validation isolée. Liste détaillée plan §G2-G7.
 - **Tool 7 PotMapping bug** : spawn-task séparée (cf section ci-dessus).
-- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). **Étape courante : Phase 2 LOOP à rédiger from scratch** (Refacto Tool 5 livré 2026-05-17, prêt pour LOOP runtime). À enchaîner après viewer Phase 2 + HW gates G2-G7.
+- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). **Étape courante** : Phase 3 (Tool 3 b1 + Tool 4 ext) en prep. Phase 2 + Master Sync + OD-Sync CLOSE.
 
 ## Sources
 
 - Spec ARPEG_GEN : [docs/superpowers/specs/2026-04-25-arpeg-gen-design.md](docs/superpowers/specs/2026-04-25-arpeg-gen-design.md)
-- Spec LOOP : [docs/superpowers/specs/2026-04-19-loop-mode-design.md](docs/superpowers/specs/2026-04-19-loop-mode-design.md) (VALIDÉE, MAJ 2026-05-17 — Q6 inversée post refacto Tool 5)
+- Spec LOOP parent : [docs/superpowers/specs/2026-04-19-loop-mode-design.md](docs/superpowers/specs/2026-04-19-loop-mode-design.md) (VALIDÉE, MAJ 2026-05-19 — Master Sync + OD-Sync amendements §7/§8/§9/§17/§23/§24/§28)
+- Spec **Master Sync** : [docs/superpowers/specs/Illpad_Master_Sync.md](docs/superpowers/specs/Illpad_Master_Sync.md) (CLOSE 2026-05-19, self-suffisante, 15 décisions BS-1 à BS-9)
+- Spec **OD-Sync** : [docs/superpowers/specs/Illpad_OD_Sync.md](docs/superpowers/specs/Illpad_OD_Sync.md) (CLOSE 2026-05-19, self-suffisante, 16 décisions OD-1 à OD-16)
 - Spec Tool 5 refacto (pré-Phase 2 LOOP) : [docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md](docs/superpowers/specs/2026-05-17-tool5-bank-config-refactor-design.md) (VALIDÉE 2026-05-17)
 - Spec viewer serial centralization Phase 1 : [docs/superpowers/specs/2026-05-17-viewer-serial-centralization-design.md](docs/superpowers/specs/2026-05-17-viewer-serial-centralization-design.md) (CLOSE 2026-05-17)
 - Plan viewer serial Phase 1 firmware : [docs/superpowers/plans/2026-05-17-viewer-serial-phase1-firmware-plan.md](docs/superpowers/plans/2026-05-17-viewer-serial-phase1-firmware-plan.md) (EXÉCUTÉ 2026-05-17)
