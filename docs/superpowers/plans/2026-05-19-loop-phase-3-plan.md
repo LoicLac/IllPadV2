@@ -1925,8 +1925,20 @@ Ajouter une nouvelle section "Pad role collisions" comprenant :
 - Les 5 règles spec §5 LOOP design verbatim.
 - Table des 11 rôles avec attrs (layer, context, toleratesUnassigned, carriesConfig) verbatim de §11 spec Phase 3 design.
 - Matrice compatibilité rôle × rôle verbatim de §12.
-- Les 5 helpers cross-store + signatures.
+- Les 5 helpers cross-store + signatures (post refondation (c) — arrays par
+  référence pour Scale/Arp/Bank).
 - Pattern TAB navigation sous-pages (`SubPage` enum, cycle, arrows intra-page only).
+
+**Note (b) intégrée — 2 gestes runtime sur pad CLEAR** : ajouter une sous-section
+"Pad CLEAR — dual-gesture runtime (OD-Sync 2026-05-19)" mentionnant :
+- **Long-press** → `LoopEngine::longPressClear` (clear destructive, comportement
+  Phase 2 préservé).
+- **Tap court en PLAYING / STOPPED** → Undo/Redo 1-level toggle sur la dernière
+  couche OD (OD-Sync nouveau, cf [`Illpad_OD_Sync.md`](../superpowers/specs/Illpad_OD_Sync.md) §4).
+- **Conséquence Tool 3** : un seul `clearPad` field dans `LoopPadStore` ; le
+  runtime LoopEngine dispatch selon la durée du press. Tool 3 sous-page LOOP
+  montre un seul pad CLEAR. INFO panel peut mentionner les 2 gestes pour
+  exhaustivité (optionnel, hors-scope strict Phase 3).
 
 - [ ] **Step 2: Update `nvs-reference.md`**
 
