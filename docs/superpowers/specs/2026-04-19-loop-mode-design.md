@@ -102,6 +102,8 @@ Aucun écran, aucun menu, aucune confirmation par texte. Le feedback est entièr
 
 ### §5 — Refactor Tool 3 → rôles contextuels b1
 
+> **REFONDU 2026-05-23** — Cette section est remplacée par la spec dédiée [`tool-pad-role-design.md`](2026-05-23-tool-pad-role-design.md) qui formalise les concepts ABSORBANT/CONTEXTUEL + règle unique de compatibilité, en lieu et place de la catégorisation A/B/C + règles R1-R6 en gestation ici. Tool 3 + Tool 4 fusionnés en Tool PAD ROLE (4 pages BANK/ARPEG/LOOP/CC). Les §6+ qui référencent §5 (collision rules, sous-pages) restent lisibles ci-dessous comme matériau historique, mais le concept canonique est dans la nouvelle spec.
+
 **Clarification layers avant les rôles.** ILLPAD48 a deux layers d'interaction sur les pads :
 
 - **Layer musical** (press direct, sans hold) : c'est ici que les pads jouent des notes. Certains rôles squattent aussi ce layer et volent donc des pads musicaux — les **ControlPads (Tool 4, MIDI CC/latch/momentary)** et les **3 controls LOOP (REC, PLAY/STOP, CLEAR)**. ARPEG n'a **aucun** rôle sur le layer musical — son play/stop passe par le geste `LEFT + double-tap bank pad` (layer hold-left).

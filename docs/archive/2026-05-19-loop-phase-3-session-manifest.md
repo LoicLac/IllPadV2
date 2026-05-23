@@ -1,5 +1,7 @@
 # Manifeste de session — Exécution Phase 3 LOOP
 
+> **ARCHIVÉ 2026-05-23** — Instance Phase 3 caduque. Discipline durable codifiée dans [`docs/superpowers/SESSION_PROTOCOL.md`](../../superpowers/SESSION_PROTOCOL.md) — réutilisable pour toutes phases futures. Référence historique des audit-fix v1+v2 Phase 3. Voir aussi [`tool-pad-role-design.md`](../../superpowers/specs/2026-05-23-tool-pad-role-design.md).
+
 **Plan référence** : [`2026-05-19-loop-phase-3-plan.md`](2026-05-19-loop-phase-3-plan.md) (2900+ lignes + addendums v1 audit-fix + v2 refondation indépendante)
 
 **Spec source** : [`../specs/2026-05-19-loop-phase-3-design.md`](../specs/2026-05-19-loop-phase-3-design.md) (refondue §13 + §22 + §2 post audit indépendant 2026-05-19)

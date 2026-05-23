@@ -1,4 +1,6 @@
-# NVS Reference — ILLPAD V2
+# NVS Reference
+
+> **MAJ 2026-05-23** — Tool 3 + Tool 4 fusionnés dans Tool PAD ROLE (4 pages BANK/ARPEG/LOOP/CC). Field NVS `ArpPadStore.holdPad` à renommer `arpPlayStopPad` (bump v2→v3) à la livraison du plan d'impl. Spec source-of-truth : [`tool-pad-role-design.md`](../superpowers/specs/2026-05-23-tool-pad-role-design.md). Ce doc sera aligné intégralement à la livraison. — ILLPAD V2
 
 Source of truth for all Non-Volatile Storage usage. Read before touching any NVS code.
 
@@ -105,7 +107,7 @@ All structs have magic (uint16_t) + version (uint8_t) at bytes 0-2. `NVS_BLOB_MA
 | `ControlPadStore` | `illpad_ctrl` | `pads` | 0xBEEF | 2 | 82B | 12 sparse entries + 3 global DSP params (v2) for Tool 4 Control Pads. Globals : `smoothMs` (EMA tau, CONTINUOUS pressed), `sampleHoldMs` (ring-buffer look-back for HOLD_LAST capture), `releaseMs` (linear fade-out duration for RETURN_TO_ZERO). Each entry : padIndex, ccNumber, channel, mode, deadzone, releaseMode. Validator : `validateControlPadStore()` clamps globals + entries + enforces LATCH-requires-fixed-channel invariant. |
 | `ArpPadStore` | `illpad_apad` | `pads` | 0xBEEF | 2 | 12B | 2 separate keys (hold_pad, oct_pads) — v2 drops legacy play/stop pad |
 | `BankTypeStore` | `illpad_btype` | `config` | 0xBEEF | 3 | 44B | raw types[8] + qmode[8] (2 blobs, desync risk). v2 adds `scaleGroup[8]` (0=none, 1..4=A..D) for inter-bank scale linking. v3 adds `bonusPilex10[8]` [10..20=1.0..2.0] + `marginWalk[8]` [3..12] for ARPEG_GEN per-bank walk tuning |
-| `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 23B | **DECLARED Phase 1 + LOADED Phase 2** (commit `fd25a4b`) — 3 controls (REC/PS/CLR) + 16 slots, strict packed. Descriptor index 12. Accessor `NvsManager::getLoadedLoopPadStore()` + helper `applyDevSeedLoopPadsIfSafe()` (audit fix M7 — seed pads 32/33/34 si NVS vide ET pas de collision Tool 4 ControlPad, à retirer Phase 3 quand Tool 3 b1 livre writer/UI). Pas de writer Phase 2 (Phase 3 = Tool 3 b1 + extend TOOL_NVS_LAST[2]). |
+| `LoopPadStore` | `illpad_lpad` | `pads` | 0xBEEF | 1 | 23B | **DECLARED Phase 1 + LOADED Phase 2** (commit `fd25a4b`) — 3 controls (REC/PS/CLR) + 16 slots, strict packed. Descriptor index 12. Accessor `NvsManager::getLoadedLoopPadStore()` + helper `applyDevSeedLoopPadsIfSafe()` (audit fix M7 — seed pads 32/33/34 si NVS vide ET pas de collision ControlPad). Writer/UI à livrer dans Tool PAD ROLE page LOOP (cf [`tool-pad-role-design.md`](../superpowers/specs/2026-05-23-tool-pad-role-design.md)). |
 
 ### Non-Blob Namespaces (scalar values, not Store structs)
 

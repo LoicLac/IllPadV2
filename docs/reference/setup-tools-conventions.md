@@ -1,5 +1,7 @@
 # Setup Tools — Behavioral Conventions
 
+> **MAJ 2026-05-23** — Tool 3 + Tool 4 fusionnés dans Tool PAD ROLE (4 pages BANK/ARPEG/LOOP/CC). Les références à Tool 3 / Tool 4 ci-dessous restent applicables au sens « code canonique du module `ToolPadRoles.cpp` » qui sera étendu pour intégrer les 4 pages. Les patterns de nav / commit / flash décrits sont conservés. Concept ABSORBANT/CONTEXTUEL + règle unique : voir [`tool-pad-role-design.md`](../superpowers/specs/2026-05-23-tool-pad-role-design.md). Ce doc sera refondu intégralement à la livraison du plan d'impl.
+
 Complements [`vt100-design-guide.md`](vt100-design-guide.md) (visual conventions) with **interaction and behavioral** rules for setup tools. Read before adding a new tool or modifying an existing one. Deviation requires documented justification.
 
 > **Authority** : tools that conform to these conventions are considered canonical ; tools that deviate are bugs in waiting. When in doubt, imitate [`ToolPadRoles.cpp`](../../src/setup/ToolPadRoles.cpp) which respects all conventions below.

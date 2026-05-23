@@ -1,5 +1,7 @@
 # VT100 Setup Console — Design Guide
 
+> **MAJ 2026-05-23** — Tool 3 + Tool 4 fusionnés dans Tool PAD ROLE (4 pages BANK/ARPEG/LOOP/CC). Le concept ABSORBANT/CONTEXTUEL + règle unique remplace la catégorisation A/B/C + règles R1-R6. Palette + comportement édition + modale d'écrasement définis dans la nouvelle spec : [`tool-pad-role-design.md`](../superpowers/specs/2026-05-23-tool-pad-role-design.md). Les sections « Tool 3 — Pad Roles », « Tool 4 — Control Pads » et « 2.3 Pad Role Categories » ci-dessous seront refondues à la livraison du plan d'impl.
+
 This document defines the visual language, navigation patterns, and technical conventions for VT100 terminal-based setup interfaces. It serves as the spec for anyone touching the setup UI code.
 
 Aesthetic direction : **Apollo cockpit / amber phosphor CRT**. Every visible element must serve a function ("beauté fonctionnelle") — no decorative text. Structural accents (rivets, tape labels, voyants, segmented readouts) caricature that functional beauty.

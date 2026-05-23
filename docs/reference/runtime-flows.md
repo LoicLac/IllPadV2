@@ -1,5 +1,7 @@
 # Runtime Data Flows — ILLPAD V2
 
+> **MAJ 2026-05-23** — `holdPad`/`_holdPad` à renommer `arpPlayStopPad`/`_arpPlayStopPad` à la livraison du plan Tool PAD ROLE. Sémantique « fingers down → wipe pile » supprimée du code post fix F1 du 2026-05-15. Spec source-of-truth : [`tool-pad-role-design.md`](../superpowers/specs/2026-05-23-tool-pad-role-design.md).
+
 Five critical data flows that describe how the runtime moves state between
 subsystems. Read the relevant flow when debugging a specific causal chain or
 before adding a new consumer.
@@ -185,10 +187,10 @@ Rising edge on bank pad b (while LEFT held):
         _pausedPile && pile>0 → relaunch from step 0, waitForQuantize if needed
         else                  → just flip _captured, _pausedPile=false
       Play → Stop (captured=false):
-        anyFingerDown (excl. holdPad) → clearAllNotes() (live mode takes over)
-        no fingers (or BG: keys==nullptr)
-                                       → flushPendingNoteOffs, _playing=false,
-                                         _waitingForQuantize=false, _pausedPile=true
+        // Post fix F1 (2026-05-15) : pile TOUJOURS préservée. Branche
+        // "anyFingerDown → clearAllNotes" supprimée. Cf ArpEngine.cpp:514-545.
+        → flushPendingNoteOffs, _playing=false,
+          _waitingForQuantize=false, _pausedPile=true
     Toggle always fires — LED always updates.
     Always: consume press (timestamp=0), cancel pending switch, continue.
     LED: triggerEvent(EVT_STOP|EVT_PLAY, mask=1<<b) — FADE overlay on target

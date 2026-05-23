@@ -1,5 +1,7 @@
 # Audit adversarial — Plan Phase 3 LOOP
 
+> **ARCHIVÉ 2026-05-23** — Audit du plan caduc. Phase 3 LOOP refondue en Tool PAD ROLE. Voir [`tool-pad-role-design.md`](../../superpowers/specs/2026-05-23-tool-pad-role-design.md).
+
 **Date audit** : 2026-05-19
 **Plan audité** : [`2026-05-19-loop-phase-3-plan.md`](2026-05-19-loop-phase-3-plan.md) (2100 lignes)
 **Posture** : STOP-and-find. Pas de complaisance — biais par défaut LLM = compliance, à combattre.

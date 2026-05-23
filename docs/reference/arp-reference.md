@@ -53,8 +53,10 @@ so a scale change does not strand pending noteOffs on stale notes.
 
 ## 3. Play/Stop semantic
 
+> **MAJ 2026-05-23** — Le « hold pad » devient le « PL/S ARPEG pad » dans Tool PAD ROLE. Le code utilise encore `holdPad` jusqu'à la livraison du plan d'impl, qui le renommera `arpPlayStopPad`. Sémantique runtime déjà actualisée post fix F1 du 2026-05-15 (cf [`ArpEngine.cpp:514-545`](../../src/arp/ArpEngine.cpp:514)) : pile sacrée armée, plus de branche « fingers down → wipe pile ».
+
 Toggled via :
-- **Hold pad** (dedicated ARPEG-only control, configurable in Tool 3).
+- **PL/S ARPEG pad** (dedicated ARPEG-only control, configurable in Tool PAD ROLE page ARPEG ; code legacy `holdPad`).
 - **LEFT + double-tap on the target bank pad** (FG or BG ; BG target
   means `keys = nullptr`, treated as "no fingers"). Never switches bank.
 
@@ -81,10 +83,7 @@ Both triggers go through a single event chain :
 
 ### Play → Stop transition
 
-- **Fingers down (excl. holdPad)** : pile cleared, live mode takes over
-  (`clearAllNotes()`).
-- **No fingers** (or BG target, `keys == nullptr`) : pile kept, arp stops,
-  `_pausedPile = true` armed. Next Play relaunches from step 0.
+- **Pile toujours préservée** post fix F1 du 2026-05-15 : `_pausedPile = true` armé, `_playing = false`, noteOffs en vol flushed. La branche historique « fingers down → wipe pile » est supprimée du code. La pile sacrée est armée pour relance par re-press du pad PL/S (cf ArpEngine.cpp:533-536).
 
 ### Stop → Play transition
 

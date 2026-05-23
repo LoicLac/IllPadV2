@@ -185,8 +185,8 @@ confirmer point par point :
   le buffer** : appeler `stop()` puis `play()` sans rien d'autre redonne
   exactement le même état audible.
 - [ ] Toute interaction LEFT (press/release/held) ne touche pas le buffer LOOP.
-- [ ] Le toggle global `(HOLD_PAD, leftHeld=true)` est prévu pour être étendu
-  aux banks LOOP (cf. §6).
+- [ ] Le toggle global `(PL/S ARPEG pad, leftHeld=true)` est prévu pour être étendu
+  aux banks LOOP (cf. §6). Code legacy `HOLD_PAD`, rename vers `arpPlayStopPad` à la livraison Tool PAD ROLE.
 - [ ] Les invariants ARPEG §2 (1-5) restent préservés par l'ajout de LOOP.
 
 Si une checkbox ne peut pas être cochée avant l'implémentation, c'est qu'il

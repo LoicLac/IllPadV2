@@ -1,5 +1,7 @@
 # Prompt d'ouverture session EXEC — Phase 3 LOOP
 
+> **ARCHIVÉ 2026-05-23** — Prompt EXEC du plan caduc. Phase 3 LOOP refondue en Tool PAD ROLE. Un nouveau prompt EXEC sera écrit après livraison du plan d'impl Tool PAD ROLE. Voir [`tool-pad-role-design.md`](../../superpowers/specs/2026-05-23-tool-pad-role-design.md).
+
 À copier-coller en tête d'une nouvelle session Claude Code pour exécuter Phase 3.
 
 ---

@@ -1,5 +1,7 @@
 # LOOP Phase 3 — Tool 3 b1 contextuel + Tool 4 ext + retrait dev seed M7
 
+> **ARCHIVÉ 2026-05-23** — Document caduc. Phase 3 LOOP refondue en Tool PAD ROLE (fusion Tool 3 + Tool 4 en 4 pages). Voir [`tool-pad-role-design.md`](../../superpowers/specs/2026-05-23-tool-pad-role-design.md). Code 3.A/3.B/3.C livré sur main reste acquis.
+
 **Date** : 2026-05-19
 **Statut** : VALIDÉ pour rédaction plan d'implémentation
 **Scope** : refacto Tool 3 (`src/setup/ToolPadRoles.{h,cpp}`) en 3 sous-pages contextuelles

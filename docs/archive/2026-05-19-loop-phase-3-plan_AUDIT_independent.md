@@ -1,5 +1,7 @@
 # Audit indépendant — Plan Phase 3 LOOP (sub-agent contradictoire)
 
+> **ARCHIVÉ 2026-05-23** — Audit indépendant du plan caduc. Phase 3 LOOP refondue en Tool PAD ROLE. Voir [`tool-pad-role-design.md`](../../superpowers/specs/2026-05-23-tool-pad-role-design.md). Le contenu (B-N2, B-N3, M8, M14 critiques) reste pertinent comme leçons à appliquer au nouveau plan d'impl.
+
 **Date** : 2026-05-19
 **Plan audité** : [`2026-05-19-loop-phase-3-plan.md`](2026-05-19-loop-phase-3-plan.md)
 **Audit auto précédent** : [`2026-05-19-loop-phase-3-plan_AUDIT.md`](2026-05-19-loop-phase-3-plan_AUDIT.md) (19 findings)

@@ -1,5 +1,7 @@
 # LOOP Phase 3 Implementation Plan — Tool 3 b1 contextuel + Tool 4 ext + retrait dev seed M7
 
+> **ARCHIVÉ 2026-05-23** — Plan caduc (3.D+ jeté suite HW gates G3+G4). Phase 3 LOOP refondue en Tool PAD ROLE. Voir [`tool-pad-role-design.md`](../../superpowers/specs/2026-05-23-tool-pad-role-design.md). Le nouveau plan d'impl sera écrit en session suivante. Code 3.A/3.B/3.C livré sur main reste acquis.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use `superpowers:subagent-driven-development` (recommended) or `superpowers:executing-plans` to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. **Workflow embedded** : 5 gates par task (Code → Build → Auto-review → HW gate quand applicable → Commit gate) per [SESSION_PROTOCOL.md](../SESSION_PROTOCOL.md). HW gates **bloquent** — pas de commit avant validation HW Loïc. Mot magique `GO` / `validé` obligatoire (cf manifeste session).
 
 **Goal** : Livrer Tool 3 b1 contextuel (3 sous-pages NORM / ARPEG / LOOP via TAB) + Tool 4 extension (refus ControlPad sur pad LOOP control) + retrait dev seed M7 (remplacement par defaults LOOP 30/31/32 hardcodés dans validator). État final : user peut configurer 3 controls LOOP + 16 slots via UI propre, Tool 4 protège l'invariant R2 (layer musical exclusion), validator garantit `recPad/playStopPad/clearPad` jamais 0xFF.
