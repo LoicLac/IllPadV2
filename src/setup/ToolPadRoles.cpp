@@ -62,7 +62,7 @@ ToolPadRoles::ToolPadRoles()
     _chromaticPad(nullptr), _arpPlayStopPad(nullptr),
     _octavePads(nullptr),
     _wkChromPad(0xFF), _wkArpPlayStopPad(0xFF),
-    _activeSubPage(SUB_NORM),          // Phase 3 — default sub-page
+    _activeSubPage(SUB_BANK),          // Phase 3 — default sub-page (4 pages : BANK/ARPEG/LOOP/CC)
     _flashExpireMs(0),                 // Phase 3 — no flash at construction
     _gridRow(0), _gridCol(0), _editing(false),
     _poolLine(0), _poolIdx(0),
@@ -155,22 +155,24 @@ const char* ToolPadRoles::poolItemLabel(uint8_t line, uint8_t index) const {
 }
 
 // =================================================================
-// buildRoleMap — Phase 3 dispatcher (m14 v2 audit indé : factorisation cible
-// buildRoleMap, pas drawGrid qui est trivial). Selon _activeSubPage, appelle
-// l'impl appropriée. Stubs ARPEG/LOOP en Phase 3.C — vraies impls Phase 3.D/3.E.
+// buildRoleMap — Phase 3 dispatcher (4 pages : BANK / ARPEG / LOOP / CC).
+// Phase 3.B livre 4 stubs delegating à _buildRoleMapLegacy ; chaque sous-phase
+// 3.C-3.F remplace son stub par la vraie impl. _buildRoleMapLegacy retiré en
+// 3.H.2 quand toutes les pages sont incarnées.
 // =================================================================
 
 void ToolPadRoles::buildRoleMap() {
   switch (_activeSubPage) {
-    case SUB_NORM:  _buildRoleMapNorm();  break;
+    case SUB_BANK:  _buildRoleMapBank();  break;
     case SUB_ARPEG: _buildRoleMapArpeg(); break;
     case SUB_LOOP:  _buildRoleMapLoop();  break;
+    case SUB_CC:    _buildRoleMapCc();    break;
     default:        _buildRoleMapLegacy(); break;
   }
 }
 
 // _buildRoleMapLegacy — body original Tool 3 (avant Phase 3 refacto).
-// Conservé pour stubs ARPEG/LOOP Phase 3.C (non-régression UX inter-phases).
+// Fallback pour les stubs des 4 pages jusqu'à leur incarnation respective.
 void ToolPadRoles::_buildRoleMapLegacy() {
   memset(_roleMap, ROLE_NONE, NUM_KEYS);
   for (int i = 0; i < NUM_KEYS; i++) {
@@ -200,23 +202,10 @@ void ToolPadRoles::_buildRoleMapLegacy() {
     setRole(_wkOctavePads[i], ROLE_OCTAVE, GRID_OCTAVE_LABELS[i]);
 }
 
-// Phase 3.C — sous-page NORM (bank slots assignment). Comportement équivalent
-// legacy pour Phase 3.C : montre tous les rôles. Phase 3.D / 3.E ajouteront
-// le distingo visuel "active vs dim selon sous-page" (nécessite extension
-// palette SetupUI GRID_ROLES, hors-scope strict Phase 3.C).
-void ToolPadRoles::_buildRoleMapNorm() {
-  _buildRoleMapLegacy();
-}
-
-// Phase 3.D — sous-page ARPEG (root/mode/chrom/hold/octave). Stub Phase 3.C.
-void ToolPadRoles::_buildRoleMapArpeg() {
-  _buildRoleMapLegacy();
-}
-
-// Phase 3.E — sous-page LOOP (3 controls + 16 slots). Stub Phase 3.C.
-void ToolPadRoles::_buildRoleMapLoop() {
-  _buildRoleMapLegacy();
-}
+// Phase 3.B — stubs _buildRoleMapBank/Cc/Arpeg/Loop déplacés vers fichiers
+// dédiés (ToolPadRoles_Bank.cpp, ToolPadRoles_Cc.cpp, ToolPadRoles_Arpeg.cpp,
+// ToolPadRoles_Loop.cpp). Chaque sous-phase 3.C-3.F y incarne sa page propre
+// sans toucher cet orchestrateur.
 
 // =================================================================
 // Phase 3 — sub-page navigation (Tasks 9 + 10)
@@ -230,11 +219,11 @@ void ToolPadRoles::_handleTab() {
   buildRoleMap();
 }
 
-// _drawSubPageHeader — affiche "Pad Roles  [NORM|ARPEG|LOOP]" avec sous-page
+// _drawSubPageHeader — affiche "Sub-page  [BANK|ARPEG|LOOP|CC]" avec sous-page
 // active en VT_REVERSE+VT_BOLD, autres dim. Utilise drawFrameLine + escapes
 // VT100 inline (M14 v2 audit indé : SetupUI n'a pas setInverse/moveCursor).
 void ToolPadRoles::_drawSubPageHeader() {
-  const char* labels[SUB_COUNT] = { "NORM", "ARPEG", "LOOP" };
+  const char* labels[SUB_COUNT] = { "BANK", "ARPEG", "LOOP", "CC" };
   char buf[128];
   int pos = 0;
   pos += snprintf(buf + pos, sizeof(buf) - pos, "Sub-page  [");
@@ -605,9 +594,9 @@ void ToolPadRoles::drawControlBar() {
 
 void ToolPadRoles::drawScreen() {
   _ui->vtFrameStart();
-  _ui->drawConsoleHeader("TOOL 3: PAD ROLES", _nvsSaved);
+  _ui->drawConsoleHeader("TOOL 3: PAD ROLE", _nvsSaved);
 
-  // Phase 3 — sub-page header [NORM|ARPEG|LOOP] highlighted
+  // Phase 3 — sub-page header [BANK|ARPEG|LOOP|CC] highlighted
   _drawSubPageHeader();
   _ui->drawFrameEmpty();
 
@@ -879,7 +868,7 @@ void ToolPadRoles::run() {
           // rôle cross-store (LoopPadStore ou ControlPadStore), qui ne sont pas gérés
           // par clearRole(). R1 sacré spec §5 : Bank pad ne peut pas coexister avec
           // n'importe quel autre rôle. S'applique dans TOUTES les sous-pages (HW gate
-          // G2 fix : ancien check _activeSubPage == SUB_NORM trop restrictif).
+          // G2 fix : ancien check sub-page-scoped trop restrictif).
           // Note : ARPEG roles (root/mode/etc) sont swap-able silencieusement via
           // clearRole(pad) ci-dessous — pas de refus pour ces cas (cohérence pattern
           // existing "Steal silencieux", modulo M1 v1 audit flash msg ajouté plus tard

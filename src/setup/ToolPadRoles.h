@@ -19,6 +19,7 @@ enum PadRoleCode : uint8_t {
   ROLE_MODE      = 3,
   ROLE_OCTAVE    = 4,
   ROLE_PLAY_STOP = 5,
+  ROLE_CC        = 6,    // Phase 3.B — consumed by page CC cell display (3.C.2+)
   ROLE_COLLISION = 0xFF
 };
 
@@ -28,12 +29,13 @@ struct PadRole {
   uint8_t index;  // index within that line
 };
 
-// Phase 3 — sous-page contexte (Tool 3 b1 refactor)
+// Phase 3 — sous-page contexte (Tool PAD ROLE 4-page refactor)
 enum SubPage : uint8_t {
-  SUB_NORM  = 0,   // Bank pads assignment (the 8 bank slots)
-  SUB_ARPEG = 1,   // 20 roles : root, mode, chrom, hold, octave
-  SUB_LOOP  = 2,   // 19 roles : 3 controls (REC/PS/CLR) + 16 slots
-  SUB_COUNT = 3
+  SUB_BANK  = 0,   // 8 bank pads assignment
+  SUB_ARPEG = 1,   // Root × 7, Mode × 7, Chromatic, Octave × 4, PL/S ARPEG
+  SUB_LOOP  = 2,   // REC, PL/S, CLR, Slots × 16
+  SUB_CC    = 3,   // CC MIDI ControlPads (Tool 4 absorbed Phase 3.C)
+  SUB_COUNT = 4
 };
 
 class ToolPadRoles {
@@ -72,7 +74,7 @@ private:
   LoopPadStore _wkLoopPad;            // Phase 3 — working copy for sub-page LOOP
 
   // Phase 3 — sub-page state + flash msg infrastructure
-  SubPage      _activeSubPage;        // current sub-page (NORM/ARPEG/LOOP)
+  SubPage      _activeSubPage;        // current sub-page (BANK/ARPEG/LOOP/CC)
   char         _flashMsg[80];         // flash msg buffer (pattern Tool 4)
   uint32_t     _flashExpireMs;        // flash msg expiry timestamp
 
@@ -127,17 +129,20 @@ private:
   void printPadDescription(uint8_t pad);
 
   // Phase 3 — helpers
-  void _handleTab();                  // cycle sub-page NORM -> ARPEG -> LOOP -> NORM
-  void _drawSubPageHeader();          // affiche "[NORM|ARPEG|LOOP]" highlighted
+  void _handleTab();                  // cycle sub-page BANK -> ARPEG -> LOOP -> CC -> BANK
+  void _drawSubPageHeader();          // affiche "[BANK|ARPEG|LOOP|CC]" highlighted
   void _setFlash(const char* msg);    // pattern Tool 4 (ToolControlPads.cpp:854)
   bool _flashActive() const;
   void _drawFlash();                  // render flash line between info panel and control bar
 
-  // Phase 3 — factorisation buildRoleMap (m14 v2 : cible buildRoleMap, pas drawGrid)
-  void _buildRoleMapLegacy();         // body original extrait pour stubs ARPEG/LOOP Phase 3.C
-  void _buildRoleMapNorm();           // Phase 3.C — sous-page NORM (bank pads actifs)
-  void _buildRoleMapArpeg();          // Phase 3.D — sous-page ARPEG (vrai impl)
-  void _buildRoleMapLoop();           // Phase 3.E — sous-page LOOP (vrai impl)
+  // Phase 3 — factorisation buildRoleMap (m14 v2 : cible buildRoleMap, pas drawGrid).
+  // Phase 3.B livre 4 stubs delegating à _buildRoleMapLegacy. Chaque sous-phase
+  // 3.C-3.F remplace son stub par la vraie impl ; _buildRoleMapLegacy retiré en 3.H.2.
+  void _buildRoleMapLegacy();         // body original — fallback pour stubs Phase 3.B-3.F
+  void _buildRoleMapBank();           // Phase 3.D — sous-page BANK (defined ToolPadRoles_Bank.cpp)
+  void _buildRoleMapCc();             // Phase 3.C — sous-page CC   (defined ToolPadRoles_Cc.cpp)
+  void _buildRoleMapArpeg();          // Phase 3.E — sous-page ARPEG (defined ToolPadRoles_Arpeg.cpp)
+  void _buildRoleMapLoop();           // Phase 3.F — sous-page LOOP (defined ToolPadRoles_Loop.cpp)
 };
 
 #endif // TOOL_PAD_ROLES_H
