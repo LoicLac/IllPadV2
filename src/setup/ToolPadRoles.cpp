@@ -58,6 +58,7 @@ static const char* POOL_PLAY_STOP_LABELS[] = { "Hld" };
 ToolPadRoles::ToolPadRoles()
   : _keyboard(nullptr), _leds(nullptr), _ui(nullptr),
     _nvs(nullptr),                     // Phase 3
+    _banks(nullptr),                   // Phase 3.C — page CC follow-bank resolution
     _bankPads(nullptr), _rootPads(nullptr), _modePads(nullptr),
     _chromaticPad(nullptr), _arpPlayStopPad(nullptr),
     _octavePads(nullptr),
@@ -66,7 +67,12 @@ ToolPadRoles::ToolPadRoles()
     _flashExpireMs(0),                 // Phase 3 — no flash at construction
     _gridRow(0), _gridCol(0), _editing(false),
     _poolLine(0), _poolIdx(0),
-    _confirmDefaults(false), _confirmClearAll(false), _nvsSaved(false)
+    _confirmDefaults(false), _confirmClearAll(false), _nvsSaved(false),
+    // Phase 3.C — page CC state (ex Tool 4 members, prefixed _cc*)
+    _ccUiMode(UI_CC_GRID_NAV),
+    _ccFieldIdx(0), _ccPoolIdx(0), _ccGlobalFieldIdx(0),
+    _ccPropEditDirty(false), _ccGlobalEditDirty(false),
+    _ccWkDirty(false), _ccScreenDirty(false)
 {
   memset(_wkBankPads, 0xFF, sizeof(_wkBankPads));
   memset(_wkRootPads, 0xFF, sizeof(_wkRootPads));
@@ -83,11 +89,16 @@ ToolPadRoles::ToolPadRoles()
   _wkLoopPad.clearPad    = 0xFF;
   for (uint8_t i = 0; i < 16; i++) _wkLoopPad.slotPads[i] = 0xFF;
 
+  // Phase 3.C — _wkCc init to empty (will be loaded from NvsManager cache in begin)
+  memset(&_wkCc, 0, sizeof(_wkCc));
+  _wkCc.magic   = CONTROLPAD_MAGIC;
+  _wkCc.version = CONTROLPAD_VERSION;
+
   _flashMsg[0] = '\0';
 }
 
 void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
-                          SetupUI* ui, NvsManager* nvs,
+                          SetupUI* ui, NvsManager* nvs, BankSlot* banks,
                           uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
                           uint8_t& chromaticPad, uint8_t& arpPlayStopPad,
                           uint8_t* octavePads) {
@@ -95,6 +106,7 @@ void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _leds         = leds;
   _ui           = ui;
   _nvs          = nvs;                 // Phase 3
+  _banks        = banks;               // Phase 3.C — page CC follow-bank channel resolution
   _bankPads     = bankPads;
   _rootPads     = rootPads;
   _modePads     = modePads;
@@ -102,9 +114,11 @@ void ToolPadRoles::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _arpPlayStopPad = &arpPlayStopPad;
   _octavePads   = octavePads;
 
-  // Phase 3 — load LoopPadStore working copy from NvsManager cached state
+  // Phase 3 — load working copies from NvsManager cached state (peuplé par loadAll au boot)
   if (_nvs) {
     _wkLoopPad = _nvs->getLoadedLoopPadStore();
+    _wkCc      = _nvs->getLoadedControlPadStore();  // Phase 3.C — page CC
+    validateControlPadStore(_wkCc);                 // defensive
   }
 }
 

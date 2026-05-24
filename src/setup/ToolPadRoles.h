@@ -10,6 +10,7 @@ class CapacitiveKeyboard;
 class LedController;
 class SetupUI;
 class NvsManager;   // Phase 3 — for cross-store lookup (LoopPadStore + ControlPadStore)
+struct BankSlot;    // Phase 3.C — page CC needs banks for follow-bank channel resolution
 
 // Role codes for grid coloring
 enum PadRoleCode : uint8_t {
@@ -43,8 +44,9 @@ public:
   ToolPadRoles();
 
   // Phase 3 — `nvs` parameter added (NvsManager*) for LoopPadStore + ControlPadStore lookup.
+  // Phase 3.C — `banks` parameter added (BankSlot*) for page CC follow-bank channel resolution.
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
-             SetupUI* ui, NvsManager* nvs,
+             SetupUI* ui, NvsManager* nvs, BankSlot* banks,
              uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
              uint8_t& chromaticPad, uint8_t& arpPlayStopPad,
              uint8_t* octavePads);
@@ -55,6 +57,7 @@ private:
   LedController*      _leds;
   SetupUI*            _ui;
   NvsManager*         _nvs;   // Phase 3 — for cross-store lookup (LoopPadStore + ControlPadStore)
+  BankSlot*           _banks; // Phase 3.C — page CC follow-bank channel resolution (SELECTED panel)
 
   // Pointers to live pad assignment arrays (owned by caller)
   uint8_t* _bankPads;      // [NUM_BANKS]
@@ -72,6 +75,7 @@ private:
   uint8_t      _wkArpPlayStopPad;
   uint8_t      _wkOctavePads[4];
   LoopPadStore _wkLoopPad;            // Phase 3 — working copy for sub-page LOOP
+  ControlPadStore _wkCc;              // Phase 3.C — working copy for sub-page CC (ex Tool 4 _wk)
 
   // Phase 3 — sub-page state + flash msg infrastructure
   SubPage      _activeSubPage;        // current sub-page (BANK/ARPEG/LOOP/CC)
@@ -143,6 +147,61 @@ private:
   void _buildRoleMapCc();             // Phase 3.C — sous-page CC   (defined ToolPadRoles_Cc.cpp)
   void _buildRoleMapArpeg();          // Phase 3.E — sous-page ARPEG (defined ToolPadRoles_Arpeg.cpp)
   void _buildRoleMapLoop();           // Phase 3.F — sous-page LOOP (defined ToolPadRoles_Loop.cpp)
+
+  // =================================================================
+  // Phase 3.C — page CC (MIDI CC ControlPads, absorbs Tool 4).
+  // 3.C.1a : migration mécanique pure, code dormant (non câblé sur run()).
+  // 3.C.1b : câblage orchestrateur (dispatch run() + drawScreen).
+  // 3.C.2  : cell display §8.1 + helpers cross-store.
+  // =================================================================
+
+  // Sub-state machine (formerly ToolControlPads::UIMode)
+  enum CcUiMode : uint8_t {
+    UI_CC_GRID_NAV         = 0,
+    UI_CC_MODE_PICK        = 1,
+    UI_CC_VALUE_EDIT       = 2,
+    UI_CC_CONFIRM_REMOVE   = 3,
+    UI_CC_CONFIRM_DEFAULTS = 4,
+    UI_CC_GLOBAL_EDIT      = 5,
+  };
+
+  // Page CC state members (ex Tool 4 — preserved semantics, prefixed _cc*)
+  CcUiMode _ccUiMode;
+  uint8_t  _ccFieldIdx;        // 0..4 in UI_CC_VALUE_EDIT (CC/Channel/Mode/Deadzone/Release)
+  uint8_t  _ccPoolIdx;         // 0..4 in UI_CC_MODE_PICK (MOM/LATCH/RET0/HOLD/clear)
+  uint8_t  _ccGlobalFieldIdx;  // 0=smoothMs, 1=sampleHoldMs, 2=releaseMs
+  bool     _ccPropEditDirty;   // VALUE_EDIT dirty tracking (save on state exit)
+  bool     _ccGlobalEditDirty; // GLOBAL_EDIT dirty tracking
+  bool     _ccWkDirty;         // _wkCc modified since last _saveCc()
+  bool     _ccScreenDirty;     // member dédié (ne pas confondre avec local screenDirty de run())
+
+  // Page CC methods (defined in ToolPadRoles_Cc.cpp)
+  void _handleGridNavCc(const NavEvent& ev);
+  void _handleModePickCc(const NavEvent& ev);
+  void _handleValueEditCc(const NavEvent& ev);
+  void _handleConfirmRemoveCc(const NavEvent& ev);
+  void _handleConfirmDefaultsCc(const NavEvent& ev);
+  void _handleGlobalEditCc(const NavEvent& ev);
+  void _drawPageCc();
+  void _drawGridCc();
+  void _drawPoolCc();
+  void _drawSelectedCc();
+  void _drawGlobalsCc();
+  void _drawInfoCc();
+  void _drawControlBarCc();
+  uint8_t _poolIdxFromEntryCc(const ControlPadEntry& e) const;
+  void    _applyPoolIdxToEntryCc(uint8_t idx, ControlPadEntry& e) const;
+  void    _adjustGlobalFieldCc(int8_t delta);
+  uint8_t _currentBankFromBanksCc() const;
+  int8_t  _findSlotCc(uint8_t padIdx) const;
+  bool    _addSlotCc(uint8_t padIdx);
+  void    _removeSlotForPadCc(uint8_t padIdx);
+  void    _resetAllCc();
+  void    _adjustFieldCc(int8_t delta);
+  bool    _isFieldGreyedCc(uint8_t fieldIdx) const;
+  void    _saveCc();
+  void    _loadCc();
+  void    _refreshBadgeCc();
 };
 
 #endif // TOOL_PAD_ROLES_H

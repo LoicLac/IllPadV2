@@ -27,9 +27,10 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _ui.begin(leds);
   _toolCal.begin(keyboard, leds, &_ui);
   _toolOrdering.begin(keyboard, leds, &_ui, padOrder);
-  // Phase 3 — Tool 3 b1 begin signature étendue avec NvsManager* (B-N1 fix v1 + M13 v2)
-  // pour cross-store lookup LoopPadStore + ControlPadStore.
-  _toolPadRoles.begin(keyboard, leds, &_ui, nvs,
+  // Phase 3 — Tool PAD ROLE begin signature : NvsManager* (B-N1 fix v1 + M13 v2)
+  // pour cross-store lookup LoopPadStore + ControlPadStore ; BankSlot* banks
+  // (Phase 3.C) pour page CC follow-bank channel resolution.
+  _toolPadRoles.begin(keyboard, leds, &_ui, nvs, banks,
                    bankPads, rootPads, modePads,
                    chromaticPad, arpPlayStopPad,
                    octavePads);
