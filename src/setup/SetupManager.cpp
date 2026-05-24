@@ -34,7 +34,7 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
                    bankPads, rootPads, modePads,
                    chromaticPad, arpPlayStopPad,
                    octavePads);
-  _toolControlPads.begin(keyboard, leds, &_ui, nvs, banks);
+  // Phase 3.C.1b — Tool 4 (ToolControlPads) absorbé par Tool 3 page CC.
   _toolBankConfig.begin(leds, nvs, &_ui, banks);
   _toolSettings.begin(keyboard, leds, &_ui);
   _toolPotMapping.begin(leds, &_ui);
@@ -98,12 +98,6 @@ void SetupManager::run() {
 
       case '3':
         _toolPadRoles.run();
-        _ui.vtClear();
-        screenDirty = true;
-        break;
-
-      case '4':
-        _toolControlPads.run();
         _ui.vtClear();
         screenDirty = true;
         break;

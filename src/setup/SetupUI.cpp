@@ -382,7 +382,11 @@ void SetupUI::setProgress(int8_t percent) {
 // =================================================================
 
 void SetupUI::printMainMenu() {
-  // Unified NVS status checks via descriptor table
+  // Unified NVS status checks via descriptor table.
+  // Phase 3.C.1b — Tool 4 absorbé par T3 page CC : T3 range [2..5] inclut désormais
+  // descriptor 5 (ControlPad). T4 range vide (FIRST=5 > LAST=4) — toolStatus[3]
+  // ignoré, ligne [4] retirée du menu.
+  // B-N3 (§12.6 plan) — T3 badge intègre aussi descriptor 12 (LoopPadStore).
   char toolStatus[8];
   for (uint8_t t = 0; t < 8; t++) {
     bool allOk = true;
@@ -394,16 +398,23 @@ void SetupUI::printMainMenu() {
         break;
       }
     }
+    // B-N3 §12.6 : T3 (index 2) also checks descriptor 12 (LoopPadStore, Phase 3 LOOP page).
+    if (t == 2 && allOk) {
+      if (!NvsManager::checkBlob(NVS_DESCRIPTORS[12].ns, NVS_DESCRIPTORS[12].key,
+                                  NVS_DESCRIPTORS[12].magic, NVS_DESCRIPTORS[12].version,
+                                  NVS_DESCRIPTORS[12].size)) {
+        allOk = false;
+      }
+    }
     toolStatus[t] = allOk ? 'v' : '!';
   }
   char calStatus  = toolStatus[0];
   char ordStatus  = toolStatus[1];
-  char roleStatus = toolStatus[2];
-  char ctrlStatus = toolStatus[3];  // T4 Control Pads
-  char bankStatus = toolStatus[4];  // was T4, now T5
-  char setStatus  = toolStatus[5];  // was T5, now T6
-  char potStatus  = toolStatus[6];  // was T6, now T7
-  char ledStatus  = toolStatus[7];  // was T7, now T8
+  char roleStatus = toolStatus[2];  // T3 Pad Roles (4 pages BANK/ARPEG/LOOP/CC since 3.C.1b)
+  char bankStatus = toolStatus[4];  // T5 Bank Config
+  char setStatus  = toolStatus[5];  // T6 Settings
+  char potStatus  = toolStatus[6];  // T7 Pot Mapping
+  char ledStatus  = toolStatus[7];  // T8 LED Settings
 
   auto statusStr = [](char s) -> const char* {
     if (s == 'v') return VT_REVERSE VT_GREEN " ok " VT_RESET;
@@ -423,8 +434,7 @@ void SetupUI::printMainMenu() {
   drawFrameEmpty();
   drawFrameLine("[1]  Pressure Calibration          " VT_DIM "sensitivity tuning" VT_RESET "                  %s", statusStr(calStatus));
   drawFrameLine("[2]  Pad Ordering                  " VT_DIM "pitch mapping, low to high" VT_RESET "          %s", statusStr(ordStatus));
-  drawFrameLine("[3]  Pad Roles                     " VT_DIM "bank / scale / arp pads" VT_RESET "             %s", statusStr(roleStatus));
-  drawFrameLine("[4]  Control Pads                  " VT_DIM "cross-bank CC pads" VT_RESET "                  %s", statusStr(ctrlStatus));
+  drawFrameLine("[3]  Pad Roles                     " VT_DIM "bank / scale / arp / loop / CC pads" VT_RESET "  %s", statusStr(roleStatus));
   drawFrameLine("[5]  Bank Config                   " VT_DIM "NORMAL vs ARPEG, quantize" VT_RESET "           %s", statusStr(bankStatus));
   drawFrameLine("[6]  Settings                      " VT_DIM "preferences & connectivity" VT_RESET "          %s", statusStr(setStatus));
   drawFrameLine("[7]  Pot Mapping                   " VT_DIM "parameter assignments" VT_RESET "               %s", statusStr(potStatus));
@@ -441,17 +451,17 @@ void SetupUI::printMainMenu() {
   drawSection("SYSTEM CHECK");
   drawFrameEmpty();
   {
-    StatusItem items[8] = {
+    // Phase 3.C.1b — CTL voyant retiré (Tool 4 absorbé par T3 page CC).
+    StatusItem items[7] = {
       { "CAL",  calStatus  == 'v' },
       { "ORD",  ordStatus  == 'v' },
       { "ROL",  roleStatus == 'v' },
-      { "CTL",  ctrlStatus == 'v' },
       { "BNK",  bankStatus == 'v' },
       { "SET",  setStatus  == 'v' },
       { "POT",  potStatus  == 'v' },
       { "LED",  ledStatus  == 'v' },
     };
-    drawStatusCluster(items, 8);
+    drawStatusCluster(items, 7);
   }
   drawFrameEmpty();
 

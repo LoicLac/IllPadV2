@@ -614,26 +614,32 @@ void ToolPadRoles::drawScreen() {
   _drawSubPageHeader();
   _ui->drawFrameEmpty();
 
-  // Grid section
-  _ui->drawSection("GRID");
-  drawGrid();
-  _ui->drawFrameEmpty();
+  if (_activeSubPage == SUB_CC) {
+    // Phase 3.C.1b — page CC dispatch (sections + control bar rendered inside).
+    _drawPageCc();
+  } else {
+    // Legacy fallback BANK/ARPEG/LOOP (jusqu'à incarnation 3.D/3.E/3.F).
+    // Grid section
+    _ui->drawSection("GRID");
+    drawGrid();
+    _ui->drawFrameEmpty();
 
-  // Pool section
-  _ui->drawSection("POOL");
-  drawPool();
-  _ui->drawFrameEmpty();
+    // Pool section
+    _ui->drawSection("POOL");
+    drawPool();
+    _ui->drawFrameEmpty();
 
-  // Info section
-  _ui->drawSection("INFO");
-  drawInfoPanel();
-  _ui->drawFrameEmpty();
+    // Info section
+    _ui->drawSection("INFO");
+    drawInfoPanel();
+    _ui->drawFrameEmpty();
 
-  // Phase 3 — flash msg line (between info and control bar — m16 v2)
-  _drawFlash();
+    // Phase 3 — flash msg line (between info and control bar — m16 v2)
+    _drawFlash();
 
-  // Control bar
-  drawControlBar();
+    // Control bar
+    drawControlBar();
+  }
 
   _ui->vtFrameEnd();
 }
@@ -703,8 +709,57 @@ void ToolPadRoles::run() {
   while (true) {
     _leds->update();
     _keyboard->pollAllSensorData();
+    NavEvent ev = _input.update();
 
-    // --- Touch detection (jump to cell) ---
+    // =================================================================
+    // Phase 3.C.1b — early-branch dispatch page CC (skip legacy si SUB_CC).
+    // Le code legacy below ne s'exécute jamais quand SUB_CC est active.
+    // Touch detection : gérée à l'intérieur de _handleGridNavCc.
+    // =================================================================
+    if (_activeSubPage == SUB_CC) {
+      // Cleanup flash msg expiré (sinon reste visible jusqu'au prochain redraw).
+      if (_flashMsg[0] != '\0' && millis() > _flashExpireMs) {
+        _flashMsg[0] = '\0';
+        _flashExpireMs = 0;
+        _ccScreenDirty = true;
+      }
+
+      // TAB cycle (blocked durant sub-edit Cc)
+      bool inCcSubEdit = (_ccUiMode != UI_CC_GRID_NAV);
+      if (ev.type == NAV_CHAR && ev.ch == '\t' && !inCcSubEdit) {
+        _handleTab();
+        _ccScreenDirty = true;
+      } else {
+        // 2-step exit snapshot : préserve "q sort de sub-edit vers grid-nav,
+        // q sur grid-nav sort du tool" (pattern setup-tools-conventions §6.4).
+        CcUiMode modeAtStart = _ccUiMode;
+        switch (_ccUiMode) {
+          case UI_CC_GRID_NAV:         _handleGridNavCc(ev);         break;
+          case UI_CC_MODE_PICK:        _handleModePickCc(ev);        break;
+          case UI_CC_VALUE_EDIT:       _handleValueEditCc(ev);       break;
+          case UI_CC_CONFIRM_REMOVE:   _handleConfirmRemoveCc(ev);   break;
+          case UI_CC_CONFIRM_DEFAULTS: _handleConfirmDefaultsCc(ev); break;
+          case UI_CC_GLOBAL_EDIT:      _handleGlobalEditCc(ev);      break;
+        }
+        if (ev.type == NAV_QUIT && modeAtStart == UI_CC_GRID_NAV) {
+          _ui->vtClear();
+          return;
+        }
+      }
+
+      if (_ccScreenDirty) {
+        _ccScreenDirty = false;
+        buildRoleMap();
+        drawScreen();
+      }
+      delay(5);
+      continue;
+    }
+    // =================================================================
+    // Fin dispatch page CC — code legacy BANK/ARPEG/LOOP ci-dessous.
+    // =================================================================
+
+    // --- Touch detection (jump to cell) — legacy only ---
     if (!_confirmDefaults && !_confirmClearAll) {
       int detected = detectActiveKey(*_keyboard, _refBaselines);
       if (detected >= 0) {
@@ -720,8 +775,6 @@ void ToolPadRoles::run() {
         }
       }
     }
-
-    NavEvent ev = _input.update();
 
     // --- Defaults confirmation sub-mode ---
     if (_confirmDefaults) {

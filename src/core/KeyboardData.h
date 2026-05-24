@@ -1008,9 +1008,13 @@ static constexpr NvsDescriptor NVS_DESCRIPTORS[] = {
 };
 static constexpr uint8_t NVS_DESCRIPTOR_COUNT = sizeof(NVS_DESCRIPTORS) / sizeof(NVS_DESCRIPTORS[0]);
 
-// Tool-to-descriptor mapping: each tool checks descriptors in range [first, last] inclusive
-// T3 spans 3 (bankpad+scalepad+arppad), T7 spans 2 (potmapping+potfilter), T8 spans 2 (ledsettings+colorslots)
+// Tool-to-descriptor mapping: each tool checks descriptors in range [first, last] inclusive.
+// Phase 3.C.1b — Tool PAD ROLE (T3) absorbs Tool 4 (ControlPad) :
+//   T3 spans [2..5] (bankpad+scalepad+arppad+controlpad).
+//   T4 = range vide (FIRST=5 > LAST=4) — Tool 4 supprimé, descriptor 5 délégué à T3.
+//   B-N3 (§12.6 plan) : T3 badge intègre aussi descriptor 12 (LoopPadStore) via
+//   check ad-hoc dans SetupUI::printMainMenu.
 static constexpr uint8_t TOOL_NVS_FIRST[] = { 0, 1, 2, 5, 6, 7, 8, 10 };   // T1..T8
-static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 4, 5, 6, 7, 9, 11 };   // T4=5 (ctrl single), shifts +1 after
+static constexpr uint8_t TOOL_NVS_LAST[]  = { 0, 1, 5, 4, 6, 7, 9, 11 };   // T3=[2..5], T4=range vide
 
 #endif // KEYBOARD_DATA_H
