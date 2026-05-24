@@ -544,17 +544,18 @@ void SetupUI::drawCellGrid(
         } else {
           const char* color;
           switch (roleMap[key]) {
+            // Phase 3.E.1 — couleurs §11.1 (Mode cyan, Octave pourpre, PL/S
+            // vert unifié ARPEG+LOOP). case 6 legacy "Play/Stop" VT_BRIGHT_RED
+            // retiré (mort code post-3.A rename, ROLE_PLAY_STOP est case 5).
+            // Phase 3.E feedback HW Gate G4 : Root passe pêche → bleu (Loïc).
+            // Note : Root case 2 et Bank case 1 partagent VT_BLUE — pas de
+            // collision visuelle car ne coexistent jamais sur même cell
+            // (BANK absorbant en page ARPEG affiché en case 7 dim VT_DIM).
             case 1:    color = VT_BLUE;                  break;  // Bank
-            case 2:    color = VT_GREEN;                 break;  // Root
-            case 3:    color = VT_CYAN;                  break;  // Mode
-            case 4:    color = VT_YELLOW;                break;  // Octave
-            case 5:    color = VT_MAGENTA;               break;  // Play/Stop (renamed 3.A)
-            case 6:    color = VT_BRIGHT_RED;            break;  // legacy (dead, retiré 3.H.2)
-            // Phase 3.D.2 cross-page (§12.4 audit B-N1 switch inline, cohérent GRID_CONTROLPAD).
-            // Phase 3.D fix HW Gate G3 — VT_BG_AMBER_SAT retiré : background ambre
-            // saturé donne effet "reverse+dim" moche sous feedback user. Distinction
-            // absorbant/contextuel via les LABELS (Bk<n>/CC<n> vs " :: "), pas la
-            // couleur. Refonte palette possible 3.H.1 (§13).
+            case 2:    color = VT_BLUE;                  break;  // Root (post-G4 Loïc, was VT_PEACH)
+            case 3:    color = VT_CYAN;                  break;  // Mode + Chromatic
+            case 4:    color = VT_PURPLE;                break;  // Octave (§11.1)
+            case 5:    color = VT_GREEN;                 break;  // Play/Stop (§11.1 unifié ARPEG+LOOP)
             case 7:    color = VT_DIM;                   break;  // ABSORBANT cross-page (label distinct : Bk<n>/CC<n>)
             case 8:    color = VT_DIM;                   break;  // CONTEXTUEL cross-page (ARPEG mod / LOOP slot/control) → " :: "
             case 0xFF: color = VT_RED;                   break;  // Collision

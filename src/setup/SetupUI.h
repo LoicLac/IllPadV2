@@ -67,6 +67,10 @@ enum ConfirmResult : uint8_t {
 #define VT_NEUTRAL_BAR    " :: "
 // Phase 3.D — pool BANK assignable color (vert menthe, à raffiner 3.H.1).
 #define VT_MINT_GREEN     "\033[38;5;121m"
+// Phase 3.E — palette §11.1 couleurs page ARPEG (Root pêche, Octave pourpre).
+// Mode/Chrom restent VT_CYAN existing, PL/S unifié vers VT_GREEN existing.
+#define VT_PEACH          "\033[38;5;216m"
+#define VT_PURPLE         "\033[38;5;141m"
 
 // Unicode box drawing — double-line (outer frame)
 #define UNI_TL  "\xe2\x95\x94"  // ╔

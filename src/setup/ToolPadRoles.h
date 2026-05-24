@@ -241,6 +241,22 @@ private:
   void _handleEnterPoolBank();      // ENTER from pool nav (§9.2 strict)
   void _applyDefaultsBank();        // §15.4 + §15.5 skip silencieux
   void _clearRolesBankOnly(uint8_t pad);  // §15.3 page-scoped clear
+
+  // =================================================================
+  // Phase 3.E — page ARPEG (Root × 7, Mode × 7, Chromatic, Octave × 4,
+  // PL/S ARPEG). §7.4 strict uniforme adopté (Loïc post HW Gate G3) :
+  // ENTER sur rôle propre = dégage direct, pas de [---] clear pool.
+  // §9.2 strict pool (no silent steal). Couleurs §11.1.
+  // =================================================================
+  void _drawPageArpeg();
+  void _drawGridArpeg();
+  void _drawPoolArpeg();
+  void _drawInfoArpeg();
+  void _drawControlBarArpeg();
+  void _handleEnterArpeg();         // ENTER grid (§7.4 strict)
+  void _handleEnterPoolArpeg();     // ENTER pool (§9.2 strict)
+  void _applyDefaultsArpeg();       // §15.4 + §15.5 skip silencieux
+  void _clearRolesArpegOnly(uint8_t pad);  // §15.3 page-scoped
 };
 
 #endif // TOOL_PAD_ROLES_H
