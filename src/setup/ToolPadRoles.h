@@ -30,6 +30,20 @@ struct PadRole {
   uint8_t index;  // index within that line
 };
 
+// Phase 3.C.2 — agrégateur cross-store pour cell display §8.1 + info panel
+// + future modale d'écrasement 3.G. Consulté par toutes les pages (BANK/ARPEG/
+// LOOP/CC) pour décider de l'affichage et de la légalité des assignments.
+struct PadNeighborInfo {
+  int8_t          bankIdx;         // -1 si pas BANK, sinon 0..7
+  bool            hasCc;
+  ScaleRoleResult scaleRole;       // .kind == NONE si pas de rôle scale
+  ArpRoleResult   arpRole;         // .kind == NONE si pas de rôle arp
+  int8_t          loopSlotIdx;     // -1 si pas slot, sinon 0..15
+  bool            isLoopRec;
+  bool            isLoopPlayStop;
+  bool            isLoopClear;
+};
+
 // Phase 3 — sous-page contexte (Tool PAD ROLE 4-page refactor)
 enum SubPage : uint8_t {
   SUB_BANK  = 0,   // 8 bank pads assignment
@@ -202,6 +216,15 @@ private:
   void    _saveCc();
   void    _loadCc();
   void    _refreshBadgeCc();
+
+  // =================================================================
+  // Phase 3.C.2 — cross-store helpers (réutilisés par toutes les pages
+  // 3.D/3.E/3.F/3.G pour cell display §8.1, info panel langue musicien,
+  // et la modale d'écrasement future).
+  // =================================================================
+  PadNeighborInfo _padNeighborInfo(uint8_t pad) const;
+  void _formatRoleNameMusician(const PadNeighborInfo& info,
+                                char* out, size_t cap) const;
 };
 
 #endif // TOOL_PAD_ROLES_H

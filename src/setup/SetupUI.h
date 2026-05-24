@@ -57,6 +57,15 @@ enum ConfirmResult : uint8_t {
 #define VT_BRIGHT_RED     "\033[91m"
 #define VT_BRIGHT_BLUE    "\033[94m"
 
+// Phase 3.C.2 — palette cross-page Tool PAD ROLE (placeholders, refonte 3.H.1).
+// VT_BG_AMBER_SAT : background ambre saturé pour cell BANK absorbant cross-page
+//   (256-color palette index 130 = ambre soutenu, à raffiner 3.H.1).
+// VT_NEUTRAL_BAR  : label cell contextuel cross-page (ARPEG/LOOP slot).
+//   Placeholder ASCII " :: " (4 bytes) — fit le buffer roleLabels[][6] actuel
+//   (5 char + null). Refonte UTF-8 " ■■ " + extension buffer décidées 3.H.1.
+#define VT_BG_AMBER_SAT   "\033[48;5;130m"
+#define VT_NEUTRAL_BAR    " :: "
+
 // Unicode box drawing — double-line (outer frame)
 #define UNI_TL  "\xe2\x95\x94"  // ╔
 #define UNI_TR  "\xe2\x95\x97"  // ╗

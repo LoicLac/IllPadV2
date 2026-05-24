@@ -701,6 +701,17 @@ void ToolPadRoles::run() {
   _confirmDefaults = false;
   _confirmClearAll = false;
 
+  // Phase 3.C.2 + fix HW Gate G2 — reset state page CC à l'entrée tool
+  // (re-entry safe : évite écran vide quand on rouvre Tool 3 sur SUB_CC
+  // après un edit précédent, car _ccScreenDirty member persistait à false).
+  _ccUiMode          = UI_CC_GRID_NAV;
+  _ccFieldIdx        = 0;
+  _ccPoolIdx         = 0;
+  _ccGlobalFieldIdx  = 0;
+  _ccPropEditDirty   = false;
+  _ccGlobalEditDirty = false;
+  _ccScreenDirty     = true;  // force redraw initial sur page CC
+
   captureBaselines(*_keyboard, _refBaselines);
 
   _ui->vtClear();
@@ -988,5 +999,103 @@ void ToolPadRoles::run() {
     }
 
     delay(5);
+  }
+}
+
+// =================================================================
+// Phase 3.C.2 — cross-store helpers (cell display §8.1 + info panel +
+// modale d'écrasement future 3.G). Consultés par toutes les pages
+// (BANK/ARPEG/LOOP/CC) — implémentation unique dans ToolPadRoles.cpp.
+// =================================================================
+
+PadNeighborInfo ToolPadRoles::_padNeighborInfo(uint8_t pad) const {
+  PadNeighborInfo info{};
+  info.bankIdx        = findBankIdxForPad(_wkBankPads, pad);
+  info.scaleRole      = scaleRoleAtPad(_wkRootPads, _wkModePads, _wkChromPad, pad);
+  info.arpRole        = arpRoleAtPad(_wkArpPlayStopPad, _wkOctavePads, pad);
+  info.loopSlotIdx    = findLoopSlotIdx(_wkLoopPad, pad);
+  info.isLoopRec      = (_wkLoopPad.recPad      == pad);
+  info.isLoopPlayStop = (_wkLoopPad.playStopPad == pad);
+  info.isLoopClear    = (_wkLoopPad.clearPad    == pad);
+  info.hasCc          = (findControlPadEntryIdx(_wkCc, pad) >= 0);
+  return info;
+}
+
+// _formatRoleNameMusician — produit une phrase courte langue musicien pour
+// les rôles CONTEXTUELs portés par un pad (consommée par info panel page CC
+// 3.C.2, étendue verbose pour modale 3.G.1). Le rôle ABSORBANT BANK est
+// traité séparément par le caller (cf §15.2 spec — naming Ion/Dor/etc).
+void ToolPadRoles::_formatRoleNameMusician(const PadNeighborInfo& info,
+                                            char* out, size_t cap) const {
+  if (!out || cap == 0) return;
+  out[0] = '\0';
+  if (cap < 2) return;
+
+  static const char* ROOT_NAMES[7] = {"A","B","C","D","E","F","G"};
+  static const char* MODE_NAMES[7] = {"Ion","Dor","Phr","Lyd","Mix","Aeo","Loc"};
+
+  // Helper : append " + " then text (space-separated cumulative naming).
+  auto append = [&](const char* text) {
+    if (!text || !text[0]) return;
+    size_t cur = strlen(out);
+    if (cur > 0) {
+      if (cur + 3 < cap) {
+        strcat(out, " + ");
+        cur += 3;
+      } else {
+        return;
+      }
+    }
+    size_t remain = cap - cur - 1;
+    strncat(out, text, remain);
+  };
+
+  char buf[24];
+
+  // Scale roles (Root / Mode / Chrom)
+  switch (info.scaleRole.kind) {
+    case ScaleRoleKind::ROOT:
+      if (info.scaleRole.idx < 7) {
+        snprintf(buf, sizeof(buf), "Root %s", ROOT_NAMES[info.scaleRole.idx]);
+        append(buf);
+      }
+      break;
+    case ScaleRoleKind::MODE:
+      if (info.scaleRole.idx < 7) {
+        snprintf(buf, sizeof(buf), "Mode %s", MODE_NAMES[info.scaleRole.idx]);
+        append(buf);
+      }
+      break;
+    case ScaleRoleKind::CHROM:
+      append("Chromatic");
+      break;
+    case ScaleRoleKind::NONE:
+    default:
+      break;
+  }
+
+  // Arp roles (PL/S ARPEG / Octave)
+  switch (info.arpRole.kind) {
+    case ArpRoleKind::PLAY_STOP:
+      append("PL/S ARPEG");
+      break;
+    case ArpRoleKind::OCTAVE:
+      snprintf(buf, sizeof(buf), "Octave %u", (unsigned)(info.arpRole.idx + 1));
+      append(buf);
+      break;
+    case ArpRoleKind::NONE:
+    default:
+      break;
+  }
+
+  // LOOP controls (REC / PS / CLR)
+  if (info.isLoopRec)       append("LOOP REC");
+  if (info.isLoopPlayStop)  append("LOOP PS");
+  if (info.isLoopClear)     append("LOOP CLR");
+
+  // LOOP slot
+  if (info.loopSlotIdx >= 0) {
+    snprintf(buf, sizeof(buf), "Slot %u", (unsigned)(info.loopSlotIdx + 1));
+    append(buf);
   }
 }

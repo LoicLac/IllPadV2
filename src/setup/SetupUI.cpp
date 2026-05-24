@@ -558,11 +558,14 @@ void SetupUI::drawCellGrid(
         const char* label = roleLabels[key];
         const char* modeColor;
         switch (roleMap[key]) {
-          case 1:  modeColor = VT_BRIGHT_YELLOW; break;  // MOMENTARY   → "m"
-          case 2:  modeColor = VT_MAGENTA;       break;  // LATCH       → "l"
-          case 3:  modeColor = VT_ORANGE;        break;  // CONT + RET0 → "z"
-          case 4:  modeColor = VT_BRIGHT_WHITE;  break;  // CONT + HOLD → "h"
-          default: modeColor = VT_DIM;           break;  // unassigned  → "---"
+          case 1:  modeColor = VT_BRIGHT_YELLOW;          break;  // MOMENTARY   → "m"
+          case 2:  modeColor = VT_MAGENTA;                break;  // LATCH       → "l"
+          case 3:  modeColor = VT_ORANGE;                 break;  // CONT + RET0 → "z"
+          case 4:  modeColor = VT_BRIGHT_WHITE;           break;  // CONT + HOLD → "h"
+          // Phase 3.C.2 cross-page (§12.4 audit B-N1 switch inline, pas table COLORS_*[]).
+          case 7:  modeColor = VT_DIM VT_BG_AMBER_SAT;    break;  // BANK absorbant cross-page → "Bk<n>"
+          case 8:  modeColor = VT_DIM;                    break;  // CONTEXTUEL cross-page (ARPEG mod / LOOP slot) → " :: "
+          default: modeColor = VT_DIM;                    break;  // unassigned  → "---"
         }
         if (key == activeKey) {
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,

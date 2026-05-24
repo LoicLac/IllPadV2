@@ -108,11 +108,20 @@ void ToolPadRoles::_handleModePickCc(const NavEvent& ev) {
 
       // Create slot if needed
       if (s < 0) {
-        // Phase 3 — R2 collision check (spec §5) : refuse if pad is LOOP control.
-        if (isLoopControlPad(_nvs->getLoadedLoopPadStore(), cursorPad)) {
-          _setFlash("Pad is LOOP REC/PS/CLR - move in Tool 3 first");
-          _ccScreenDirty = true;
+        // Phase 3.C.2 — refus uniforme silencieux (§12.11 M4) : si pad porte
+        // un rôle cross-page (BANK absorbant OU contextuel ARPEG/LOOP), no-op
+        // silencieux placeholder. Modale d'écrasement 3.G.2 viendra remplacer
+        // ce no-op par l'arbitrage interactif. Flash 3.B "Pad is LOOP REC/PS/
+        // CLR..." retiré pour cohérence (était la seule UX divergente).
+        PadNeighborInfo info = _padNeighborInfo(cursorPad);
+        bool blockedCrossPage = (info.bankIdx >= 0)
+                              || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear
+                              || (info.scaleRole.kind != ScaleRoleKind::NONE)
+                              || (info.arpRole.kind   != ArpRoleKind::NONE)
+                              || (info.loopSlotIdx >= 0);
+        if (blockedCrossPage) {
           _ccUiMode = UI_CC_GRID_NAV;
+          _ccScreenDirty = true;
           break;
         }
         if (!_addSlotCc(cursorPad)) {
@@ -172,6 +181,24 @@ void ToolPadRoles::_handleGridNavCc(const NavEvent& ev) {
 
     case NAV_ENTER: {
       cursorPad = (uint8_t)(_gridRow * 12 + _gridCol);
+
+      // Phase 3.C.2 + fix HW Gate G2 — refus pré-MODE_PICK : si pad porte un
+      // rôle cross-page (BANK absorbant OU contextuel ARPEG/LOOP), ne pas
+      // même ouvrir la pool selector. No-op silencieux dès grid-nav. Modale
+      // d'écrasement 3.G.2 viendra remplacer ce no-op par l'arbitrage
+      // interactif. Le check dans _handleModePickCc reste en défense en
+      // profondeur (cas concurrent edit hypothétique).
+      PadNeighborInfo info = _padNeighborInfo(cursorPad);
+      bool blockedCrossPage = (info.bankIdx >= 0)
+                            || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear
+                            || (info.scaleRole.kind != ScaleRoleKind::NONE)
+                            || (info.arpRole.kind   != ArpRoleKind::NONE)
+                            || (info.loopSlotIdx >= 0);
+      if (blockedCrossPage) {
+        // No-op silencieux : ne pas ouvrir MODE_PICK.
+        break;
+      }
+
       // V3.B : ENTER opens the mode pool selector. Pool cursor starts on
       // the pad's current mode if assigned, else MOM (idx 0).
       int8_t s = _findSlotCc(cursorPad);
@@ -480,54 +507,85 @@ void ToolPadRoles::_drawGridCc() {
   uint8_t map[NUM_KEYS];
   memset(map, 0, sizeof(map));
 
-  // Phase 3 — LOOP controls (REC/PS/CLEAR) labelisés, non-éditables (R2 spec §5).
-  const LoopPadStore& lp = _nvs->getLoadedLoopPadStore();
-
+  // Phase 3.C.2 — cell display §8.1. Ordre des checks :
+  //   1. CC propre (priorité absolue page CC)
+  //   2. LOOP control REC/PS/CLEAR (3.B preserved : labels R/P/C, map=0)
+  //   3. BANK absorbant cross-page → "Bk<n>", map=7 (ambre+ saturé)
+  //   4. Contextuel ARPEG (Root/Mode/Chrom/Octave/PL/S) OU LOOP slot → " :: ", map=8
+  //   5. Vide → "---", map=0
+  // Refus dur silencieux placeholder pour cases 3+4 (modale arbitrage en 3.G.2).
   for (uint8_t i = 0; i < NUM_KEYS; i++) {
-    if (isLoopControlPad(lp, i)) {
-      const char* lbl = (i == lp.recPad)      ? " R "
-                      : (i == lp.playStopPad) ? " P "
-                                              : " C ";
+    PadNeighborInfo info = _padNeighborInfo(i);
+
+    // 1. CC propre
+    if (info.hasCc) {
+      int8_t s = _findSlotCc(i);
+      if (s >= 0) {
+        const ControlPadEntry& e = _wkCc.entries[s];
+        char suffix;
+        uint8_t mapVal;
+        switch (e.mode) {
+          case CTRL_MODE_MOMENTARY:
+            suffix = 'm';
+            mapVal = 1;
+            break;
+          case CTRL_MODE_LATCH:
+            suffix = 'l';
+            mapVal = 2;
+            break;
+          case CTRL_MODE_CONTINUOUS:
+          default:
+            if (e.releaseMode == CTRL_RELEASE_HOLD) {
+              suffix = 'h';
+              mapVal = 4;
+            } else {
+              suffix = 'z';
+              mapVal = 3;
+            }
+            break;
+        }
+        snprintf(labels[i], sizeof(labels[i]), "%02u%c",
+                 (unsigned)(e.ccNumber % 100), suffix);
+        map[i] = mapVal;
+        continue;
+      }
+    }
+
+    // 2. LOOP control REC/PS/CLEAR (preserved 3.B affichage)
+    if (info.isLoopRec || info.isLoopPlayStop || info.isLoopClear) {
+      const char* lbl = info.isLoopRec      ? " R "
+                      : info.isLoopPlayStop ? " P "
+                                            : " C ";
       strncpy(labels[i], lbl, 5);
       labels[i][5] = '\0';
       map[i] = 0;
       continue;
     }
 
-    int8_t s = _findSlotCc(i);
-    if (s < 0) {
-      strncpy(labels[i], "---", 5);
-      labels[i][5] = '\0';
-      map[i] = 0;
-    } else {
-      const ControlPadEntry& e = _wkCc.entries[s];
-      char suffix;
-      uint8_t mapVal;
-      switch (e.mode) {
-        case CTRL_MODE_MOMENTARY:
-          suffix = 'm';
-          mapVal = 1;
-          break;
-        case CTRL_MODE_LATCH:
-          suffix = 'l';
-          mapVal = 2;
-          break;
-        case CTRL_MODE_CONTINUOUS:
-        default:
-          if (e.releaseMode == CTRL_RELEASE_HOLD) {
-            suffix = 'h';
-            mapVal = 4;
-          } else {
-            // CTRL_RELEASE_TO_ZERO (default)
-            suffix = 'z';
-            mapVal = 3;
-          }
-          break;
-      }
-      snprintf(labels[i], sizeof(labels[i]), "%02u%c",
-               (unsigned)(e.ccNumber % 100), suffix);
-      map[i] = mapVal;
+    // 3. BANK absorbant cross-page
+    if (info.bankIdx >= 0) {
+      snprintf(labels[i], sizeof(labels[i]), "Bk%d", info.bankIdx + 1);
+      map[i] = 7;
+      continue;
     }
+
+    // 4. Contextuel ARPEG ou LOOP slot
+    bool hasContextuel = (info.scaleRole.kind != ScaleRoleKind::NONE)
+                       || (info.arpRole.kind  != ArpRoleKind::NONE)
+                       || (info.loopSlotIdx >= 0);
+    if (hasContextuel) {
+      // VT_NEUTRAL_BAR = " :: " placeholder ASCII (4 bytes) — fit buffer [6].
+      // Refonte UTF-8 " ■■ " + extension buffer en 3.H.1 (cf §13 placeholders).
+      strncpy(labels[i], VT_NEUTRAL_BAR, 5);
+      labels[i][5] = '\0';
+      map[i] = 8;
+      continue;
+    }
+
+    // 5. Vide
+    strncpy(labels[i], "---", 5);
+    labels[i][5] = '\0';
+    map[i] = 0;
   }
 
   _ui->drawCellGrid(GRID_CONTROLPAD,
@@ -735,48 +793,80 @@ void ToolPadRoles::_drawInfoCc() {
     return;
   }
 
-  // Cursor sur pad LOOP control : info immédiate, pas attendre tentative add.
-  const LoopPadStore& lp = _nvs->getLoadedLoopPadStore();
-  if (isLoopControlPad(lp, cursorPad)) {
-    const char* role = (cursorPad == lp.recPad)      ? "REC"
-                     : (cursorPad == lp.playStopPad) ? "PLAY/STOP"
-                                                     : "CLEAR";
-    _ui->drawFrameLine(VT_YELLOW "Pad #%d : LOOP %s (Tool 3 b1) - cannot assign CC here." VT_RESET,
+  // Phase 3.C.2 — section grid-nav unifiée : info panel langue musicien §15.2
+  // + voisins cross-page (BANK absorbant ou contextuels ARPEG/LOOP).
+  PadNeighborInfo info = _padNeighborInfo(cursorPad);
+
+  // Cas 1 : pad porte BANK (absorbant cross-page) — interdit pour CC.
+  if (info.bankIdx >= 0) {
+    _ui->drawFrameLine(VT_YELLOW "Pad #%d : Bank %d (page BANK, absorbant) - cannot assign CC here." VT_RESET,
+                       (int)cursorPad + 1, info.bankIdx + 1);
+    _ui->drawFrameLine(VT_DIM "Move Bank %d in page BANK first to free this pad." VT_RESET,
+                       info.bankIdx + 1);
+    return;
+  }
+
+  // Cas 2 : pad porte LOOP control (REC/PS/CLEAR) — preserved 3.B comportement,
+  // mais wording aligné no-op silencieux (modale 3.G.2 décidera).
+  if (info.isLoopRec || info.isLoopPlayStop || info.isLoopClear) {
+    const char* role = info.isLoopRec      ? "REC"
+                     : info.isLoopPlayStop ? "PLAY/STOP"
+                                           : "CLEAR";
+    _ui->drawFrameLine(VT_YELLOW "Pad #%d : LOOP %s (page LOOP) - cannot assign CC here." VT_RESET,
                        (int)cursorPad + 1, role);
-    _ui->drawFrameLine(VT_DIM "Move LOOP %s in Tool 3 first to free this pad." VT_RESET, role);
+    _ui->drawFrameLine(VT_DIM "Move LOOP %s in page LOOP first to free this pad." VT_RESET, role);
     return;
   }
 
-  int8_t s = _findSlotCc(cursorPad);
-  if (s < 0) {
-    _ui->drawFrameLine(VT_DIM "Pad #%d : unassigned. [RET] to create. [g] edit globals." VT_RESET,
-                       (int)cursorPad + 1);
-    _ui->drawFrameEmpty();
+  // Cas 3 : pad porte CC propre (assigned slot) — détails MIDI CC.
+  if (info.hasCc) {
+    int8_t s = _findSlotCc(cursorPad);
+    if (s >= 0) {
+      const ControlPadEntry& e = _wkCc.entries[s];
+      const char* modeName = (e.mode == CTRL_MODE_MOMENTARY)  ? "momentary"
+                            : (e.mode == CTRL_MODE_LATCH)     ? "latch"
+                                                              : "continuous";
+      char chBuf[12];
+      if (e.channel == 0) snprintf(chBuf, sizeof(chBuf), "follow");
+      else                snprintf(chBuf, sizeof(chBuf), "ch %u", (unsigned)e.channel);
+
+      _ui->drawFrameLine(VT_BRIGHT_WHITE "Pad #%d" VT_RESET " : CC %u, %s, %s",
+                         (int)cursorPad + 1, (unsigned)e.ccNumber, chBuf, modeName);
+
+      const char* modeSem;
+      if (e.mode == CTRL_MODE_MOMENTARY) {
+        modeSem = "MOMENTARY : press=127, release=0 (binary gate)";
+      } else if (e.mode == CTRL_MODE_LATCH) {
+        modeSem = "LATCH : each press toggles CC 0 <-> 127 (needs fixed channel)";
+      } else if (e.releaseMode == CTRL_RELEASE_TO_ZERO) {
+        modeSem = "CONT+RET0 : pressure-driven, release fades to 0 (gate expression)";
+      } else {
+        modeSem = "CONT+HOLD : pressure-driven, release freezes last value (setter)";
+      }
+      _ui->drawFrameLine(VT_DIM "%s" VT_RESET, modeSem);
+      return;
+    }
+  }
+
+  // Cas 4 : pad porte un/des rôles CONTEXTUEL (ARPEG mod / LOOP slot).
+  // Langue musicien via _formatRoleNameMusician. Modale d'écrasement 3.G.2
+  // décidera de l'arbitrage à l'assign (placeholder no-op silencieux ici).
+  bool hasContextuel = (info.scaleRole.kind != ScaleRoleKind::NONE)
+                     || (info.arpRole.kind  != ArpRoleKind::NONE)
+                     || (info.loopSlotIdx >= 0);
+  if (hasContextuel) {
+    char roleName[80] = {0};
+    _formatRoleNameMusician(info, roleName, sizeof(roleName));
+    _ui->drawFrameLine(VT_YELLOW "Pad #%d : %s (contextuel)" VT_RESET,
+                       (int)cursorPad + 1, roleName);
+    _ui->drawFrameLine(VT_DIM "Assigning CC here will overwrite this role (modale §10, Phase 3.G)." VT_RESET);
     return;
   }
 
-  const ControlPadEntry& e = _wkCc.entries[s];
-  const char* modeName = (e.mode == CTRL_MODE_MOMENTARY)  ? "momentary"
-                        : (e.mode == CTRL_MODE_LATCH)     ? "latch"
-                                                          : "continuous";
-  char chBuf[12];
-  if (e.channel == 0) snprintf(chBuf, sizeof(chBuf), "follow");
-  else                snprintf(chBuf, sizeof(chBuf), "ch %u", (unsigned)e.channel);
-
-  _ui->drawFrameLine(VT_BRIGHT_WHITE "Pad #%d" VT_RESET " : CC %u, %s, %s",
-                     (int)cursorPad + 1, (unsigned)e.ccNumber, chBuf, modeName);
-
-  const char* modeSem;
-  if (e.mode == CTRL_MODE_MOMENTARY) {
-    modeSem = "MOMENTARY : press=127, release=0 (binary gate)";
-  } else if (e.mode == CTRL_MODE_LATCH) {
-    modeSem = "LATCH : each press toggles CC 0 <-> 127 (needs fixed channel)";
-  } else if (e.releaseMode == CTRL_RELEASE_TO_ZERO) {
-    modeSem = "CONT+RET0 : pressure-driven, release fades to 0 (gate expression)";
-  } else {
-    modeSem = "CONT+HOLD : pressure-driven, release freezes last value (setter)";
-  }
-  _ui->drawFrameLine(VT_DIM "%s" VT_RESET, modeSem);
+  // Cas 5 : pad libre — invite à créer.
+  _ui->drawFrameLine(VT_DIM "Pad #%d : unassigned. [RET] to create. [g] edit globals." VT_RESET,
+                     (int)cursorPad + 1);
+  _ui->drawFrameEmpty();
 }
 
 void ToolPadRoles::_drawControlBarCc() {
