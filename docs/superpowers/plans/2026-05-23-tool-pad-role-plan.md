@@ -271,13 +271,12 @@ grep -rn "ArpRoleKind::PLAY_STOP" src/
 1. Build clean (`~/.platformio/penv/bin/pio run -e esp32-s3-devkitc-1`), 0 warning.
 2. Upload (`pio run -t upload`), monitor (`pio device monitor -b 115200`).
 3. Vérifier au boot : `[BOOT NVS] ArpPadStore raw/v0 detecte - reset v1 applique...` ou message équivalent (mismatch v2→v3 → defaults factory appliqués).
-4. Badge T3 sur menu setup : partiellement OK (BankPad + ScalePad inchangés, ArpPad reset).
-5. Entrer Tool 3 (sous-page NORM legacy). Pool, ligne "Hold:" → sélectionner "Hld", placer sur pad 23 (default factory). Save. Reboot.
-6. Au boot : `[BOOT NVS] Arp pads loaded (v3 store): arpPlayStop=23 oct=...` attendu.
+4. Entrer Tool 3 (sous-page NORM legacy). Pool, ligne "Hold:" → sélectionner "Hld", placer sur pad 23. Save. Observer en passant : badge T3 sur menu = état partiel OK (ArpPad reset post-bump). Reboot.
+5. **Tool 4 non-régression check** (5.5 fusionné ici) : depuis menu setup, entrer Tool 4 → ENTER pad libre → MODE_PICK MOM → ENTER (assign CC0) → q exit. Tool 4 fonctionne comme avant.
+6. Au boot suivant : `[BOOT NVS] Arp pads loaded (v3 store): arpPlayStop=23 oct=...` attendu.
 7. Foreground bank ARPEG (Tool 5 si nécessaire). Jouer 2-3 notes (pile peuplée).
 8. Tap pad 23 → moteur ARPEG démarre, arpège joue (DAW reçoit notes).
-9. Tap pad 23 → moteur stop, pile préservée (DAW : pas de nouvelles notes).
-10. Tap pad musical → moteur relance step 0 avec pile précédente (fix F1 confirmé).
+9. Tap pad 23 → moteur stop, pile préservée (DAW : pas de nouvelles notes). **(Allègement : step 10 retiré — `tap pad musical → relance step 0` est le fix F1 2026-05-15 stable, non touché par 3.A, vérification redondante.)**
 
 **Critères** :
 - ✓ Boot OK, logs serial NVS v3 cohérents
@@ -285,7 +284,7 @@ grep -rn "ArpRoleKind::PLAY_STOP" src/
 - ✓ ARPEG Play/Stop via pad PL/S fonctionne (toggle)
 - ✓ Pile sacrée préservée au Stop (fix F1 du 2026-05-15)
 - ✓ Pas de stuck note, pas de comportement bizarre dans `handleArpPlayStopPad`
-- ✓ Tool 4 toujours fonctionnel (suppression en 3.C.1b, pas en 3.A)
+- ✓ Tool 4 toujours fonctionnel (step 5 — suppression en 3.C.1b, pas en 3.A)
 
 ### §3.6 Mini-audit faisabilité
 
@@ -428,15 +427,14 @@ grep -E '"BANK".*"ARPEG".*"LOOP".*"CC"' src/setup/ToolPadRoles.cpp
 ### §4.4 HW Gate G1
 
 **Procédure** :
-1. Boot OK. RAM/Flash inchangés à variance compile près (création de 4 fichiers + extension header ≈ négligeable).
+1. Build clean (0 warning), boot OK.
 2. Menu setup : Tool 3 sélectionnable, Tool 4 reste sélectionnable (transition).
 3. Entrer Tool 3. Header affiche **"TOOL 3: PAD ROLE"** + ligne sub-page `Sub-page [BANK|ARPEG|LOOP|CC] [TAB] cycle`. BANK est highlighted reverse+bold, autres dim.
-4. TAB : cycle BANK → ARPEG → LOOP → CC → BANK. Chaque page affiche le contenu legacy identique (toutes couleurs/rôles superposés). Acceptable transition.
-5. Nav arrows OK dans chaque page.
-6. ENTER ouvre pool (comportement actuel). Pool toujours 5 lignes legacy.
-7. Save d'un rôle (ex assignment Root B sur pad libre). Reload reboot. Persiste.
-8. q exit OK depuis chaque page.
-9. Tool 4 sélectionné depuis menu : fonctionne comme avant.
+4. **TAB nav + arrows** (fusionné 4+5) : TAB cycle BANK → ARPEG → LOOP → CC → BANK (4 tours). Chaque page affiche contenu legacy identique. Nav arrows testées implicitement en se déplaçant.
+5. ENTER ouvre pool (comportement actuel). Pool toujours 5 lignes legacy.
+6. Save d'un rôle (ex assignment Root B sur pad libre). Reload reboot. Persiste.
+7. q exit depuis page BANK uniquement (code exit dans orchestrateur, pas page-specific en 3.B — test redondant sur 4 pages).
+8. Tool 4 sélectionné depuis menu : fonctionne comme avant.
 
 **Critères** :
 - ✓ TAB cycle 4 pages, header correct
@@ -531,6 +529,7 @@ uint8_t         _ccGlobalFieldIdx;
 bool            _ccPropEditDirty;
 bool            _ccGlobalEditDirty;
 bool            _ccWkDirty;
+bool            _ccScreenDirty;     // migration _screenDirty member Tool 4 (cf §5.1.5 point 4)
 
 // --- Page CC methods (defined in ToolPadRoles_Cc.cpp) ---
 void _handleGridNavCc(const NavEvent& ev);
@@ -857,19 +856,61 @@ L'affichage grid label R/P/C des LOOP control reste preserved pour info visuelle
 #define VT_NEUTRAL_BAR    " ■■ "             // UTF-8 BLACK SQUARE x2
 ```
 
-**Patch 5 — `SetupUI.cpp`** : extension palette `GRID_CONTROLPAD` map=7 (ambre+) / map=8 (neutre)
+**Patch 5 — `SetupUI.cpp`** : extension switch inline `GRID_CONTROLPAD` cases 7 (ambre+) / 8 (neutre) — cf §12.4 audit B-N1
+
+Refonte du switch `case GRID_CONTROLPAD` actuel (`SetupUI.cpp:550-556`) — extension avec cases 7/8 (pas de table `COLORS_CONTROLPAD[]`, c'est un switch inline).
+
 ```cpp
-const char* COLORS_CONTROLPAD[] = {
-  VT_DIM,                  // 0 = unassigned
-  VT_BRIGHT_YELLOW,        // 1 = MOM
-  VT_MAGENTA,              // 2 = LATCH
-  VT_ORANGE,               // 3 = RET0
-  VT_BRIGHT_WHITE,         // 4 = HOLD
-  VT_DIM,                  // 5 = reserved
-  VT_DIM,                  // 6 = reserved
-  VT_DIM VT_BG_AMBER_SAT,  // 7 = absorbant cross-page (NEW 3.C.2)
-  VT_DIM,                  // 8 = neutre ■■ cross-page (NEW 3.C.2)
-};
+// SetupUI.cpp switch GRID_CONTROLPAD — extension 3.C.2
+switch (roleMap[key]) {
+  case 1:    modeColor = VT_BRIGHT_YELLOW;        break;  // MOM
+  case 2:    modeColor = VT_MAGENTA;              break;  // LATCH
+  case 3:    modeColor = VT_ORANGE;               break;  // CONT + RET0
+  case 4:    modeColor = VT_BRIGHT_WHITE;         break;  // CONT + HOLD
+  case 7:    modeColor = VT_DIM VT_BG_AMBER_SAT;  break;  // ABSORBANT cross-page (NEW 3.C.2 §12.4)
+  case 8:    modeColor = VT_DIM;                  break;  // neutre ■■ cross-page (NEW 3.C.2 §12.4)
+  default:   modeColor = VT_DIM;                  break;  // unassigned
+}
+```
+
+**Patch 6 — `ToolPadRoles_Cc.cpp` `_drawInfoCc` body** : langue musicien §15.2 (F7 audit 1 I4.4 — clôture dette doc)
+
+Body concret (symétrique aux _drawInfoBank / _drawInfoArpeg / _drawInfoLoop) :
+```cpp
+void ToolPadRoles::_drawInfoCc() const {
+  uint8_t pad = _gridRow * 12 + _gridCol;
+  PadNeighborInfo info = _padNeighborInfo(pad);
+  char line1[80], line2[80] = {0};
+
+  // Ligne 1 : rôle propre CC (entry MIDI CC sur ce pad)
+  if (info.hasCc) {
+    int8_t ccSlot = findControlPadEntryIdx(_wkCc, pad);
+    if (ccSlot >= 0) {
+      const ControlPadEntry& e = _wkCc.entries[ccSlot];
+      static const char* modeLabels[5] = {"MOM","LATCH","CONT+RET0","CONT+HOLD","?"};
+      uint8_t mIdx = (e.mode < 4) ? e.mode : 4;
+      snprintf(line1, sizeof(line1), "Pad %u : CC%u ch%u %s",
+               pad + 1, e.ccNumber, e.channel + 1, modeLabels[mIdx]);
+    }
+  } else {
+    snprintf(line1, sizeof(line1), "Pad %u : libre pour CC", pad + 1);
+  }
+
+  // Ligne 2 : voisins cross-page (absorbant BANK ou contextuels ARPEG/LOOP)
+  if (info.bankIdx >= 0) {
+    snprintf(line2, sizeof(line2), "  + Bank %d (page BANK, absorbant — interdit ici)",
+             info.bankIdx + 1);
+  } else {
+    char neighborBuf[60] = {0};
+    _formatRoleNameMusician(info, neighborBuf, sizeof(neighborBuf));
+    if (neighborBuf[0]) {
+      snprintf(line2, sizeof(line2), "  + %s (contextuel — modale a l'assign §10)", neighborBuf);
+    }
+  }
+
+  _ui->drawFrameLine(line1);
+  if (line2[0]) _ui->drawFrameLine(line2);
+}
 ```
 
 #### §5.3.3 Hard-asserts 3.C.2
@@ -919,25 +960,25 @@ grep -cE "findBankIdxForPad|scaleRoleAtPad|arpRoleAtPad|findLoopSlotIdx|info\." 
    - Curseur pad 0 : "Pad #1 : BANK 1 - interdit ici. Move bank assignment in page BANK first."
    - Curseur pad 8 : "Pad #9 : Root A (ARPEG). Assignment overwrites these roles (Phase 3.G modale)."
    - Curseur pad 32 : "Pad #33 : LOOP REC (Tool 3 b1) - cannot assign CC here" (3.B preserved)
-5. Tentatives ENTER :
-   - ENTER sur pad 0 (BANK) → no-op silencieux (placeholder modale)
+5. **Test refus uniforme cross-page** (cohérent §12.11 — flash 3.B retiré dès 3.C.2) :
+   - ENTER sur pad 0 (BANK) → no-op silencieux (placeholder modale 3.G)
    - ENTER sur pad 8 (ARPEG) → no-op silencieux
-   - ENTER sur pad 32 (LOOP REC) → flash "Pad is LOOP REC/PS/CLR..." (code 3.B preserved)
-6. Test non-régression Tool 4 :
+   - ENTER sur pad 32 (LOOP REC) → **no-op silencieux** (PAS de flash, alignement no-op uniforme §12.11)
+   Critère : aucun flash, aucun message, retour direct UI_CC_GRID_NAV pour les 3 cas.
+6. Test non-régression Tool 4 (essentiel) :
    - ENTER sur pad 5 (libre) → MODE_PICK pool ouvert
    - Sélectionner MOM, ENTER → assigne CC0 momentary, save (flashSaved), label `00m`
-   - Tester `e` (VALUE_EDIT), `g` (GLOBAL_EDIT), `x` (CONFIRM_REMOVE), `d` (CONFIRM_DEFAULTS) — tous fonctionnels comme Tool 4 actuel
-7. Quitter via q → retour menu setup
-8. Reboot, persistance OK
+   - Tester `e` (VALUE_EDIT) + `d` (CONFIRM_DEFAULTS) — fonctionnels comme Tool 4 actuel
+   - (`g` GLOBAL_EDIT et `x` CONFIRM_REMOVE : smoke-check uniquement, regroupés en "fonctionnalités avancées CC OK")
+7. q exit + reboot, persistance OK (fusionné en 1 observation séquentielle)
 
 **Critères** :
 - ✓ Tool 4 retiré du menu (`case '4'` absent)
 - ✓ Page CC absorption Tool 4 non-régression (tous comportements préservés)
 - ✓ Cell display §8.1 colonne CC : BANK ambre+, contextuels ■■, LOOP control R/P/C, CC propre normal
 - ✓ Info panel langue musicien correct (cross-page + LOOP control)
-- ✓ Refus dur silencieux placeholder modale OK
-- ✓ Refus flash 3.B LOOP control preserved
-- ✓ NVS T3 badge agrégé reflète ControlPad
+- ✓ Refus no-op silencieux uniforme cross-page (BANK + contextuels + LOOP control — placeholder modale 3.G, flash 3.B retiré §12.11)
+- ✓ NVS T3 badge agrégé reflète ControlPad (descriptor 5 inclus dans range T3=[2..5]) ET LoopPadStore (descriptor 12 via check ad-hoc §12.6)
 - ✓ Palette GRID_CONTROLPAD map=7/8 cohérente
 
 ---
@@ -1000,7 +1041,41 @@ void ToolPadRoles::_buildRoleMapBank() {
 }
 ```
 
-b. `_drawPageBank`, `_drawGridBank`, `_drawPoolBank`, `_drawInfoBank`, `_drawControlBarBank` (cf chat iter 2 passe 3 pour body complet).
+b. `_drawPageBank`, `_drawGridBank`, `_drawPoolBank`, `_drawControlBarBank` : patterns identiques aux sections du code legacy (legacy Tool 3 sous-page NORM livré commit `97db63a`), adaptés au scope BANK.
+
+`_drawInfoBank` body concret (F7 audit 1 I4.4 — clôture dette doc) :
+```cpp
+void ToolPadRoles::_drawInfoBank() const {
+  uint8_t pad = _gridRow * 12 + _gridCol;
+  PadNeighborInfo info = _padNeighborInfo(pad);
+  char line1[80], line2[80] = {0};
+
+  // Ligne 1 : rôle propre BANK
+  if (info.bankIdx >= 0) {
+    snprintf(line1, sizeof(line1), "Pad %u : Bank %d", pad + 1, info.bankIdx + 1);
+  } else {
+    snprintf(line1, sizeof(line1), "Pad %u : libre pour Bank", pad + 1);
+  }
+
+  // Ligne 2 : voisins cross-page (absorbant CC ou contextuels ARPEG/LOOP)
+  if (info.hasCc) {
+    int8_t ccSlot = findControlPadEntryIdx(_wkCc, pad);
+    if (ccSlot >= 0) {
+      snprintf(line2, sizeof(line2), "  + CC%u (page CC, absorbant — interdit ici)",
+               _wkCc.entries[ccSlot].ccNumber);
+    }
+  } else {
+    char neighborBuf[60] = {0};
+    _formatRoleNameMusician(info, neighborBuf, sizeof(neighborBuf));
+    if (neighborBuf[0]) {
+      snprintf(line2, sizeof(line2), "  + %s (contextuel — modale a l'assign §10)", neighborBuf);
+    }
+  }
+
+  _ui->drawFrameLine(line1);
+  if (line2[0]) _ui->drawFrameLine(line2);
+}
+```
 
 c. `_handleEnterBank` — **respect spec §7.4 strict** :
 ```cpp
@@ -1264,13 +1339,17 @@ grep -cE "_roleMap\[.*\] = [78]" src/setup/ToolPadRoles_Bank.cpp src/setup/ToolP
 6. **§7.4 strict test (dégage direct)** :
    - Curseur sur pad 0 (Bank 1 assignée), ENTER → dégage immédiat (no pool ouvert), pad 0 redevient ` -- `, pool Bk1 redevient vert menthe
    - Pas de retour au pool nav, reste en grid nav (visible par control bar)
-7. Ré-assigner Bank 1 sur pad 0, puis Banks 2-8 sur pads 1-7
+7. Ré-assigner Bank 1 sur pad 0, puis assigner rapidement Banks 2-8 sur pads 1-7 (procédure assignement déjà validée steps 5-6)
+7.5. **Test `d` defaults BANK** (validation stub reserved §7.3.2 Patch 5 remplacé par body réel 3.D.2) :
+   - `d` → confirm prompt "Restaurer les defauts de cette page ? (y/n)"
+   - `y` → 8 banks assignées pads 0-7 (§15.4 factory), pool entries dim
+   - INFO curseur pad 0 → "Bank 1"
+   Critère : 8 banks assignées (PAS de flash "reserved" — preuve que le body 3.D.2 a remplacé le stub)
 8. **§8.1 cross-page test CC** : curseur pad 10 → cell `CC00` dim ambre+, INFO "Pad 11 : CC0 - interdit ici", ENTER → no-op silencieux
-9. **§8.1 cross-page test ARPEG** : curseur pad 20 → cell ` ■■ ` neutre, INFO "Pad 21 : Root A (ARPEG)", ENTER → no-op silencieux
-10. **§8.1 cross-page test LOOP** : curseur pad 32 → cell ` ■■ `, INFO "Pad 33 : REC (LOOP)", ENTER → no-op silencieux
-11. q exit → exit OK (8 banks assignées)
-12. Reboot, persistance OK
-13. **§9.2 strict test (no silent steal)** :
+9. **§8.1 cross-page test contextuels** (1 cas suffit, ■■ neutre identique ARPEG/LOOP) : curseur pad 20 → cell ` ■■ ` neutre, INFO "Pad 21 : Root A (ARPEG)", ENTER → no-op silencieux. (Pad 32 LOOP REC : même comportement, vérification rapide en passant.)
+10. q exit → exit OK (8 banks assignées)
+11. Reboot, persistance OK
+12. **§9.2 strict test (no silent steal)** :
     - ENTER sur pad 5 (libre) → pool, naviguer cursor sur Bk2 (déjà assignée pad 1, dim)
     - ENTER sur Bk2 → no-op silencieux (pas de silent steal), pad 5 reste libre, pool inchangé
     - Bk2 reste sur pad 1
@@ -1411,20 +1490,27 @@ void _clearRolesArpegOnly(uint8_t pad);  // helper page-scoped, body en 3.E.2
 #define VT_PURPLE  "\033[38;5;141m"  // Phase 3.E.1 placeholder §11.1 (Octave), refined 3.H.1
 ```
 
-**Patch 3 — `SetupUI.cpp`** : palette `GRID_ROLES` mise à jour §11.1
+**Patch 3 — `SetupUI.cpp`** : extension switch inline `GRID_ROLES` §11.1 (cf §12.4 audit B-N1 — pas de table `COLORS_ROLES[]`, c'est un switch inline)
+
+Refonte du switch `case GRID_ROLES` actuel (`SetupUI.cpp:534-543`) — modifier cases 2/4/5 vers couleurs spec §11.1 + **retirer le case 6 legacy `"Play/Stop" VT_BRIGHT_RED` orphelin** (audit 1 finding I3.1 : enum n'avait pas de valeur 6, label "Play/Stop" était mort. Avec `ROLE_CC=6` ajouté en 3.B, `_buildRoleMapX` ne l'émet jamais en GRID_ROLES — les pads CC en pages BANK/ARPEG/LOOP sont mappés via case 7 "ABSORBANT cross-page"). Cases 7/8 déjà ajoutés en 3.C.2 (§12.4).
+
 ```cpp
-const char* COLORS_ROLES[] = {
-  VT_DIM,                   // 0 = ROLE_NONE
-  VT_BLUE,                  // 1 = ROLE_BANK (legacy, audit 3.H.1 vs spec §11.1 "blanc")
-  VT_PEACH,                 // 2 = ROLE_ROOT (NEW 3.E.1)
-  VT_CYAN,                  // 3 = ROLE_MODE (Chromatic réutilise cyan §11.1)
-  VT_PURPLE,                // 4 = ROLE_OCTAVE (NEW 3.E.1)
-  VT_GREEN,                 // 5 = ROLE_PLAY_STOP (NEW 3.E.1)
-  VT_RED,                   // 6 = ROLE_COLLISION
-  VT_DIM VT_BG_AMBER_SAT,   // 7 = absorbant cross-page
-  VT_DIM,                   // 8 = neutre ■■ cross-page (utilisé BANK/CC, pas ARPEG)
-};
+// SetupUI.cpp switch GRID_ROLES — refonte 3.E.1 (couleurs §11.1)
+switch (roleMap[key]) {
+  case 1:    color = VT_BLUE;                  break;  // BANK (legacy, audit 3.H.1 vs spec §11.1 "blanc")
+  case 2:    color = VT_PEACH;                 break;  // ROOT (NEW 3.E.1, was VT_GREEN)
+  case 3:    color = VT_CYAN;                  break;  // MODE (+ Chromatic, inchangé)
+  case 4:    color = VT_PURPLE;                break;  // OCTAVE (NEW 3.E.1, was VT_YELLOW)
+  case 5:    color = VT_GREEN;                 break;  // PLAY_STOP unifié ARPEG+LOOP (NEW 3.E.1, was VT_MAGENTA pour ROLE_HOLD)
+  // case 6 retiré : ROLE_CC n'est pas émis en GRID_ROLES (mappé case 7 ABSORBANT par _buildRoleMapX, ou rendu par GRID_CONTROLPAD séparé en page CC)
+  case 7:    color = VT_DIM VT_BG_AMBER_SAT;   break;  // ABSORBANT cross-page (NEW 3.C.2 §12.4)
+  case 8:    color = VT_DIM;                   break;  // neutre ■■ cross-page (NEW 3.C.2 §12.4, BANK/CC seulement, pas ARPEG)
+  case 0xFF: color = VT_RED;                   break;  // COLLISION (inchangé legacy)
+  default:   color = VT_DIM;                   break;
+}
 ```
+
+Cases 9/10/11 ajoutés en 3.F.1 (`ROLE_REC`/`ROLE_CLR`/`ROLE_SLOT`) — cf §8.1.2 Patch 3.
 
 **Patch 4 — `ToolPadRoles_Arpeg.cpp`** : remplacement stub + statics + body
 
@@ -1543,6 +1629,10 @@ grep -E "VT_PEACH|VT_PURPLE" src/setup/SetupUI.h
 # E. drawScreen dispatch SUB_ARPEG
 grep "_activeSubPage == SUB_ARPEG" src/setup/ToolPadRoles.cpp
 # attendu : ≥ 1 match
+
+# F. case 6 legacy "Play/Stop" retiré du switch GRID_ROLES (§12.4 audit + audit 1 I3.1)
+grep -A1 "case 6:" src/setup/SetupUI.cpp | grep "Play/Stop"
+# attendu : 0 matches (label legacy mort retiré)
 ```
 
 #### §7.1.4 Mini-audit 3.E.1
@@ -1682,14 +1772,68 @@ Compléter `_drawInfoArpeg` langue musicien (§8.5 + §15.2). Implémenter `_app
 
 #### §7.3.2 Patches
 
-**Patch 1 — `ToolPadRoles_Arpeg.cpp` `_drawInfoArpeg` complet** : langue musicien §15.2
-- "Root A", "Root B", ..., "Root G"
-- "Mode Ionian (Ion)", "Mode Dorian (Dor)", ..., "Mode Locrian (Loc)"
-- "Chromatic"
-- "Octave 1", "Octave 2", "Octave 3", "Octave 4"
-- "Play/Stop ARPEG"
-- Cross-page voisins LOOP : "(+ Slot 5 LOOP)", "(+ REC LOOP)", etc.
-- Helpers `_formatArpegRole`, `_formatLoopNeighbor`, `_drawArpegRoleDescription`
+**Patch 1 — `ToolPadRoles_Arpeg.cpp` `_drawInfoArpeg` complet** : langue musicien §15.2 (F7 audit 1 I4.4 — clôture dette doc)
+
+Body concret (symétrique au `_drawInfoLoop` §8.3.2 Patch 1) :
+```cpp
+void ToolPadRoles::_drawInfoArpeg() const {
+  uint8_t pad = _gridRow * 12 + _gridCol;
+  PadNeighborInfo info = _padNeighborInfo(pad);
+  char line1[80], line2[80] = {0};
+
+  // Ligne 1 : rôle propre ARPEG (Root/Mode/Chrom/Octave/PL/S)
+  static const char* rootNames[7] = {"A","B","C","D","E","F","G"};
+  static const char* modeNamesShort[8] = {"Ion","Dor","Phr","Lyd","Mix","Aeo","Loc","Chr"};
+  static const char* modeNamesLong[8]  = {
+    "Ionian", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Aeolian", "Locrian", "Chromatic"
+  };
+
+  if (info.scaleRole.kind == ScaleRoleKind::ROOT) {
+    snprintf(line1, sizeof(line1), "Pad %u : Root %s", pad + 1, rootNames[info.scaleRole.idx]);
+  } else if (info.scaleRole.kind == ScaleRoleKind::MODE) {
+    snprintf(line1, sizeof(line1), "Pad %u : Mode %s (%s)",
+             pad + 1, modeNamesLong[info.scaleRole.idx], modeNamesShort[info.scaleRole.idx]);
+  } else if (info.scaleRole.kind == ScaleRoleKind::CHROM) {
+    snprintf(line1, sizeof(line1), "Pad %u : Chromatic", pad + 1);
+  } else if (info.arpRole.kind == ArpRoleKind::OCTAVE) {
+    snprintf(line1, sizeof(line1), "Pad %u : Octave %u", pad + 1, info.arpRole.idx + 1);
+  } else if (info.arpRole.kind == ArpRoleKind::PLAY_STOP) {
+    // PL/S unifié §14.1 — détection partage avec LOOP
+    if (_wkArpPlayStopPad == _wkLoopPad.playStopPad && _wkLoopPad.playStopPad < NUM_KEYS) {
+      snprintf(line1, sizeof(line1),
+               "Pad %u : Play/Stop ARPEG + LOOP (geste unifie §14.1)", pad + 1);
+    } else {
+      snprintf(line1, sizeof(line1), "Pad %u : Play/Stop ARPEG", pad + 1);
+    }
+  } else {
+    snprintf(line1, sizeof(line1), "Pad %u : libre pour ARPEG", pad + 1);
+  }
+
+  // Ligne 2 : voisins cross-page (absorbants ou contextuels LOOP)
+  if (info.bankIdx >= 0) {
+    snprintf(line2, sizeof(line2), "  + Bank %d (page BANK, absorbant — interdit ici)",
+             info.bankIdx + 1);
+  } else if (info.hasCc) {
+    int8_t ccSlot = findControlPadEntryIdx(_wkCc, pad);
+    if (ccSlot >= 0) {
+      snprintf(line2, sizeof(line2), "  + CC%u (page CC, absorbant — interdit ici)",
+               _wkCc.entries[ccSlot].ccNumber);
+    }
+  } else {
+    // Voisins contextuels LOOP → coexistence §7.3 (informatif)
+    char loopNeighborBuf[60] = {0};
+    _formatLoopNeighbor(info, loopNeighborBuf, sizeof(loopNeighborBuf));
+    if (loopNeighborBuf[0]) {
+      snprintf(line2, sizeof(line2), "  + %s (page LOOP, coexistence §7.3)", loopNeighborBuf);
+    }
+  }
+
+  _ui->drawFrameLine(line1);
+  if (line2[0]) _ui->drawFrameLine(line2);
+}
+```
+
+Helpers `_formatArpegRole`, `_formatLoopNeighbor`, `_drawArpegRoleDescription` : utility wrappers compacts pour réutilisation par modale (§9.1.2 `_formatOverwriteWording`).
 
 **Patch 2 — `ToolPadRoles_Arpeg.cpp` `_applyDefaultsArpeg`** : restore defaults §15
 ```cpp
@@ -1756,10 +1900,36 @@ if (_confirmDefaults) {
 - `_confirmClearAll` flag legacy retiré (le `r` n'existe plus)
 - `clearRole(pad)` legacy conservé temporairement → utilisé pour migrations transitoires, retiré en 3.H.2
 
-**Patch 5 — Stubs `_applyDefaultsBank/Loop/Cc`** : déclarés dans `ToolPadRoles.h` et stubs vides en 3.E.3 pour que le compile passe. Bodies remplis :
-- `_applyDefaultsBank()` → rétroactif 3.D.2 (cf §6 mise à jour)
-- `_applyDefaultsLoop()` → en 3.F.3
-- `_applyDefaultsCc()` → rétroactif 3.C.2 (vide _wkCc) ou réutilisation `_resetAllCc` migré depuis Tool 4 `_handleConfirmDefaultsCc`
+**Patch 5 — Stubs `_applyDefaultsBank/Loop/Cc` — "reserved actifs"** (cohérent CLAUDE.md projet "qualité finale, pas de body vide silencieux") :
+
+Déclarés dans `ToolPadRoles.h`, bodies stubs **avec feedback observable** en 3.E.3. Si bodies réels manquent à la phase d'EXEC correspondante, `d` page X affiche un flash explicite au lieu d'un `flashSaved` trompeur. Bodies réels remplacent ces stubs :
+- `_applyDefaultsBank()` → body réel en 3.D.2 (rétroactif §6.6 cf §6 mise à jour)
+- `_applyDefaultsLoop()` → body réel en 3.F.3
+- `_applyDefaultsCc()` → body réel en 3.C.2 (vide `_wkCc.count = 0` + memset, équivalent migré `_resetAllCc` Tool 4)
+
+Stubs reserved actifs (3.E.3) :
+```cpp
+void ToolPadRoles::_applyDefaultsBank() {
+  // Stub reserved actif — body réel livré en 3.D.2 (§6.6)
+  _setFlash("Defaults BANK reserved (livre en 3.D.2)");
+}
+void ToolPadRoles::_applyDefaultsLoop() {
+  // Stub reserved actif — body réel livré en 3.F.3
+  _setFlash("Defaults LOOP reserved (livre en 3.F.3)");
+}
+void ToolPadRoles::_applyDefaultsCc() {
+  // Stub reserved actif — body réel livré en 3.C.2
+  _setFlash("Defaults CC reserved (livre en 3.C.2)");
+}
+```
+
+**Décision actée** (cohérent CLAUDE.md projet "qualité finale, pas de body vide silencieux qui ferait passer `flashSaved` trompeur"). Le `d` page X ne peut pas faire `if (saveAll()) _ui->flashSaved()` trompeur en cas d'oubli body réel — le flash explicite domine et signale au testeur qu'un travail est manquant.
+
+**Hard-assert cross-phase** (validation post-EXEC complète) :
+```bash
+grep -E "_setFlash.*reserved" src/setup/ToolPadRoles.cpp src/setup/ToolPadRoles_*.cpp
+# attendu : 0 matches après 3.D.2 + 3.C.2 + 3.F.3 livrés (flash stubs disparus, bodies réels en place)
+```
 
 #### §7.3.3 Hard-asserts 3.E.3
 
@@ -1808,43 +1978,34 @@ grep "_confirmClearAll" src/setup/ToolPadRoles.cpp src/setup/ToolPadRoles.h
 **Setup préalable** :
 - 8 banks assignées (depuis 3.D test G3)
 - pad 10 = CC0 (depuis 3.C test G2)
+- **pad 8 = CC1 (NEW : ajouté manuellement avant G4, requis pour test skip silencieux step 5 — oubli setup audit 2)**
 - Dev seed M7 LOOP REC/PS/CLR sur pads 32/33/34
 
 **Procédure** :
 1. Boot. Entrer Tool 3 → TAB jusqu'à page ARPEG.
-2. Vérifier rendu §8.1 :
-   - Pads 0-7 (banks) : `Bk1`..`Bk8` dim fond ambre+ saturé
-   - Pad 10 (CC0) : `CC00` dim fond ambre+
-   - Pads 32/33/34 (LOOP control) : `--` (invisible §8.1)
+2. Vérifier rendu §8.1 (2 types suffisent — pattern identique cross-pages) : pad 0 (Bank 1) `Bk1` dim ambre+, pad 32 (LOOP REC) `--` invisible. (Pad 10 CC0 ambre+ et pad 33/34 invisibles : observation passante.)
 3. Vérifier pool 4 lignes : Root `A B C D E F G`, Mode `Ion Dor Phr Lyd Mix Aeo Loc Chr`, Oct `Oct1 Oct2 Oct3 Oct4`, PL/S `P/S` — tous vert menthe.
 4. Test `d` defaults ARPEG :
    - `d` → confirm prompt "Restaurer les defauts de cette page ? (y/n)"
    - `y` → defaults factory appliqués :
-     - Pads 8-14 : Root A B C D E F G (pêche)
+     - Pads 8 (skipped — CC1 préassigné §15.5), 9-14 : Root B C D E F G (pêche)
      - Pads 15-21 : Mode Ion..Loc (cyan)
      - Pad 22 : Chr (cyan)
      - Pad 23 : P/S (vert)
      - Pads 25-28 : Oct1..Oct4 (pourpre)
    - Banks et CC inchangés
-5. Test conflict skip silencieux : pré-setup placer CC1 sur pad 8 (page CC) avant `d` ARPEG.
-   - Re-`d` ARPEG → Root A pad 8 skipped (pad reste CC1).
-   - Pool ARPEG : Root A vert menthe (libre).
+5. Test conflict skip silencieux **(setup CC1 pad 8 fait au préalable G4 setup)** : observation immédiate de step 4 — Root A pad 8 skipped, pool ARPEG ligne Root affiche `A` vert menthe libre.
 6. Test swap intra-AC §7.2 :
-   - ENTER sur pad 8 → pool ligne Root, cursor sur "A"
-   - Naviguer cursor sur "B" (déjà pad 9, dim)
-   - ENTER → silent steal : pad 8 = Root B, pad 9 = `--`, pool Root A vert menthe
-7. Test refus absorbants :
-   - ENTER sur pad 0 (Bank 1) → no-op silencieux
-   - ENTER sur pad 10 (CC0) → no-op silencieux
-8. Test info panel langue musicien :
-   - Curseur pad 8 (Root B) → "Pad 9 — Root B — description spec"
-   - Curseur pad 23 (P/S) → "Pad 24 — Play/Stop ARPEG — description fix F1"
-   - Curseur pad 10 → "Pad 11 : CC0 - interdit ici"
+   - ENTER sur pad 9 (Root B, post-d) → pool ligne Root, cursor sur "B"
+   - Naviguer cursor sur "C" (déjà pad 10... non, pad 10 = CC0. Cursor sur "D" (déjà pad 11))
+   - ENTER → silent steal : pad 9 = Root D, pad 11 = `--`, pool Root B vert menthe
+7. Test refus absorbants (1 cas suffit, pattern symétrique) : ENTER sur pad 0 (Bank 1) → no-op silencieux. (Pad 10 CC0 : même comportement, vérification rapide.)
+8. Test info panel langue musicien (2 cas — F8 wording suffixe ARPEG) :
+   - Curseur pad 9 (Root D post-swap) → "Pad 10 — Root D de ARPEG"
    - Curseur pad 32 → "Pad 33 — free for ARPEG (REC LOOP en page LOOP — coexistence possible)"
 9. Test `[---] clear role` page-scoped :
    - ENTER sur pad 23, `[---]`, ENTER → P/S retiré pad 23, dev seed LOOP pad 32 inchangé
-10. q exit → hard-constraint OK (8 banks toujours) → exit
-11. Reboot, persistance
+10. q exit → hard-constraint OK + reboot persistance (fusionné)
 
 **Critères** :
 - ✓ Cell display §8.1 (absorbant ambre+, contextuel LOOP invisible)
@@ -2043,6 +2204,72 @@ else if (_activeSubPage == SUB_LOOP)  _drawPageLoop();   // NEW 3.F.1
 
 `run()` legacy dispatch reste pour SUB_LOOP en 3.F.1 (handlers branchés en 3.F.2). **Plus de branche `else` legacy fallback** après 3.F.1 — toutes les pages ont leur dispatch propre. `_buildRoleMapLegacy` n'est plus consommé que par le `default` switch (chemin mort, retiré en 3.H.2 selon L1).
 
+**Patch 6 — `ToolPadRoles.cpp` `saveAll()` extension LoopPadStore** (déplacé depuis §8.3 / §12.12 audit M6) :
+
+**Rationale** : `saveAll()` legacy ne persiste pas `LoopPadStore`. Si l'extension est livrée seulement en 3.F.3, la fenêtre 3.F.2 (handlers LOOP branchés, `saveAll()` appelé après chaque ENTER) montre un comportement `flashSaved` trompeur — changements LOOP perdus au reboot. L'extension doit donc précéder le branchement des handlers (3.F.2). Livraison en 3.F.1 = bonne fenêtre.
+
+```cpp
+// ToolPadRoles.cpp saveAll() — après les 3 saves existants BankPad+ScalePad+ArpPad :
+// 4. LoopPadStore (NEW 3.F.1, déplacé de 3.F.3 §12.12 audit M6 pour éviter
+//    fenêtre data loss entre 3.F.2 et 3.F.3)
+_nvs->setLoadedLoopPad(_wkLoopPad);
+if (!_nvs->saveLoopPad()) allOk = false;
+```
+
+Vérification API NvsManager : `setLoadedLoopPad(const LoopPadStore&)` inline `NvsManager.h:88`, `saveLoopPad()` `NvsManager.cpp:1246-1252` retourne `bool`. **Signatures conformes — patch applicable sans modification API.**
+
+**Note CC** : `_saveCc` legacy (pattern save-per-commit Tool 4, conservé §14.1) persiste déjà `ControlPadStore` via `NvsManager::saveBlob` direct. Pas besoin d'extension `saveAll` pour CC.
+
+**Patch 7 — `ToolPadRoles.cpp` `poolLineSize()` extension page-scoped + skip silencieux nav circulaire** (audit B-E2 + §12.5) :
+
+Avec `POOL_LINE_COUNT = 10` (Patch 1), la nav circulaire pool (`ToolPadRoles.cpp:842,848`) cyclerait sur les lignes 6-9 même en pages BANK/ARPEG/CC où ces lignes sont vides. `poolLineSize()` doit retourner page-scoped pour lignes 6-9 ; nav circulaire doit skipper silencieusement les lignes vides.
+
+a. `poolLineSize()` extension (test interne `_activeSubPage` — minimise diff vs signature avec param) :
+```cpp
+uint8_t ToolPadRoles::poolLineSize(uint8_t line) const {
+  // Lignes 0-5 : page-agnostic legacy
+  switch (line) {
+    case 0: return 1;                // [---] clear role (toujours valide)
+    case 1: return POOL_BANK_COUNT;  // Banks
+    case 2: return POOL_ROOT_COUNT;  // Roots ARPEG
+    case 3: return POOL_MODE_COUNT;  // Modes ARPEG
+    case 4: return POOL_OCTAVE_COUNT;// Octaves ARPEG
+    case 5: return POOL_HOLD_COUNT;  // PL/S unifié
+  }
+  // Lignes 6-9 : page LOOP uniquement (NEW 3.F.1)
+  if (_activeSubPage == SUB_LOOP) {
+    switch (line) {
+      case 6: return 1;              // REC
+      case 7: return 1;              // PL/S (peut être identique pad ARPEG, §14.1)
+      case 8: return 1;              // CLR
+      case 9: return POOL_SLOT_COUNT;// 16 Slots
+    }
+  }
+  return 0;  // hors page LOOP : lignes 6-9 inactives
+}
+```
+
+b. Skip silencieux nav circulaire (`run()` lignes 842 et 848) :
+```cpp
+// UP arrow pool nav (L842)
+do {
+  if (_poolLine == 0) _poolLine = POOL_LINE_COUNT - 1;
+  else _poolLine--;
+} while (poolLineSize(_poolLine) == 0);
+uint8_t sz = poolLineSize(_poolLine);
+if (sz > 0 && _poolIdx >= sz) _poolIdx = sz - 1;
+
+// DOWN arrow pool nav (L848)
+do {
+  if (_poolLine == POOL_LINE_COUNT - 1) _poolLine = 0;
+  else _poolLine++;
+} while (poolLineSize(_poolLine) == 0);
+sz = poolLineSize(_poolLine);
+if (sz > 0 && _poolIdx >= sz) _poolIdx = sz - 1;
+```
+
+**Note** : la ligne 0 (`[---] clear role`) retourne toujours `1` — elle est valide et toujours atteignable, ce qui évite une boucle infinie. La ligne 5 (PL/S) retourne `POOL_HOLD_COUNT = 1` (le pad PL/S est unique) et reste valide en page ARPEG/LOOP (PL/S unifié §14.1).
+
 #### §8.1.3 Hard-asserts 3.F.1
 
 ```bash
@@ -2073,6 +2300,18 @@ grep -A14 "COLORS_ROLES\[\]" src/setup/SetupUI.cpp
 # G. POOL_LINE_COUNT = 10
 grep "POOL_LINE_COUNT" src/setup/ToolPadRoles.h
 # attendu : "POOL_LINE_COUNT = 10"
+
+# H. saveAll() persiste LoopPadStore (Patch 6 déplacé de 3.F.3, audit B-E2 + §12.12)
+grep -E "_nvs->saveLoopPad|setLoadedLoopPad.*_wkLoopPad" src/setup/ToolPadRoles.cpp
+# attendu : ≥ 2 (un appel setLoaded + un saveLoopPad dans saveAll body)
+
+# I. poolLineSize() page-scoped LOOP (Patch 7 audit M-E2 + §12.5)
+grep "_activeSubPage == SUB_LOOP" src/setup/ToolPadRoles.cpp
+# attendu : ≥ 2 (un dans poolLineSize, un dans drawScreen)
+
+# J. Skip silencieux nav circulaire pool (Patch 7 §12.5)
+grep -c "while (poolLineSize" src/setup/ToolPadRoles.cpp
+# attendu : ≥ 2 (UP + DOWN nav)
 ```
 
 #### §8.1.4 Mini-audit 3.F.1
@@ -2238,14 +2477,64 @@ Compléter `_drawInfoLoop` langue musicien (§8.5 + §15.2). Implémenter `_appl
 
 #### §8.3.2 Patches
 
-**Patch 1 — `ToolPadRoles_Loop.cpp` `_drawInfoLoop` complet** : langue musicien
-- "REC LOOP" + description "Record toggle for current bank"
-- "Play/Stop LOOP" + description
-- "CLEAR LOOP" + description "Long-press to empty bank"
-- "Slot N LOOP" (avec numéro) + description "Save/Load loop content"
-- Cross-page voisins ARPEG : "(+ Root D ARPEG)", "(+ Octave 2 ARPEG)", etc.
-- **PL/S unifié §14.1** : si `_wkLoopPad.playStopPad == _wkArpPlayStopPad`, info panel mentionne "Play/Stop LOOP + ARPEG sur ce pad (geste unifié §14.1)"
-- Helpers `_formatLoopRole`, `_formatArpegNeighbor` (symétriques 3.E.3)
+**Patch 1 — `ToolPadRoles_Loop.cpp` `_drawInfoLoop` complet** : langue musicien §15.2
+
+Body concret (closes l'audit 1 finding I4.4 "renvoi à chat iter 2 passe 3") :
+```cpp
+void ToolPadRoles::_drawInfoLoop() const {
+  uint8_t pad = _gridRow * 12 + _gridCol;
+  PadNeighborInfo info = _padNeighborInfo(pad);
+  char line1[80], line2[80] = {0};
+
+  // Ligne 1 : rôle propre LOOP (REC / PS / CLR / Slot)
+  if (info.isLoopRec) {
+    snprintf(line1, sizeof(line1), "Pad %u : REC LOOP — record toggle bank courant", pad + 1);
+  } else if (info.isLoopPlayStop) {
+    // PL/S unifié §14.1 — détection partage avec ARPEG
+    if (_wkLoopPad.playStopPad == _wkArpPlayStopPad) {
+      snprintf(line1, sizeof(line1),
+               "Pad %u : Play/Stop LOOP + ARPEG (geste unifie §14.1)", pad + 1);
+    } else {
+      snprintf(line1, sizeof(line1), "Pad %u : Play/Stop LOOP", pad + 1);
+    }
+  } else if (info.isLoopClear) {
+    snprintf(line1, sizeof(line1), "Pad %u : CLEAR LOOP — long-press vide bank", pad + 1);
+  } else if (info.loopSlotIdx >= 0) {
+    // F11 audit 3 Q2-F1 : prévenir user que slots = Phase 6
+    snprintf(line1, sizeof(line1),
+             "Pad %u : Slot %d LOOP (UI configuree, runtime Phase 6 Slot Drive)",
+             pad + 1, info.loopSlotIdx);
+  } else {
+    snprintf(line1, sizeof(line1), "Pad %u : libre pour LOOP", pad + 1);
+  }
+
+  // Ligne 2 : voisins cross-page (absorbants ou contextuels ARPEG)
+  char neighborBuf[60] = {0};
+  if (info.bankIdx >= 0) {
+    snprintf(line2, sizeof(line2), "  + Bank %d (page BANK, absorbant — interdit ici)",
+             info.bankIdx + 1);
+  } else if (info.hasCc) {
+    int8_t ccSlot = findControlPadEntryIdx(_wkCc, pad);
+    if (ccSlot >= 0) {
+      snprintf(line2, sizeof(line2), "  + CC%u (page CC, absorbant — interdit ici)",
+               _wkCc.entries[ccSlot].ccNumber);
+    }
+  } else {
+    // Voisins contextuels ARPEG → coexistence §7.3 (informatif)
+    _formatArpegNeighbor(info, neighborBuf, sizeof(neighborBuf));
+    if (neighborBuf[0]) {
+      snprintf(line2, sizeof(line2), "  + %s (page ARPEG, coexistence §7.3)", neighborBuf);
+    }
+  }
+
+  _ui->drawFrameLine(line1);
+  if (line2[0]) _ui->drawFrameLine(line2);
+}
+```
+
+Helpers symétriques 3.E.3 : `_formatLoopRole`, `_formatArpegNeighbor` (formate Root/Mode/Chrom/Octave/PL/S ARPEG en string court pour voisin info panel).
+
+**Note F11 audit 3 Q2-F1** : les Slots LOOP sont configurables UI mais n'ont aucun consumer runtime (Phase 6 Slot Drive). L'info panel prévient explicitement l'utilisateur — pas de surprise UX silencieuse.
 
 **Patch 2 — `ToolPadRoles_Loop.cpp` `_applyDefaultsLoop`** : restore defaults §15
 ```cpp
@@ -2341,21 +2630,19 @@ grep "_wkLoopPad.playStopPad == _wkArpPlayStopPad" src/setup/ToolPadRoles_Loop.c
    - ENTER → pool ligne REC. Naviguer Slots, cursor `S0`, ENTER → Slot 0 LOOP pad 8 (cell jaune `S0`)
    - TAB page ARPEG → cell pad 8 reste `A` couleur pêche (Root A inchangé)
    - Info panel page ARPEG : "Pad 9 — Root A (+ Slot 0 LOOP)"
-7. **Test PL/S unifié §14.1** :
-   - Pré-test : ARPEG PL/S pad 23 (default). Page LOOP, dégager PS pad 33 via `[---] clear role`, naviguer pad 23, ENTER pool ligne PS, ENTER assigne PS LOOP pad 23.
-   - Cell pad 23 `P/S` vert sur page LOOP ET page ARPEG (couleur unifiée §11.1)
-   - Info panel LOOP : "Pad 24 — Play/Stop LOOP + ARPEG (geste unifié §14.1)"
-   - Info panel ARPEG : "Pad 24 — Play/Stop ARPEG (+ Play/Stop LOOP en page LOOP — geste unifié §14.1)"
-8. Test swap intra-AC §7.2 :
-   - ENTER pad 32 (REC), ENTER → no-op (même pad)
-   - Re-ENTER, naviguer ligne Slots `S0`, ENTER → Slot 0 sur pad 32 (steal pad 8), REC retiré pad 32, pool REC vert menthe libre
-9. Test refus absorbants :
-   - ENTER pad 0 (Bank 1) → no-op
-   - ENTER pad 10 (CC0) → no-op
+7. **Test PL/S unifié §14.1** (test critique unique à cette phase — pre-steps détaillés) :
+   - **Pre-step 7a** : ARPEG PL/S pad 23 (default G4). TAB page LOOP.
+   - **Pre-step 7b** : naviguer pad 33 (PS LOOP default), ENTER → pool ouvert, naviguer ligne `[---] clear role`, ENTER → PS LOOP dégagé pad 33, pool PS vert menthe libre.
+   - **Pre-step 7c** : naviguer pad 23 (porte déjà PS ARPEG visible page LOOP via _drawInfoLoop — coexistence §7.3 partagée canal PL/S), ENTER → pool ouvert, naviguer ligne PS, cursor `P/S`, ENTER → PS LOOP assigné pad 23.
+   - **Vérification** : cell pad 23 `P/S` vert sur page LOOP ET page ARPEG (couleur unifiée §11.1)
+   - Info panel LOOP : "Pad 24 — Play/Stop LOOP + ARPEG (geste unifié §14.1)" — wording exact du body §8.3.2 Patch 1
+   - Info panel ARPEG (TAB ARPEG) : confirme "Pad 24 — Play/Stop ARPEG (+ Play/Stop LOOP en page LOOP — geste unifié §14.1)"
+8. Test swap intra-AC §7.2 (1 swap suffit, symétrique G4 step 6) : ENTER pad 32 (REC), pool ligne Slots `S0`, ENTER → Slot 0 sur pad 32, REC retiré, pool REC vert menthe.
+9. **(Step 9 audit 2 retiré : test refus absorbants redondant avec G4 step 7 — page LOOP et ARPEG partagent le même code de refus absorbants côté orchestrateur.)**
 10. Test `[---] clear role` page-scoped :
     - ENTER pad 8 (Slot 0 LOOP), `[---]` clear, ENTER → Slot 0 retiré, Root A ARPEG **conservé** (§15.3 page-scoped)
 11. q exit → hard-constraint OK → exit
-12. Reboot, persistance OK
+12. **Reboot, persistance OK — prérequis F1 audit B-E2 : `saveAll()` extension LoopPadStore est livrée en 3.F.1 (déplacée de 3.F.3, cf §8.1.2 Patch 6 + §12.12). Sans ce déplacement, ce step échouerait cryptiquement.**
 
 **Critères** :
 - ✓ Cell display §8.1 page LOOP
@@ -2441,23 +2728,23 @@ void ToolPadRoles::_formatOverwriteWording(char* out, size_t cap) {
   char roleBufs[4][32];
   uint8_t roleCount = 0;
 
-  // Modificateurs ARPEG (Root/Mode/Chrom)
+  // Modificateurs ARPEG (Root/Mode/Chrom) — suffixe " de ARPEG" pour clarté UX cross-page (F8 audit 1 I2.2 + spec §10.2)
   if (info.scaleRole.kind == ScaleRoleKind::ROOT) {
     static const char* rootNames[7] = {"A","B","C","D","E","F","G"};
-    snprintf(roleBufs[roleCount], 32, "ROOT %s", rootNames[info.scaleRole.idx]);
+    snprintf(roleBufs[roleCount], 32, "ROOT %s de ARPEG", rootNames[info.scaleRole.idx]);
     roleCount++;
   } else if (info.scaleRole.kind == ScaleRoleKind::MODE) {
     static const char* modeNames[7] = {"Ion","Dor","Phr","Lyd","Mix","Aeo","Loc"};  // §15.2
-    snprintf(roleBufs[roleCount], 32, "MODE %s", modeNames[info.scaleRole.idx]);
+    snprintf(roleBufs[roleCount], 32, "MODE %s de ARPEG", modeNames[info.scaleRole.idx]);
     roleCount++;
   } else if (info.scaleRole.kind == ScaleRoleKind::CHROM) {
-    snprintf(roleBufs[roleCount], 32, "CHROMATIC");
+    snprintf(roleBufs[roleCount], 32, "CHROMATIC de ARPEG");
     roleCount++;
   }
 
-  // Octave + PL/S ARPEG
+  // Octave + PL/S ARPEG (suffixe " de ARPEG" cohérent §10.2)
   if (info.arpRole.kind == ArpRoleKind::OCTAVE) {
-    snprintf(roleBufs[roleCount], 32, "OCTAVE %u", info.arpRole.idx + 1);
+    snprintf(roleBufs[roleCount], 32, "OCTAVE %u de ARPEG", info.arpRole.idx + 1);
     roleCount++;
   }
   if (info.arpRole.kind == ArpRoleKind::PLAY_STOP) {
@@ -2808,7 +3095,7 @@ grep "cannot assign CC here" src/setup/ToolPadRoles_Cc.cpp
 4. ENTER pad 22 → pool ouvert ligne Bank. Cursor cible Bk5.
 5. **ENTER Bk5 → modale apparaît** (overlay INFO) :
    ```
-   En placant B5 sur ce pad, "ROOT D" et "SLOT de LOOP" devront etre reattribues. Y/N ?
+   En placant B5 sur ce pad, "ROOT D de ARPEG" et "SLOT de LOOP" devront etre reattribues. Y/N ?
    ```
 6. Vérifier wording exact §10.2 + §10.3 (quotes, "et", "devront etre reattribues", "Y/N ?")
 7. **Test `n` annulation** : `n` → modale disparaît, pad 22 inchangé (Root D + Slot 3 conservés), pool fermé, retour grid nav.
@@ -2820,20 +3107,18 @@ grep "cannot assign CC here" src/setup/ToolPadRoles_Cc.cpp
     - TAB page CC : pool inchangé, pad 22 affiche `Bk5` dim ambre+
 11. **Test modale page CC + contextuels** :
     - TAB page CC. Pré-test : placer Root C ARPEG pad 30 (TAB ARPEG, ENTER pad 30, pool Root C, ENTER).
-    - Retour page CC. ENTER pad 30 → MODE_PICK pool. Sélectionner MOM, ENTER → modale "En placant CC sur ce pad, "ROOT C" devra etre reattribue. Y/N ?"
+    - Retour page CC. ENTER pad 30 → MODE_PICK pool. Sélectionner MOM, ENTER → modale "En placant CC sur ce pad, "ROOT C de ARPEG" devra etre reattribue. Y/N ?"
     - `y` → Root C dégagé, CC entry créée sur pad 30 avec defaults.
 12. **Test modale LOOP control (retrait flash 3.B)** :
     - Pad 33 porte PL/S LOOP (default). Page CC, ENTER pad 33, MODE_PICK pool, ENTER MOM → modale "En placant CC sur ce pad, "PLAY/STOP de LOOP" devra etre reattribue. Y/N ?"
     - **PAS de flash** "Pad is LOOP REC/PS/CLR" (retiré 3.G.2)
     - `y` → PL/S LOOP dégagé, CC entry créé.
-13. **Test modale 3-4 rôles** :
-    - Pré-test : placer Root A + Octave 2 + Slot 5 sur pad 40 (coexistence §4.2 max 4 théoriques)
-    - Page BANK, ENTER pad 40, pool Bk7, ENTER → modale "En placant B7 sur ce pad, "ROOT A", "OCTAVE 2" et "SLOT de LOOP" devront etre reattribues. Y/N ?"
-14. **Test refus permanent CC + BANK** :
-    - Page CC, ENTER pad 0 (Bank 1) → no-op silencieux (pas de modale)
-    - Page BANK, ENTER pad 30 (porte CC0) → no-op silencieux (info panel "interdit ici")
-15. q exit → hard-constraint OK → exit
-16. Reboot, persistance OK
+13. **Test modale 2 rôles** (allègement audit 2 G6 — passer de 3 à 2 rôles, le wording avec 3 rôles est extrapolation directe du template `roleCount == 3`) :
+    - Pré-test : placer Root A + Slot 5 sur pad 40 (coexistence §7.3 cross-AC)
+    - Page BANK, ENTER pad 40, pool Bk7, ENTER → modale "En placant B7 sur ce pad, "ROOT A de ARPEG" et "SLOT de LOOP" devront etre reattribues. Y/N ?"
+    - Vérifier wording 2 rôles correct. (Le cas 3-4 rôles est couvert par template `_formatOverwriteWording` — extrapolation logique, pas besoin de test HW séparé.)
+14. **Test refus permanent CC + BANK** (1 cas suffit, le pattern est symétrique) : Page CC, ENTER pad 0 (Bank 1) → no-op silencieux (pas de modale). Critère : aucune modale apparaît pour ABSORBANT × ABSORBANT.
+15. q exit + reboot, persistance OK (fusionné)
 
 **Critères** :
 - ✓ Modale apparaît page BANK + contextuels
@@ -3018,30 +3303,34 @@ grep -rn "clearRole(" src/ | grep -v "_clearRoles" | grep -v "//"
 ### §10.3 HW Gate G7
 
 **Procédure** :
-1. Pré-test : flash effacement NVS (touche `e` au boot maintenu) pour reproduire premier boot factory.
+1. Pré-test : **reset factory ArpPad + LoopPad via outils existants** (F9 audit 2 — option A retenue, pas de touche `e` au boot dans le firmware actuel) :
+   - Sur instrument démarré, entrer Tool 3 → page ARPEG → `d` → `y` (rétablit factory ARPEG).
+   - TAB page LOOP → `d` → `y` (rétablit factory LOOP REC=32/PS=33/CLR=34).
+   - q exit, reboot pour observer boot propre.
 2. Boot. Vérifier :
-   - **Pas** de message `[BOOT] LOOP dev seed applied: rec=32 playStop=33 clear=34` (M7 retiré)
-   - LOOP REC/PS/CLR pads tous `0xFF` au premier boot factory (cohérent `validateLoopPadStore` 0xFF preserved)
-3. Entrer Tool 3 → page LOOP. Cell pads 32/33/34 affichent `--` (vides).
-4. `d` defaults LOOP → applique factory : REC=32, PS=33, CLR=34. Comportement équivalent ex-M7 mais user-driven.
-5. Save + reboot. Persiste OK.
-6. **Audits palette HW (Q2 3.H.1)** :
+   - **Pas** de message `[BOOT] LOOP dev seed applied: rec=32 playStop=33 clear=34` (M7 retiré 3.H.2)
+   - LOOP REC/PS/CLR pads présents à 32/33/34 (post-`d` step 1)
+3. Entrer Tool 3 → page LOOP. Cell pads 32/33/34 affichent `REC` rouge, `P/S` vert, `CLR` bleu foncé (couleurs §11.1).
+4. **Audits palette HW (Q2 3.H.1)** :
    - Ambre+ saturé bien distinguable du fg ambient (`#ffaa33`)
    - Vert menthe pool vs vert PL/S grille bien distinguables
    - Root pêche, Mode cyan, Octave pourpre, PL/S vert distinguables §11.1
    - LOOP REC rouge, CLR bleu foncé, Slots jaune distinguables
    - Curseur inverse fg/bg cohérent grid + pool
-7. Si audit dévie : swap macros ANSI dans `SetupUI.h`, rebuild, re-test.
-8. Test toutes pages BANK/ARPEG/LOOP/CC : pas de régression cell display, info panels, modale, `d` defaults.
-9. Test scenarios §14 spec entiers (live mixed ARPEG+LOOP, re-attribution bank, collision CC).
+5. Si audit dévie : swap macros ANSI dans `SetupUI.h`, rebuild, re-test (cycle).
+6. **Smoke-check non-régression** (allègement audit 2 — pas de full test scenarios §14, déjà couvert G4/G5/G6) :
+   - Tester 2 pages au hasard (ex. BANK + LOOP) : cell display OK, info panel OK
+   - 1 modale (re-attribution bank sur pad portant Slot LOOP) : wording correct, `y` propage
+   - `d` LOOP → factory OK
+7. **Live smoke** (5 min) : 1 scenario réel `§14.1 A` (PL/S unifié déjà testé G5) — vérifier que l'instrument joue normalement en bank ARPEG, switch vers bank LOOP, REC/PS/CLR fonctionnels. Validation finale d'usage.
 
 **Critères** :
-- ✓ Dev seed M7 retiré (premier boot affiche LOOP pads vides)
-- ✓ `d` defaults LOOP remplace fonctionnellement M7
-- ✓ `_buildRoleMapLegacy` + `clearRole` legacy + statics BANK résiduels retirés
+- ✓ Dev seed M7 retiré (premier boot post-`d` LOOP step 1 : log absence M7)
+- ✓ `d` defaults LOOP remplace fonctionnellement M7 (step 1)
+- ✓ `_buildRoleMapLegacy` + `clearRole` legacy + statics BANK résiduels retirés (auto-review §10.2.4)
 - ✓ Build clean (0 warning, 0 error)
-- ✓ Audits palette validés Loïc HW (5 macros)
-- ✓ Pas de régression cross-pages (toutes fonctionnalités 3.A-3.G OK)
+- ✓ Audits palette validés Loïc HW (5 macros) — step 4
+- ✓ Smoke-check 2 pages + 1 modale + live (steps 6-7) sans régression
 - ✓ Save persiste reboot
 
 ### §10.4 Décisions actées pour 3.H
@@ -3174,7 +3463,9 @@ grep "descriptor 12.*check ad-hoc\|check ad-hoc.*printMainMenu" docs/reference/n
 
 **`docs/superpowers/specs/2026-04-19-loop-mode-design.md`** (spec parent LOOP) :
 - §5 cartouche refonte confirmée (déjà fait livraison spec PAD ROLE 2026-05-23) — vérifier cross-pointer à jour.
-- §15, §18, §19, §28 : vérifier cohérence avec spec PAD ROLE actuelle (aucune contradiction).
+- **§27 Phase 3 tableau d'étapes** : remplacer ancien framing "Refactor Tool 3 vers b1 contextuel + Extension Tool 4" par "**Tool PAD ROLE** (fusion Tool 3 + Tool 4 en 4 pages BANK/ARPEG/LOOP/CC, règle unique ABSORBANT/CONTEXTUEL, refonte 2026-05-23)". Cross-pointer vers `specs/2026-05-23-tool-pad-role-design.md`. (F10 audit 3 Q3-F1)
+- **§28 Q7 décision "Tool 4 extension (refus ControlPad sur pad LOOP control)"** : remplacer par "Q7 RÉSOLU 2026-05-23 — absorption Tool 4 dans Tool PAD ROLE page CC ; refus cross-page par règle unique ABSORBANT/CONTEXTUEL §4 spec PAD ROLE."
+- §15, §18, §19 : vérifier cohérence avec spec PAD ROLE actuelle (aucune contradiction attendue).
 
 **`docs/superpowers/specs/2026-05-23-tool-pad-role-design.md`** (spec PAD ROLE elle-même) :
 - §10.3 Mode wording aligné §15.2 plan : remplacer "MODE Maj", "MODE Min", "MODE Dor" par "MODE Ion", "MODE Dor", "MODE Phr", "MODE Lyd", "MODE Mix", "MODE Aeo", "MODE Loc" — cf §12.9 audit M2 (cohérence cross-doc : la spec doit refléter le wording final choisi en passe 4).
@@ -3199,6 +3490,12 @@ grep "MODE Ion\|MODE Dor\|MODE Phr" docs/superpowers/specs/2026-05-23-tool-pad-r
 # attendu : ≥ 1 match (mention Ion/Dor/Phr)
 grep "MODE Maj\|MODE Min" docs/superpowers/specs/2026-05-23-tool-pad-role-design.md
 # attendu : 0 matches (anciens wordings retirés)
+
+# E. Spec parent §27 + Q7 nouveau framing Tool PAD ROLE (F10 audit 3 Q3-F1)
+grep "Tool PAD ROLE" docs/superpowers/specs/2026-04-19-loop-mode-design.md
+# attendu : ≥ 2 matches (§27 + §28 Q7 mis à jour)
+grep "Tool 3 b1\|Tool 4 ext" docs/superpowers/specs/2026-04-19-loop-mode-design.md
+# attendu : 0 matches (anciens framings retirés ou marqués RÉSOLU)
 ```
 
 #### §11.2.3 Mini-audit 3.I.2
@@ -3441,25 +3738,19 @@ Idem côté DOWN (L848). ~10 L extra cumulées. À intégrer dans Phase 3.F.1 ou
   ```
 - Le LOOP control devient un cas de "contextuel" géré uniformément avec ARPEG modificateurs en no-op silencieux placeholder, puis modale en 3.G.2.
 
-### §12.12 — M6 `saveAll()` extension explicite pour LoopPadStore en 3.F.3
+### §12.12 — M6 `saveAll()` extension explicite pour LoopPadStore — **déplacé 3.F.3 → 3.F.1** (iter 3.6 audit B-E2)
 
-**Origine** : audit adversarial 2026-05-23 détecte que `saveAll()` legacy (`ToolPadRoles.cpp:366-415`) ne persiste pas LoopPadStore. Plan ne mentionne pas l'extension. Sans cela, changements LOOP perdus à exit du tool.
+**Origine** : audit adversarial 2026-05-23 détecte que `saveAll()` legacy (`ToolPadRoles.cpp:366-415`) ne persiste pas LoopPadStore. Plan original mentionnait l'extension en 3.F.3.
 
-**Décision pré-EXEC** : ajouter explicit extension `saveAll()` en 3.F.3.
+**Révision iter 3.6 (audit B-E2 + audits 1 et 3 convergents)** : déplacement à 3.F.1. La fenêtre 3.F.2 (handlers LOOP branchés mais 3.F.3 pas encore livré) produit un `flashSaved` trompeur — les changements LOOP semblent persistés mais disparaissent au reboot. HW Gate G5 step de persistance échouerait cryptiquement entre 3.F.2 et 3.F.3.
 
-**Impact rétroactif sur §8.3 Phase 3.F.3** :
-- Ajouter Patch 4 : `ToolPadRoles.cpp::saveAll()` extension
-  ```cpp
-  // Après les 3 saves existants (BankPad, ScalePad, ArpPad) :
-  // 4. LoopPadStore (NEW 3.F.3)
-  _nvs->setLoadedLoopPad(_wkLoopPad);
-  if (_nvs->saveLoopPad()) {
-    // ok
-  } else {
-    allOk = false;
-  }
-  ```
-- Hard-assert §8.3.3 ajouter : `grep "_nvs->saveLoopPad\|setLoadedLoopPad" src/setup/ToolPadRoles.cpp` attendu ≥ 1.
+**Décision pré-EXEC** : extension `saveAll()` livrée en **3.F.1** (avant le branchement des handlers en 3.F.2). Cohérent avec audit indépendant 3 ajouts (Q1-F1).
+
+**Impact rétroactif sur §8.1 Phase 3.F.1** :
+- §8.1.2 nouveau **Patch 6** : `ToolPadRoles.cpp::saveAll()` extension LoopPadStore (snippet cf §8.1.2 Patch 6 — déplacé ici).
+- §8.1.3 hard-assert H ajouté : `grep -E "_nvs->saveLoopPad|setLoadedLoopPad.*_wkLoopPad" src/setup/ToolPadRoles.cpp` attendu ≥ 2.
+
+**Note §8.3** : Phase 3.F.3 ne contient PLUS de Patch 4 saveAll (livré en amont). §8.3.2 reste avec Patches 1-3 (info panel, `_applyDefaultsLoop` body, dispatch update).
 
 **Note CC** : `_saveCc` legacy (pattern save-per-commit Tool 4 conservé §14.1) persiste déjà ControlPadStore via `NvsManager::saveBlob` direct. Pas besoin d'extension `saveAll` pour CC (déjà sauvé en cours d'usage page CC).
 
@@ -3621,6 +3912,8 @@ Valeurs actuelles legacy, conservées pour livraison initiale Tool PAD ROLE. À 
 **Note** : pad 24 reste libre par défaut (pas de Root/Mode/Chrom assigné dessus). C'est le pad entre Chromatic (22), PL/S (23), et Octave 1 (25). Cohérent legacy.
 
 **Note dev seed M7** : Le dev seed M7 actuel (`applyDevSeedLoopPadsIfSafe`, NvsManager.cpp:1224-1226) seede REC=32, PS=33, CLR=34. Identique aux defaults factory ci-dessus. En 3.H.2, le dev seed est **retiré** car le bouton `d` page LOOP livre la même fonctionnalité de façon propre.
+
+**Note Slots LOOP — F11 audit 3 Q2-F1** : les 16 slots restent `0xFF` (vides) par défaut factory. **Le wiring runtime Slot Drive est livré en Phase 6** — assigner des pads slots en Phase 3 PAD ROLE = pré-configuration UI, sans effet musical immédiat. Info panel `_drawInfoLoop` (3.F.3) prévient explicitement l'utilisateur (cf §8.3.2 Patch 1).
 
 ### §15.5 — Skip silencieux des conflits cross-page lors du `d`
 
