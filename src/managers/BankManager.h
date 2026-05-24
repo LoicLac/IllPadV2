@@ -34,8 +34,8 @@ public:
   // LEFT + double-tap on bank pad → toggle arp Play/Stop on target bank).
   void setDoubleTapMs(uint8_t ms);
 
-  // Set hold pad index (excluded from "any finger down" check in setCaptured).
-  void setHoldPad(uint8_t padIdx);
+  // Set ARPEG Play/Stop pad index (excluded from "any finger down" check in setCaptured).
+  void setArpPlayStopPad(uint8_t padIdx);
 
   // Emit the bank-select Note On for the current bank on channel 16.
   // Called at boot, on BLE reconnect, and after a MIDI panic to resync the
@@ -63,8 +63,8 @@ private:
   uint32_t _lastBankPadPressTime[NUM_BANKS];  // 0 = never / consumed
   uint8_t  _doubleTapMs;
 
-  // Hold pad index (passed to setCaptured to exclude from finger-down scan)
-  uint8_t  _holdPad;
+  // ARPEG Play/Stop pad index (passed to setCaptured to exclude from finger-down scan)
+  uint8_t  _arpPlayStopPad;
 
   // Pending deferred switch (ARPEG targets only)
   int8_t   _pendingSwitchBank;   // -1 = none, else 0..NUM_BANKS-1

@@ -512,7 +512,7 @@ void ArpEngine::setPadOrder(const uint8_t* padOrder) {
 // =================================================================
 
 void ArpEngine::setCaptured(bool captured, MidiTransport& transport,
-                             const uint8_t* keyIsPressed, uint8_t holdPadIdx) {
+                             const uint8_t* keyIsPressed, uint8_t arpPlayStopPadIdx) {
   if (captured == _captured) return;
   _captured = captured;
 
@@ -532,10 +532,10 @@ void ArpEngine::setCaptured(bool captured, MidiTransport& transport,
   } else {
     // Play → Stop : pile toujours préservée, paused armée (pile sacrée Q3
     // spec gesture §13, fix F1 du 2026-05-15). Les paramètres keyIsPressed
-    // et holdPadIdx ne sont plus utilisés — gardés pour compat API jusqu'à
+    // et arpPlayStopPadIdx ne sont plus utilisés — gardés pour compat API jusqu'à
     // la refonte gesture Phase 5 qui simplifiera la signature.
     (void)keyIsPressed;
-    (void)holdPadIdx;
+    (void)arpPlayStopPadIdx;
     flushPendingNoteOffs(transport);
     _playing = false;
     _waitingForQuantize = false;

@@ -16,7 +16,7 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
                           NvsManager* nvs, BankSlot* banks,
                           uint8_t* padOrder, uint8_t* bankPads,
                           uint8_t* rootPads, uint8_t* modePads,
-                          uint8_t& chromaticPad, uint8_t& holdPad,
+                          uint8_t& chromaticPad, uint8_t& arpPlayStopPad,
                           uint8_t* octavePads, PotRouter* potRouter) {
   _keyboard = keyboard;
   _leds = leds;
@@ -29,9 +29,9 @@ void SetupManager::begin(CapacitiveKeyboard* keyboard, LedController* leds,
   _toolOrdering.begin(keyboard, leds, &_ui, padOrder);
   // Phase 3 — Tool 3 b1 begin signature étendue avec NvsManager* (B-N1 fix v1 + M13 v2)
   // pour cross-store lookup LoopPadStore + ControlPadStore.
-  _toolRoles.begin(keyboard, leds, &_ui, nvs,
+  _toolPadRoles.begin(keyboard, leds, &_ui, nvs,
                    bankPads, rootPads, modePads,
-                   chromaticPad, holdPad,
+                   chromaticPad, arpPlayStopPad,
                    octavePads);
   _toolControlPads.begin(keyboard, leds, &_ui, nvs, banks);
   _toolBankConfig.begin(leds, nvs, &_ui, banks);
@@ -96,7 +96,7 @@ void SetupManager::run() {
         break;
 
       case '3':
-        _toolRoles.run();
+        _toolPadRoles.run();
         _ui.vtClear();
         screenDirty = true;
         break;

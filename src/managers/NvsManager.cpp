@@ -669,7 +669,7 @@ bool NvsManager::saveBlob(const char* ns, const char* key,
 void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
                           uint8_t* padOrder, uint8_t* bankPads,
                           uint8_t* rootPads, uint8_t* modePads,
-                          uint8_t& chromaticPad, uint8_t& holdPad,
+                          uint8_t& chromaticPad, uint8_t& arpPlayStopPad,
                           uint8_t* octavePads,
                           PotRouter& potRouter, SettingsStore& settings) {
   Preferences prefs;
@@ -935,11 +935,11 @@ void NvsManager::loadAll(BankSlot* banks, uint8_t& currentBank,
     if (NvsManager::loadBlob(ARP_PAD_NVS_NAMESPACE, ARPPAD_NVS_KEY,
                               EEPROM_MAGIC, ARPPAD_VERSION, &aps, sizeof(aps))) {
       validateArpPadStore(aps);
-      holdPad     = aps.holdPad;
+      arpPlayStopPad = aps.arpPlayStopPad;
       memcpy(octavePads, aps.octavePads, 4);
       #if DEBUG_SERIAL
-      Serial.printf("[BOOT NVS] Arp pads loaded (v2 store): hold=%d oct=%d,%d,%d,%d\n",
-                    holdPad, octavePads[0], octavePads[1],
+      Serial.printf("[BOOT NVS] Arp pads loaded (v3 store): arpPlayStop=%d oct=%d,%d,%d,%d\n",
+                    arpPlayStopPad, octavePads[0], octavePads[1],
                     octavePads[2], octavePads[3]);
       #endif
     }

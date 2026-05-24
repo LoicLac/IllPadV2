@@ -12,7 +12,6 @@ ScaleManager::ScaleManager()
   , _holding(false)
   , _lastBtnState(false)
   , _chromaticPad(22)
-  , _holdPad(23)
   , _scaleChangeType(SCALE_CHANGE_NONE)
   , _octaveChanged(false)
   , _newOctaveRange(1)
@@ -45,10 +44,6 @@ void ScaleManager::setModePads(const uint8_t* pads) {
 
 void ScaleManager::setChromaticPad(uint8_t pad) {
   _chromaticPad = pad;
-}
-
-void ScaleManager::setHoldPad(uint8_t pad) {
-  _holdPad = pad;
 }
 
 void ScaleManager::setOctavePads(const uint8_t* pads) {

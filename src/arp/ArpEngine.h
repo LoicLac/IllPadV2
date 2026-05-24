@@ -102,15 +102,15 @@ public:
   void setScaleConfig(const ScaleConfig& scale);
   void setPadOrder(const uint8_t* padOrder);
 
-  // --- Play/Stop toggle (hold pad OR LEFT + double-tap bank pad) ---
+  // --- Play/Stop toggle (PL/S pad OR LEFT + double-tap bank pad) ---
   // Stop → Play : if paused pile has notes, relaunch ; clears paused flag.
   // Play → Stop : pile toujours préservée, paused flag armé (pile sacrée Q3,
-  //               spec gesture §13). Les paramètres keyIsPressed et holdPadIdx
+  //               spec gesture §13). Les paramètres keyIsPressed et arpPlayStopPadIdx
   //               sont conservés pour compat API mais ignorés depuis le fix F1
   //               du 2026-05-15 — la branche "fingers down → wipe pile" a été
   //               supprimée. La refonte gesture Phase 5 simplifiera la signature.
   void setCaptured(bool captured, MidiTransport& transport,
-                   const uint8_t* keyIsPressed, uint8_t holdPadIdx);
+                   const uint8_t* keyIsPressed, uint8_t arpPlayStopPadIdx);
   bool isCaptured() const;
   bool isPlaying() const;
   bool isPaused() const;

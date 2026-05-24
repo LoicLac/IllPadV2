@@ -44,7 +44,7 @@ public:
   // Resets runtime state (latchState=false, lastCcValue=0, etc.).
   void applyStore(const ControlPadStore& store);
 
-  // Per-frame update. Call from Core 1 loop between handleHoldPad and
+  // Per-frame update. Call from Core 1 loop between handleArpPlayStopPad and
   // handlePadInput. currentBankChannel must be 0-7 (BankSlot.channel).
   void update(const SharedKeyboardState& state, bool leftHeld,
               uint8_t currentBankChannel);

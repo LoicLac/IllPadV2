@@ -83,8 +83,8 @@ static uint8_t s_lastKeys[NUM_KEYS];
 static uint32_t s_lastPressTime[NUM_KEYS];
 static uint8_t  s_doubleTapMs = DOUBLE_TAP_MS_DEFAULT;
 
-// Hold pad (ARPEG OFF/ON switch, always exposed — not gated by button hold)
-static uint8_t s_holdPad = 23;  // Default, overwritten by NVS
+// ARPEG Play/Stop pad (OFF/ON switch, always exposed — not gated by button hold)
+static uint8_t s_arpPlayStopPad = 23;  // Default, overwritten by NVS
 
 // Panic: BLE reconnect detection + settings
 static bool    s_lastBleConnected = false;
@@ -367,7 +367,7 @@ void setup() {
   uint8_t rootPads[7], modePads[7];
   for (uint8_t i = 0; i < 7; i++) { rootPads[i] = 8 + i; modePads[i] = 15 + i; }
   uint8_t chromaticPad = 22;
-  uint8_t holdPad = 23;
+  uint8_t arpPlayStopPad = 23;
   uint8_t octavePads[4] = {25, 26, 27, 28};
 
   // =================================================================
@@ -397,10 +397,10 @@ void setup() {
   // setup tools reading uninitialized state (Tool 7 PotMapping bug fix 2026-05-17).
   // =================================================================
   uint8_t currentBank = DEFAULT_BANK;
-  // bankPads[], rootPads[], modePads[], chromaticPad, holdPad initialized above (~L344-362).
+  // bankPads[], rootPads[], modePads[], chromaticPad, arpPlayStopPad initialized above (~L344-362).
   // s_settings is a file-scope global (external linkage — ViewerSerial reads it).
   s_nvsManager.loadAll(s_banks, currentBank, s_padOrder, bankPads,
-                        rootPads, modePads, chromaticPad, holdPad,
+                        rootPads, modePads, chromaticPad, arpPlayStopPad,
                         octavePads, s_potRouter, s_settings);
 
   // M7 dev seed (Phase 2 testing, retiré Phase 3.G) — DOIT être appelé AVANT setup gate.
@@ -455,7 +455,7 @@ void setup() {
       s_setupManager.begin(&s_keyboard, &s_leds, &s_nvsManager,
                            s_banks, s_padOrder, bankPads,
                            rootPads, modePads, chromaticPad,
-                           holdPad, octavePads, &s_potRouter);
+                           arpPlayStopPad, octavePads, &s_potRouter);
       s_setupManager.run();
       // F-CODE-7: setupManager.run() never returns — its only exit path is
       // ESP.restart() in Tool 0 confirmation. Code below this point was dead.
@@ -631,15 +631,15 @@ void setup() {
   // Give LedController access to bank states for multi-bank display
   s_leds.setBankSlots(s_banks);
 
-  // Store hold pad for ARPEG toggle detection in loop
-  s_holdPad = holdPad;
+  // Store ARPEG Play/Stop pad for toggle detection in loop
+  s_arpPlayStopPad = arpPlayStopPad;
 
   // Bank Manager
   s_bankManager.begin(&s_midiEngine, &s_leds, s_banks, s_lastKeys, &s_transport);
   s_bankManager.setBankPads(bankPads);
   s_bankManager.setCurrentBank(currentBank);
   s_bankManager.setDoubleTapMs(s_doubleTapMs);
-  s_bankManager.setHoldPad(holdPad);
+  s_bankManager.setArpPlayStopPad(arpPlayStopPad);
   // Boot-time bank-select notification on canal 16 (USB receivers only —
   // BLE clients receive it on their first connect via panicOnReconnect).
   s_bankManager.emitBankSelectNote();
@@ -652,7 +652,6 @@ void setup() {
   s_scaleManager.setRootPads(rootPads);
   s_scaleManager.setModePads(modePads);
   s_scaleManager.setChromaticPad(chromaticPad);
-  s_scaleManager.setHoldPad(holdPad);
   s_scaleManager.setOctavePads(octavePads);
   #if DEBUG_SERIAL
   Serial.println("[BOOT] ScaleManager OK.");
@@ -762,7 +761,7 @@ static void processNormalMode(const SharedKeyboardState& state, BankSlot& slot) 
 
 static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uint32_t now) {
   for (int i = 0; i < NUM_KEYS; i++) {
-    if (i == s_holdPad) continue;  // Hold pad is never a music pad
+    if (i == s_arpPlayStopPad) continue;  // Hold pad is never a music pad
     if (s_controlPadManager.isControlPad(i)) continue;
 
     bool pressed    = state.keyIsPressed[i];
@@ -788,11 +787,11 @@ static void processArpMode(const SharedKeyboardState& state, BankSlot& slot, uin
         // permettre "table rase" — pour conserver la pile, le user doit Play
         // via hold pad / double-tap bank pad (toggle explicite).
         // LED : EVT_PLAY pour signaler le passage automatique en Play,
-        // cohérent avec handleHoldPad et BankManager double-tap.
+        // cohérent avec handleArpPlayStopPad et BankManager double-tap.
         if (slot.arpEngine->isPaused() && slot.arpEngine->hasNotes()) {
           slot.arpEngine->clearAllNotes(s_transport);
         }
-        slot.arpEngine->setCaptured(true, s_transport, nullptr, s_holdPad);
+        slot.arpEngine->setCaptured(true, s_transport, nullptr, s_arpPlayStopPad);
         s_leds.triggerEvent(EVT_PLAY);
         slot.arpEngine->addPadPosition(pos);
       }
@@ -891,7 +890,7 @@ static void processLoopMode(const SharedKeyboardState& state, BankSlot& slot, ui
 
   // Iterate musical pads (rising/falling edges)
   for (int i = 0; i < NUM_KEYS; i++) {
-    if (i == s_holdPad) continue;
+    if (i == s_arpPlayStopPad) continue;
     if (s_controlPadManager.isControlPad(i)) continue;
     if (le->isLoopControlPad((uint8_t)i)) {
       // REC / PLAY/STOP tap on rising edge (CLEAR already handled above)
@@ -1126,12 +1125,12 @@ static void toggleAllArpsAndLoops() {
     if (isArpType(s_banks[i].type) && s_banks[i].arpEngine) {
       if (anyPlaying && s_banks[i].arpEngine->isCaptured()) {
         // Stop : nullptr → branche "no fingers" → pile préservée (Q3)
-        s_banks[i].arpEngine->setCaptured(false, s_transport, nullptr, s_holdPad);
+        s_banks[i].arpEngine->setCaptured(false, s_transport, nullptr, s_arpPlayStopPad);
         mask |= (uint8_t)(1 << i);
       } else if (!anyPlaying && s_banks[i].arpEngine->isPaused()
                                 && s_banks[i].arpEngine->hasNotes()) {
         // Play : relaunch chaque paused pile non vide
-        s_banks[i].arpEngine->setCaptured(true, s_transport, nullptr, s_holdPad);
+        s_banks[i].arpEngine->setCaptured(true, s_transport, nullptr, s_arpPlayStopPad);
         mask |= (uint8_t)(1 << i);
       }
     }
@@ -1150,20 +1149,20 @@ static void toggleAllArpsAndLoops() {
   if (mask != 0) s_leds.triggerEvent(anyPlaying ? EVT_STOP : EVT_PLAY, mask);
 }
 
-// --- Hold pad edge detection (ARPEG OFF/ON switch, always exposed) ---
+// --- ARPEG Play/Stop pad edge detection (ARPEG OFF/ON switch, always exposed) ---
 // Sans LEFT : toggle FG bank (comportement classique).
 // Avec LEFT : toggle global toutes banks ARPEG + LOOP (cf toggleAllArpsAndLoops).
-static void handleHoldPad(const SharedKeyboardState& state, bool leftHeld) {
-  static bool s_lastHoldPadState = false;
-  if (s_holdPad >= NUM_KEYS) { s_lastHoldPadState = false; return; }
+static void handleArpPlayStopPad(const SharedKeyboardState& state, bool leftHeld) {
+  static bool s_lastArpPlayStopPadState = false;
+  if (s_arpPlayStopPad >= NUM_KEYS) { s_lastArpPlayStopPadState = false; return; }
 
-  bool pressed = state.keyIsPressed[s_holdPad];
-  bool risingEdge = pressed && !s_lastHoldPadState;
-  s_lastHoldPadState = pressed;
+  bool pressed = state.keyIsPressed[s_arpPlayStopPad];
+  bool risingEdge = pressed && !s_lastArpPlayStopPadState;
+  s_lastArpPlayStopPadState = pressed;
   if (!risingEdge) return;
 
   if (leftHeld) {
-    // LEFT + hold pad = scope étendu (toutes banks ARPEG + LOOP)
+    // LEFT + PL/S pad = scope étendu (toutes banks ARPEG + LOOP)
     toggleAllArpsAndLoops();
     return;
   }
@@ -1173,7 +1172,7 @@ static void handleHoldPad(const SharedKeyboardState& state, bool leftHeld) {
   if (!isArpType(slot.type) || !slot.arpEngine) return;
 
   bool wasCaptured = slot.arpEngine->isCaptured();
-  slot.arpEngine->setCaptured(!wasCaptured, s_transport, state.keyIsPressed, s_holdPad);
+  slot.arpEngine->setCaptured(!wasCaptured, s_transport, state.keyIsPressed, s_arpPlayStopPad);
   s_leds.triggerEvent(slot.arpEngine->isCaptured() ? EVT_PLAY : EVT_STOP);
   if (slot.arpEngine->isCaptured()) {
     memset(s_lastPressTime, 0, sizeof(s_lastPressTime));
@@ -1564,7 +1563,7 @@ void loop() {
   // --- CRITICAL PATH ---
   handleManagerUpdates(state, leftHeld);
 
-  handleHoldPad(state, leftHeld);
+  handleArpPlayStopPad(state, leftHeld);
 
   // --- Control pads (step 7b): after bank switch resolution + hold pad,
   //     before music block. Emits CC and handles LEFT/bank edges.

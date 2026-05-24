@@ -520,13 +520,13 @@ struct ScalePadStore {
 static_assert(sizeof(ScalePadStore) <= NVS_BLOB_MAX_SIZE, "ScalePadStore exceeds NVS blob max");
 
 #define ARPPAD_NVS_KEY      "pads"
-#define ARPPAD_VERSION      2
+#define ARPPAD_VERSION      3
 
 struct ArpPadStore {
   uint16_t magic;
   uint8_t  version;
   uint8_t  reserved;
-  uint8_t  holdPad;
+  uint8_t  arpPlayStopPad;
   uint8_t  octavePads[4];
   uint8_t  _pad[3];      // alignment to 12 bytes
 };
@@ -606,15 +606,15 @@ inline ScaleRoleResult scaleRoleAtPad(const uint8_t* rootPads,
   return ScaleRoleResult{ScaleRoleKind::NONE, 0};
 }
 
-// --- Arp roles : owned by main.cpp (holdPad scalar, octavePads[4]) ---
+// --- Arp roles : owned by main.cpp (arpPlayStopPad scalar, octavePads[4]) ---
 
-enum class ArpRoleKind : uint8_t { NONE, HOLD, OCTAVE };
+enum class ArpRoleKind : uint8_t { NONE, PLAY_STOP, OCTAVE };
 struct ArpRoleResult { ArpRoleKind kind; uint8_t idx; };
 
-inline ArpRoleResult arpRoleAtPad(uint8_t holdPad,
+inline ArpRoleResult arpRoleAtPad(uint8_t arpPlayStopPad,
                                    const uint8_t* octavePads,
                                    uint8_t pad) {
-  if (holdPad == pad) return ArpRoleResult{ArpRoleKind::HOLD, 0};
+  if (arpPlayStopPad == pad) return ArpRoleResult{ArpRoleKind::PLAY_STOP, 0};
   for (uint8_t i = 0; i < 4; i++) {
     if (octavePads[i] == pad) return ArpRoleResult{ArpRoleKind::OCTAVE, i};
   }
@@ -840,7 +840,7 @@ inline void validateScalePadStore(ScalePadStore& s) {
 }
 
 inline void validateArpPadStore(ArpPadStore& s) {
-  if (s.holdPad >= NUM_KEYS) s.holdPad = 23;
+  if (s.arpPlayStopPad >= NUM_KEYS) s.arpPlayStopPad = 23;
   for (uint8_t i = 0; i < 4; i++) {
     if (s.octavePads[i] >= NUM_KEYS) s.octavePads[i] = 25 + i;
   }

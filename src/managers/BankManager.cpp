@@ -18,7 +18,7 @@ BankManager::BankManager()
   , _holding(false)
   , _lastBtnState(false)
   , _doubleTapMs(DOUBLE_TAP_MS_DEFAULT)
-  , _holdPad(0xFF)
+  , _arpPlayStopPad(0xFF)
   , _pendingSwitchBank(-1)
   , _pendingSwitchTime(0)
   , _switchedDuringHold(false)
@@ -50,8 +50,8 @@ void BankManager::setDoubleTapMs(uint8_t ms) {
   _doubleTapMs = ms;
 }
 
-void BankManager::setHoldPad(uint8_t padIdx) {
-  _holdPad = padIdx;
+void BankManager::setArpPlayStopPad(uint8_t padIdx) {
+  _arpPlayStopPad = padIdx;
 }
 
 // =================================================================
@@ -88,7 +88,7 @@ bool BankManager::update(const uint8_t* keyIsPressed, bool btnLeftHeld) {
         if (_banks[b].arpEngine && _transport) {
           bool wasCaptured = _banks[b].arpEngine->isCaptured();
           const uint8_t* keys = (b == _currentBank) ? keyIsPressed : nullptr;
-          _banks[b].arpEngine->setCaptured(!wasCaptured, *_transport, keys, _holdPad);
+          _banks[b].arpEngine->setCaptured(!wasCaptured, *_transport, keys, _arpPlayStopPad);
           if (_leds) {
             EventId evt = _banks[b].arpEngine->isCaptured() ? EVT_PLAY : EVT_STOP;
             _leds->triggerEvent(evt, (uint8_t)(1 << b));

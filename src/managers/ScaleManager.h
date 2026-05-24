@@ -30,7 +30,6 @@ public:
   void setRootPads(const uint8_t* pads);
   void setModePads(const uint8_t* pads);
   void setChromaticPad(uint8_t pad);
-  void setHoldPad(uint8_t pad);         // Hold pad index (skipped from scale processing)
   void setOctavePads(const uint8_t* pads);  // 4 pads for octave 1-4 (ARPEG only)
 
   bool hasOctaveChanged();       // True if octave was changed this frame (auto-clears)
@@ -50,7 +49,6 @@ private:
   uint8_t _rootPads[7];
   uint8_t _modePads[7];
   uint8_t _chromaticPad;
-  uint8_t _holdPad;           // Hold pad index (skipped from scale processing)
   uint8_t _octavePads[4];    // Octave range 1-4 pads (for ARPEG banks)
   ScaleChangeType _scaleChangeType;  // Set by processScalePads, cleared by consumeScaleChange()
   bool    _octaveChanged;    // Set by processScalePads, cleared by hasOctaveChanged()

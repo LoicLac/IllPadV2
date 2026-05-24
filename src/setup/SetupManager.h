@@ -26,7 +26,7 @@ public:
              NvsManager* nvs, BankSlot* banks,
              uint8_t* padOrder, uint8_t* bankPads,
              uint8_t* rootPads, uint8_t* modePads,
-             uint8_t& chromaticPad, uint8_t& holdPad,
+             uint8_t& chromaticPad, uint8_t& arpPlayStopPad,
              uint8_t* octavePads, PotRouter* potRouter);
 
   // Enter setup mode (blocking — returns when user exits)
@@ -42,7 +42,7 @@ private:
   SetupUI             _ui;
   ToolCalibration     _toolCal;
   ToolPadOrdering     _toolOrdering;
-  ToolPadRoles        _toolRoles;
+  ToolPadRoles        _toolPadRoles;
   ToolControlPads     _toolControlPads;
   ToolBankConfig      _toolBankConfig;
   ToolSettings        _toolSettings;

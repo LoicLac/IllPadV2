@@ -18,13 +18,13 @@ enum PadRoleCode : uint8_t {
   ROLE_ROOT      = 2,
   ROLE_MODE      = 3,
   ROLE_OCTAVE    = 4,
-  ROLE_HOLD      = 5,
+  ROLE_PLAY_STOP = 5,
   ROLE_COLLISION = 0xFF
 };
 
 // Unified role identifier (pool item)
 struct PadRole {
-  uint8_t line;   // 0=none, 1=bank, 2=root, 3=mode, 4=octave, 5=hold
+  uint8_t line;   // 0=none, 1=bank, 2=root, 3=mode, 4=octave, 5=play/stop
   uint8_t index;  // index within that line
 };
 
@@ -44,7 +44,7 @@ public:
   void begin(CapacitiveKeyboard* keyboard, LedController* leds,
              SetupUI* ui, NvsManager* nvs,
              uint8_t* bankPads, uint8_t* rootPads, uint8_t* modePads,
-             uint8_t& chromaticPad, uint8_t& holdPad,
+             uint8_t& chromaticPad, uint8_t& arpPlayStopPad,
              uint8_t* octavePads);
   void run();  // Blocking — grid + pool driven
 
@@ -59,7 +59,7 @@ private:
   uint8_t* _rootPads;      // [7]
   uint8_t* _modePads;      // [7]
   uint8_t* _chromaticPad;  // single
-  uint8_t* _holdPad;       // single
+  uint8_t* _arpPlayStopPad;       // single
   uint8_t* _octavePads;    // [4]
 
   // Working copies (edited during tool, committed on save)
@@ -67,7 +67,7 @@ private:
   uint8_t      _wkRootPads[7];
   uint8_t      _wkModePads[7];
   uint8_t      _wkChromPad;
-  uint8_t      _wkHoldPad;
+  uint8_t      _wkArpPlayStopPad;
   uint8_t      _wkOctavePads[4];
   LoopPadStore _wkLoopPad;            // Phase 3 — working copy for sub-page LOOP
 
@@ -85,7 +85,7 @@ private:
   uint8_t _gridRow;       // 0-3 (4 rows of 12)
   uint8_t _gridCol;       // 0-11
   bool    _editing;       // true = pool navigation mode
-  uint8_t _poolLine;      // 0=clear, 1=bank, 2=root, 3=mode, 4=octave, 5=hold
+  uint8_t _poolLine;      // 0=clear, 1=bank, 2=root, 3=mode, 4=octave, 5=play/stop
   uint8_t _poolIdx;       // index within current pool line
   bool    _confirmDefaults;  // true = waiting for y/n defaults confirmation
   bool    _confirmClearAll;  // true = waiting for y/n clear-all confirmation
@@ -109,7 +109,7 @@ private:
   static const uint8_t POOL_ROOT_COUNT     = 7;
   static const uint8_t POOL_MODE_COUNT     = 8;   // 7 modes + chromatic
   static const uint8_t POOL_OCTAVE_COUNT   = 4;
-  static const uint8_t POOL_HOLD_COUNT     = 1;
+  static const uint8_t POOL_PLAY_STOP_COUNT     = 1;
   static const uint8_t POOL_LINE_COUNT     = 6;   // 0=clear, 1-5=categories
 
   uint8_t poolLineSize(uint8_t line) const;
