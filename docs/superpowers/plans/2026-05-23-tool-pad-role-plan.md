@@ -2698,19 +2698,14 @@ if (hasContextual) {
 
 Avant (3.C.2) :
 ```cpp
-// Refus dur silencieux pour BANK / contextuels (placeholder modale 3.G)
+// Refus dur silencieux pour BANK / contextuels (placeholder modale 3.G).
+// LOOP control (REC/PS/CLR) fusionné avec contextuels — §12.11 audit M4 a
+// retiré le flash 3.B dès 3.C.2 (cohérence no-op silencieux uniforme).
 if (info.bankIdx >= 0
     || info.scaleRole.kind != ScaleRoleKind::NONE
     || info.arpRole.kind != ArpRoleKind::NONE
-    || info.loopSlotIdx >= 0) {
-  _ccUiMode = UI_CC_GRID_NAV;
-  _screenDirty = true;
-  break;
-}
-
-// LOOP control refus avec flash (code 3.B preserved)
-if (info.isLoopRec || info.isLoopPlayStop || info.isLoopClear) {
-  _setFlash("Pad is LOOP REC/PS/CLR - move in Tool 3 first");
+    || info.loopSlotIdx >= 0
+    || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear) {
   _ccUiMode = UI_CC_GRID_NAV;
   _screenDirty = true;
   break;
@@ -2741,7 +2736,7 @@ if (hasContextual) {
 }
 ```
 
-**Retrait flash 3.B** : le bloc `if (info.isLoopRec || info.isLoopPlayStop || info.isLoopClear) { _setFlash(...); }` est **supprimé** en 3.G.2. LOOP control = CONTEXTUEL M·L, donc passe par la modale §10 uniforme. Le flash devient redondant.
+**Note flash 3.B** : le bloc `if (info.isLoopRec || info.isLoopPlayStop || info.isLoopClear) { _setFlash(...); }` a déjà été **retiré en 3.C.2** (§12.11 audit M4). 3.G.2 ne re-touche pas à cette branche : LOOP control fait partie de la branche `hasContextual` unifiée ci-dessus, donc passe automatiquement par la modale §10 uniforme.
 
 **Patch 3 — `ToolPadRoles_Cc.cpp` `_drawInfoCc`** : retrait info LOOP control "cannot assign CC here"
 
@@ -3114,7 +3109,7 @@ Refonte des mentions Tool 3 / Tool 4 → Tool PAD ROLE 4 pages + concept ABSORBA
 **`docs/reference/nvs-reference.md`** :
 - Retirer cartouche MAJ 2026-05-23
 - §"V2 Stores" `ArpPadStore` : rename `holdPad → arpPlayStopPad`, version 2 → 3.
-- §"Tool to descriptor mapping" : T3 absorbe ControlPad descriptor (T3 = [2..5] désormais), T4 = range vide (FIRST > LAST).
+- §"Tool to descriptor mapping" : T3 absorbe ControlPad descriptor (T3 = [2..5] désormais), T4 = range vide (FIRST > LAST). Ajouter note : "T3 mapping = [2..5] + descriptor 12 (LoopPadStore, check ad-hoc dans `printMainMenu`)" — cf §12.6 audit B-N3 (descriptor 12 hors range T3 mais santé NVS reflétée dans le badge T3).
 - §"Phase 0.1 Notes" : ajout Phase 3 PAD ROLE note (ARPPAD v2→v3 zero-migration, dev seed M7 retiré 3.H.2, T4 menu retiré 3.C.1b).
 
 **`docs/reference/arp-reference.md`** :
@@ -3145,6 +3140,10 @@ grep -lE "BANK.*ARPEG.*LOOP.*CC|4 pages" docs/reference/setup-tools-conventions.
 # E. ARPPAD_VERSION 3 dans nvs-reference
 grep "ARPPAD.*v[23]\|ARPPAD.*Version.*3" docs/reference/nvs-reference.md
 # attendu : ≥ 1 match (mention v3)
+
+# F. Note descriptor 12 check ad-hoc dans nvs-reference (§12.6)
+grep "descriptor 12.*check ad-hoc\|check ad-hoc.*printMainMenu" docs/reference/nvs-reference.md
+# attendu : ≥ 1 match
 ```
 
 #### §11.1.4 Mini-audit 3.I.1
@@ -3177,6 +3176,9 @@ grep "ARPPAD.*v[23]\|ARPPAD.*Version.*3" docs/reference/nvs-reference.md
 - §5 cartouche refonte confirmée (déjà fait livraison spec PAD ROLE 2026-05-23) — vérifier cross-pointer à jour.
 - §15, §18, §19, §28 : vérifier cohérence avec spec PAD ROLE actuelle (aucune contradiction).
 
+**`docs/superpowers/specs/2026-05-23-tool-pad-role-design.md`** (spec PAD ROLE elle-même) :
+- §10.3 Mode wording aligné §15.2 plan : remplacer "MODE Maj", "MODE Min", "MODE Dor" par "MODE Ion", "MODE Dor", "MODE Phr", "MODE Lyd", "MODE Mix", "MODE Aeo", "MODE Loc" — cf §12.9 audit M2 (cohérence cross-doc : la spec doit refléter le wording final choisi en passe 4).
+
 #### §11.2.2 Hard-asserts 3.I.2
 
 ```bash
@@ -3191,6 +3193,12 @@ grep "2026-05-23-tool-pad-role-design" docs/superpowers/specs/2026-04-19-loop-mo
 # C. fonction_regen.md note différée
 grep "refonte différée\|differée\|§17.2" docs/reference/fonction_regen.md
 # attendu : ≥ 1 match
+
+# D. Spec PAD ROLE §10.3 wording aligné (§12.9)
+grep "MODE Ion\|MODE Dor\|MODE Phr" docs/superpowers/specs/2026-05-23-tool-pad-role-design.md
+# attendu : ≥ 1 match (mention Ion/Dor/Phr)
+grep "MODE Maj\|MODE Min" docs/superpowers/specs/2026-05-23-tool-pad-role-design.md
+# attendu : 0 matches (anciens wordings retirés)
 ```
 
 #### §11.2.3 Mini-audit 3.I.2
@@ -3231,17 +3239,20 @@ grep "refonte différée\|differée\|§17.2" docs/reference/fonction_regen.md
   - Dev seed M7 retiré
 - Dépendance Phase 4 (PotRouter + Tool 7 ext + LED wiring) reste open
 
-**Archives `docs/archive/`** (déplacement via `git mv`) :
-- `docs/superpowers/specs/2026-05-19-loop-phase-3-design.md` → `docs/archive/2026-05-19-loop-phase-3-design.md`
-- `docs/superpowers/plans/2026-05-19-loop-phase-3-plan.md` → `docs/archive/`
-- `docs/superpowers/plans/2026-05-19-loop-phase-3-plan_AUDIT.md` → `docs/archive/`
-- `docs/superpowers/plans/2026-05-19-loop-phase-3-plan_AUDIT_independent.md` → `docs/archive/`
-- `docs/superpowers/plans/2026-05-19-loop-phase-3-exec-prompt.md` → `docs/archive/`
-- `docs/superpowers/plans/2026-05-19-loop-phase-3-session-manifest.md` → `docs/archive/`
+**Archives `docs/archive/`** (déjà déplacées le 2026-05-23 — vérification seulement, pas de `git mv`) :
+- `2026-05-19-loop-phase-3-design.md` (présent dans `docs/archive/`)
+- `2026-05-19-loop-phase-3-plan.md` (présent)
+- `2026-05-19-loop-phase-3-plan_AUDIT.md` (présent)
+- `2026-05-19-loop-phase-3-plan_AUDIT_independent.md` (présent)
+- `2026-05-19-loop-phase-3-exec-prompt.md` (présent)
+- `2026-05-19-loop-phase-3-session-manifest.md` (présent)
+
+Action 3.I.3 : `ls docs/archive/2026-05-19-loop-phase-3-*.md` doit retourner 6 matches. Si manquant, faire le `git mv` correspondant.
 
 **Suppressions** (décision Q4 = (a) supprimer) :
-- `docs/superpowers/HANDOFF-2026-05-20-loop-phase-3-spec-rework.md` (§16.3 spec — consommé)
+- `docs/superpowers/HANDOFF-2026-05-20-loop-phase-3-spec-rework.md` (§16.3 spec — consommé ; vérifier absence)
 - `docs/superpowers/HANDOFF-2026-05-23-tool-pad-role-plan.md` (consommé par ce plan livré)
+- `docs/superpowers/HANDOFF-2026-05-23-tool-pad-role-iter3.md` (consommé par cycle iter 3 → EXEC)
 
 #### §11.3.2 Hard-asserts 3.I.3
 
@@ -3270,6 +3281,10 @@ ls docs/superpowers/HANDOFF-2026-05-20-loop-phase-3-spec-rework.md 2>&1 | grep "
 
 # F. Suppression HANDOFF-2026-05-23 (décision Q4 a)
 ls docs/superpowers/HANDOFF-2026-05-23-tool-pad-role-plan.md 2>&1 | grep "No such"
+# attendu : match (supprimé)
+
+# G. Suppression HANDOFF-2026-05-23-iter3 (cycle iter 3 consommé)
+ls docs/superpowers/HANDOFF-2026-05-23-tool-pad-role-iter3.md 2>&1 | grep "No such"
 # attendu : match (supprimé)
 ```
 
