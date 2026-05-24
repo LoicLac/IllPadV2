@@ -170,13 +170,14 @@ private:
   // =================================================================
 
   // Sub-state machine (formerly ToolControlPads::UIMode)
+  // Phase 3.D — UI_CC_CONFIRM_REMOVE retiré (convention §7.4 uniforme : ENTER
+  // sur CC propre = dégage direct, raccourci 'x' redondant supprimé).
   enum CcUiMode : uint8_t {
     UI_CC_GRID_NAV         = 0,
     UI_CC_MODE_PICK        = 1,
     UI_CC_VALUE_EDIT       = 2,
-    UI_CC_CONFIRM_REMOVE   = 3,
-    UI_CC_CONFIRM_DEFAULTS = 4,
-    UI_CC_GLOBAL_EDIT      = 5,
+    UI_CC_CONFIRM_DEFAULTS = 3,
+    UI_CC_GLOBAL_EDIT      = 4,
   };
 
   // Page CC state members (ex Tool 4 — preserved semantics, prefixed _cc*)
@@ -193,7 +194,6 @@ private:
   void _handleGridNavCc(const NavEvent& ev);
   void _handleModePickCc(const NavEvent& ev);
   void _handleValueEditCc(const NavEvent& ev);
-  void _handleConfirmRemoveCc(const NavEvent& ev);
   void _handleConfirmDefaultsCc(const NavEvent& ev);
   void _handleGlobalEditCc(const NavEvent& ev);
   void _drawPageCc();
@@ -225,6 +225,22 @@ private:
   PadNeighborInfo _padNeighborInfo(uint8_t pad) const;
   void _formatRoleNameMusician(const PadNeighborInfo& info,
                                 char* out, size_t cap) const;
+
+  // =================================================================
+  // Phase 3.D — page BANK (8 bank slots assignment).
+  // Spec §7.4 strict (dégage direct) + §9.2 strict (no silent steal) +
+  // §6.5 hard-constraint exit (8 banks obligatoires) + §8.1 cell display
+  // cross-page (CC absorbant ambre+, contextuels neutres).
+  // =================================================================
+  void _drawPageBank();
+  void _drawGridBank();
+  void _drawPoolBank();
+  void _drawInfoBank();
+  void _drawControlBarBank();
+  void _handleEnterBank();          // ENTER from grid nav (§7.4 strict)
+  void _handleEnterPoolBank();      // ENTER from pool nav (§9.2 strict)
+  void _applyDefaultsBank();        // §15.4 + §15.5 skip silencieux
+  void _clearRolesBankOnly(uint8_t pad);  // §15.3 page-scoped clear
 };
 
 #endif // TOOL_PAD_ROLES_H

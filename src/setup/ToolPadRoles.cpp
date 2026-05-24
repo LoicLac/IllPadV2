@@ -617,8 +617,11 @@ void ToolPadRoles::drawScreen() {
   if (_activeSubPage == SUB_CC) {
     // Phase 3.C.1b — page CC dispatch (sections + control bar rendered inside).
     _drawPageCc();
+  } else if (_activeSubPage == SUB_BANK) {
+    // Phase 3.D.1 — page BANK dispatch (sections + control bar rendered inside).
+    _drawPageBank();
   } else {
-    // Legacy fallback BANK/ARPEG/LOOP (jusqu'à incarnation 3.D/3.E/3.F).
+    // Legacy fallback ARPEG/LOOP (jusqu'à incarnation 3.E/3.F).
     // Grid section
     _ui->drawSection("GRID");
     drawGrid();
@@ -748,7 +751,6 @@ void ToolPadRoles::run() {
           case UI_CC_GRID_NAV:         _handleGridNavCc(ev);         break;
           case UI_CC_MODE_PICK:        _handleModePickCc(ev);        break;
           case UI_CC_VALUE_EDIT:       _handleValueEditCc(ev);       break;
-          case UI_CC_CONFIRM_REMOVE:   _handleConfirmRemoveCc(ev);   break;
           case UI_CC_CONFIRM_DEFAULTS: _handleConfirmDefaultsCc(ev); break;
           case UI_CC_GLOBAL_EDIT:      _handleGlobalEditCc(ev);      break;
         }
@@ -791,7 +793,14 @@ void ToolPadRoles::run() {
     if (_confirmDefaults) {
       ConfirmResult r = SetupUI::parseConfirm(ev);
       if (r == CONFIRM_YES) {
-        resetToDefaults();
+        // Phase 3.D.1 — routing page-scoped (§15.1). BANK utilise
+        // _applyDefaultsBank (factory bank i → pad i + skip silencieux),
+        // autres pages restent sur le legacy global resetToDefaults().
+        if (_activeSubPage == SUB_BANK) {
+          _applyDefaultsBank();
+        } else {
+          resetToDefaults();
+        }
         if (saveAll()) {
           _ui->flashSaved();
         }
@@ -839,8 +848,24 @@ void ToolPadRoles::run() {
         _editing = false;
         screenDirty = true;
       } else {
-        _ui->vtClear();
-        return;
+        // Phase 3.D.2 — §6.5 hard-constraint exit : les 8 banks doivent être
+        // assignées pour pouvoir sortir du tool. Globale (toutes pages),
+        // car les banks sont la fondation de toute la session musicale.
+        bool allBanksAssigned = true;
+        for (uint8_t i = 0; i < NUM_BANKS; i++) {
+          if (_wkBankPads[i] >= NUM_KEYS) {
+            allBanksAssigned = false;
+            break;
+          }
+        }
+        if (!allBanksAssigned) {
+          _setFlash("Les 8 banks doivent etre assignees pour sortir");
+          screenDirty = true;
+          // do NOT return — reste in tool jusqu'à ce que user assigne
+        } else {
+          _ui->vtClear();
+          return;
+        }
       }
     }
 
@@ -849,8 +874,10 @@ void ToolPadRoles::run() {
       screenDirty = true;
     }
 
-    // [r] = Clear All
-    if (ev.type == NAV_CHAR && (ev.ch == 'r' || ev.ch == 'R') && !_editing) {
+    // [r] = Clear All (§15.1 : supprimé en page BANK — wipe global incompatible
+    // avec hard-constraint exit §6.5. Conservé pour ARPEG/LOOP/CC legacy.)
+    if (ev.type == NAV_CHAR && (ev.ch == 'r' || ev.ch == 'R')
+        && !_editing && _activeSubPage != SUB_BANK) {
       _confirmClearAll = true;
       screenDirty = true;
     }
@@ -892,11 +919,18 @@ void ToolPadRoles::run() {
         }
         arrowMoved = true;
       } else if (ev.type == NAV_ENTER) {
-        _editing = true;
-        int pad = _gridRow * 12 + _gridCol;
-        PadRole role = getRoleForPad((uint8_t)pad);
-        _poolLine = role.line;
-        _poolIdx = role.index;
+        // Phase 3.D.1 — routing page-scoped. SUB_BANK utilise _handleEnterBank
+        // (§7.4 strict : ENTER sur bank assignée = dégage direct, no pool).
+        // Autres pages : legacy open pool with current role.
+        if (_activeSubPage == SUB_BANK) {
+          _handleEnterBank();
+        } else {
+          _editing = true;
+          int pad = _gridRow * 12 + _gridCol;
+          PadRole role = getRoleForPad((uint8_t)pad);
+          _poolLine = role.line;
+          _poolIdx = role.index;
+        }
         screenDirty = true;
       }
       if (arrowMoved) {
@@ -904,15 +938,22 @@ void ToolPadRoles::run() {
       }
     } else {
       // --- Pool navigation (edit mode) ---
+      // Phase 3.D.1 fix HW Gate G3 — page-scoped pool nav cap : SUB_BANK n'a
+      // que 2 lignes (0=clear, 1=Bank). Le legacy POOL_LINE_COUNT=6 cyclerait
+      // sur Root/Mode/Octave/Hold invisibles en page BANK. Autres pages
+      // (ARPEG/LOOP/CC) utilisent legacy 6 lignes jusqu'à 3.E/3.F/3.G.
+      const uint8_t poolLineMax = (_activeSubPage == SUB_BANK) ? 1 : (POOL_LINE_COUNT - 1);
+
       bool poolArrowMoved = false;
       if (ev.type == NAV_UP) {
-        if (_poolLine == 0) _poolLine = POOL_LINE_COUNT - 1;
+        if (_poolLine == 0) _poolLine = poolLineMax;
+        else if (_poolLine > poolLineMax) _poolLine = poolLineMax;  // safety après TAB
         else _poolLine--;
         uint8_t sz = poolLineSize(_poolLine);
         if (sz > 0 && _poolIdx >= sz) _poolIdx = sz - 1;
         poolArrowMoved = true;
       } else if (ev.type == NAV_DOWN) {
-        if (_poolLine == POOL_LINE_COUNT - 1) _poolLine = 0;
+        if (_poolLine >= poolLineMax) _poolLine = 0;
         else _poolLine++;
         uint8_t sz = poolLineSize(_poolLine);
         if (sz > 0 && _poolIdx >= sz) _poolIdx = sz - 1;
@@ -932,6 +973,13 @@ void ToolPadRoles::run() {
         }
         poolArrowMoved = true;
       } else if (ev.type == NAV_ENTER) {
+        // Phase 3.D.1 — routing page-scoped. SUB_BANK utilise _handleEnterPoolBank
+        // (§9.2 strict : refus si entry pool déjà assignée à un autre pad, no
+        // silent steal ; §15.3 clear page-scoped via _clearRolesBankOnly).
+        if (_activeSubPage == SUB_BANK) {
+          _handleEnterPoolBank();
+          screenDirty = true;
+        } else {
         int pad = _gridRow * 12 + _gridCol;
 
         if (_poolLine == 0) {
@@ -985,6 +1033,7 @@ void ToolPadRoles::run() {
             screenDirty = true;
           }
         }
+        }  // close `} else {` du routing SUB_BANK (Phase 3.D.1)
       }
       if (poolArrowMoved) {
         screenDirty = true;

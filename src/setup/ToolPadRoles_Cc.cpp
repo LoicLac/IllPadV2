@@ -182,12 +182,12 @@ void ToolPadRoles::_handleGridNavCc(const NavEvent& ev) {
     case NAV_ENTER: {
       cursorPad = (uint8_t)(_gridRow * 12 + _gridCol);
 
-      // Phase 3.C.2 + fix HW Gate G2 — refus pré-MODE_PICK : si pad porte un
-      // rôle cross-page (BANK absorbant OU contextuel ARPEG/LOOP), ne pas
-      // même ouvrir la pool selector. No-op silencieux dès grid-nav. Modale
-      // d'écrasement 3.G.2 viendra remplacer ce no-op par l'arbitrage
-      // interactif. Le check dans _handleModePickCc reste en défense en
-      // profondeur (cas concurrent edit hypothétique).
+      // Phase 3.D — convention §7.4 uniforme cross-page :
+      //   - ENTER sur cell cross-page (BANK absorbant / contextuel ARPEG/LOOP)
+      //     → no-op silencieux (placeholder modale 3.G, refus pré-MODE_PICK).
+      //   - ENTER sur cell portant le rôle propre (CC ici) → dégage direct
+      //     (uniforme avec page BANK §7.4 strict).
+      //   - ENTER sur cell libre → ouvre flow d'assignement (MODE_PICK pour CC).
       PadNeighborInfo info = _padNeighborInfo(cursorPad);
       bool blockedCrossPage = (info.bankIdx >= 0)
                             || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear
@@ -199,10 +199,16 @@ void ToolPadRoles::_handleGridNavCc(const NavEvent& ev) {
         break;
       }
 
-      // V3.B : ENTER opens the mode pool selector. Pool cursor starts on
-      // the pad's current mode if assigned, else MOM (idx 0).
-      int8_t s = _findSlotCc(cursorPad);
-      _ccPoolIdx = (s >= 0) ? _poolIdxFromEntryCc(_wkCc.entries[s]) : 0;
+      // §7.4 strict : ENTER sur CC propre → dégage direct (no MODE_PICK ouvert).
+      // Pour re-créer/réassigner, user fait à nouveau ENTER sur la cell libre.
+      if (info.hasCc) {
+        _removeSlotForPadCc(cursorPad);
+        _ccScreenDirty = true;
+        break;
+      }
+
+      // Pad libre : ouvre MODE_PICK pool selector. Cursor start sur MOM (idx 0).
+      _ccPoolIdx = 0;
       _ccPropEditDirty = false;
       _ccUiMode = UI_CC_MODE_PICK;
       _ccScreenDirty = true;
@@ -210,14 +216,9 @@ void ToolPadRoles::_handleGridNavCc(const NavEvent& ev) {
     }
 
     case NAV_CHAR:
-      if (ev.ch == 'x') {
-        cursorPad = (uint8_t)(_gridRow * 12 + _gridCol);
-        int8_t s = _findSlotCc(cursorPad);
-        if (s >= 0) {
-          _ccUiMode = UI_CC_CONFIRM_REMOVE;
-          _ccScreenDirty = true;
-        }
-      } else if (ev.ch == 'd') {
+      // Phase 3.D — raccourci 'x' (CONFIRM_REMOVE) retiré : redondant avec
+      // ENTER §7.4 dégage direct (convention uniforme cross-page).
+      if (ev.ch == 'd') {
         _ccUiMode = UI_CC_CONFIRM_DEFAULTS;
         _ccScreenDirty = true;
       } else if (ev.ch == 'e') {
@@ -296,19 +297,8 @@ void ToolPadRoles::_handleValueEditCc(const NavEvent& ev) {
   }
 }
 
-void ToolPadRoles::_handleConfirmRemoveCc(const NavEvent& ev) {
-  ConfirmResult r = SetupUI::parseConfirm(ev);
-  if (r == CONFIRM_YES) {
-    uint8_t cursorPad = (uint8_t)(_gridRow * 12 + _gridCol);
-    _removeSlotForPadCc(cursorPad);
-    _ccUiMode = UI_CC_GRID_NAV;
-    _ccScreenDirty = true;
-  } else if (r == CONFIRM_NO) {
-    _ccUiMode = UI_CC_GRID_NAV;
-    _ccScreenDirty = true;
-  }
-  // PENDING → stay
-}
+// Phase 3.D — _handleConfirmRemoveCc retiré (convention §7.4 uniforme : ENTER
+// sur CC propre = dégage direct via _removeSlotForPadCc dans _handleGridNavCc).
 
 void ToolPadRoles::_handleConfirmDefaultsCc(const NavEvent& ev) {
   ConfirmResult r = SetupUI::parseConfirm(ev);
@@ -747,12 +737,6 @@ void ToolPadRoles::_drawGlobalsCc() {
 void ToolPadRoles::_drawInfoCc() {
   uint8_t cursorPad = (uint8_t)(_gridRow * 12 + _gridCol);
 
-  if (_ccUiMode == UI_CC_CONFIRM_REMOVE) {
-    _ui->drawFrameLine(VT_YELLOW "Remove control pad #%d? (y/n)" VT_RESET,
-                       (int)cursorPad + 1);
-    _ui->drawFrameEmpty();
-    return;
-  }
   if (_ccUiMode == UI_CC_CONFIRM_DEFAULTS) {
     _ui->drawFrameLine(VT_YELLOW "Reset ALL control pads to empty? (y/n)" VT_RESET);
     _ui->drawFrameEmpty();
@@ -844,6 +828,7 @@ void ToolPadRoles::_drawInfoCc() {
         modeSem = "CONT+HOLD : pressure-driven, release freezes last value (setter)";
       }
       _ui->drawFrameLine(VT_DIM "%s" VT_RESET, modeSem);
+      _ui->drawFrameLine(VT_DIM "[RET] to clear this CC assignment (§7.4 dégage direct)." VT_RESET);
       return;
     }
   }
@@ -872,9 +857,10 @@ void ToolPadRoles::_drawInfoCc() {
 void ToolPadRoles::_drawControlBarCc() {
   switch (_ccUiMode) {
     case UI_CC_GRID_NAV:
+      // Phase 3.D — [x] RM retiré : ENTER sur CC propre = dégage direct (§7.4).
       _ui->drawControlBar(
-        VT_DIM "[^v<>] GRID  [RET] MODE  [e] VALUES  [TAP] SELECT" CBAR_SEP
-               "[x] RM  [d] DFLT  [g] GLOBS" CBAR_SEP
+        VT_DIM "[^v<>] GRID  [RET] CREATE/CLEAR  [e] VALUES  [TAP] SELECT" CBAR_SEP
+               "[d] DFLT  [g] GLOBS" CBAR_SEP
                "[q] EXIT" VT_RESET);
       break;
     case UI_CC_MODE_PICK:
@@ -892,7 +878,6 @@ void ToolPadRoles::_drawControlBarCc() {
         VT_DIM "[^v] PARAM  [</>] VALUE" CBAR_SEP
                "[RET] BACK  [q] CANCEL" VT_RESET);
       break;
-    case UI_CC_CONFIRM_REMOVE:
     case UI_CC_CONFIRM_DEFAULTS:
       _ui->drawControlBar(CBAR_CONFIRM_ANY);
       break;

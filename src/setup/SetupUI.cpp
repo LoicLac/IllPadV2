@@ -537,19 +537,28 @@ void SetupUI::drawCellGrid(
 
       if (mode == GRID_ROLES && roleLabels && roleMap) {
         if (key == activeKey) {
+          // Phase 3.D fix HW Gate G3 — curseur grid = reverse pur (pas color
+          // combinée). Évite combo reverse+dim moche sur cells cross-page.
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
-                          VT_CYAN VT_BOLD "%5s" VT_RESET, roleLabels[key]);
+                          VT_REVERSE VT_BOLD "%5s" VT_RESET, roleLabels[key]);
         } else {
           const char* color;
           switch (roleMap[key]) {
-            case 1:    color = VT_BLUE;       break;  // Bank
-            case 2:    color = VT_GREEN;      break;  // Root
-            case 3:    color = VT_CYAN;       break;  // Mode
-            case 4:    color = VT_YELLOW;     break;  // Octave
-            case 5:    color = VT_MAGENTA;    break;  // Hold
-            case 6:    color = VT_BRIGHT_RED; break;  // Play/Stop
-            case 0xFF: color = VT_RED;        break;  // Collision
-            default:   color = VT_DIM;        break;
+            case 1:    color = VT_BLUE;                  break;  // Bank
+            case 2:    color = VT_GREEN;                 break;  // Root
+            case 3:    color = VT_CYAN;                  break;  // Mode
+            case 4:    color = VT_YELLOW;                break;  // Octave
+            case 5:    color = VT_MAGENTA;               break;  // Play/Stop (renamed 3.A)
+            case 6:    color = VT_BRIGHT_RED;            break;  // legacy (dead, retiré 3.H.2)
+            // Phase 3.D.2 cross-page (§12.4 audit B-N1 switch inline, cohérent GRID_CONTROLPAD).
+            // Phase 3.D fix HW Gate G3 — VT_BG_AMBER_SAT retiré : background ambre
+            // saturé donne effet "reverse+dim" moche sous feedback user. Distinction
+            // absorbant/contextuel via les LABELS (Bk<n>/CC<n> vs " :: "), pas la
+            // couleur. Refonte palette possible 3.H.1 (§13).
+            case 7:    color = VT_DIM;                   break;  // ABSORBANT cross-page (label distinct : Bk<n>/CC<n>)
+            case 8:    color = VT_DIM;                   break;  // CONTEXTUEL cross-page (ARPEG mod / LOOP slot/control) → " :: "
+            case 0xFF: color = VT_RED;                   break;  // Collision
+            default:   color = VT_DIM;                   break;
           }
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
                           "%s%5s" VT_RESET, color, roleLabels[key]);
@@ -563,13 +572,18 @@ void SetupUI::drawCellGrid(
           case 3:  modeColor = VT_ORANGE;                 break;  // CONT + RET0 → "z"
           case 4:  modeColor = VT_BRIGHT_WHITE;           break;  // CONT + HOLD → "h"
           // Phase 3.C.2 cross-page (§12.4 audit B-N1 switch inline, pas table COLORS_*[]).
-          case 7:  modeColor = VT_DIM VT_BG_AMBER_SAT;    break;  // BANK absorbant cross-page → "Bk<n>"
+          // Phase 3.D fix HW Gate G3 — VT_BG_AMBER_SAT retiré (effet reverse-like).
+          // Distinction absorbant/contextuel via labels (Bk<n> vs " :: "), pas la couleur.
+          case 7:  modeColor = VT_DIM;                    break;  // BANK absorbant cross-page → "Bk<n>"
           case 8:  modeColor = VT_DIM;                    break;  // CONTEXTUEL cross-page (ARPEG mod / LOOP slot) → " :: "
           default: modeColor = VT_DIM;                    break;  // unassigned  → "---"
         }
         if (key == activeKey) {
+          // Phase 3.D fix HW Gate G3 — curseur grid CC = reverse pur (pas
+          // modeColor combiné). Évite combo reverse+dim+bg moche sur cells
+          // cross-page (BANK absorbant / contextuels).
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
-                          VT_REVERSE "%s%5s" VT_RESET, modeColor, label);
+                          VT_REVERSE VT_BOLD "%5s" VT_RESET, label);
         } else {
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,
                           "%s%5s" VT_RESET, modeColor, label);

@@ -65,6 +65,8 @@ enum ConfirmResult : uint8_t {
 //   (5 char + null). Refonte UTF-8 " ■■ " + extension buffer décidées 3.H.1.
 #define VT_BG_AMBER_SAT   "\033[48;5;130m"
 #define VT_NEUTRAL_BAR    " :: "
+// Phase 3.D — pool BANK assignable color (vert menthe, à raffiner 3.H.1).
+#define VT_MINT_GREEN     "\033[38;5;121m"
 
 // Unicode box drawing — double-line (outer frame)
 #define UNI_TL  "\xe2\x95\x94"  // ╔
