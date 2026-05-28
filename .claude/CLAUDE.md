@@ -120,6 +120,33 @@ ending normalization, DEC 2026 sync support).
 
 ---
 
+## Garde format SCOPE — docs pipeline créatif
+
+Tout fichier sous `docs/superpowers/{ideas,designs,specs,plans,reports}/`
+et toute écriture dans `STATUS.md` ou `docs/superpowers/HANDOFF-*.md`
+DOIT respecter le format `[SCOPE]` du `CLAUDE.md` global (section
+« Estimations de scope — format obligatoire »).
+
+Aucune estimation en jours / heures / semaines / sessions / sprints /
+minutes / mois, ni adjectifs temporels (« rapide », « court », « long »
+appliqués au temps de dev). Forme obligatoire :
+`[SCOPE rough|read|verified : ~N LOC | +X new, ~Y edit | cplx Z/5]`.
+
+Avant chaque commit qui touche un de ces fichiers : grep le contenu
+modifié sur
+`\b(jours?|heures?|semaines?|sessions?|sprints?|minutes?|mois)\b`
+(hors expressions françaises non-estimation type « à jour », « le
+jour », « bonjour »). Si match en contexte estimation, corriger avant
+`git add`.
+
+Justification de la garde : la règle vit dans le global, mais le drift
+d'attention sur sessions longues et la contamination par lecture de
+docs externes utilisant d'autres conventions cause des violations
+récurrentes. La garde locale agit comme deuxième rideau au moment où
+ces docs sont écrits.
+
+---
+
 ## VT100 Setup Console — politique
 
 Le terminal VT100 du setup mode est un **argument de vente esthétique** et
