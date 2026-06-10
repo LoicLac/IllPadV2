@@ -153,6 +153,13 @@ uint8_t ToolPadRoles::poolLineSize(uint8_t line) const {
     case 3: return POOL_MODE_COUNT;
     case 4: return POOL_OCTAVE_COUNT;
     case 5: return POOL_PLAY_STOP_COUNT;
+    // Phase 3.F.1 fix HW Gate G5 — lignes LOOP 6-9.
+    // Sans cette extension, LEFT/RIGHT dans pool LOOP (ligne Slots
+    // particulièrement) ne défilent pas car sz=0 bloque le if (sz > 0).
+    case 6: return 1;                  // REC LOOP (1 entry)
+    case 7: return 1;                  // PS LOOP (1 entry)
+    case 8: return 1;                  // CLR LOOP (1 entry)
+    case 9: return POOL_SLOT_COUNT;    // Slots LOOP (16 entries S0..S15)
     default: return 0;
   }
 }
@@ -413,6 +420,16 @@ bool ToolPadRoles::saveAll() {
     allOk = false;
   }
 
+  // 4. LoopPadStore (Phase 3.F.1 + §12.12 audit M6) — extension critique :
+  // sans cette persistance, les edits page LOOP sont perdus au reboot car
+  // _wkLoopPad n'était synchronisé qu'au boot via getLoadedLoopPadStore().
+  if (_nvs) {
+    _nvs->setLoadedLoopPad(_wkLoopPad);
+    if (!_nvs->saveLoopPad()) {
+      allOk = false;
+    }
+  }
+
   _nvsSaved = allOk;
   return allOk;
 }
@@ -623,8 +640,11 @@ void ToolPadRoles::drawScreen() {
   } else if (_activeSubPage == SUB_ARPEG) {
     // Phase 3.E.1 — page ARPEG dispatch.
     _drawPageArpeg();
+  } else if (_activeSubPage == SUB_LOOP) {
+    // Phase 3.F.1 — page LOOP dispatch.
+    _drawPageLoop();
   } else {
-    // Legacy fallback LOOP (jusqu'à incarnation 3.F).
+    // Legacy fallback (default switch — code mort post-3.F, retiré 3.H.2).
     // Grid section
     _ui->drawSection("GRID");
     drawGrid();
@@ -796,14 +816,16 @@ void ToolPadRoles::run() {
     if (_confirmDefaults) {
       ConfirmResult r = SetupUI::parseConfirm(ev);
       if (r == CONFIRM_YES) {
-        // Phase 3.D.1 / 3.E.3 — routing page-scoped (§15.1). Chaque page
-        // utilise son propre _applyDefaults*() ; SUB_LOOP reste sur legacy
-        // resetToDefaults() jusqu'à incarnation 3.F.3 ; SUB_CC dispatcher
-        // interne (_handleConfirmDefaultsCc) non utilisé ici (early-branch).
+        // Phase 3.D.1 / 3.E.3 / 3.F.3 — routing page-scoped (§15.1).
+        // Chaque page utilise son propre _applyDefaults*().
+        // SUB_CC : dispatcher interne (_handleConfirmDefaultsCc) via early-branch.
+        // Legacy fallback resetToDefaults() = mort code post-3.F, retiré 3.H.2.
         if (_activeSubPage == SUB_BANK) {
           _applyDefaultsBank();
         } else if (_activeSubPage == SUB_ARPEG) {
           _applyDefaultsArpeg();
+        } else if (_activeSubPage == SUB_LOOP) {
+          _applyDefaultsLoop();
         } else {
           resetToDefaults();
         }
@@ -880,14 +902,14 @@ void ToolPadRoles::run() {
       screenDirty = true;
     }
 
-    // [r] = Clear All legacy (§15.1 supprimé en pages incarnées) :
-    // - BANK : wipe global incompatible avec hard-constraint exit §6.5
-    // - ARPEG : §7.4 strict + d defaults remplacent le wipe global
-    // - LOOP : conservé jusqu'à 3.F (incarnation)
+    // [r] = Clear All legacy (§15.1 supprimé toutes pages incarnées
+    // post-3.F). Conservation du code legacy = défense en profondeur si
+    // future page non incarnée. Retiré définitivement 3.H.2.
     if (ev.type == NAV_CHAR && (ev.ch == 'r' || ev.ch == 'R')
         && !_editing
         && _activeSubPage != SUB_BANK
-        && _activeSubPage != SUB_ARPEG) {
+        && _activeSubPage != SUB_ARPEG
+        && _activeSubPage != SUB_LOOP) {
       _confirmClearAll = true;
       screenDirty = true;
     }
@@ -929,15 +951,15 @@ void ToolPadRoles::run() {
         }
         arrowMoved = true;
       } else if (ev.type == NAV_ENTER) {
-        // Phase 3.D.1 / 3.E.2 — routing page-scoped (§7.4 strict uniforme) :
-        // SUB_BANK → _handleEnterBank (§7.4 dégage direct si bank propre).
-        // SUB_ARPEG → _handleEnterArpeg (§7.4 dégage direct si rôle ARPEG).
-        // Autres (SUB_LOOP legacy) : legacy open pool.
+        // Phase 3.D.1 / 3.E.2 / 3.F.2 — routing page-scoped (§7.4 strict uniforme).
         if (_activeSubPage == SUB_BANK) {
           _handleEnterBank();
         } else if (_activeSubPage == SUB_ARPEG) {
           _handleEnterArpeg();
+        } else if (_activeSubPage == SUB_LOOP) {
+          _handleEnterLoop();
         } else {
+          // Legacy fallback (mort code post-3.F, retiré 3.H.2).
           _editing = true;
           int pad = _gridRow * 12 + _gridCol;
           PadRole role = getRoleForPad((uint8_t)pad);
@@ -951,15 +973,18 @@ void ToolPadRoles::run() {
       }
     } else {
       // --- Pool navigation (edit mode) ---
-      // Phase 3.D.1 / 3.E.2 — page-scoped pool nav range :
+      // Phase 3.D.1 / 3.E.2 / 3.F.2 — page-scoped pool nav range :
       //   SUB_BANK  : range [0..1] (clear/Bank)
       //   SUB_ARPEG : range [2..5] (Root/Mode/Octave/PL/S, pas de [---] clear §15.1)
-      //   LOOP legacy : range [0..5] (legacy 6 lignes jusqu'à 3.F)
+      //   SUB_LOOP  : range [6..9] (REC/PS/CLR/Slots, pas de [---] clear §15.1)
+      //   legacy    : range [0..9] (mort code post-3.F)
       uint8_t poolLineMin, poolLineMax;
       if (_activeSubPage == SUB_BANK) {
         poolLineMin = 0; poolLineMax = 1;
       } else if (_activeSubPage == SUB_ARPEG) {
         poolLineMin = 2; poolLineMax = 5;
+      } else if (_activeSubPage == SUB_LOOP) {
+        poolLineMin = 6; poolLineMax = 9;
       } else {
         poolLineMin = 0; poolLineMax = POOL_LINE_COUNT - 1;
       }
@@ -994,12 +1019,15 @@ void ToolPadRoles::run() {
         }
         poolArrowMoved = true;
       } else if (ev.type == NAV_ENTER) {
-        // Phase 3.D.1 / 3.E.2 — routing page-scoped (§9.2 strict uniforme).
+        // Phase 3.D.1 / 3.E.2 / 3.F.2 — routing page-scoped (§9.2 strict).
         if (_activeSubPage == SUB_BANK) {
           _handleEnterPoolBank();
           screenDirty = true;
         } else if (_activeSubPage == SUB_ARPEG) {
           _handleEnterPoolArpeg();
+          screenDirty = true;
+        } else if (_activeSubPage == SUB_LOOP) {
+          _handleEnterPoolLoop();
           screenDirty = true;
         } else {
         int pad = _gridRow * 12 + _gridCol;

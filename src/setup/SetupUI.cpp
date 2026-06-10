@@ -558,7 +558,11 @@ void SetupUI::drawCellGrid(
             case 5:    color = VT_GREEN;                 break;  // Play/Stop (§11.1 unifié ARPEG+LOOP)
             case 7:    color = VT_DIM;                   break;  // ABSORBANT cross-page (label distinct : Bk<n>/CC<n>)
             case 8:    color = VT_DIM;                   break;  // CONTEXTUEL cross-page (ARPEG mod / LOOP slot/control) → " :: "
-            case 0xFF: color = VT_RED;                   break;  // Collision
+            // Phase 3.F.1 — codes LOOP (REC/CLR/SLOT) §11.1
+            case 9:    color = VT_RED;                   break;  // ROLE_REC LOOP (rouge §11.1)
+            case 10:   color = VT_DARK_BLUE;             break;  // ROLE_CLR LOOP (bleu foncé §11.1)
+            case 11:   color = VT_YELLOW;                break;  // ROLE_SLOT LOOP (jaune §11.1)
+            case 0xFF: color = VT_RED;                   break;  // Collision (partage VT_RED avec REC, états exclusifs)
             default:   color = VT_DIM;                   break;
           }
           pos += snprintf(rowBuf + pos, sizeof(rowBuf) - pos,

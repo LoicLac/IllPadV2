@@ -71,6 +71,11 @@ enum ConfirmResult : uint8_t {
 // Mode/Chrom restent VT_CYAN existing, PL/S unifié vers VT_GREEN existing.
 #define VT_PEACH          "\033[38;5;216m"
 #define VT_PURPLE         "\033[38;5;141m"
+// Phase 3.F — palette §11.1 couleur page LOOP (CLEAR bleu).
+// REC réutilise VT_RED, Slots VT_YELLOW, PS unifié VT_GREEN (ARPEG+LOOP §14.1).
+// Phase 3.F fix HW Gate G5 — color 19 trop foncé illisible (Loïc) → 27 (bleu
+// saturé visible mais reste "foncé" famille §11.1). Refonte 3.H.1 possible.
+#define VT_DARK_BLUE      "\033[38;5;27m"
 
 // Unicode box drawing — double-line (outer frame)
 #define UNI_TL  "\xe2\x95\x94"  // ╔

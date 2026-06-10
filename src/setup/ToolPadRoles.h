@@ -19,8 +19,12 @@ enum PadRoleCode : uint8_t {
   ROLE_ROOT      = 2,
   ROLE_MODE      = 3,
   ROLE_OCTAVE    = 4,
-  ROLE_PLAY_STOP = 5,
+  ROLE_PLAY_STOP = 5,    // PL/S ARPEG ET LOOP unifié §11.1 (vert §14.1)
   ROLE_CC        = 6,    // Phase 3.B — consumed by page CC cell display (3.C.2+)
+  // Codes 7/8 réservés pour cell display §8.1 cross-page (case 7 ABSORBANT, case 8 CONTEXTUEL).
+  ROLE_REC       = 9,    // Phase 3.F.1 — LOOP REC (rouge §11.1)
+  ROLE_CLR       = 10,   // Phase 3.F.1 — LOOP CLEAR (bleu foncé §11.1)
+  ROLE_SLOT      = 11,   // Phase 3.F.1 — LOOP Slot (jaune §11.1)
   ROLE_COLLISION = 0xFF
 };
 
@@ -130,7 +134,11 @@ private:
   static const uint8_t POOL_MODE_COUNT     = 8;   // 7 modes + chromatic
   static const uint8_t POOL_OCTAVE_COUNT   = 4;
   static const uint8_t POOL_PLAY_STOP_COUNT     = 1;
-  static const uint8_t POOL_LINE_COUNT     = 6;   // 0=clear, 1-5=categories
+  static const uint8_t POOL_SLOT_COUNT     = 16;  // Phase 3.F.1 — LOOP Slots
+  // Phase 3.F.1 — POOL_LINE_COUNT 6 → 10 : ajout lignes 6-9 page LOOP.
+  // Layout : 0=clear (legacy), 1=Bank, 2-5=ARPEG (Root/Mode/Octave/PL/S),
+  // 6=LOOP REC, 7=LOOP PS, 8=LOOP CLR, 9=LOOP Slots.
+  static const uint8_t POOL_LINE_COUNT     = 10;
 
   uint8_t poolLineSize(uint8_t line) const;
 
@@ -257,6 +265,22 @@ private:
   void _handleEnterPoolArpeg();     // ENTER pool (§9.2 strict)
   void _applyDefaultsArpeg();       // §15.4 + §15.5 skip silencieux
   void _clearRolesArpegOnly(uint8_t pad);  // §15.3 page-scoped
+
+  // =================================================================
+  // Phase 3.F — page LOOP (REC × 1, PL/S × 1, CLR × 1, Slots × 16).
+  // §7.4 strict uniforme + §9.2 strict pool + couleurs §11.1.
+  // PL/S unifié ARPEG+LOOP §14.1 (geste musical commun).
+  // Coexistence cross-AC ARPEG-LOOP §7.3 (Slot LOOP + Root ARPEG OK).
+  // =================================================================
+  void _drawPageLoop();
+  void _drawGridLoop();
+  void _drawPoolLoop();
+  void _drawInfoLoop();
+  void _drawControlBarLoop();
+  void _handleEnterLoop();          // ENTER grid (§7.4 strict)
+  void _handleEnterPoolLoop();      // ENTER pool (§9.2 strict)
+  void _applyDefaultsLoop();        // §15.4 + §15.5 skip silencieux (REC=32/PS=33/CLR=34)
+  void _clearRolesLoopOnly(uint8_t pad);   // §15.3 page-scoped
 };
 
 #endif // TOOL_PAD_ROLES_H
