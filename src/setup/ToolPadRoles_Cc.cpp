@@ -108,22 +108,31 @@ void ToolPadRoles::_handleModePickCc(const NavEvent& ev) {
 
       // Create slot if needed
       if (s < 0) {
-        // Phase 3.C.2 — refus uniforme silencieux (§12.11 M4) : si pad porte
-        // un rôle cross-page (BANK absorbant OU contextuel ARPEG/LOOP), no-op
-        // silencieux placeholder. Modale d'écrasement 3.G.2 viendra remplacer
-        // ce no-op par l'arbitrage interactif. Flash 3.B "Pad is LOOP REC/PS/
-        // CLR..." retiré pour cohérence (était la seule UX divergente).
         PadNeighborInfo info = _padNeighborInfo(cursorPad);
-        bool blockedCrossPage = (info.bankIdx >= 0)
-                              || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear
-                              || (info.scaleRole.kind != ScaleRoleKind::NONE)
-                              || (info.arpRole.kind   != ArpRoleKind::NONE)
-                              || (info.loopSlotIdx >= 0);
-        if (blockedCrossPage) {
+
+        // Phase 3.G.2 — BANK absorbant : refus permanent (§4 exclusif, jamais modale).
+        if (info.bankIdx >= 0) {
           _ccUiMode = UI_CC_GRID_NAV;
           _ccScreenDirty = true;
           break;
         }
+
+        // Phase 3.G.2 — contextuels (ARPEG/LOOP incl. LOOP control) → modale §10.
+        // Le mode choisi en MODE_PICK est préservé via ccPoolIdx (appliqué post-'y').
+        bool hasContextual = (info.scaleRole.kind != ScaleRoleKind::NONE)
+                          || (info.arpRole.kind   != ArpRoleKind::NONE)
+                          || (info.loopSlotIdx >= 0)
+                          || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear;
+        if (hasContextual) {
+          _pendingOverwrite.action    = OVERWRITE_ACTION_CC_CREATE;
+          _pendingOverwrite.pad       = cursorPad;
+          _pendingOverwrite.ccPoolIdx = _ccPoolIdx;
+          _confirmOverwrite = true;
+          _ccUiMode = UI_CC_GRID_NAV;  // sortie MODE_PICK, modale prend le relais
+          _ccScreenDirty = true;
+          break;
+        }
+
         if (!_addSlotCc(cursorPad)) {
           _setFlash("Cap reached (12/12). Remove a pad first.");
           _ccScreenDirty = true;
@@ -182,32 +191,25 @@ void ToolPadRoles::_handleGridNavCc(const NavEvent& ev) {
     case NAV_ENTER: {
       cursorPad = (uint8_t)(_gridRow * 12 + _gridCol);
 
-      // Phase 3.D — convention §7.4 uniforme cross-page :
-      //   - ENTER sur cell cross-page (BANK absorbant / contextuel ARPEG/LOOP)
-      //     → no-op silencieux (placeholder modale 3.G, refus pré-MODE_PICK).
-      //   - ENTER sur cell portant le rôle propre (CC ici) → dégage direct
-      //     (uniforme avec page BANK §7.4 strict).
-      //   - ENTER sur cell libre → ouvre flow d'assignement (MODE_PICK pour CC).
+      // Phase 3.D + 3.G.2 — convention §7.4 uniforme cross-page :
+      //   - BANK absorbant → refus permanent no-op (§4 exclusif, jamais modale).
+      //   - CC propre → dégage direct (§7.4 strict).
+      //   - Pad libre OU contextuels (ARPEG/LOOP) → ouvre MODE_PICK ; la
+      //     modale d'écrasement §10 apparaîtra à l'ENTER pool si contextuels.
       PadNeighborInfo info = _padNeighborInfo(cursorPad);
-      bool blockedCrossPage = (info.bankIdx >= 0)
-                            || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear
-                            || (info.scaleRole.kind != ScaleRoleKind::NONE)
-                            || (info.arpRole.kind   != ArpRoleKind::NONE)
-                            || (info.loopSlotIdx >= 0);
-      if (blockedCrossPage) {
-        // No-op silencieux : ne pas ouvrir MODE_PICK.
+      if (info.bankIdx >= 0) {
+        // No-op silencieux permanent : ABSORBANT × ABSORBANT interdit.
         break;
       }
 
       // §7.4 strict : ENTER sur CC propre → dégage direct (no MODE_PICK ouvert).
-      // Pour re-créer/réassigner, user fait à nouveau ENTER sur la cell libre.
       if (info.hasCc) {
         _removeSlotForPadCc(cursorPad);
         _ccScreenDirty = true;
         break;
       }
 
-      // Pad libre : ouvre MODE_PICK pool selector. Cursor start sur MOM (idx 0).
+      // Pad libre ou contextuel : ouvre MODE_PICK pool selector. Cursor MOM (idx 0).
       _ccPoolIdx = 0;
       _ccPropEditDirty = false;
       _ccUiMode = UI_CC_MODE_PICK;
@@ -790,17 +792,8 @@ void ToolPadRoles::_drawInfoCc() {
     return;
   }
 
-  // Cas 2 : pad porte LOOP control (REC/PS/CLEAR) — preserved 3.B comportement,
-  // mais wording aligné no-op silencieux (modale 3.G.2 décidera).
-  if (info.isLoopRec || info.isLoopPlayStop || info.isLoopClear) {
-    const char* role = info.isLoopRec      ? "REC"
-                     : info.isLoopPlayStop ? "PLAY/STOP"
-                                           : "CLEAR";
-    _ui->drawFrameLine(VT_YELLOW "Pad #%d : LOOP %s (page LOOP) - cannot assign CC here." VT_RESET,
-                       (int)cursorPad + 1, role);
-    _ui->drawFrameLine(VT_DIM "Move LOOP %s in page LOOP first to free this pad." VT_RESET, role);
-    return;
-  }
+  // Cas 2 (Phase 3.G.2) : LOOP control = CONTEXTUEL — traité par le cas
+  // générique contextuel ci-dessous (modale d'écrasement à l'assign §10).
 
   // Cas 3 : pad porte CC propre (assigned slot) — détails MIDI CC.
   if (info.hasCc) {
@@ -833,18 +826,19 @@ void ToolPadRoles::_drawInfoCc() {
     }
   }
 
-  // Cas 4 : pad porte un/des rôles CONTEXTUEL (ARPEG mod / LOOP slot).
-  // Langue musicien via _formatRoleNameMusician. Modale d'écrasement 3.G.2
-  // décidera de l'arbitrage à l'assign (placeholder no-op silencieux ici).
+  // Cas 4 : pad porte un/des rôles CONTEXTUEL (ARPEG mod / LOOP slot/control).
+  // Langue musicien via _formatRoleNameMusician — la modale d'écrasement §10
+  // confirmera à l'assign.
   bool hasContextuel = (info.scaleRole.kind != ScaleRoleKind::NONE)
                      || (info.arpRole.kind  != ArpRoleKind::NONE)
-                     || (info.loopSlotIdx >= 0);
+                     || (info.loopSlotIdx >= 0)
+                     || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear;
   if (hasContextuel) {
     char roleName[80] = {0};
     _formatRoleNameMusician(info, roleName, sizeof(roleName));
     _ui->drawFrameLine(VT_YELLOW "Pad #%d : %s (contextuel)" VT_RESET,
                        (int)cursorPad + 1, roleName);
-    _ui->drawFrameLine(VT_DIM "Assigning CC here will overwrite this role (modale §10, Phase 3.G)." VT_RESET);
+    _ui->drawFrameLine(VT_DIM "[RET] ouvre le pool — la modale d'ecrasement confirmera (§10)." VT_RESET);
     return;
   }
 

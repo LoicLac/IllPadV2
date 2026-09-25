@@ -68,6 +68,9 @@ ToolPadRoles::ToolPadRoles()
     _gridRow(0), _gridCol(0), _editing(false),
     _poolLine(0), _poolIdx(0),
     _confirmDefaults(false), _confirmClearAll(false), _nvsSaved(false),
+    // Phase 3.G — modale d'écrasement state
+    _pendingOverwrite{OVERWRITE_ACTION_NONE, 0xFF, 0, 0},
+    _confirmOverwrite(false),
     // Phase 3.C — page CC state (ex Tool 4 members, prefixed _cc*)
     _ccUiMode(UI_CC_GRID_NAV),
     _ccFieldIdx(0), _ccPoolIdx(0), _ccGlobalFieldIdx(0),
@@ -643,6 +646,7 @@ void ToolPadRoles::drawScreen() {
   } else if (_activeSubPage == SUB_LOOP) {
     // Phase 3.F.1 — page LOOP dispatch.
     _drawPageLoop();
+    // (overlay modale rendu plus bas, après la branche fallback)
   } else {
     // Legacy fallback (default switch — code mort post-3.F, retiré 3.H.2).
     // Grid section
@@ -665,6 +669,13 @@ void ToolPadRoles::drawScreen() {
 
     // Control bar
     drawControlBar();
+  }
+
+  // Phase 3.G — overlay modale d'écrasement §10 (pattern "inline INFO" §8.2 :
+  // la page courante est rendue normalement, la question modale s'ajoute en
+  // ligne sous le rendu — l'user garde le contexte grid + pool + info).
+  if (_confirmOverwrite) {
+    _drawOverwriteModale();
   }
 
   _ui->vtFrameEnd();
@@ -727,6 +738,10 @@ void ToolPadRoles::run() {
   _confirmDefaults = false;
   _confirmClearAll = false;
 
+  // Phase 3.G — reset modale d'écrasement à l'entrée tool (re-entry safe)
+  _confirmOverwrite        = false;
+  _pendingOverwrite.action = OVERWRITE_ACTION_NONE;
+
   // Phase 3.C.2 + fix HW Gate G2 — reset state page CC à l'entrée tool
   // (re-entry safe : évite écran vide quand on rouvre Tool 3 sur SUB_CC
   // après un edit précédent, car _ccScreenDirty member persistait à false).
@@ -747,6 +762,36 @@ void ToolPadRoles::run() {
     _leds->update();
     _keyboard->pollAllSensorData();
     NavEvent ev = _input.update();
+
+    // =================================================================
+    // Phase 3.G — dispatch modale d'écrasement (§10). Focus unique : tant
+    // que la modale est active, tous les autres dispatchs (CC early-branch,
+    // legacy, TAB) sont skippés. parseConfirm legacy : y = apply, any other
+    // key = cancel.
+    // =================================================================
+    if (_confirmOverwrite) {
+      ConfirmResult r = SetupUI::parseConfirm(ev);
+      if (r == CONFIRM_YES) {
+        _handleOverwriteModaleApply();
+        _confirmOverwrite = false;
+        _pendingOverwrite.action = OVERWRITE_ACTION_NONE;
+        _editing = false;
+        screenDirty = true;
+      } else if (r == CONFIRM_NO) {
+        _confirmOverwrite = false;
+        _pendingOverwrite.action = OVERWRITE_ACTION_NONE;
+        _editing = false;
+        screenDirty = true;
+      }
+      // CONFIRM_PENDING : reste dans modale
+      if (screenDirty) {
+        screenDirty = false;
+        buildRoleMap();
+        drawScreen();
+      }
+      delay(5);
+      continue;  // skip autres dispatchs tant que modale active
+    }
 
     // =================================================================
     // Phase 3.C.1b — early-branch dispatch page CC (skip legacy si SUB_CC).
@@ -1197,4 +1242,135 @@ void ToolPadRoles::_formatRoleNameMusician(const PadNeighborInfo& info,
     snprintf(buf, sizeof(buf), "Slot %u", (unsigned)(info.loopSlotIdx + 1));
     append(buf);
   }
+}
+
+// =================================================================
+// Phase 3.G — modale d'écrasement §10. Un absorbant (BANK/CC) veut occuper
+// un pad portant 1-4 rôles CONTEXTUELs. Wording français langue musicien
+// §10.2-10.3 ; effet 'y' = clear contextuels (retour pools) + assign.
+// =================================================================
+
+// _formatOverwriteWording — construit la question §10.2 selon les rôles
+// contextuels du pad cible (1 à 4 rôles, accord singulier/pluriel).
+void ToolPadRoles::_formatOverwriteWording(char* out, size_t cap) {
+  PadNeighborInfo info = _padNeighborInfo(_pendingOverwrite.pad);
+
+  // Static buffers locaux pour 4 rôles max (§4.2)
+  char roleBufs[4][32];
+  uint8_t roleCount = 0;
+
+  // Modificateurs ARPEG (Root/Mode/Chrom) — suffixe " de ARPEG" §10.2
+  if (info.scaleRole.kind == ScaleRoleKind::ROOT && roleCount < 4) {
+    static const char* rootNames[7] = {"A","B","C","D","E","F","G"};
+    snprintf(roleBufs[roleCount], 32, "ROOT %s de ARPEG", rootNames[info.scaleRole.idx]);
+    roleCount++;
+  } else if (info.scaleRole.kind == ScaleRoleKind::MODE && roleCount < 4) {
+    static const char* modeNames[7] = {"Ion","Dor","Phr","Lyd","Mix","Aeo","Loc"};  // §15.2
+    snprintf(roleBufs[roleCount], 32, "MODE %s de ARPEG", modeNames[info.scaleRole.idx]);
+    roleCount++;
+  } else if (info.scaleRole.kind == ScaleRoleKind::CHROM && roleCount < 4) {
+    snprintf(roleBufs[roleCount], 32, "CHROMATIC de ARPEG");
+    roleCount++;
+  }
+
+  // Octave + PL/S ARPEG
+  if (info.arpRole.kind == ArpRoleKind::OCTAVE && roleCount < 4) {
+    snprintf(roleBufs[roleCount], 32, "OCTAVE %u de ARPEG", (unsigned)(info.arpRole.idx + 1));
+    roleCount++;
+  }
+  if (info.arpRole.kind == ArpRoleKind::PLAY_STOP && roleCount < 4) {
+    snprintf(roleBufs[roleCount], 32, "PLAY/STOP de ARPEG");
+    roleCount++;
+  }
+
+  // Transports LOOP + Slot (sans numéro de slot §10.3)
+  if (info.isLoopRec && roleCount < 4)       { snprintf(roleBufs[roleCount], 32, "REC de LOOP");       roleCount++; }
+  if (info.isLoopPlayStop && roleCount < 4)  { snprintf(roleBufs[roleCount], 32, "PLAY/STOP de LOOP"); roleCount++; }
+  if (info.isLoopClear && roleCount < 4)     { snprintf(roleBufs[roleCount], 32, "CLEAR de LOOP");     roleCount++; }
+  if (info.loopSlotIdx >= 0 && roleCount < 4) { snprintf(roleBufs[roleCount], 32, "SLOT de LOOP");     roleCount++; }
+
+  // Label absorbant à assigner
+  char absorbantLabel[16];
+  if (_pendingOverwrite.action == OVERWRITE_ACTION_BANK_ASSIGN) {
+    snprintf(absorbantLabel, sizeof(absorbantLabel), "B%u", (unsigned)(_pendingOverwrite.bankIdx + 1));
+  } else {  // CC_CREATE
+    snprintf(absorbantLabel, sizeof(absorbantLabel), "CC");
+  }
+
+  // Construction phrase selon roleCount (accord singulier/pluriel §10.2)
+  if (roleCount == 1) {
+    snprintf(out, cap,
+             "En placant %s sur ce pad, \"%s\" devra etre reattribue. Y/N ?",
+             absorbantLabel, roleBufs[0]);
+  } else if (roleCount == 2) {
+    snprintf(out, cap,
+             "En placant %s sur ce pad, \"%s\" et \"%s\" devront etre reattribues. Y/N ?",
+             absorbantLabel, roleBufs[0], roleBufs[1]);
+  } else if (roleCount == 3) {
+    snprintf(out, cap,
+             "En placant %s sur ce pad, \"%s\", \"%s\" et \"%s\" devront etre reattribues. Y/N ?",
+             absorbantLabel, roleBufs[0], roleBufs[1], roleBufs[2]);
+  } else if (roleCount == 4) {
+    snprintf(out, cap,
+             "En placant %s sur ce pad, \"%s\", \"%s\", \"%s\" et \"%s\" devront etre reattribues. Y/N ?",
+             absorbantLabel, roleBufs[0], roleBufs[1], roleBufs[2], roleBufs[3]);
+  } else {
+    // Edge case roleCount == 0 (ne devrait pas arriver — modale appelée
+    // seulement quand contextuels présents)
+    snprintf(out, cap, "Assigner %s ici ? Y/N ?", absorbantLabel);
+  }
+}
+
+// _handleOverwriteModaleApply — effet 'y' : les rôles contextuels du pad
+// retournent à leurs pools respectifs, l'absorbant est assigné, save NVS.
+void ToolPadRoles::_handleOverwriteModaleApply() {
+  PadNeighborInfo info = _padNeighborInfo(_pendingOverwrite.pad);
+
+  // Étape 1 : retirer rôles contextuels → retournent à leurs pools respectifs
+  if (info.scaleRole.kind != ScaleRoleKind::NONE
+      || info.arpRole.kind != ArpRoleKind::NONE) {
+    _clearRolesArpegOnly(_pendingOverwrite.pad);
+  }
+  if (info.loopSlotIdx >= 0 || info.isLoopRec
+      || info.isLoopPlayStop || info.isLoopClear) {
+    _clearRolesLoopOnly(_pendingOverwrite.pad);
+  }
+
+  // Étape 2 : assigner l'absorbant selon contexte
+  switch (_pendingOverwrite.action) {
+    case OVERWRITE_ACTION_BANK_ASSIGN:
+      // Silent steal acté §9.4 : la modale a été acceptée explicitement,
+      // libérer le pad cible et la bank cible de leurs assignments préalables.
+      for (uint8_t i = 0; i < NUM_BANKS; i++) {
+        if (_wkBankPads[i] == _pendingOverwrite.pad) _wkBankPads[i] = 0xFF;
+      }
+      _wkBankPads[_pendingOverwrite.bankIdx] = _pendingOverwrite.pad;
+      break;
+    case OVERWRITE_ACTION_CC_CREATE:
+      // Crée CC entry avec defaults puis applique le mode choisi en
+      // MODE_PICK (préservé via _pendingOverwrite.ccPoolIdx — sans cela,
+      // un choix LATCH retomberait silencieusement sur MOM).
+      if (_addSlotCc(_pendingOverwrite.pad)) {
+        int8_t s = _findSlotCc(_pendingOverwrite.pad);
+        if (s >= 0) {
+          _applyPoolIdxToEntryCc(_pendingOverwrite.ccPoolIdx, _wkCc.entries[s]);
+          _saveCc();
+        }
+      }
+      break;
+    case OVERWRITE_ACTION_NONE:
+      break;
+  }
+
+  // Étape 3 : save NVS (BankPad + ScalePad + ArpPad + LoopPad ; CC déjà
+  // persisté via _saveCc ci-dessus, pattern save-per-commit §14.1)
+  if (saveAll()) _ui->flashSaved();
+}
+
+// _drawOverwriteModale — overlay INFO §8.2 (la page reste rendue, la
+// question s'ajoute en ligne — l'user garde le contexte visuel complet).
+void ToolPadRoles::_drawOverwriteModale() {
+  char wording[256];
+  _formatOverwriteWording(wording, sizeof(wording));
+  _ui->drawFrameLine(VT_YELLOW "%s" VT_RESET, wording);
 }

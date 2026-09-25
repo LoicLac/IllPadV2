@@ -71,14 +71,8 @@ void ToolPadRoles::_handleEnterBank() {
   uint8_t pad = (uint8_t)(_gridRow * 12 + _gridCol);
   PadNeighborInfo info = _padNeighborInfo(pad);
 
-  // Refus dur silencieux : CC absorbant OU contextuels (placeholder modale 3.G).
-  if (info.hasCc
-      || info.scaleRole.kind != ScaleRoleKind::NONE
-      || info.arpRole.kind   != ArpRoleKind::NONE
-      || info.loopSlotIdx >= 0
-      || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear) {
-    return;
-  }
+  // CC absorbant → refus permanent (§4 ABSORBANT exclusif, jamais de modale).
+  if (info.hasCc) return;
 
   // §7.4 STRICT : pad porte bank propre → dégage direct (no pool ouvert).
   if (info.bankIdx >= 0) {
@@ -87,7 +81,9 @@ void ToolPadRoles::_handleEnterBank() {
     return;
   }
 
-  // Pad vide : ouvre pool BANK (1 ligne).
+  // Phase 3.G.2 — pad vide OU portant contextuels (ARPEG/LOOP) : ouvre pool.
+  // L'user choisit la bank ; la modale d'écrasement §10 apparaîtra à l'ENTER
+  // pool si le pad porte des contextuels (cf _handleEnterPoolBank).
   _editing = true;
   _poolLine = 1;
   _poolIdx = 0;
@@ -112,6 +108,27 @@ void ToolPadRoles::_handleEnterPoolBank() {
   if (targetBank >= NUM_BANKS) return;
   if (_wkBankPads[targetBank] < NUM_KEYS && _wkBankPads[targetBank] != pad) {
     return;  // no-op, entry dim, ENTER ne fait rien
+  }
+
+  // Phase 3.G.2 — défensif : CC absorbant = refus permanent (jamais de modale).
+  PadNeighborInfo info = _padNeighborInfo(pad);
+  if (info.hasCc) {
+    _editing = false;
+    return;
+  }
+
+  // Phase 3.G.2 — contextuels (ARPEG/LOOP incl. LOOP control) → modale §10.
+  bool hasContextual = (info.scaleRole.kind != ScaleRoleKind::NONE)
+                    || (info.arpRole.kind   != ArpRoleKind::NONE)
+                    || (info.loopSlotIdx >= 0)
+                    || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear;
+  if (hasContextual) {
+    _pendingOverwrite.action  = OVERWRITE_ACTION_BANK_ASSIGN;
+    _pendingOverwrite.pad     = pad;
+    _pendingOverwrite.bankIdx = targetBank;
+    _confirmOverwrite = true;
+    _editing = false;  // sortie pool, modale prend le relais
+    return;
   }
 
   _wkBankPads[targetBank] = pad;
@@ -246,16 +263,8 @@ void ToolPadRoles::_drawInfoBank() {
     return;
   }
 
-  // Cas 2 : pad porte LOOP control — interdit pour BANK.
-  if (info.isLoopRec || info.isLoopPlayStop || info.isLoopClear) {
-    const char* role = info.isLoopRec      ? "REC"
-                     : info.isLoopPlayStop ? "PLAY/STOP"
-                                           : "CLEAR";
-    _ui->drawFrameLine(VT_YELLOW "Pad #%d : LOOP %s (page LOOP) - cannot assign Bank here." VT_RESET,
-                       (int)pad + 1, role);
-    _ui->drawFrameLine(VT_DIM "Move LOOP %s in page LOOP first to free this pad." VT_RESET, role);
-    return;
-  }
+  // Cas 2 (Phase 3.G.2) : LOOP control = CONTEXTUEL — traité par le cas
+  // générique contextuel ci-dessous (modale d'écrasement à l'assign §10).
 
   // Cas 3 : pad porte Bank propre — détails simple §7.4 (ENTER → dégage direct).
   if (info.bankIdx >= 0) {
@@ -265,16 +274,18 @@ void ToolPadRoles::_drawInfoBank() {
     return;
   }
 
-  // Cas 4 : pad porte contextuels (ARPEG mod / LOOP slot) — modale §10 future.
+  // Cas 4 : pad porte contextuels (ARPEG mod / LOOP slot/control) — la modale
+  // d'écrasement §10 confirmera à l'assign.
   bool hasContextuel = (info.scaleRole.kind != ScaleRoleKind::NONE)
                      || (info.arpRole.kind  != ArpRoleKind::NONE)
-                     || (info.loopSlotIdx >= 0);
+                     || (info.loopSlotIdx >= 0)
+                     || info.isLoopRec || info.isLoopPlayStop || info.isLoopClear;
   if (hasContextuel) {
     char roleName[80] = {0};
     _formatRoleNameMusician(info, roleName, sizeof(roleName));
     _ui->drawFrameLine(VT_YELLOW "Pad #%d : %s (contextuel)" VT_RESET,
                        (int)pad + 1, roleName);
-    _ui->drawFrameLine(VT_DIM "Assigning Bank here will overwrite this role (modale §10, Phase 3.G)." VT_RESET);
+    _ui->drawFrameLine(VT_DIM "[RET] ouvre le pool — la modale d'ecrasement confirmera (§10)." VT_RESET);
     return;
   }
 

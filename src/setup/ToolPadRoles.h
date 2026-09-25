@@ -48,6 +48,23 @@ struct PadNeighborInfo {
   bool            isLoopClear;
 };
 
+// Phase 3.G — modale d'écrasement §10 : un absorbant (BANK/CC) veut occuper
+// un pad portant 1-4 rôles CONTEXTUELs (ARPEG mod / LOOP). L'user arbitre y/n.
+enum OverwriteAction : uint8_t {
+  OVERWRITE_ACTION_NONE = 0,
+  OVERWRITE_ACTION_BANK_ASSIGN,   // page BANK : assign bank N sur pad
+  OVERWRITE_ACTION_CC_CREATE,     // page CC : créer CC entry sur pad
+};
+
+struct PendingOverwrite {
+  OverwriteAction action;
+  uint8_t         pad;
+  uint8_t         bankIdx;    // valide si action == BANK_ASSIGN
+  uint8_t         ccPoolIdx;  // valide si action == CC_CREATE — mode choisi en
+                              // MODE_PICK (0=MOM/1=LATCH/2=RET0/3=HOLD), préservé
+                              // à travers la modale (sinon retombée silencieuse MOM)
+};
+
 // Phase 3 — sous-page contexte (Tool PAD ROLE 4-page refactor)
 enum SubPage : uint8_t {
   SUB_BANK  = 0,   // 8 bank pads assignment
@@ -114,6 +131,10 @@ private:
   bool    _confirmDefaults;  // true = waiting for y/n defaults confirmation
   bool    _confirmClearAll;  // true = waiting for y/n clear-all confirmation
   bool    _nvsSaved;         // NVS status for header badge
+
+  // Phase 3.G — modale d'écrasement state (§10)
+  PendingOverwrite _pendingOverwrite;
+  bool             _confirmOverwrite;  // true = modale active, focus unique
 
   // Touch detection baselines
   uint16_t _refBaselines[NUM_KEYS];
@@ -233,6 +254,13 @@ private:
   PadNeighborInfo _padNeighborInfo(uint8_t pad) const;
   void _formatRoleNameMusician(const PadNeighborInfo& info,
                                 char* out, size_t cap) const;
+
+  // =================================================================
+  // Phase 3.G — modale d'écrasement §10 (defined ToolPadRoles.cpp).
+  // =================================================================
+  void _handleOverwriteModaleApply();   // effet 'y' : clear contextuels + assign absorbant
+  void _formatOverwriteWording(char* out, size_t cap);  // wording français §10.2-10.3
+  void _drawOverwriteModale();          // overlay INFO section quand _confirmOverwrite
 
   // =================================================================
   // Phase 3.D — page BANK (8 bank slots assignment).
