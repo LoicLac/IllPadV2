@@ -1,8 +1,8 @@
 # ILLPAD V2 — Status
 
-_Sync : 2026-05-20. Lu en début de session, gardé à jour au fil de l'eau._
+_Sync : focus courant 2026-09-25. Sections historiques ci-dessous non resynchronisées depuis 2026-05-20 — le code et git font foi ; resync complète prévue dans le grand audit._
 
-**Focus courant** : ★ **Phase 3 LOOP pivotée vers Tool PAD ROLE — spec écrite 2026-05-23, plan d'impl session suivante**. Spec source-of-truth livrée : [`docs/superpowers/specs/2026-05-23-tool-pad-role-design.md`](docs/superpowers/specs/2026-05-23-tool-pad-role-design.md) — Tool 3 + Tool 4 fusionnés en Tool PAD ROLE (4 pages BANK/ARPEG/LOOP/CC), concept ABSORBANT/CONTEXTUEL + règle unique remplacent la catégorisation A/B1/B2/B3/C1/C2 et règles R1-R6 du handoff. HEAD courant `97db63a`. Code 3.A/3.B/3.C livré (commits `002400c`/`cd3b3c9`/`97db63a`) **conservé sur main**, compatible avec le nouveau concept moyennant renommages (NORM→BANK sous-page + holdPad→arpPlayStopPad bump ARPPAD_VERSION). **Prochaine étape** : nouvelle session pour plan d'impl Tool PAD ROLE (writing-plans → audit indépendant → manifest EXEC → exécution). Phase 3 LOOP est ce plan, pas un nouveau jet du code livré. Master Sync + OD-Sync CLOSE base inchangée. Refacto Tool 5 + LOOP Phase 1 + ARPEG_GEN + Viewer serial Phase 1 toujours CLOSE. Build clean RAM 40.4 % / Flash 22.1 %. **Caveat connu** : ARP behaviour desync sur changement de division mid-playback (existant Phase 2, non régression Master Sync/OD-Sync) — fix futur Paquet ARP-DivSync hors scope immédiat.
+**Focus courant** : ★ **Reprise après pause (dernier commit 2026-06-10) — grand audit repo + code en préparation** pour cadrer la fin de LOOP (spec complète Phases 3-6, révisable à la baisse) et de l'app companion (livrée ; monitor + réglages live limités + hôte de tous les réglages ; piste « setup hébergé dans l'app à la place du VT100 firmware » à étudier). HEAD `e63ff27`. Plan Tool PAD ROLE ([spec](docs/superpowers/specs/2026-05-23-tool-pad-role-design.md), [plan](docs/superpowers/plans/2026-05-23-tool-pad-role-plan.md)) : 3.A → 3.F commités (`aa26ad5` → `e63ff27`, HW gates G0-G5) ; **3.G (modale overwrite) codé, non commité** dans `src/setup/ToolPadRoles*` (compile, HW gate G6 non passé) ; 3.H / 3.I non commencés — suite suspendue au verdict de l'audit. LOOP Phases 4-6 : aucun plan. Viewer `viewer-juce` : dernier commit 2026-05-19, main non mergé depuis `74b57d9`. Build OK avec WIP 3.G : RAM 40,4 % / Flash 22,5 %. **Caveat connu** : ARP behaviour desync sur changement de division mid-playback (existant Phase 2) — fix futur Paquet ARP-DivSync.
 
 ## ARPEG_GEN — historique commits
 
@@ -167,10 +167,10 @@ Spec viewer parallèle (`viewer-juce`) : `../ILLPAD_V2-viewer/docs/2026-05-17-vi
 
 ## Follow-ups ouverts
 
-- **Viewer Phase 2 impl** : à coder sur branche `viewer-juce` selon la spec déjà validée. ~150 lignes JUCE (parser + Model + CommandSender + UI). Estimation 4-6h dev incluant tests Catch2.
-- **HW gates G2-G7 firmware** : à exécuter post-viewer Phase 2 OU manuellement via terminal serial pour validation isolée. Liste détaillée plan §G2-G7.
+- **Viewer Phase 2** : codé sur `viewer-juce` (5 writes `!CLOCKMODE` + `!BONUS/MARGIN/PROX/ECART`, commits `97bfc92`…`9a9e862`).
+- **HW gates G2-G7 firmware** : non consignés — à exécuter avec le viewer Phase 2. Liste détaillée plan §G2-G7.
 - **Tool 7 PotMapping bug** : spawn-task séparée (cf section ci-dessus).
-- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). **Étape courante** : Phase 3 (Tool 3 b1 + Tool 4 ext) en prep. Phase 2 + Master Sync + OD-Sync CLOSE.
+- **Progrès LOOP** (orchestration légère, jalons restants) : [docs/superpowers/LOOP_PROGRESS.md](docs/superpowers/LOOP_PROGRESS.md). **Étape courante** : Phase 3 = Tool PAD ROLE (cf. focus courant). Phase 2 + Master Sync + OD-Sync CLOSE.
 
 ## Sources
 
